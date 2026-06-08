@@ -1362,9 +1362,9 @@ class MessageBubble(QFrame):
 class ChatMessageContainer(QWidget):
     tts_button_clicked = pyqtSignal(object)
 
-    ACTION_BUTTON_SIZE = 40
-    ACTION_ICON_SIZE = 24
-    ACTION_ROW_HEIGHT = 44
+    ACTION_BUTTON_SIZE = 36
+    ACTION_ICON_SIZE = 22
+    ACTION_ROW_HEIGHT = 40
 
     def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None, parent=None):
         super().__init__(parent)
