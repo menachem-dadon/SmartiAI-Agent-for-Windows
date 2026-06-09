@@ -1003,7 +1003,7 @@ def _agent_tool_status_text(status):
     if status in {"cancelled", "canceled", "stopped"}:
         return "בוטל"
     if status:
-        return "שגיאה"
+        return "נכשל"
     return ""
 
 class AgentToolDetailWidget(QWidget):

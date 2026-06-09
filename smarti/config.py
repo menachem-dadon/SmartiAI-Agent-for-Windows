@@ -256,7 +256,9 @@ BUILTIN_TOOL_SCHEMAS = {
             "properties": {
                 "intent": {"type": "string", "enum": ["initial_plan", "continue_plan", "replan"], "description": "סוג התכנון המבוקש: ראשוני, המשכי, או תכנון מחדש אחרי מידע חדש/כשל."},
                 "reason": {"type": "string", "description": "סיבה קצרה למה המשימה מצדיקה תכנון."},
-                "steps": {"type": "array", "items": {"type": "string"}, "description": "תוכנית קצרה של 3-7 שלבים אם כבר ברור לך איך לתכנן. כשיש אי-ודאות, כלול קודם שלב discovery כגון בדיקת סכמה, חיפוש/קריאת קובץ, git status, בדיקת מסך/חלון, בדיקת תהליכים או איסוף מצב רלוונטי."},
+                "steps": {"type": "array", "items": {"type": "string"}, "description": "Detailed workflow steps for the agent. Include discovery/setup first when environment, files, UI state, previous output, or tool schema are uncertain. Steps should be operational, not generic."},
+                "verification_points": {"type": "array", "items": {"type": "string"}, "description": "Concrete progress/final checks the agent should perform, including which observable result would prove the step succeeded. Mention tool-based checks when needed."},
+                "contingencies": {"type": "array", "items": {"type": "string"}, "description": "Likely failures or branches and how the agent should react, including when to retry, replan, ask the user, or run discovery/verification tools."},
                 "risk": {"type": "string", "enum": ["low", "medium", "high"], "description": "רמת סיכון משוערת."},
                 "mode": {"type": "string", "enum": ["auto", "use_provided_steps", "ask_planner"], "description": "auto ברירת מחדל; use_provided_steps אם סיפקת צעדים טובים; ask_planner אם צריך Planner פנימי נוסף."}
             },

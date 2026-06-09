@@ -1256,58 +1256,9 @@ class SmartiCore:
 
     def _fallback_agent_report_for_tools(self, calls, task_state=None, iteration=1):
         return ""
-        calls = calls or []
-        first_action = str((calls[0] or {}).get("action", "") if calls else "").strip()
-        args = (calls[0] or {}).get("arguments", {}) if calls else {}
-        args = args if isinstance(args, dict) else {}
-        objective = str((task_state or {}).get("objective", "") or "")
-        lower_objective = objective.lower()
-        if len(calls) > 1:
-            return "אני בודק כמה נקודות במקביל כדי להבין את המצב מהר יותר, ואז אעדכן רק במה שבאמת משנה להמשך."
-        if first_action == "agent_planner" or (task_state and task_state.get("planner_enabled") and iteration <= 2):
-            return "אני מפרק את הבקשה לשלבים מעשיים כדי להתקדם בצורה מסודרת ולבדוק את התוצאה בסוף."
-        manager_action = str(args.get("action") or "").strip()
-        effective, _ = self._effective_tool_action(first_action, args)
-        action_key = manager_action or effective or first_action
-        if action_key in {"git_status", "smart_file_search", "read_local_file"} or "קוד" in lower_objective or "קובץ" in lower_objective:
-            return "אני בודק את הקבצים והמצב המקומי הרלוונטיים כדי לבצע את השינוי בלי לגעת בדברים לא קשורים."
-        if action_key in {"save_text_file", "create_python_tool"}:
-            return "אני יוצר את התוכן המבוקש ושומר אותו בצורה שתוכל לפתוח ולהמשיך לעבוד איתה."
-        if action_key in {"run_project_check", "system_command"}:
-            return "אני מריץ בדיקה מקומית כדי לוודא שהשינוי או הפעולה אכן עובדים בפועל."
-        if action_key in {"get_weather"}:
-            return "אני בודק מידע עדכני על מזג האוויר עבור המקום שביקשת."
-        if action_key in {"internet_search", "read_website"}:
-            return "אני מאמת את המידע מול מקור עדכני כדי לא להסתמך על זיכרון לא בטוח."
-        if action_key in {"email_manager"}:
-            return "אני בודק את פרטי האימייל הרלוונטיים בזהירות לפני שאמשיך לפעולה הבאה."
-        if action_key in {"browser_automation", "computer_automation"}:
-            return "אני בודק את המסך והאפליקציה בפועל כדי לבצע את הפעולה במקום להניח מה מופיע שם."
-        if action_key in {"agent_planner"}:
-            return "אני מסדר את המשימה לשלבים מעשיים לפני שאני ממשיך לביצוע."
-        return "אני בודק את המידע הנדרש כדי להתקדם בבקשה שלך בלי להציף אותך בפרטים טכניים."
 
     def _task_phase_report_text(self, task_state=None, phase="progress"):
         return ""
-        objective = str((task_state or {}).get("objective", "") or "")
-        lower_objective = objective.lower()
-        if phase == "planner":
-            if any(word in lower_objective for word in ("קובץ", "טקסט", "מסמך")):
-                return "אני מסדר את שלבי יצירת הקובץ והבדיקה שלו כדי שהתוצאה תהיה שמישה ולא רק תשובה בצ'אט."
-            if any(word in lower_objective for word in ("קוד", "תיקון", "ui", "ממשק")):
-                return "אני מסדר את שלבי השינוי והבדיקה כדי שהממשק יתנהג כמו שביקשת."
-            return "אני מסדר את המשימה לשלבים מעשיים לפני שאני ממשיך לביצוע."
-        if phase == "verifier":
-            if any(word in lower_objective for word in ("קובץ", "טקסט", "מסמך")):
-                return "אני בודק שהקובץ או התוכן שנוצרו באמת תואמים למה שביקשת לפני הסיכום הסופי."
-            if any(word in lower_objective for word in ("קוד", "תיקון", "ui", "ממשק")):
-                return "אני בודק שהשינוי שבוצע מתאים לבקשה ושאין סימן ברור לפגיעה בהתנהגות קיימת."
-            return "אני בודק שהתשובה הסופית נשענת על מה שנעשה בפועל ולא מפספסת פרט חשוב."
-        if any(word in lower_objective for word in ("קובץ", "טקסט", "מסמך")):
-            return "אני בודק את ההתקדמות מול הקובץ או התוכן המבוקש, כדי לראות אם נשאר משהו להשלים."
-        if any(word in lower_objective for word in ("קוד", "תיקון", "ui", "ממשק")):
-            return "אני בודק את ההתקדמות מול השינוי שביקשת, כדי להחליט אם צריך עוד תיקון או אימות."
-        return "אני בודק את ההתקדמות מול המטרה שלך לפני שאחליט על הצעד הבא."
 
     def _looks_like_internal_artifact(self, text):
         text = html.unescape(str(text or "")).strip()
@@ -1317,7 +1268,7 @@ class SmartiCore:
             "[UNTRUSTED_", "[SKILL_OBSERVATION_", "SKILL_INSTRUCTIONS:",
             "SKILL_REQUIREMENTS_MISSING:", "tools/call", "הנחיית מערכת:",
             "UNTRUSTED_TOOL_OUTPUT", "UNTRUSTED_TOOL_ERROR",
-            "[SMARTI_TASK_STATE", "[SMARTI_PROGRESS", "[SMARTI_EVALUATOR",
+            "[SMARTI_TASK_STATE", "[SMARTI_PROGRESS", "[SMARTI_EVALUATOR", "[SMARTI_FINAL_VERIFIER",
             "[SMARTI_PLANNER", "[SMARTI_PARALLEL_TOOL_RESULTS", "SMARTI_TOOL_OUTPUT_COMPACTED"
         ]
         if any(marker in text for marker in markers):
@@ -2065,6 +2016,20 @@ class SmartiCore:
 
     def _tool_requires_info_before_use(self, action, args_dict, schemas_seen):
         schemas_seen = schemas_seen or set()
+        inline_schema_tools = {
+            "agent_planner",
+            "get_tool_info",
+            "system_manager",
+            "software_manager",
+            "file_manager",
+            "web_manager",
+            "screen_manager",
+            "background_task_manager",
+            "notification_manager",
+            "memory_manager",
+            "automation_manager",
+            "extension_manager",
+        }
         if action == "extension_manager":
             try:
                 routed_action, routed_args = self._route_unified_tool(action, args_dict)
@@ -2085,6 +2050,8 @@ class SmartiCore:
             tool_key = safe_filename(action)
             if os.path.exists(os.path.join(TOOLS_DIR, f"{tool_key}.txt")) and tool_key not in schemas_seen:
                 return True, f"לפני הפעלת כלי פייתון מותאם אישית חובה לקרוא `get_tool_info`: {tool_key}."
+        if action in BUILTIN_TOOL_SCHEMAS and action not in inline_schema_tools and action not in schemas_seen:
+            return True, f"לפני הפעלת הכלי `{action}` חובה לקרוא `get_tool_info` כי הסכמה המלאה שלו אינה מופיעה בהנחיית המערכת."
         return False, None
 
     def _get_mcp_function_schema(self, pkg_name, func_name):
@@ -2248,45 +2215,29 @@ class SmartiCore:
             current_messages.append({"role": "user", "content": feedback_payload})
 
     def _estimate_agent_task_complexity(self, user_text):
-        text = (user_text or "").strip().lower()
-        if not text:
-            return 0
-        score = 0
-        if len(text) > 90:
-            score += 1
-        if len(text) > 220:
-            score += 1
-        multi_step_markers = [
-            "ואז", "אחר כך", "לאחר מכן", "במקביל", "כמה", "מספר", "כל ", "כולל",
-            "תנתח", "נתח", "תשווה", "השווה", "תבדוק", "בדוק", "תשפר", "שפר",
-            "תתקן", "תקן", "תבנה", "בנה", "תיצור", "צור", "תכתוב", "כתוב",
-            "תמצא", "מצא", "תחפש", "חפש", "תפתח", "פתח", "תתקין", "התקן",
-            "תשלח", "שלח", "תסכם", "סכם", "דו\"ח", "דוח", "קובץ", "תיקייה",
-            "אתר", "מייל", "אימייל", "אפליקציה", "חלון", "מסך", "בדיקות",
-            "build", "test", "fix", "debug", "refactor", "analyze", "compare",
-            "create", "update", "install", "search", "open", "email"
-        ]
-        score += min(4, sum(1 for marker in multi_step_markers if marker in text))
-        if re.search(r'(\d+\s*(שלבים|דברים|קבצים|משימות))|[,;:]\s*\S+', text):
-            score += 1
-        if "\n" in text:
-            score += 1
-        return score
+        return 0
 
     def _fallback_task_plan(self, objective):
-        text = (objective or "").lower()
-        steps = ["להבין את המטרה והאילוצים"]
-        if any(token in text for token in ["חפש", "מצא", "בדוק", "נתח", "השווה", "אתר", "search", "analyze", "compare"]):
-            steps.append("לאסוף את המידע או המצב הרלוונטי")
-        if any(token in text for token in ["צור", "כתוב", "שמור", "תקן", "שפר", "התקן", "פתח", "שלח", "create", "write", "fix", "install", "open", "send"]):
-            steps.append("לבצע את הפעולות הנדרשות בכלים המתאימים")
-        steps.append("לאמת שהתוצאה תואמת לבקשה")
-        steps.append("להחזיר סיכום קצר וברור למשתמש")
-        deduped = []
-        for step in steps:
-            if step not in deduped:
-                deduped.append(step)
-        return deduped[:6]
+        return [
+            "להבין את המטרה והאילוצים",
+            "לאסוף את המידע או המצב הדרוש לפני פעולה",
+            "לבצע את הצעדים הנדרשים לפי התוצאות שהתקבלו",
+            "לאמת שהתוצאה תואמת לבקשה",
+            "להחזיר סיכום קצר וברור למשתמש",
+        ]
+
+    def _fallback_verification_points(self):
+        return [
+            "Verify that the latest observable state or output matches the requested result.",
+            "If the result depends on files, UI, system state, web data, or command output, inspect that source directly before the final answer.",
+        ]
+
+    def _fallback_contingencies(self):
+        return [
+            "If a tool schema is unclear or validation fails, call get_tool_info before retrying.",
+            "If a check disproves progress, retry with corrected parameters or call agent_planner with intent=replan.",
+            "Ask the user only when required information or permission cannot be obtained with safe discovery tools.",
+        ]
 
     def _extract_first_json_object_text(self, text):
         text = (text or "").strip()
@@ -2309,9 +2260,12 @@ class SmartiCore:
         context_block = f"\n\nמידע קיים לתכנון מחדש/המשך:\n{context[:2200]}" if str(context or "").strip() else ""
         planner_prompt = (
             "אתה Planner פנימי של סמארטי. אל תפעיל כלים ואל תענה למשתמש.\n"
-            "צור תוכנית קצרה, מעשית ובטיחותית למשימה. החזר JSON בלבד במבנה:\n"
-            "{\"steps\":[\"...\"],\"risk\":\"low|medium|high\",\"notes\":\"...\"}\n"
-            "3-7 שלבים, בלי פירוט יתר ובלי לחשוף מחשבות פנימיות.\n"
+            "Create a practical, detailed workflow for the task. Return JSON only in this exact shape:\n"
+            "{\"steps\":[\"...\"],\"verification_points\":[\"...\"],\"contingencies\":[\"...\"],\"risk\":\"low|medium|high\",\"notes\":\"...\"}\n"
+            "The workflow must include concrete discovery/setup steps when environment, files, UI state, previous output, or tool schema are uncertain.\n"
+            "verification_points must define what evidence proves partial/final success, including tool-based checks when needed.\n"
+            "contingencies must cover likely failures, schema errors, missing permissions, unavailable files/UI, and when to retry, replan, or ask the user.\n"
+            "Use 4-9 operational steps when useful; avoid generic filler and do not expose hidden reasoning.\n"
             "אם מדובר בתכנון מחדש/המשך, התבסס על המידע הקיים ושנה אסטרטגיה במקום לחזור מכנית על אותה דרך.\n"
             "אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, "
             "אל תנחש: התחל בשלב discovery קצר ללמידת הסביבה, כגון בדיקת סכמה, חיפוש/קריאת קובץ, git status, בדיקת מסך/חלון, "
@@ -2335,8 +2289,25 @@ class SmartiCore:
             steps = [re.sub(r'\s+', ' ', str(step)).strip() for step in data.get("steps", []) if str(step).strip()]
             if steps:
                 risk = str(data.get("risk", "medium") or "medium")
+                verification_points = [
+                    re.sub(r'\s+', ' ', str(point)).strip()
+                    for point in data.get("verification_points", [])
+                    if str(point).strip()
+                ]
+                contingencies = [
+                    re.sub(r'\s+', ' ', str(item)).strip()
+                    for item in data.get("contingencies", [])
+                    if str(item).strip()
+                ]
                 self._trace_agent_phase("planner", f"model_result steps={len(steps[:7])} risk={risk} raw_chars={len(raw or '')}")
-                return steps[:7], risk, str(data.get("notes", "") or "")[:500], True
+                return (
+                    steps[:9],
+                    verification_points[:8] or self._fallback_verification_points(),
+                    contingencies[:8] or self._fallback_contingencies(),
+                    risk,
+                    str(data.get("notes", "") or "")[:500],
+                    True,
+                )
         except Exception as e:
             if "CANCELLED_BY_USER" in str(e):
                 raise SmartiCancelled("CANCELLED_BY_USER")
@@ -2344,12 +2315,12 @@ class SmartiCore:
                 raise
             self._trace_agent_phase("planner", f"model_skipped error={redact_sensitive_text(str(e), self.settings)[:300]}")
             logging.warning(f"Task planner skipped: {e}")
-        return self._fallback_task_plan(objective), "medium", "", False
+        return self._fallback_task_plan(objective), self._fallback_verification_points(), self._fallback_contingencies(), "medium", "", False
 
     def _base_task_state(self, objective, planner_enabled=False):
         return {
             "objective": objective,
-            "complexity_score": self._estimate_agent_task_complexity(objective),
+            "complexity_score": 0,
             "planner_enabled": bool(planner_enabled),
             "used_model_planner": False,
             "planner_source": "none",
@@ -2357,6 +2328,8 @@ class SmartiCore:
             "risk": "medium" if planner_enabled else "low",
             "planner_notes": "",
             "plan_steps": [],
+            "verification_points": [],
+            "contingencies": [],
             "planner_revisions": 0,
             "current_step_idx": 0,
             "completed_steps": [],
@@ -2371,7 +2344,7 @@ class SmartiCore:
         state = self._base_task_state(objective, planner_enabled=False)
         self._trace_agent_phase(
             "planner",
-            f"available_for_model_decision score={state.get('complexity_score', 0)} auto_start=false"
+            "available_for_model_decision auto_start=false"
         )
         return state
 
@@ -2380,13 +2353,21 @@ class SmartiCore:
             return ""
         current_plan = "\n".join(
             f"{idx}. {step}"
-            for idx, step in enumerate((task_state.get("plan_steps") or [])[:7], start=1)
+            for idx, step in enumerate((task_state.get("plan_steps") or [])[:9], start=1)
         ) or "אין תוכנית קודמת."
+        verification_points = "\n".join(
+            f"- {point}" for point in (task_state.get("verification_points") or [])[:8]
+        ) or "אין נקודות אימות קודמות."
+        contingencies = "\n".join(
+            f"- {item}" for item in (task_state.get("contingencies") or [])[:8]
+        ) or "אין תרחישי כשל קודמים."
         recent_obs = "\n".join(task_state.get("observations", [])[-8:]) or "אין תצפיות."
         failures = "\n".join(task_state.get("failures", [])[-6:]) or "אין כשלים."
         return (
             f"סיבת התכנון/תכנון מחדש: {reason or 'לא צוינה'}\n"
             f"תוכנית קודמת:\n{current_plan}\n"
+            f"נקודות אימות קודמות:\n{verification_points}\n"
+            f"תרחישי כשל קודמים:\n{contingencies}\n"
             f"תצפיות אחרונות:\n{recent_obs}\n"
             f"כשלים/אזהרות:\n{failures}\n"
             f"הערכת Evaluator אחרונה: {task_state.get('last_evaluation', '') or 'אין'}"
@@ -2414,10 +2395,20 @@ class SmartiCore:
             for step in (args.get("steps") or [])
             if str(step).strip()
         ]
+        provided_verification_points = [
+            re.sub(r'\s+', ' ', str(point)).strip()
+            for point in (args.get("verification_points") or [])
+            if str(point).strip()
+        ]
+        provided_contingencies = [
+            re.sub(r'\s+', ' ', str(item)).strip()
+            for item in (args.get("contingencies") or [])
+            if str(item).strip()
+        ]
 
         self._emit_agent_phase(
             "planner",
-            f"requested_by_model intent={intent} score={task_state.get('complexity_score', 0)} mode={mode} provided_steps={len(provided_steps)} reason={reason[:250]}",
+            f"requested_by_model intent={intent} mode={mode} provided_steps={len(provided_steps)} reason={reason[:250]}",
             status_text="מעדכן תוכנית..." if replanning else "מתכנן שלבי ביצוע...",
             show_step=bool(show_step) and not is_background_task,
         )
@@ -2426,17 +2417,23 @@ class SmartiCore:
         used_model_planner = False
         source = "replan_controller" if replanning else "controller"
         if provided_steps and mode != "ask_planner":
-            steps = provided_steps[:7]
+            steps = provided_steps[:9]
+            verification_points = provided_verification_points[:8] or self._fallback_verification_points()
+            contingencies = provided_contingencies[:8] or self._fallback_contingencies()
         elif not is_background_task:
             replan_context = self._planner_context_for_replan(task_state, reason=reason) if replanning else ""
-            steps, risk, notes, used_model_planner = self._model_task_plan(objective, current_model, context=replan_context)
+            steps, verification_points, contingencies, risk, notes, used_model_planner = self._model_task_plan(objective, current_model, context=replan_context)
             source = "replan_model" if replanning else "model"
         else:
             steps = self._fallback_task_plan(objective)
+            verification_points = self._fallback_verification_points()
+            contingencies = self._fallback_contingencies()
             source = "replan_local" if replanning else "local"
 
         if not steps:
             steps = self._fallback_task_plan(objective)
+            verification_points = verification_points or self._fallback_verification_points()
+            contingencies = contingencies or self._fallback_contingencies()
             source = "replan_local" if replanning else "local"
 
         task_state.update({
@@ -2446,7 +2443,9 @@ class SmartiCore:
             "planner_request_reason": reason,
             "risk": risk,
             "planner_notes": notes,
-            "plan_steps": steps[:7],
+            "plan_steps": steps[:9],
+            "verification_points": verification_points[:8],
+            "contingencies": contingencies[:8],
             "planner_revisions": int(task_state.get("planner_revisions", 0) or 0) + (1 if replanning else 0),
             "current_step_idx": 0,
             "completed_steps": [],
@@ -2465,9 +2464,15 @@ class SmartiCore:
         steps = task_state.get("plan_steps", []) or []
         current_idx = min(max(0, int(task_state.get("current_step_idx", 0) or 0)), max(0, len(steps) - 1)) if steps else 0
         plan_lines = []
-        for idx, step in enumerate(steps[:7], start=1):
+        for idx, step in enumerate(steps[:9], start=1):
             marker = "current" if idx - 1 == current_idx else ("done" if step in task_state.get("completed_steps", []) else "pending")
             plan_lines.append(f"{idx}. [{marker}] {step}")
+        verification_lines = "\n".join(
+            f"- {point}" for point in (task_state.get("verification_points") or [])[:8]
+        ) or "- Verify observable progress and final state before answering."
+        contingency_lines = "\n".join(
+            f"- {item}" for item in (task_state.get("contingencies") or [])[:8]
+        ) or "- On schema errors, call get_tool_info; on failed checks, retry or replan."
         recent_obs = "\n".join(task_state.get("observations", [])[-5:]) or "אין עדיין תצפיות."
         failures = "\n".join(task_state.get("failures", [])[-3:]) or "אין כשלים משמעותיים."
         guidance = (
@@ -2480,6 +2485,8 @@ class SmartiCore:
             f"Objective: {task_state.get('objective', '')[:900]}\n"
             f"Mode: {'hierarchical' if task_state.get('planner_enabled') else 'direct'} | Risk: {task_state.get('risk', 'medium')} | Planner: {task_state.get('planner_source') or ('model' if task_state.get('used_model_planner') else 'local')}\n"
             f"Plan:\n" + ("\n".join(plan_lines) if plan_lines else "אין תוכנית נפרדת.") + "\n"
+            f"Verification points:\n{verification_lines}\n"
+            f"Contingencies:\n{contingency_lines}\n"
             f"Recent observations:\n{recent_obs}\n"
             f"Recent failures:\n{failures}"
             f"{guidance}\n"
@@ -2587,29 +2594,23 @@ class SmartiCore:
         try:
             tool_call = json.loads(json_str)
             if tool_call.get("method") != "tools/call":
-                return None, "ERROR: Invalid JSON Tool Call. Missing 'method': 'tools/call' inside JSON root.", None
+                return None, "ERROR: Invalid JSON Tool Call. Missing 'method': 'tools/call' inside JSON root."
             action = tool_call.get("params", {}).get("name", "")
             args_dict = tool_call.get("params", {}).get("arguments", {})
             args_dict = self._normalize_tool_call_args(action, args_dict)
         except json.JSONDecodeError as e:
-            return None, f"ERROR: Invalid JSON Tool Call. Details: {e}. You MUST output exactly valid JSON objects representing tools/call requests.", None
+            return None, f"ERROR: Invalid JSON Tool Call. Details: {e}. You MUST output exactly valid JSON objects representing tools/call requests."
         except Exception as e:
-            return None, f"ERROR: Invalid tool call structure. Details: {e}", None
+            return None, f"ERROR: Invalid tool call structure. Details: {e}"
 
         local_pre_text = pre_text if call_index == 0 else (call_entry or {}).get("pre_text", "")
-        if self._looks_like_user_question(local_pre_text) and action in (HIGH_RISK_TOOLS | {"open_file_or_folder", "open_in_browser"}):
-            approval_preface = re.search(r'(לאשר|תרצה|רוצה שא|אפשר שא|שאפתח|שאבצע|שאשלח|שאעביר|שאמחוק|שאעדכן)', local_pre_text)
-            if approval_preface:
-                local_pre_text = ""
-            else:
-                return None, None, local_pre_text
 
         needs_info, info_error = self._tool_requires_info_before_use(action, args_dict, schemas_seen)
         step_text = self._normalize_step_text(local_pre_text)
         if not step_text:
             step_text = self._fallback_step_for_tool(action, args_dict, schema_check=needs_info)
         if needs_info:
-            return None, f"SCHEMA_REQUIRED: {info_error} הפעל קודם get_tool_info עם tool_name מתאים, ואז המשך.", None
+            return None, f"SCHEMA_REQUIRED: {info_error} הפעל קודם get_tool_info עם tool_name מתאים, ואז המשך."
 
         valid_call, validation_error = self._validate_tool_call(action, args_dict)
         if not valid_call:
@@ -2617,7 +2618,7 @@ class SmartiCore:
             feedback = f"ERROR: Tool call schema validation failed for '{action}'. Details: {validation_error}. Retry once with exactly the documented schema below; do not guess extra fields."
             if schema_hint:
                 feedback += f"\nSCHEMA:\n{schema_hint}"
-            return None, feedback, None
+            return None, feedback
 
         return {
             "action": action,
@@ -2625,7 +2626,27 @@ class SmartiCore:
             "step_text": step_text,
             "tool_turn_text": tool_turn_text,
             "index": call_index,
-        }, None, None
+        }, None
+
+    def _tool_call_attempt_for_event(self, call_entry, fallback_action="tool_parser"):
+        json_str = (call_entry or {}).get("json_str", "")
+        action = fallback_action
+        args_dict = {}
+        try:
+            tool_call = json.loads(json_str)
+            if isinstance(tool_call, dict):
+                params = tool_call.get("params", {}) if isinstance(tool_call.get("params"), dict) else {}
+                action = params.get("name") or tool_call.get("name") or tool_call.get("tool") or fallback_action
+                args_dict = params.get("arguments", tool_call.get("arguments", {}))
+                if not isinstance(args_dict, dict):
+                    args_dict = {}
+                try:
+                    args_dict = self._normalize_tool_call_args(action, args_dict)
+                except Exception:
+                    pass
+        except Exception:
+            args_dict = {"raw": str(json_str or "")[:1200]} if json_str else {}
+        return str(action or fallback_action), args_dict
 
     def _preview_step_for_tool_call_entry(self, call_entry, pre_text, schemas_seen=None, call_index=0):
         try:
@@ -2850,13 +2871,23 @@ class SmartiCore:
             for r in results[-4:]
         )
         plan = "\n".join(f"{idx}. {step}" for idx, step in enumerate(task_state.get("plan_steps", [])[:7], start=1))
+        verification_points = "\n".join(
+            f"- {point}" for point in (task_state.get("verification_points") or [])[:8]
+        ) or "- Verify observable progress and final state before accepting completion."
+        contingencies = "\n".join(
+            f"- {item}" for item in (task_state.get("contingencies") or [])[:8]
+        ) or "- If evidence is missing or a check fails, request a verification/discovery step or replan."
         evaluator_prompt = (
-            "אתה Evaluator פנימי של סוכן. אל תפעיל כלים ואל תענה למשתמש.\n"
-            "בדוק אם תוצאות הכלים מקדמות את המשימה ומה ההנחיה הבאה. החזר JSON בלבד:\n"
-            "{\"status\":\"continue|retry|done|ask_user\",\"step_done\":true|false,\"next_step_index\":null|1,\"guidance\":\"...\"}\n"
-            "ה-guidance חייב להיות קצר ומעשי.\n\n"
+            "You are Smarti's internal progress evaluator. Do not answer the user and do not call tools directly.\n"
+            "Evaluate actual evidence, not whether a tool merely ran. If evidence is insufficient, require the main agent to run a concrete verification/discovery tool next.\n"
+            "Return JSON only:\n"
+            "{\"status\":\"continue|verify|retry|done|ask_user\",\"step_done\":true|false,\"next_step_index\":null|1,\"evidence\":\"...\",\"guidance\":\"...\"}\n"
+            "Use status=verify when another tool-based check is needed before declaring progress or completion. guidance must tell the main agent what to verify and what evidence to collect, without naming a tool unless that tool is clearly appropriate.\n"
+            "Use status=retry when the last action failed or produced the wrong state. Use ask_user only when safe discovery cannot obtain the missing information or permission.\n\n"
             f"מטרה:\n{task_state.get('objective', '')[:900]}\n\n"
             f"תוכנית:\n{plan}\n\n"
+            f"נקודות אימות מתוכננות:\n{verification_points}\n\n"
+            f"תרחישי כשל/הסתעפויות:\n{contingencies}\n\n"
             f"תוצאות אחרונות:\n{recent_results}"
         )
         if self.mode == "gemini":
@@ -2873,6 +2904,7 @@ class SmartiCore:
             data = json.loads(json_text) if json_text else {}
             task_state["evaluations"] = int(task_state.get("evaluations", 0) or 0) + 1
             guidance = re.sub(r'\s+', ' ', str(data.get("guidance", "") or "")).strip()[:500]
+            evidence = re.sub(r'\s+', ' ', str(data.get("evidence", "") or "")).strip()[:500]
             status = str(data.get("status", "continue") or "continue").strip().lower()
             step_done = bool(data.get("step_done"))
             next_idx = data.get("next_step_index", None)
@@ -2886,19 +2918,21 @@ class SmartiCore:
                     task_state["current_step_idx"] = min(next_idx - 1, max(0, len(task_state["plan_steps"]) - 1))
                 else:
                     task_state["current_step_idx"] = min(idx + 1, max(0, len(task_state["plan_steps"]) - 1))
-            if status in {"retry", "ask_user"} and guidance:
+            if status in {"verify", "retry", "ask_user"} and guidance:
                 task_state.setdefault("failures", []).append(f"Evaluator: {guidance}")
                 task_state["failures"] = task_state["failures"][-8:]
-            task_state["last_evaluation"] = guidance
+            task_state["last_evaluation"] = guidance or evidence
             self._trace_agent_phase(
                 "evaluator",
-                f"result iteration={iteration} status={status} step_done={step_done} next_step_index={next_idx} guidance={guidance[:250]}"
+                f"result iteration={iteration} status={status} step_done={step_done} next_step_index={next_idx} evidence={evidence[:180]} guidance={guidance[:250]}"
             )
-            if guidance:
+            if guidance or evidence:
                 return (
                     "[SMARTI_EVALUATOR_BEGIN]\n"
                     f"status={status}\n"
+                    f"evidence={evidence}\n"
                     f"guidance={guidance}\n"
+                    "If status=verify, run the needed verification/discovery tool before giving a final answer.\n"
                     "[SMARTI_EVALUATOR_END]"
                 )
         except Exception as e:
@@ -2918,19 +2952,7 @@ class SmartiCore:
             return True
         if tool_call_counts:
             return True
-        complexity = 0
-        risk = "low"
-        if task_state:
-            try:
-                complexity = int(task_state.get("complexity_score", 0) or 0)
-            except Exception:
-                complexity = 0
-            risk = str(task_state.get("risk", "low") or "low").lower()
-        if task_state and task_state.get("planner_enabled") and (iteration >= 2 or risk in {"medium", "high"} or complexity >= 3):
-            return True
-        if len(text) >= 600 and complexity >= 2:
-            return True
-        if len(text) >= 220 and complexity >= 4:
+        if task_state and task_state.get("planner_enabled"):
             return True
         return False
 
@@ -3196,17 +3218,6 @@ class SmartiCore:
             if token in {"npm", "npm.cmd"} and not re.match(r'^(?:npm|npm\.cmd)\s+(?:--version|-v)\s*$', seg_l):
                 return "high"
         return "low"
-
-    def _looks_like_user_question(self, text):
-        text = (text or "").strip()
-        if not text: return False
-        text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
-        text = re.sub(r'https?://\S+|\b[\w.-]+\.[a-zA-Z]{2,}\S*', '', text)
-        text = re.sub(r'\b\w+\?[^\s]*', '', text)
-        question_mark_text = re.sub(r'\?{2,}', '', text)
-        question_mark = "?" in question_mark_text or "？" in text
-        question_words = ["האם", "תרצה", "רוצה שא", "לאשר", "אפשר", "שאפתח", "שאבצע"]
-        return question_mark or any(word in text for word in question_words)
 
     def _normalize_step_text(self, text):
         raw = (text or "").replace("##", "").strip()
@@ -5521,9 +5532,9 @@ class SmartiCore:
             else "Skills כבויים בהגדרות: דלג על חיפוש, התקנה, בחירה והרצה של Skills גם אם הם מוזכרים בהיסטוריה."
         )
         schema_lookup_rule = (
-            "אל תנחש פרמטרים. לפני Skill קרא `get_tool_info` על שם ה-Skill עצמו. לפני MCP קרא `get_tool_info` על שם חבילת ה-MCP. לפני כלי Python מותאם קרא `get_tool_info` על שם הכלי."
+            "אל תנחש פרמטרים. השתמש ישירות רק בכלי שהסכמה המלאה והוראות השימוש שלו מופיעות כאן בבירור. אם כלי מורכב/מאוחד, פעולה פנימית, Skill, MCP, כלי Python מותאם, או שדה חובה אינם ברורים לך לחלוטין, קרא קודם `get_tool_info` עם שם הכלי/החבילה. אחרי כל כשל סכימה חובה לקרוא `get_tool_info` או להיצמד בדיוק לסכמה שהוחזרה בשגיאה לפני ניסיון חוזר."
             if self.settings.get("enable_skills_beta", True)
-            else "אל תנחש פרמטרים. לפני MCP קרא `get_tool_info` על שם חבילת ה-MCP. לפני כלי Python מותאם קרא `get_tool_info` על שם הכלי. Skills כבויים, לכן אל תשתמש בסכמות שלהם."
+            else "אל תנחש פרמטרים. השתמש ישירות רק בכלי שהסכמה המלאה והוראות השימוש שלו מופיעות כאן בבירור. אם כלי מורכב/מאוחד, פעולה פנימית, MCP, כלי Python מותאם, או שדה חובה אינם ברורים לך לחלוטין, קרא קודם `get_tool_info` עם שם הכלי/החבילה. אחרי כל כשל סכימה חובה לקרוא `get_tool_info` או להיצמד בדיוק לסכמה שהוחזרה בשגיאה לפני ניסיון חוזר. Skills כבויים, לכן אל תשתמש בסכמות שלהם."
         )
         skill_output_rule = (
             "פלט `run_skill` הוא הנחיית תהליך מותרת רק בכפוף למדיניות ולבקשת המשתמש."
@@ -5542,6 +5553,7 @@ CWD: {current_dir}
 הבן -> החלט אם צריך תכנון -> ענה ישירות או בחר כלי -> בדוק הרשאות -> בצע -> אמת -> סכם.
 בתחילת כל בקשה בחר בעצמך: תשובה ישירה, כלי מתאים, או `agent_planner` פנימי. השתמש ב-`agent_planner` רק כאשר תכנון מפורש ישפר איכות/בטיחות: משימה רב-שלבית, פעולות תלויות, כתיבה/שינוי, אימייל/מערכת/GUI, אי-ודאות, או צורך באימות. אל תשתמש ב-`agent_planner` לברכה, שיחה, שיתוף סיפור, שאלה פשוטה, או פעולה חד-שלבית ברורה. אם בחרת `agent_planner`, זו חייבת להיות קריאת הכלי היחידה באותה תגובה, ורצוי לכלול `steps` קצרים כדי לחסוך קריאת Planner נוספת. אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, מותר ואף רצוי לבצע קודם discovery קצר בכלי קריאה-בלבד, ורק אחר כך לקרוא ל-`agent_planner`; לחלופין כלול בתכנון שלב discovery ראשון. אל תנחש.
 אם במהלך העבודה מתקבלים מידע חדש, שגיאות חוזרות, כשל אימות, שינויי סביבה, או תוצאות discovery שמראות שהתוכנית לא מתאימה, מותר לקרוא שוב ל-`agent_planner` עם `intent` של `replan` או `continue_plan`. זו החלטת המודל, לא טריגר אוטומטי של הקוד.
+תכנון טוב אינו רשימת כותרות. כאשר אתה משתמש ב-`agent_planner`, ספק או בקש workflow מפורט מספיק לביצוע, נקודות אימות קונקרטיות, ו-contingencies לשגיאות/הרשאות/סכמות/קבצים חסרים/מצב UI לא צפוי. אם חסר מידע סביבתי, בצע discovery בטוח בכלים לפני התכנון או כלול אותו כשלב הראשון. אל תאשר סיום רק כי כלי רץ; אשר לפי תוצאה נצפית.
 כאשר מצב משימה פנימי כבר קיים, פעל היררכית לפיו: שמור את המטרה, התקדם שלב-שלב, שנה אסטרטגיה אחרי כשל, ואל תדלג לאישור סופי לפני שבדקת שהתוצאה מתאימה לבקשה.
 חובת דיווח ראשון: אם התשובה אינה מיידית ואתה עומד להפעיל כלי ראשון בתהליך סוכני, כתוב לפני בלוק ה-JSON דיווח מצב קצר, טבעי ומועיל למשתמש. אל תתחיל תהליך סוכני ישר ב-JSON. הכלל של דילוג על דיווחים חוזרים אינו מבטל את הדיווח הראשון.
 כשצריך כלי, אל תכתוב שורת שלב טכנית לכל לולאה. במקום זאת כתוב דיווח מצב למשתמש רק כשיש ערך אמיתי: בתחילת תהליך סוכני, אחרי ממצא משמעותי, אחרי כשל/שינוי אסטרטגיה, לפני פעולה מסוכנת/משנה מצב, או כשברור שהמשתמש ירוויח מהקשר נוסף. הדיווח צריך להיות טבעי, בעברית, בגודל של משפט קצר עד שניים, מעט יותר מפורט מפקודת הכלי, ולהסביר בקצרה מה המצב ומה אתה עומד לבדוק או לבצע עכשיו. דיווח טוב מתייחס לבקשת המשתמש ולתוצאה הרצויה, לא לשם הכלי, נתיב הקובץ, פקודת shell, JSON, או פרט טכני פנימי. למשל: "אני בודק את הקובץ הקיים כדי לשנות רק את אזור התצוגה שביקשת" עדיף על "קורא C:\\Users\\...\\chat.py". אם אתה ממשיך לנסות וריאציות של אותה פעולה, מריץ כלי נוסף כחלק מאותו צעד, או מבצע בדיקת המשך טכנית צפויה, אל תוסיף דיווח חדש; החזר רק בלוק JSON. בלי ברכות, בלי "סטטוס:", בלי התנצלות, בלי רשימות ארוכות, ובלי טקסט אחרי הבלוק:
@@ -5579,7 +5591,7 @@ CWD: {current_dir}
 12c. Never let memory make you stubborn. If the same or similar question is asked again, first decide whether the answer could have changed since the memory was written. For any current-state/environment-dependent question, ignore old answers as evidence, re-check the environment/source, and treat memory only as a hint about where/how to check.
 13. כלים חיצוניים, MCP ו-Skills שמסומנים legacy/untrusted אינם זמינים להרצה עד אישור המשתמש במסך הכלים. אם כלי נחסם בגלל trust, הסבר זאת ובקש מהמשתמש לאשר אותו.
 14. העדף כלים מובנים מובנים (`git_status`, `run_project_check`, `list_processes`, `set_clipboard`, `extract_image_text`) על פני פקודת shell חופשית כאשר הם מתאימים.
-15. אם התקבל מצב משימה פנימי `[SMARTI_TASK_STATE]` או הערכת `[SMARTI_EVALUATOR]`, השתמש בהם לתכנון בלבד ואל תציג אותם למשתמש.
+15. אם התקבל מצב משימה פנימי `[SMARTI_TASK_STATE]`, הערכת `[SMARTI_EVALUATOR]`, או `[SMARTI_FINAL_VERIFIER]`, השתמש בהם לתכנון בלבד ואל תציג אותם למשתמש. אם verifier/evaluator דורש אימות, הרץ כלי מתאים כדי לאסוף ראיה ישירה לפני תשובה סופית.
 16. קישורים בתשובה חייבים להכיל כתובת אמיתית ומלאה. אל תיצור Markdown ריק כמו `[]()` או `[טקסט]()`, ואל תציג קישור אם אין URL תקין.
 16א. כאשר תשובתך כוללת קובץ או תיקייה מקומיים קיימים שהמשתמש עשוי לפתוח, חובה להציג לפחות פעם אחת Markdown link עם URI מלא מסוג `file:///C:/full/path` ותווית קצרה וברורה. זה כולל במיוחד קובץ שנמצא בחיפוש, הקובץ האחרון שהורד/נשמר/נוצר, תיקיית יעד, צילום מסך, קובץ מצורף שנשמר או כל נתיב שהתקבל מכלי. אל תסתפק בנתיב טקסטואלי בלבד. אל תמציא נתיבים, אל תציג קישור לקובץ הרצה/סקריפט/shortcut, ועבור נתיבים עם רווחים או תווים מיוחדים השתמש ב-URI תקין עם קידוד אחוזים. אם יש צורך מכוון להציג נתיב מילולי שאינו לחיץ, למשל לצורך העתקה לפקודה או תיעוד, הצג אותו בתוך backticks או בלוק קוד; אם המשתמש גם עשוי לפתוח אותו, הוסף קישור נפרד.
 
@@ -5750,13 +5762,15 @@ CWD: {current_dir}
                     raise ApiRequestError(analysis)
         raise ApiRequestError(api_retry_exhausted_analysis(analyze_api_error(self.mode, current_model, error=Exception("retry attempts exhausted"))))
 
-    def _verify_final_response(self, objective, final_response, force=False):
+    def _verify_final_response(self, objective, final_response, force=False, return_continue_feedback=False, allow_tool_request=False):
+        def _pack(response, continue_feedback=""):
+            if return_continue_feedback:
+                return response, continue_feedback
+            return response
+
         if not self.settings.get("enable_final_verifier", True) or self._is_background_context():
             self._trace_agent_phase("verifier", "skipped reason=disabled_or_background")
-            return final_response
-        if not force and len(str(final_response or "").strip()) < 220 and not self._looks_like_internal_artifact(final_response):
-            self._trace_agent_phase("verifier", "skipped reason=short_low_risk_response")
-            return final_response
+            return _pack(final_response)
         try:
             observations = "\n".join(self.recent_tool_observations[-8:])
             self._emit_agent_phase(
@@ -5765,9 +5779,13 @@ CWD: {current_dir}
                 status_text="מאמת תשובה סופית...",
             )
             verifier_text = (
-                "אתה בודק אמינות קצר. אל תפעיל כלים ואל תוסיף מידע חדש.\n"
-                "אם התשובה מספקת ביחס למטרה ולתצפיות, ענה בדיוק: OK.\n"
-                "אם חסר משהו חשוב, ענה בשורה אחת שמתחילה ב-NEEDS_USER: ואז הסבר קצר בעברית.\n\n"
+                "You are Smarti's final verifier. Do not answer the user and do not call tools directly.\n"
+                "Verify the answer against actual evidence, not against the fact that tools were executed.\n"
+                "Return JSON only:\n"
+                "{\"status\":\"ok|revise|needs_verification_tool|needs_user\",\"reason\":\"...\",\"revision_guidance\":\"...\",\"tool_guidance\":\"...\"}\n"
+                "Use needs_verification_tool when the final answer cannot be confirmed from the observations and a safe tool check should be run before answering. tool_guidance must describe the exact evidence to collect.\n"
+                "Use revise only when the answer can be corrected using existing observations. Use needs_user only when safe tools cannot obtain the missing information or permission.\n"
+                f"Tool-request allowed now: {bool(allow_tool_request)}\n\n"
                 f"מטרה:\n{objective}\n\nתצפיות:\n{observations}\n\nתשובה:\n{final_response}"
             )
             current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
@@ -5775,14 +5793,45 @@ CWD: {current_dir}
                 messages = [{"role": "user", "parts": [{"text": verifier_text}]}]
             else:
                 messages = [
-                    {"role": "system", "content": "Verifier only. Return OK or NEEDS_USER in Hebrew."},
+                    {"role": "system", "content": "Internal verifier. Return compact JSON only."},
                     {"role": "user", "content": verifier_text}
                 ]
             verdict, usage_dict = self._handle_api_request_with_retry(current_model, messages)
             self._log_usage(current_model, usage_dict)
             verdict = (verdict or "").strip()
-            if verdict.startswith("NEEDS_USER:"):
-                note = verdict.replace("NEEDS_USER:", "", 1).strip()
+            status = ""
+            note = ""
+            revision_guidance = ""
+            tool_guidance = ""
+            json_text = self._extract_first_json_object_text(verdict)
+            if json_text:
+                try:
+                    data = json.loads(json_text)
+                    status = str(data.get("status", "") or "").strip().lower()
+                    note = re.sub(r'\s+', ' ', str(data.get("reason", "") or "")).strip()
+                    revision_guidance = re.sub(r'\s+', ' ', str(data.get("revision_guidance", "") or "")).strip()
+                    tool_guidance = re.sub(r'\s+', ' ', str(data.get("tool_guidance", "") or "")).strip()
+                except Exception:
+                    status = ""
+            if status == "needs_verification_tool":
+                guidance = tool_guidance or note or "Collect direct evidence that the requested result was actually produced, then answer only after the check."
+                self._trace_agent_phase("verifier", f"result verdict=needs_verification_tool guidance={guidance[:300]}")
+                if allow_tool_request and return_continue_feedback:
+                    feedback = (
+                        "[SMARTI_FINAL_VERIFIER_BEGIN]\n"
+                        "status=needs_verification_tool\n"
+                        f"guidance={guidance[:900]}\n"
+                        "Run the appropriate safe verification/discovery tool now. After observing the result, either fix the work, replan, or provide the final answer based on the verified evidence.\n"
+                        "[SMARTI_FINAL_VERIFIER_END]"
+                    )
+                    return _pack(final_response, feedback)
+                status = "needs_user"
+                note = guidance
+            if status in {"needs_user", "revise"} or verdict.startswith("NEEDS_USER:"):
+                if verdict.startswith("NEEDS_USER:"):
+                    note = verdict.replace("NEEDS_USER:", "", 1).strip()
+                if status == "revise" and revision_guidance:
+                    note = revision_guidance
                 self._trace_agent_phase("verifier", f"result verdict=NEEDS_USER note={note[:300]}")
                 logging.info(f"Final verifier requested revision: {note}")
                 revision_text = (
@@ -5805,7 +5854,7 @@ CWD: {current_dir}
                 revised = (revised or "").strip()
                 if revised and not revised.startswith("NEEDS_USER:") and "בדיקת אמינות" not in revised and not self._looks_like_internal_artifact(revised):
                     self._trace_agent_phase("verifier", f"revision_applied chars={len(revised)}")
-                    return self._strip_internal_artifacts(revised)
+                    return _pack(self._strip_internal_artifacts(revised))
                 self._trace_agent_phase("verifier", "revision_rejected using_original")
             else:
                 self._trace_agent_phase("verifier", f"result verdict={verdict[:120] or 'EMPTY'}")
@@ -5814,7 +5863,7 @@ CWD: {current_dir}
                 raise SmartiCancelled("CANCELLED_BY_USER")
             self._trace_agent_phase("verifier", f"skipped error={redact_sensitive_text(str(e), self.settings)[:300]}")
             logging.warning(f"Final verifier skipped: {e}")
-        return final_response
+        return _pack(final_response)
 
     def _attachment_inline_max_bytes(self):
         try:
@@ -6096,6 +6145,8 @@ CWD: {current_dir}
         run_cancel_event = cancel_event if cancel_event is not None else threading.Event()
         iteration = 0
         final_response = ""
+        final_response_verified = False
+        final_verification_tool_requests = 0
         chat_turn_recorded = False
         current_model = ""
         task_state = None
@@ -6281,11 +6332,7 @@ CWD: {current_dir}
                 raw_tool_calls = parsed_tool.get("tool_calls", []) or []
 
                 if is_tool_call_intent and raw_tool_calls:
-                    first_call, feedback_for_ai, final_candidate = self._decode_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
-                    if final_candidate:
-                        final_response = final_candidate
-                        logging.info("המודל שאל שאלה למשתמש לצד כלי; עוצר לפני הפעלה.")
-                        break
+                    first_call, feedback_for_ai = self._decode_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
                     if feedback_for_ai or not first_call:
                         preview_step = self._preview_step_for_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
                         if preview_step and self.step_callback and not self._is_background_context():
@@ -6297,6 +6344,31 @@ CWD: {current_dir}
                             except Exception:
                                 pass
                         logging.warning(feedback_for_ai)
+                        failed_action, failed_args = self._tool_call_attempt_for_event(raw_tool_calls[0])
+                        failed_output = feedback_for_ai or "ERROR: Invalid tool call."
+                        failed_result = {
+                            "action": failed_action,
+                            "arguments": failed_args,
+                            "status": "error",
+                            "output": failed_output,
+                            "feedback": failed_output,
+                        }
+                        self._emit_agent_process_event(
+                            "tool_start",
+                            tools=[self._agent_tool_event_item(failed_action, failed_args)],
+                            parallel=False,
+                        )
+                        self._emit_agent_process_event(
+                            "tool_finish",
+                            results=[self._agent_tool_event_item(
+                                failed_action,
+                                failed_args,
+                                status="error",
+                                output=failed_output,
+                                feedback=failed_output,
+                            )],
+                        )
+                        self._record_results_in_task_state(task_state, [failed_result])
                         self._append_tool_feedback(current_messages, tool_turn_text, "tool_parser", feedback_for_ai or "ERROR: Invalid tool call.")
                         checkpoint("tool_parser_feedback")
                         continue
@@ -6365,8 +6437,8 @@ CWD: {current_dir}
                         candidate_calls = [first_call]
                         extras_ok = len(raw_tool_calls) <= max_parallel
                         for idx, raw_call in enumerate(raw_tool_calls[1:max_parallel], start=1):
-                            extra_call, extra_feedback, extra_final = self._decode_tool_call_entry(raw_call, pre_text, schemas_seen, call_index=idx)
-                            if extra_final or extra_feedback or not extra_call:
+                            extra_call, extra_feedback = self._decode_tool_call_entry(raw_call, pre_text, schemas_seen, call_index=idx)
+                            if extra_feedback or not extra_call:
                                 extras_ok = False
                                 break
                             candidate_calls.append(extra_call)
@@ -6516,13 +6588,41 @@ CWD: {current_dir}
                         checkpoint("internal_artifact_feedback")
                         continue
                     final_response = ai_response_text.replace("##", "").strip()
+                    should_verify_candidate = self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration)
+                    if should_verify_candidate and not run_cancel_event.is_set():
+                        allow_verification_tool = (
+                            final_verification_tool_requests < 2
+                            and (MAX_ITERATIONS is None or iteration < MAX_ITERATIONS)
+                        )
+                        try:
+                            verified_response, verifier_feedback = self._verify_final_response(
+                                history_user_text or user_text,
+                                final_response,
+                                force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))),
+                                return_continue_feedback=True,
+                                allow_tool_request=allow_verification_tool,
+                            )
+                        except SmartiCancelled:
+                            final_response = "הפעולה נעצרה לבקשת המשתמש."
+                            break
+                        if verifier_feedback and allow_verification_tool:
+                            final_verification_tool_requests += 1
+                            final_response = ""
+                            self._append_user_feedback_message(current_messages, verifier_feedback)
+                            checkpoint("final_verifier_requested_tool")
+                            continue
+                        final_response = self._strip_internal_artifacts(verified_response)
+                        final_response = re.sub(r'\n+\s*בדיקת אמינות\s*:.*$', '', final_response, flags=re.DOTALL).strip()
+                        if not final_response or self._looks_like_internal_artifact(final_response):
+                            final_response = self._fallback_final_response(user_text)
+                        final_response_verified = True
                     logging.info("לא זוהה אובייקט JSON תקין לקריאת כלי, מסיים לולאה (טקסט חופשי).")
                     break
 
             if MAX_ITERATIONS is not None and iteration >= MAX_ITERATIONS and not final_response:
                 final_response = "ERROR_USER: סמארטי ביצע יותר מדי פעולות ברצף והופסק."
 
-            should_verify_final = self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration)
+            should_verify_final = (not final_response_verified) and self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration)
             if should_verify_final and not run_cancel_event.is_set():
                 try:
                     final_response = self._verify_final_response(history_user_text or user_text, final_response, force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))))
