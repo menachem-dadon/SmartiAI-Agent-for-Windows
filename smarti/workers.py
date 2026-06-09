@@ -9,7 +9,7 @@ class AgentWorker(QThread):
     status_signal = pyqtSignal(str)
     ask_confirm_signal = pyqtSignal(str, str, str)
     api_key_required_signal = pyqtSignal(str, str, str, str, str)
-    step_signal = pyqtSignal(str)
+    step_signal = pyqtSignal(object)
 
     def __init__(self, core, user_text, attachments=None):
         super().__init__()

@@ -268,7 +268,7 @@ class ChatSessionStore:
             user_messages = [m for m in session.get("messages", []) if m.get("role") == "user"]
             return len(user_messages) == 0
 
-    def add_turn(self, user_text, assistant_text, assistant_raw=None, is_error=False, title="", context=None, user_metadata=None):
+    def add_turn(self, user_text, assistant_text, assistant_raw=None, is_error=False, title="", context=None, user_metadata=None, assistant_metadata=None):
         with self._lock:
             session = self._session_by_id(self.data.get("active_session_id"))
             if not session:
@@ -285,7 +285,8 @@ class ChatSessionStore:
                     "metadata": metadata,
                 })
             if str(assistant_text or "").strip():
-                metadata = {"is_error": bool(is_error)}
+                metadata = copy.deepcopy(assistant_metadata if isinstance(assistant_metadata, dict) else {})
+                metadata["is_error"] = bool(is_error)
                 if assistant_raw is not None and assistant_raw != assistant_text:
                     metadata["raw"] = str(assistant_raw)
                 session.setdefault("messages", []).append({

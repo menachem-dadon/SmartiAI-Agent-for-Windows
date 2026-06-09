@@ -955,11 +955,209 @@ class AttachmentPreviewStrip(QWidget):
 
 # Google Drive picker UI is parked until OAuth sign-in is reworked.
 
+def _agent_tool_display_name(tool):
+    tool = tool if isinstance(tool, dict) else {}
+    action = str(tool.get("action") or "").strip()
+    effective = str(tool.get("effective_action") or "").strip()
+    args = tool.get("arguments") if isinstance(tool.get("arguments"), dict) else {}
+    manager_action = str(args.get("action") or "").strip()
+    name = action or effective or "tool"
+    if manager_action and manager_action != name:
+        name = f"{name} / {manager_action}"
+    elif effective and effective != action:
+        name = f"{name} / {effective}"
+    return re.sub(r"\s+", " ", name).strip()
+
+class AgentToolGroupWidget(QWidget):
+    CHEVRON_ICON_NAMES = ("agent_process_chevron", "message_collapse_arrow")
+    TOOL_ICON_NAMES = ("agent_tool_status", "agent_tool_icon", "tools_icon")
+
+    def __init__(self, parent_width=450):
+        super().__init__()
+        self.max_w = max(220, int(parent_width or 450))
+        self.tools = []
+        self.run_count = 0
+        self.details_expanded = False
+        self.running = False
+        self.setStyleSheet("background: transparent; border: none;")
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self.status_row = QFrame()
+        self.status_row.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.status_row.installEventFilter(self)
+        self.status_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        status_layout = QHBoxLayout(self.status_row)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(6)
+
+        self.tool_icon_label = QLabel()
+        self.tool_icon_label.setFixedSize(18, 18)
+        self.tool_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tool_icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self.status_label = StepsShimmerLabel()
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.status_label.setWordWrap(True)
+        self.status_label.setMaximumWidth(self.max_w)
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
+        self.status_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self.arrow_label = QLabel()
+        self.arrow_label.setFixedSize(18, 18)
+        self.arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.arrow_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        status_layout.addWidget(self.tool_icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        status_layout.addWidget(self.status_label, 1)
+        status_layout.addWidget(self.arrow_label, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.status_row)
+
+        self.details_label = QLabel()
+        self.details_label.setTextFormat(Qt.TextFormat.RichText)
+        self.details_label.setWordWrap(True)
+        self.details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.details_label.setMaximumWidth(self.max_w)
+        self.details_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignTop)
+        self.details_label.hide()
+        layout.addWidget(self.details_label)
+
+        self.thinking_label = StepsShimmerLabel()
+        self.thinking_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.thinking_label.setWordWrap(True)
+        self.thinking_label.setMaximumWidth(self.max_w)
+        self.thinking_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
+        self.thinking_label.hide()
+        layout.addWidget(self.thinking_label)
+
+        self.hide()
+        self.apply_theme()
+
+    def eventFilter(self, obj, event):
+        if obj is self.status_row and event.type() == QEvent.Type.MouseButtonPress:
+            self.toggle_details()
+            return True
+        return super().eventFilter(obj, event)
+
+    def apply_theme(self):
+        self.status_row.setStyleSheet("background: transparent; border: none;")
+        self.status_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
+        self.arrow_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
+        self.tool_icon_label.setStyleSheet("background: transparent; border: none;")
+        self.details_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 15px; background: transparent; padding: 0px 0px 3px 0px;")
+        self.thinking_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
+        set_themed_label_icon(self.tool_icon_label, self.TOOL_ICON_NAMES, "", 16)
+        self._set_chevron_icon()
+
+    def update_parent_width(self, parent_width):
+        self.max_w = max(220, int(parent_width or 450))
+        self.status_label.setMaximumWidth(self.max_w)
+        self.details_label.setMaximumWidth(self.max_w)
+        self.thinking_label.setMaximumWidth(self.max_w)
+
+    def _tool_detail_html(self):
+        rows = []
+        for tool in self.tools:
+            name = _escape_with_soft_breaks(_agent_tool_display_name(tool))
+            status = str(tool.get("status") or "").lower()
+            status_text = "רץ" if status == "running" else ("שגיאה" if status in {"error", "crash", "cancelled"} else "הסתיים")
+            rows.append(
+                f"<div style='margin: 2px 0; color:{SUBTLE_TEXT_COLOR}; font-size:15px;'>"
+                f"• {name} · {html.escape(status_text)}</div>"
+            )
+        return "".join(rows)
+
+    def _refresh_details(self):
+        self.details_label.setText(self._tool_detail_html())
+        self.details_label.setVisible(self.details_expanded and bool(self.tools))
+        self._set_chevron_icon()
+
+    def _set_chevron_icon(self):
+        icon = _rotated_themed_icon(self.CHEVRON_ICON_NAMES, 90 if self.details_expanded else 0, 16)
+        if icon.isNull():
+            icon = _transparent_icon(16)
+        self.arrow_label.setPixmap(icon.pixmap(16, 16))
+        self.arrow_label.setText("")
+
+    def collapse_details(self):
+        self.details_expanded = False
+        self._refresh_details()
+
+    def toggle_details(self):
+        if not self.tools:
+            return
+        self.details_expanded = not self.details_expanded
+        self._refresh_details()
+        self.updateGeometry()
+
+    def hide_thinking(self):
+        self.thinking_label.stop_shimmer()
+        self.thinking_label.hide()
+
+    def show_thinking(self):
+        if not str(self.status_label.text() or "").strip() or self.running:
+            return
+        self.thinking_label.setText("חושב...")
+        self.thinking_label.show()
+        self.thinking_label.start_shimmer()
+        self.show()
+
+    def start_tools(self, tools, parallel=False):
+        tools = [tool if isinstance(tool, dict) else {"action": str(tool or "")} for tool in (tools or [])]
+        if not tools:
+            return
+        self.hide_thinking()
+        for tool in tools:
+            item = dict(tool)
+            item["status"] = "running"
+            self.tools.append(item)
+        self.running = True
+        if parallel and len(tools) > 1:
+            text = f"מריץ: {len(tools)} כלים במקביל"
+        else:
+            text = f"מריץ: כלי {_agent_tool_display_name(tools[0])}"
+        self.status_label.setText(text)
+        self.status_label.start_shimmer()
+        self._refresh_details()
+        self.show()
+
+    def finish_tools(self, results):
+        results = [result if isinstance(result, dict) else {"action": str(result or "")} for result in (results or [])]
+        for result in results:
+            updated = False
+            result_action = str(result.get("action") or "")
+            for item in reversed(self.tools):
+                if item.get("status") == "running" and str(item.get("action") or "") == result_action:
+                    item.update(result)
+                    item["status"] = str(result.get("status") or "ok")
+                    updated = True
+                    break
+            if not updated:
+                item = dict(result)
+                item["status"] = str(result.get("status") or "ok")
+                self.tools.append(item)
+        self.run_count += len(results)
+        for item in self.tools:
+            if item.get("status") == "running":
+                item["status"] = "ok"
+        self.running = False
+        if self.run_count:
+            self.status_label.setText(f"הורצו {self.run_count} כלים")
+        self.status_label.stop_shimmer()
+        self._refresh_details()
+        self.show_thinking()
+        self.show()
+
 class MessageBubble(QFrame):
     user_collapse_changed = pyqtSignal(bool, bool)
 
     USER_COLLAPSED_LINES = 6
     WIDGET_MAX_HEIGHT = 16777215
+    PROCESS_CHEVRON_ICON_NAMES = ("agent_process_chevron", "message_collapse_arrow")
 
     def __init__(self, text, is_user=False, parent_width=450, attachments=None):
         super().__init__()
@@ -975,24 +1173,27 @@ class MessageBubble(QFrame):
         self._user_message_collapsed = True
         
         self.steps_container = QWidget()
+        self.steps_container.setStyleSheet("background: transparent; border: none;")
         self.steps_layout = QVBoxLayout(self.steps_container)
-        self.steps_layout.setContentsMargins(0, 0, 0, 5)
-        self.steps_layout.setSpacing(4)
-        
-        self.toggle_btn = QPushButton("▼ שלבי פעולה")
+        self.steps_layout.setContentsMargins(0, 0, 0, 8)
+        self.steps_layout.setSpacing(8)
+
+        self.toggle_btn = QPushButton("")
         self.toggle_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.toggle_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.toggle_btn.clicked.connect(self.toggle_steps)
-        
-        self.steps_label = StepsShimmerLabel()
-        self.steps_label.setTextFormat(Qt.TextFormat.RichText)
-        self.steps_label.setWordWrap(True)
-        self.steps_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        self.steps_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.steps_label.setMaximumWidth(self.max_w)
-        
+
+        self.process_details = QWidget()
+        self.process_details.setStyleSheet("background: transparent; border: none;")
+        self.process_details_layout = QVBoxLayout(self.process_details)
+        self.process_details_layout.setContentsMargins(0, 0, 0, 0)
+        self.process_details_layout.setSpacing(8)
+
+        self.steps_label = QLabel()
+        self.steps_label.hide()
         self.steps_layout.addWidget(self.toggle_btn)
-        self.steps_layout.addWidget(self.steps_label)
-        self.steps_container.hide() 
+        self.steps_layout.addWidget(self.process_details)
+        self.steps_container.hide()
         
         self.final_label = QLabel()
         self.final_label.setTextFormat(Qt.TextFormat.RichText)
@@ -1017,7 +1218,18 @@ class MessageBubble(QFrame):
         self.main_layout.addWidget(self.final_content)
         
         self.steps_text_html = ""
-        self.is_expanded = True 
+        self.is_expanded = True
+        self.agent_process_started = False
+        self.agent_process_finalized = False
+        self.agent_process_start_time = 0.0
+        self.agent_process_elapsed_seconds = 0
+        self.agent_report_labels = []
+        self.agent_process_groups = []
+        self.current_process_group = None
+        self.process_copy_text_parts = []
+        self.agent_process_timer = QTimer(self)
+        self.agent_process_timer.setInterval(1000)
+        self.agent_process_timer.timeout.connect(self._update_agent_process_timer)
         
         if text:
             self.set_final_text(text)
@@ -1061,14 +1273,13 @@ class MessageBubble(QFrame):
         border = f"1px solid {USER_BUBBLE_BORDER if self.is_user else SOFT_LINE_COLOR}"
 
         self.toggle_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {ACCENT_COLOR}; border: none; "
-            f"text-align: right; font-weight: 700; font-size: 13px; padding: 2px; }}"
-            f"QPushButton:hover {{ color: {ACCENT_SECONDARY_COLOR}; }}"
+            f"QPushButton {{ background: transparent; color: {MUTED_TEXT_COLOR}; border: none; "
+            f"text-align: right; font-weight: 400; font-size: 15px; padding: 0px; }}"
+            f"QPushButton:hover {{ color: {TEXT_COLOR}; }}"
         )
-        self.steps_label.setStyleSheet(
-            f"color: {MUTED_TEXT_COLOR}; font-size: 13px; background: {GLASS_COLOR}; "
-            f"padding: 10px; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 12px;"
-        )
+        self.steps_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
+        for group in getattr(self, "agent_process_groups", []):
+            group.apply_theme()
         for label in self.findChildren(QLabel):
             self._apply_link_palette(label)
         self.setStyleSheet(
@@ -1079,6 +1290,7 @@ class MessageBubble(QFrame):
             f"pre {{ background-color: {CODE_BG_COLOR}; padding: 12px; border-radius: 14px; margin: 0; }}"
             f"p {{ margin: 0 0 5px 0; }}"
         )
+        self._set_process_header_icon()
         for block in self.findChildren(CodeBlockWidget):
             block.apply_theme()
         for tile in self.findChildren(AttachmentTile):
@@ -1090,11 +1302,16 @@ class MessageBubble(QFrame):
         self.max_w = max(220, int(parent_width * 0.76) - 30)
         self.steps_label.setMaximumWidth(self.max_w)
         self.final_label.setMaximumWidth(self.max_w)
+        for label in getattr(self, "agent_report_labels", []):
+            label.setMaximumWidth(self.max_w)
+        for group in getattr(self, "agent_process_groups", []):
+            group.update_parent_width(self.max_w)
         self._update_user_message_collapse_state()
         for block in self.findChildren(CodeBlockWidget):
             block.update_parent_width(self.max_w)
         for tile in self.findChildren(AttachmentTile):
             tile.setMaximumWidth(self.max_w)
+        self._apply_agent_process_width_lock()
         self._refresh_layout()
 
     def _refresh_layout(self):
@@ -1275,20 +1492,157 @@ class MessageBubble(QFrame):
             f'{safe_details}</div>'
         )
 
-    def add_step(self, step_text):
-        display_step = _clean_step_for_display(str(step_text or "").replace('\n', ' '))
-        if "{" in display_step and "}" in display_step:
-            display_step = display_step.split("{", 1)[0].strip()
-        clean_step = _escape_with_soft_breaks(display_step)
-        if not clean_step: return
-        if not self.copy_text:
-            self.copy_text = display_step
-        self.steps_text_html += f"<div style='margin-bottom: 2px; word-wrap: break-word;'>• {clean_step}</div>"
-        self.steps_label.setText(self.steps_text_html)
+    def _format_agent_duration(self, seconds):
+        seconds = max(0, int(seconds or 0))
+        hours, rem = divmod(seconds, 3600)
+        minutes, secs = divmod(rem, 60)
+        if hours:
+            hour_label = "שעה" if hours == 1 else "שעות"
+            return f"{hours} {hour_label} {minutes:02d} דק' {secs:02d} שנ'"
+        if minutes:
+            return f"{minutes} דק' {secs:02d} שנ'"
+        return f"{secs} שנ'"
+
+    def _set_process_header_icon(self):
+        if not hasattr(self, "toggle_btn"):
+            return
+        icon = _rotated_themed_icon(self.PROCESS_CHEVRON_ICON_NAMES, 90 if self.is_expanded else 0, 16)
+        if icon.isNull():
+            icon = _transparent_icon(16)
+        self.toggle_btn.setIcon(icon)
+        self.toggle_btn.setIconSize(QSize(16, 16))
+
+    def _update_agent_process_header(self):
+        if not self.agent_process_started:
+            return
+        prefix = "סמארטי עבד" if self.agent_process_finalized else "סמארטי עובד"
+        self.toggle_btn.setText(f"{prefix} {self._format_agent_duration(self.agent_process_elapsed_seconds)}")
+        self._set_process_header_icon()
+
+    def _apply_agent_process_width_lock(self):
+        if self.is_user:
+            return
+        if self.agent_process_started:
+            target = max(240, int(self.max_w) + 40)
+            self.setMinimumWidth(target)
+            self.setMaximumWidth(target)
+
+    def _update_agent_process_timer(self):
+        if not self.agent_process_started:
+            return
+        if not self.agent_process_finalized:
+            self.agent_process_elapsed_seconds = int(time.time() - self.agent_process_start_time)
+        self._update_agent_process_header()
+
+    def _ensure_agent_process_started(self):
+        if self.agent_process_started:
+            return
+        self.agent_process_started = True
+        self.agent_process_finalized = False
+        self.agent_process_start_time = time.time()
+        self.agent_process_elapsed_seconds = 0
+        self.is_expanded = True
+        self.process_details.show()
         self.steps_container.show()
-        self.start_steps_shimmer()
-        if not self.is_expanded: self.toggle_steps() 
+        self.agent_process_timer.start()
+        self._apply_agent_process_width_lock()
+        self._update_agent_process_header()
+
+    def _hide_current_process_thinking(self):
+        if self.current_process_group:
+            self.current_process_group.hide_thinking()
+
+    def _new_agent_process_group(self):
+        group = AgentToolGroupWidget(self.max_w)
+        self.agent_process_groups.append(group)
+        self.process_details_layout.addWidget(group)
+        self.current_process_group = group
+        group.apply_theme()
+        return group
+
+    def _current_or_new_process_group(self):
+        self._ensure_agent_process_started()
+        if self.current_process_group is None:
+            return self._new_agent_process_group()
+        return self.current_process_group
+
+    def add_agent_report(self, text):
+        display_text = _repair_markdown_links(html.unescape(str(text or ""))).strip()
+        if not display_text:
+            return
+        self._ensure_agent_process_started()
+        self._hide_current_process_thinking()
+        rendered_html = self._render_markdown_segment(display_text)
+        label = self._new_text_label(rendered_html)
+        label.setMaximumWidth(self.max_w)
+        self.agent_report_labels.append(label)
+        self.process_copy_text_parts.append(display_text)
+        self.process_details_layout.addWidget(label)
+        self._new_agent_process_group()
+        self.steps_text_html = "\n".join(self.process_copy_text_parts)
         self._refresh_layout()
+
+    def handle_agent_event(self, event):
+        if isinstance(event, str):
+            self.add_agent_report(event)
+            return bool(str(event or "").strip())
+        if not isinstance(event, dict):
+            return False
+        event_type = str(event.get("type") or "").strip()
+        if event_type == "report":
+            before = len(self.agent_report_labels)
+            self.add_agent_report(event.get("text", ""))
+            return len(self.agent_report_labels) > before
+        elif event_type == "thinking":
+            if self.agent_process_started and self.current_process_group:
+                self.current_process_group.show_thinking()
+                self._refresh_layout()
+                return True
+        elif event_type == "tool_start":
+            group = self._current_or_new_process_group()
+            group.start_tools(event.get("tools") or [], parallel=bool(event.get("parallel")))
+            self.steps_text_html = "\n".join(self.process_copy_text_parts) or "agent process"
+            self._refresh_layout()
+            return True
+        elif event_type == "tool_finish":
+            group = self._current_or_new_process_group()
+            group.finish_tools(event.get("results") or [])
+            self._refresh_layout()
+            return True
+        return False
+
+    def finalize_agent_process(self):
+        if not self.agent_process_started:
+            return
+        self.agent_process_finalized = True
+        self.agent_process_elapsed_seconds = int(time.time() - self.agent_process_start_time)
+        self.agent_process_timer.stop()
+        if self.current_process_group:
+            self.current_process_group.hide_thinking()
+        self.collapse_steps()
+
+    def restore_agent_process(self, process_data):
+        if not isinstance(process_data, dict):
+            return
+        events = process_data.get("events", [])
+        if not isinstance(events, list) or not events:
+            return
+        for event in events:
+            self.handle_agent_event(event)
+        try:
+            elapsed = int(process_data.get("elapsed_seconds", self.agent_process_elapsed_seconds) or 0)
+        except Exception:
+            elapsed = self.agent_process_elapsed_seconds
+        self.agent_process_elapsed_seconds = max(0, elapsed)
+        self.agent_process_finalized = True
+        self.agent_process_timer.stop()
+        if self.current_process_group:
+            self.current_process_group.hide_thinking()
+        self.collapse_steps()
+        self._apply_agent_process_width_lock()
+
+    def add_step(self, step_text):
+        self.add_agent_report(_clean_step_for_display(str(step_text or "").replace('\n', ' ')))
             
     def set_final_text(self, final_text):
         if not final_text: return
@@ -1296,6 +1650,7 @@ class MessageBubble(QFrame):
         render_text, technical_details = _split_technical_details(display_text)
         self.copy_text = display_text
         self.code_blocks = []
+        self.finalize_agent_process()
         self.stop_steps_shimmer()
         self._clear_final_layout()
         self.final_content.show()
@@ -1334,29 +1689,37 @@ class MessageBubble(QFrame):
         self._refresh_layout()
 
     def toggle_steps(self):
+        if not self.agent_process_started:
+            return
         self.is_expanded = not self.is_expanded
-        self.steps_label.setVisible(self.is_expanded)
+        self.process_details.setVisible(self.is_expanded)
+        self._update_agent_process_header()
         self._refresh_layout()
-        self.toggle_btn.setText("▲ שלבי פעולה" if self.is_expanded else "▼ שלבי פעולה")
 
     def collapse_steps(self):
+        if not self.agent_process_started:
+            return
         self.is_expanded = False
-        self.steps_label.hide()
+        for group in getattr(self, "agent_process_groups", []):
+            group.collapse_details()
+        self.process_details.hide()
+        self._update_agent_process_header()
         self._refresh_layout()
-        self.toggle_btn.setText("▼ שלבי פעולה")
 
     def start_steps_shimmer(self):
-        # Agent-step shimmer is disabled by default.
-        # Re-enable it by uncommenting the next line.
-        # self.steps_label.start_shimmer()
-        pass
+        if self.current_process_group:
+            self.current_process_group.show_thinking()
 
     def stop_steps_shimmer(self):
-        self.steps_label.stop_shimmer()
+        for group in getattr(self, "agent_process_groups", []):
+            group.status_label.stop_shimmer()
+            group.thinking_label.stop_shimmer()
 
     def plain_text(self):
         attachment_text = attachment_manifest_text(self.attachments)
-        base = self.copy_text or self.final_label.text() or self.steps_label.text()
+        process_text = "\n".join(getattr(self, "process_copy_text_parts", []) or [])
+        final_text = self.copy_text or self.final_label.text() or self.steps_label.text()
+        base = "\n\n".join(part for part in (process_text, final_text) if str(part or "").strip())
         return (str(base or "") + ("\n\n" + attachment_text if attachment_text else "")).strip()
 
 class ChatMessageContainer(QWidget):
@@ -3059,9 +3422,11 @@ class ChatWindow(QMainWindow):
         overlay_layout.setContentsMargins(18, 0, 18, 18)
         overlay_layout.setSpacing(4)
 
-        self.status_lbl = ShimmerLabel("")
+        self.status_lbl = QLabel("")
+        self.status_lbl.setParent(self.input_overlay)
         self.status_lbl.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 13px; font-weight: 700; padding: 0px 15px 5px 15px;")
-        overlay_layout.addWidget(self.status_lbl)
+        self.status_lbl.setFixedHeight(0)
+        self.status_lbl.hide()
         
         bottom_layout = QHBoxLayout()
         bottom_layout.setContentsMargins(0, 0, 0, 0)
@@ -3634,11 +3999,11 @@ class ChatWindow(QMainWindow):
 
     def on_agent_step(self, step_text):
         if self.current_agent_bubble:
-            self.current_agent_bubble.show()
-            self.current_agent_bubble.add_step(step_text)
-            if self.current_agent_container:
+            changed = self.current_agent_bubble.handle_agent_event(step_text)
+            if changed and self.current_agent_container:
+                self.current_agent_bubble.show()
                 self.current_agent_container.reveal_with_entry_animation()
-            self._schedule_scroll_last_user_to_view_top(delays=(50, 160))
+                self._schedule_scroll_last_user_to_view_top(delays=(50, 160))
 
     def show_confirm_dialog(self, title, text, risk="medium"):
         decision = None
@@ -3776,7 +4141,9 @@ class ChatWindow(QMainWindow):
             attachments = normalize_attachments(metadata.get("attachments", []))
             if role not in {"user", "assistant"} or (not content.strip() and not attachments):
                 continue
-            self.add_message(content, is_user=(role == "user"), show_actions=True, attachments=attachments)
+            container = self.add_message(content, is_user=(role == "user"), show_actions=True, attachments=attachments)
+            if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
+                container.bubble.restore_agent_process(metadata.get("agent_process"))
         self.refresh_chat_title()
         QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
 
