@@ -1166,11 +1166,6 @@ class SmartiCore:
                 self.status_callback(status_text)
             except Exception:
                 pass
-        if show_step and user_step and self.step_callback and not self._is_background_context():
-            try:
-                self._emit_agent_process_event("report", text=user_step, source=stage)
-            except Exception:
-                pass
 
     def _emit_agent_process_event(self, event_type, **payload):
         if not self.step_callback or self._is_background_context():
@@ -1186,8 +1181,13 @@ class SmartiCore:
         except Exception:
             pass
 
-    def _agent_tool_event_item(self, action, args_dict=None, status=""):
+    def _agent_tool_event_item(self, action, args_dict=None, status="", output=None, feedback=None, message=None):
         args = args_dict if isinstance(args_dict, dict) else {}
+        try:
+            args_text = json.dumps(args or {}, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            args_text = str(args or "")
+        args_text = redact_sensitive_text(args_text, self.settings)
         safe_args = {}
         for key in ("action", "tool_name", "name", "package", "pkg", "server", "operation", "mode"):
             value = args.get(key)
@@ -1198,9 +1198,21 @@ class SmartiCore:
             "action": str(action or ""),
             "effective_action": str(effective_action or ""),
             "arguments": safe_args,
+            "arguments_text": args_text[:12000],
         }
         if status:
             item["status"] = str(status or "")
+        output_text = output
+        if output_text is None:
+            output_text = feedback
+        if output_text is None:
+            output_text = message
+        if output_text is not None:
+            item["output_text"] = redact_sensitive_text(str(output_text or ""), self.settings)[:30000]
+        if feedback:
+            item["feedback"] = redact_sensitive_text(str(feedback or ""), self.settings)[:12000]
+        if message:
+            item["message"] = redact_sensitive_text(str(message or ""), self.settings)[:12000]
         return item
 
     def _current_agent_process_metadata(self):
@@ -1235,33 +1247,15 @@ class SmartiCore:
         report = re.sub(r'\s+', ' ', report).strip()
         if not report or self._looks_like_internal_artifact(report):
             return ""
-        if re.search(r'(?i)(?:[A-Za-z]:[\\/]|\\\\|/Users/|/home/|powershell|cmd\.exe|python(?:\.exe)?\s+-|git\s+\w+|rg\s+-|Select-Object|Get-Content)', report):
-            return ""
         if len(report) > limit:
             report = report[:max(0, limit - 3)].rstrip(" .,:;") + "..."
         return report
 
     def _should_emit_agent_report(self, report, last_report="", force=False):
-        report = self._normalize_agent_report_text(report)
-        if not report:
-            return ""
-        if force:
-            return report
-        actionish_short_report = re.match(
-            r'^(בודק|מחפש|מאתר|קורא|מריץ|מפעיל|שומר|פותח|טוען|מתקין|יוצר|מתכנן|מעריך|מאמת|מעדכן|מכין|שולף|בדיקת|חיפוש|איתור|קריאת|שליפת|שמירת|יצירת|פתיחת|הרצת|אימות|תכנון|הערכת)\b',
-            report,
-        )
-        if len(report.split()) <= 7 and actionish_short_report:
-            return ""
-        previous = self._normalize_agent_report_text(last_report)
-        if previous:
-            a = re.sub(r'\s+', ' ', report).strip().lower()
-            b = re.sub(r'\s+', ' ', previous).strip().lower()
-            if a == b or difflib.SequenceMatcher(None, a, b).ratio() >= 0.82:
-                return ""
-        return report
+        return self._normalize_agent_report_text(report)
 
     def _fallback_agent_report_for_tools(self, calls, task_state=None, iteration=1):
+        return ""
         calls = calls or []
         first_action = str((calls[0] or {}).get("action", "") if calls else "").strip()
         args = (calls[0] or {}).get("arguments", {}) if calls else {}
@@ -1294,6 +1288,7 @@ class SmartiCore:
         return "אני בודק את המידע הנדרש כדי להתקדם בבקשה שלך בלי להציף אותך בפרטים טכניים."
 
     def _task_phase_report_text(self, task_state=None, phase="progress"):
+        return ""
         objective = str((task_state or {}).get("objective", "") or "")
         lower_objective = objective.lower()
         if phase == "planner":
@@ -2423,7 +2418,6 @@ class SmartiCore:
         self._emit_agent_phase(
             "planner",
             f"requested_by_model intent={intent} score={task_state.get('complexity_score', 0)} mode={mode} provided_steps={len(provided_steps)} reason={reason[:250]}",
-            user_step=self._task_phase_report_text(task_state, phase="planner"),
             status_text="מעדכן תוכנית..." if replanning else "מתכנן שלבי ביצוע...",
             show_step=bool(show_step) and not is_background_task,
         )
@@ -2849,7 +2843,6 @@ class SmartiCore:
         self._emit_agent_phase(
             "evaluator",
             f"start iteration={iteration} results={len(results)} meaningful={meaningful}",
-            user_step=self._task_phase_report_text(task_state, phase="progress"),
             status_text="מעריך התקדמות...",
         )
         recent_results = "\n".join(
@@ -5550,6 +5543,7 @@ CWD: {current_dir}
 בתחילת כל בקשה בחר בעצמך: תשובה ישירה, כלי מתאים, או `agent_planner` פנימי. השתמש ב-`agent_planner` רק כאשר תכנון מפורש ישפר איכות/בטיחות: משימה רב-שלבית, פעולות תלויות, כתיבה/שינוי, אימייל/מערכת/GUI, אי-ודאות, או צורך באימות. אל תשתמש ב-`agent_planner` לברכה, שיחה, שיתוף סיפור, שאלה פשוטה, או פעולה חד-שלבית ברורה. אם בחרת `agent_planner`, זו חייבת להיות קריאת הכלי היחידה באותה תגובה, ורצוי לכלול `steps` קצרים כדי לחסוך קריאת Planner נוספת. אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, מותר ואף רצוי לבצע קודם discovery קצר בכלי קריאה-בלבד, ורק אחר כך לקרוא ל-`agent_planner`; לחלופין כלול בתכנון שלב discovery ראשון. אל תנחש.
 אם במהלך העבודה מתקבלים מידע חדש, שגיאות חוזרות, כשל אימות, שינויי סביבה, או תוצאות discovery שמראות שהתוכנית לא מתאימה, מותר לקרוא שוב ל-`agent_planner` עם `intent` של `replan` או `continue_plan`. זו החלטת המודל, לא טריגר אוטומטי של הקוד.
 כאשר מצב משימה פנימי כבר קיים, פעל היררכית לפיו: שמור את המטרה, התקדם שלב-שלב, שנה אסטרטגיה אחרי כשל, ואל תדלג לאישור סופי לפני שבדקת שהתוצאה מתאימה לבקשה.
+חובת דיווח ראשון: אם התשובה אינה מיידית ואתה עומד להפעיל כלי ראשון בתהליך סוכני, כתוב לפני בלוק ה-JSON דיווח מצב קצר, טבעי ומועיל למשתמש. אל תתחיל תהליך סוכני ישר ב-JSON. הכלל של דילוג על דיווחים חוזרים אינו מבטל את הדיווח הראשון.
 כשצריך כלי, אל תכתוב שורת שלב טכנית לכל לולאה. במקום זאת כתוב דיווח מצב למשתמש רק כשיש ערך אמיתי: בתחילת תהליך סוכני, אחרי ממצא משמעותי, אחרי כשל/שינוי אסטרטגיה, לפני פעולה מסוכנת/משנה מצב, או כשברור שהמשתמש ירוויח מהקשר נוסף. הדיווח צריך להיות טבעי, בעברית, בגודל של משפט קצר עד שניים, מעט יותר מפורט מפקודת הכלי, ולהסביר בקצרה מה המצב ומה אתה עומד לבדוק או לבצע עכשיו. דיווח טוב מתייחס לבקשת המשתמש ולתוצאה הרצויה, לא לשם הכלי, נתיב הקובץ, פקודת shell, JSON, או פרט טכני פנימי. למשל: "אני בודק את הקובץ הקיים כדי לשנות רק את אזור התצוגה שביקשת" עדיף על "קורא C:\\Users\\...\\chat.py". אם אתה ממשיך לנסות וריאציות של אותה פעולה, מריץ כלי נוסף כחלק מאותו צעד, או מבצע בדיקת המשך טכנית צפויה, אל תוסיף דיווח חדש; החזר רק בלוק JSON. בלי ברכות, בלי "סטטוס:", בלי התנצלות, בלי רשימות ארוכות, ובלי טקסט אחרי הבלוק:
 ```json
 {{
@@ -5768,7 +5762,6 @@ CWD: {current_dir}
             self._emit_agent_phase(
                 "verifier",
                 f"start force={bool(force)} response_chars={len(str(final_response or ''))} observations={len(self.recent_tool_observations[-8:])}",
-                user_step=self._task_phase_report_text({"objective": objective}, phase="verifier"),
                 status_text="מאמת תשובה סופית...",
             )
             verifier_text = (
@@ -6166,7 +6159,7 @@ CWD: {current_dir}
             schemas_seen = set()
             internal_artifact_replies = 0
             process_report_emitted = False
-            last_process_report = ""
+            missing_process_report_feedbacks = 0
             task_started = time.time()
             total_timeout = self._timeout("max_total_task_seconds", 900)
             current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
@@ -6297,11 +6290,10 @@ CWD: {current_dir}
                         preview_step = self._preview_step_for_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
                         if preview_step and self.step_callback and not self._is_background_context():
                             try:
-                                report = self._should_emit_agent_report(preview_step, last_process_report, force=not process_report_emitted)
+                                report = self._should_emit_agent_report(pre_text)
                                 if report:
                                     self._emit_agent_process_event("report", text=report, source="tool_parser")
                                     process_report_emitted = True
-                                    last_process_report = report
                             except Exception:
                                 pass
                         logging.warning(feedback_for_ai)
@@ -6310,13 +6302,20 @@ CWD: {current_dir}
                         continue
 
                     if first_call.get("action") == "agent_planner":
-                        planner_report = self._should_emit_agent_report(pre_text, last_process_report, force=not process_report_emitted)
-                        if not planner_report and not process_report_emitted:
-                            planner_report = self._fallback_agent_report_for_tools([first_call], task_state, iteration)
+                        planner_report = self._should_emit_agent_report(pre_text)
                         if planner_report:
                             self._emit_agent_process_event("report", text=planner_report, source="model")
                             process_report_emitted = True
-                            last_process_report = planner_report
+                        elif self.step_callback and not self._is_background_context() and not process_report_emitted and missing_process_report_feedbacks < 2:
+                            missing_process_report_feedbacks += 1
+                            self._append_tool_feedback(
+                                current_messages,
+                                tool_turn_text,
+                                "agent_process_report",
+                                "SYSTEM_FORMAT_REQUIRED: Before the first tool call in an agentic task, write a brief user-facing Hebrew status report before the JSON tool block. Then repeat the same tool call. The report content is your judgment; do not expose tool names, paths, shell commands, or JSON.",
+                            )
+                            checkpoint("missing_agent_process_report")
+                            continue
                         self._emit_agent_process_event(
                             "tool_start",
                             tools=[self._agent_tool_event_item("agent_planner", first_call.get("arguments", {}) or {})],
@@ -6336,7 +6335,12 @@ CWD: {current_dir}
                         )
                         self._emit_agent_process_event(
                             "tool_finish",
-                            results=[self._agent_tool_event_item("agent_planner", first_call.get("arguments", {}) or {}, status="ok")],
+                            results=[self._agent_tool_event_item(
+                                "agent_planner",
+                                first_call.get("arguments", {}) or {},
+                                status="ok",
+                                output=planner_feedback,
+                            )],
                         )
                         self._append_internal_planner_feedback(current_messages, tool_turn_text, task_state, planner_feedback)
                         if len(raw_tool_calls) > 1:
@@ -6397,14 +6401,20 @@ CWD: {current_dir}
                     tool_call_counts = candidate_tool_call_counts
                     similar_tool_signatures = candidate_similar_tool_signatures
 
-                    report_source = pre_text or selected_calls[0].get("step_text", "")
-                    report_text = self._should_emit_agent_report(report_source, last_process_report, force=not process_report_emitted)
-                    if not report_text and not process_report_emitted:
-                        report_text = self._fallback_agent_report_for_tools(selected_calls, task_state, iteration)
+                    report_text = self._should_emit_agent_report(pre_text)
                     if report_text:
                         self._emit_agent_process_event("report", text=report_text, source="model")
                         process_report_emitted = True
-                        last_process_report = report_text
+                    elif self.step_callback and not self._is_background_context() and not process_report_emitted and missing_process_report_feedbacks < 2:
+                        missing_process_report_feedbacks += 1
+                        self._append_tool_feedback(
+                            current_messages,
+                            tool_turn_text,
+                            "agent_process_report",
+                            "SYSTEM_FORMAT_REQUIRED: Before the first tool call in an agentic task, write a brief user-facing Hebrew status report before the JSON tool block. Then repeat the same tool call. The report content is your judgment; do not expose tool names, paths, shell commands, or JSON.",
+                        )
+                        checkpoint("missing_agent_process_report")
+                        continue
                     self._emit_agent_process_event(
                         "tool_start",
                         tools=[
@@ -6441,6 +6451,9 @@ CWD: {current_dir}
                                 result.get("action", ""),
                                 result.get("arguments", {}) or {},
                                 status=result.get("status", ""),
+                                output=result.get("output"),
+                                feedback=result.get("feedback"),
+                                message=result.get("message"),
                             )
                             for result in results
                         ],

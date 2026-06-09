@@ -968,32 +968,259 @@ def _agent_tool_display_name(tool):
         name = f"{name} / {effective}"
     return re.sub(r"\s+", " ", name).strip()
 
+def _agent_tool_payload_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str).strip()
+    except Exception:
+        return str(value or "").strip()
+
+def _agent_tool_query_text(tool):
+    tool = tool if isinstance(tool, dict) else {}
+    return (
+        _agent_tool_payload_text(tool.get("arguments_text"))
+        or _agent_tool_payload_text(tool.get("arguments"))
+        or _agent_tool_display_name(tool)
+    )
+
+def _agent_tool_output_text(tool):
+    tool = tool if isinstance(tool, dict) else {}
+    for key in ("output_text", "output", "feedback", "message"):
+        text = _agent_tool_payload_text(tool.get(key))
+        if text:
+            return text
+    return ""
+
+def _agent_tool_status_text(status):
+    status = str(status or "").strip().lower()
+    if status in {"running", "active", "started"}:
+        return "רץ"
+    if status in {"ok", "success", "done", "completed"}:
+        return "הצליח"
+    if status in {"cancelled", "canceled", "stopped"}:
+        return "בוטל"
+    if status:
+        return "שגיאה"
+    return ""
+
+class AgentToolDetailWidget(QWidget):
+    CHEVRON_ICON_NAMES = ("agent_tool_row_chevron", "agent_tool_detail_chevron", "agent_process_chevron", "message_collapse_arrow")
+    TOOL_ICON_NAMES = ("agent_tool_row_status", "agent_tool_detail_status", "agent_tool_status", "tools_icon")
+    QUERY_TITLE = "קלט ופרמטרי הפעלה"
+    OUTPUT_TITLE = "פלט הכלי"
+
+    def __init__(self, tool, parent_width=450):
+        super().__init__()
+        self.tool = dict(tool if isinstance(tool, dict) else {"action": str(tool or "")})
+        self.max_w = max(220, int(parent_width or 450))
+        self.expanded = False
+        self.setStyleSheet("background: transparent; border: none;")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(self.max_w)
+        self.setMaximumWidth(self.max_w)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        self.row = QFrame()
+        self.row.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.row.installEventFilter(self)
+        self.row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        row_layout = QHBoxLayout(self.row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(0)
+
+        self.arrow_label = QLabel()
+        self.arrow_label.setFixedSize(16, 16)
+        self.arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.arrow_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self.tool_icon_label = QLabel()
+        self.tool_icon_label.setFixedSize(16, 16)
+        self.tool_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tool_icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self.name_label = QLabel()
+        self.name_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.name_label.setWordWrap(True)
+        self.name_label.setMaximumWidth(max(150, self.max_w - 42))
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.name_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
+        self.name_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.name_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        row_layout.addStretch(1)
+        row_layout.addWidget(self.arrow_label, 0, Qt.AlignmentFlag.AlignTop)
+        row_layout.addWidget(self.name_label, 0)
+        row_layout.addWidget(self.tool_icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.row)
+
+        self.panel = QFrame()
+        self.panel.setObjectName("AgentToolDetailPanel")
+        self.panel.setMinimumWidth(self.max_w)
+        self.panel.setMaximumWidth(self.max_w)
+        panel_layout = QVBoxLayout(self.panel)
+        panel_layout.setContentsMargins(10, 9, 10, 8)
+        panel_layout.setSpacing(5)
+
+        self.query_title = QLabel(self.QUERY_TITLE)
+        self.query_title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.query_box = self._make_text_box()
+        self.output_title = QLabel(self.OUTPUT_TITLE)
+        self.output_title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.output_box = self._make_text_box()
+        self.status_label = QLabel()
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
+        panel_layout.addWidget(self.query_title)
+        panel_layout.addWidget(self.query_box)
+        panel_layout.addWidget(self.output_title)
+        panel_layout.addWidget(self.output_box)
+        panel_layout.addWidget(self.status_label)
+        self.panel.hide()
+        layout.addWidget(self.panel)
+
+        self.update_tool(self.tool)
+        self.apply_theme()
+
+    def _make_text_box(self):
+        box = QPlainTextEdit()
+        box.setReadOnly(True)
+        box.setFrameShape(QFrame.Shape.NoFrame)
+        box.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        box.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        box.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        box.setMinimumHeight(34)
+        box.setMaximumHeight(34)
+        box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        return box
+
+    def _apply_dynamic_text_box_height(self, box, text, min_lines=1, max_lines=7):
+        text = str(text or "")
+        line_count = max(1, len(text.splitlines()) if text else 1)
+        visible_lines = min(max_lines, max(min_lines, line_count))
+        metrics = QFontMetrics(box.font())
+        height = (metrics.lineSpacing() * visible_lines) + 18
+        if line_count > max_lines:
+            height += 8
+            box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        else:
+            box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        box.setMinimumHeight(height)
+        box.setMaximumHeight(height)
+
+    def eventFilter(self, obj, event):
+        if obj is self.row and event.type() == QEvent.Type.MouseButtonPress:
+            self.set_expanded(not self.expanded)
+            return True
+        return super().eventFilter(obj, event)
+
+    def update_parent_width(self, parent_width):
+        self.max_w = max(220, int(parent_width or 450))
+        self.setMinimumWidth(self.max_w)
+        self.setMaximumWidth(self.max_w)
+        self._fit_name_label_width()
+        self.panel.setMinimumWidth(self.max_w)
+        self.panel.setMaximumWidth(self.max_w)
+        self._apply_dynamic_text_box_height(self.query_box, self.query_box.toPlainText(), min_lines=1, max_lines=5)
+        if not self.output_box.isHidden():
+            self._apply_dynamic_text_box_height(self.output_box, self.output_box.toPlainText(), min_lines=1, max_lines=8)
+
+    def _fit_name_label_width(self):
+        available = max(120, self.max_w - 42)
+        text = str(self.name_label.text() or "")
+        raw_width = QFontMetrics(self.name_label.font()).horizontalAdvance(text) + 10
+        self.name_label.setWordWrap(raw_width > available)
+        width = max(42, min(available, raw_width))
+        self.name_label.setMinimumWidth(width)
+        self.name_label.setMaximumWidth(width)
+
+    def update_tool(self, tool):
+        if isinstance(tool, dict):
+            self.tool.update(tool)
+        name = _agent_tool_display_name(self.tool)
+        status_text = _agent_tool_status_text(self.tool.get("status"))
+        self.name_label.setText(f"{status_text} · {name}" if status_text else name)
+        self._fit_name_label_width()
+        query_text = _agent_tool_query_text(self.tool)
+        output_text = _agent_tool_output_text(self.tool)
+        is_running = str(self.tool.get("status") or "").strip().lower() in {"running", "active", "started"}
+        self.query_box.setPlainText(query_text)
+        self._apply_dynamic_text_box_height(self.query_box, query_text, min_lines=1, max_lines=5)
+        show_output = bool(output_text) or not is_running
+        self.output_title.setVisible(show_output)
+        self.output_box.setVisible(show_output)
+        if show_output:
+            output_display = output_text or "אין פלט."
+            self.output_box.setPlainText(output_display)
+            self._apply_dynamic_text_box_height(self.output_box, output_display, min_lines=1, max_lines=8)
+        self.status_label.setText(status_text)
+        self._set_chevron_icon()
+
+    def set_expanded(self, expanded):
+        self.expanded = bool(expanded)
+        self.panel.setVisible(self.expanded)
+        self._set_chevron_icon()
+        self.updateGeometry()
+
+    def _set_chevron_icon(self):
+        icon = _rotated_themed_icon(self.CHEVRON_ICON_NAMES, 90 if self.expanded else 0, 15)
+        if icon.isNull():
+            icon = _transparent_icon(15)
+        self.arrow_label.setPixmap(icon.pixmap(15, 15))
+        self.arrow_label.setText("")
+
+    def apply_theme(self):
+        self.row.setStyleSheet("background: transparent; border: none;")
+        self.name_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 15px; background: transparent; padding-right: 5px; padding-left: 0px;")
+        self.arrow_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; background: transparent;")
+        self.tool_icon_label.setStyleSheet("background: transparent; border: none;")
+        set_themed_label_icon(self.tool_icon_label, self.TOOL_ICON_NAMES, "", 15)
+        self.panel.setStyleSheet(
+            f"QFrame#AgentToolDetailPanel {{ background: {FIELD_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 8px; }}"
+            f"QPlainTextEdit {{ background: transparent; color: {SUBTLE_TEXT_COLOR}; border: none; "
+            "font-size: 13px; font-family: Consolas, 'Courier New'; padding: 0px; }"
+            "QPlainTextEdit viewport { background: transparent; }"
+            f"QLabel {{ color: {MUTED_TEXT_COLOR}; font-size: 13px; background: transparent; }}"
+            f"{SCROLLBAR_CSS}"
+        )
+        self._set_chevron_icon()
+
 class AgentToolGroupWidget(QWidget):
     CHEVRON_ICON_NAMES = ("agent_process_chevron", "message_collapse_arrow")
     TOOL_ICON_NAMES = ("agent_tool_status", "agent_tool_icon", "tools_icon")
+    TOOL_ROW_INDENT = 34
 
     def __init__(self, parent_width=450):
         super().__init__()
         self.max_w = max(220, int(parent_width or 450))
         self.tools = []
+        self.tool_widgets = []
         self.run_count = 0
         self.details_expanded = False
         self.running = False
         self.setStyleSheet("background: transparent; border: none;")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(self.max_w)
+        self.setMaximumWidth(self.max_w)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 12, 0)
         layout.setSpacing(4)
 
         self.status_row = QFrame()
         self.status_row.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.status_row.installEventFilter(self)
-        self.status_row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.status_row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         status_layout = QHBoxLayout(self.status_row)
         status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(6)
+        status_layout.setSpacing(0)
 
         self.tool_icon_label = QLabel()
         self.tool_icon_label.setFixedSize(18, 18)
@@ -1003,8 +1230,9 @@ class AgentToolGroupWidget(QWidget):
         self.status_label = StepsShimmerLabel()
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.status_label.setWordWrap(True)
-        self.status_label.setMaximumWidth(self.max_w)
+        self.status_label.setMaximumWidth(max(150, self.max_w - 46))
         self.status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.status_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
         self.status_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
@@ -1012,9 +1240,10 @@ class AgentToolGroupWidget(QWidget):
         self.arrow_label.setFixedSize(18, 18)
         self.arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.arrow_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        status_layout.addWidget(self.tool_icon_label, 0, Qt.AlignmentFlag.AlignTop)
-        status_layout.addWidget(self.status_label, 1)
+        status_layout.addStretch(1)
         status_layout.addWidget(self.arrow_label, 0, Qt.AlignmentFlag.AlignTop)
+        status_layout.addWidget(self.status_label, 0)
+        status_layout.addWidget(self.tool_icon_label, 0, Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.status_row)
 
         self.details_label = QLabel()
@@ -1025,6 +1254,16 @@ class AgentToolGroupWidget(QWidget):
         self.details_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignTop)
         self.details_label.hide()
         layout.addWidget(self.details_label)
+
+        self.tools_container = QWidget()
+        self.tools_container.setStyleSheet("background: transparent; border: none;")
+        self.tools_container.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.tools_container.setMaximumWidth(self.max_w)
+        self.tools_layout = QVBoxLayout(self.tools_container)
+        self.tools_layout.setContentsMargins(0, 0, 0, 0)
+        self.tools_layout.setSpacing(5)
+        self.tools_container.hide()
+        layout.addWidget(self.tools_container)
 
         self.thinking_label = StepsShimmerLabel()
         self.thinking_label.setTextFormat(Qt.TextFormat.PlainText)
@@ -1045,19 +1284,46 @@ class AgentToolGroupWidget(QWidget):
 
     def apply_theme(self):
         self.status_row.setStyleSheet("background: transparent; border: none;")
-        self.status_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
+        self.status_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent; padding-right: 6px; padding-left: 0px;")
         self.arrow_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
         self.tool_icon_label.setStyleSheet("background: transparent; border: none;")
         self.details_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 15px; background: transparent; padding: 0px 0px 3px 0px;")
         self.thinking_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
         set_themed_label_icon(self.tool_icon_label, self.TOOL_ICON_NAMES, "", 16)
         self._set_chevron_icon()
+        for widget in getattr(self, "tool_widgets", []):
+            widget.apply_theme()
 
     def update_parent_width(self, parent_width):
         self.max_w = max(220, int(parent_width or 450))
-        self.status_label.setMaximumWidth(self.max_w)
+        self.setMinimumWidth(self.max_w)
+        self.setMaximumWidth(self.max_w)
+        self._fit_status_label_width()
         self.details_label.setMaximumWidth(self.max_w)
+        self.tools_container.setMaximumWidth(self.max_w)
         self.thinking_label.setMaximumWidth(self.max_w)
+        for widget in getattr(self, "tool_widgets", []):
+            widget.update_parent_width(max(220, self.max_w - self.TOOL_ROW_INDENT))
+
+    def _fit_status_label_width(self):
+        available = max(120, self.max_w - 46)
+        text = str(self.status_label.text() or "")
+        raw_width = QFontMetrics(self.status_label.font()).horizontalAdvance(text) + 10
+        self.status_label.setWordWrap(raw_width > available)
+        width = max(42, min(available, raw_width))
+        self.status_label.setMinimumWidth(width)
+        self.status_label.setMaximumWidth(width)
+
+    def _add_tool_widget(self, item):
+        widget = AgentToolDetailWidget(item, max(220, self.max_w - self.TOOL_ROW_INDENT))
+        self.tool_widgets.append(widget)
+        self.tools_layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignRight)
+        widget.apply_theme()
+        return widget
+
+    def _update_tool_widget(self, index, item):
+        if 0 <= index < len(self.tool_widgets):
+            self.tool_widgets[index].update_tool(item)
 
     def _tool_detail_html(self):
         rows = []
@@ -1072,12 +1338,12 @@ class AgentToolGroupWidget(QWidget):
         return "".join(rows)
 
     def _refresh_details(self):
-        self.details_label.setText(self._tool_detail_html())
-        self.details_label.setVisible(self.details_expanded and bool(self.tools))
+        self.details_label.hide()
+        self.tools_container.setVisible(self.details_expanded and bool(self.tools))
         self._set_chevron_icon()
 
     def _set_chevron_icon(self):
-        icon = _rotated_themed_icon(self.CHEVRON_ICON_NAMES, 90 if self.details_expanded else 0, 16)
+        icon = _rotated_themed_icon(self.CHEVRON_ICON_NAMES, -90 if self.details_expanded else 0, 16)
         if icon.isNull():
             icon = _transparent_icon(16)
         self.arrow_label.setPixmap(icon.pixmap(16, 16))
@@ -1085,6 +1351,8 @@ class AgentToolGroupWidget(QWidget):
 
     def collapse_details(self):
         self.details_expanded = False
+        for widget in getattr(self, "tool_widgets", []):
+            widget.set_expanded(False)
         self._refresh_details()
 
     def toggle_details(self):
@@ -1115,12 +1383,14 @@ class AgentToolGroupWidget(QWidget):
             item = dict(tool)
             item["status"] = "running"
             self.tools.append(item)
+            self._add_tool_widget(item)
         self.running = True
         if parallel and len(tools) > 1:
             text = f"מריץ: {len(tools)} כלים במקביל"
         else:
             text = f"מריץ: כלי {_agent_tool_display_name(tools[0])}"
         self.status_label.setText(text)
+        self._fit_status_label_width()
         self.status_label.start_shimmer()
         self._refresh_details()
         self.show()
@@ -1129,24 +1399,32 @@ class AgentToolGroupWidget(QWidget):
         results = [result if isinstance(result, dict) else {"action": str(result or "")} for result in (results or [])]
         for result in results:
             updated = False
+            updated_index = -1
             result_action = str(result.get("action") or "")
-            for item in reversed(self.tools):
+            for index in range(len(self.tools) - 1, -1, -1):
+                item = self.tools[index]
                 if item.get("status") == "running" and str(item.get("action") or "") == result_action:
                     item.update(result)
                     item["status"] = str(result.get("status") or "ok")
                     updated = True
+                    updated_index = index
                     break
             if not updated:
                 item = dict(result)
                 item["status"] = str(result.get("status") or "ok")
                 self.tools.append(item)
+                self._add_tool_widget(item)
+            else:
+                self._update_tool_widget(updated_index, item)
         self.run_count += len(results)
-        for item in self.tools:
+        for index, item in enumerate(self.tools):
             if item.get("status") == "running":
                 item["status"] = "ok"
+                self._update_tool_widget(index, item)
         self.running = False
         if self.run_count:
             self.status_label.setText(f"הורצו {self.run_count} כלים")
+            self._fit_status_label_width()
         self.status_label.stop_shimmer()
         self._refresh_details()
         self.show_thinking()
@@ -1180,7 +1458,9 @@ class MessageBubble(QFrame):
 
         self.toggle_btn = QPushButton("")
         self.toggle_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.toggle_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.toggle_btn.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.toggle_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.toggle_btn.setMaximumWidth(self.max_w)
         self.toggle_btn.clicked.connect(self.toggle_steps)
 
         self.process_details = QWidget()
@@ -1300,6 +1580,7 @@ class MessageBubble(QFrame):
 
     def update_parent_width(self, parent_width):
         self.max_w = max(220, int(parent_width * 0.76) - 30)
+        self.toggle_btn.setMaximumWidth(self.max_w)
         self.steps_label.setMaximumWidth(self.max_w)
         self.final_label.setMaximumWidth(self.max_w)
         for label in getattr(self, "agent_report_labels", []):
@@ -1506,7 +1787,7 @@ class MessageBubble(QFrame):
     def _set_process_header_icon(self):
         if not hasattr(self, "toggle_btn"):
             return
-        icon = _rotated_themed_icon(self.PROCESS_CHEVRON_ICON_NAMES, 90 if self.is_expanded else 0, 16)
+        icon = _rotated_themed_icon(self.PROCESS_CHEVRON_ICON_NAMES, -90 if self.is_expanded else 0, 16)
         if icon.isNull():
             icon = _transparent_icon(16)
         self.toggle_btn.setIcon(icon)
