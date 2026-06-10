@@ -426,6 +426,7 @@ def _refresh_theme_exports(mode=None, settings=None):
             color: {ACCENT_TEXT_COLOR}; font-weight: 700;
             padding: 14px 22px; border-radius: 22px; font-size: 15px;
             border: 1px solid rgba(255,255,255,0.18);
+            outline: none;
         }}
         QPushButton:hover {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -440,6 +441,7 @@ def _refresh_theme_exports(mode=None, settings=None):
             background-color: {ACCENT_TINT}; color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR}; border-radius: 20px;
             padding: 11px 17px; font-size: 13px; font-weight: 700;
+            outline: none;
         }}
         QPushButton:hover {{ background-color: {HOVER_TINT}; border-color: {LINE_COLOR}; }}
         QPushButton:pressed {{ background-color: {ACCENT_TINT_STRONG}; border-color: {ACCENT_PINK_COLOR}; }}
@@ -457,6 +459,7 @@ def _refresh_theme_exports(mode=None, settings=None):
             background-color: rgba(240,90,110,0.13); color: {DANGER_COLOR};
             border: 1px solid rgba(255,95,126,0.30);
             border-radius: 20px; padding: 11px 17px; font-weight: 700;
+            outline: none;
         }}
         QPushButton:hover {{ background-color: rgba(255,95,126,0.20); border-color: rgba(255,95,126,0.44); }}
         QPushButton:pressed {{ background-color: rgba(255,95,126,0.28); }}
@@ -603,10 +606,14 @@ def application_stylesheet():
         }}
         QTextEdit {{ cursor-move-style: logical; }}
         QLineEdit {{ cursor-move-style: logical; }}
+        QPushButton, QToolButton, QCheckBox, QComboBox, QLineEdit, QTextEdit,
+        QPlainTextEdit, QListWidget, QTreeWidget, QMenu, QAbstractItemView {{
+            outline: none;
+        }}
         QToolTip {{
             background: {MENU_BG_COLOR};
             color: {TEXT_COLOR};
-            border: 1px solid {SOFT_LINE_COLOR};
+            border: 0px solid transparent;
             border-radius: 14px;
             padding: 6px 8px;
             font-size: 12px;
@@ -721,6 +728,7 @@ def icon_button_css(size=48, danger=False):
             color: {color};
             font-size: 20px;
             font-weight: 700;
+            outline: none;
         }}
         QPushButton:hover {{ background-color: {hover}; border-color: {SOFT_LINE_COLOR}; }}
         QPushButton:pressed {{ background-color: {tint}; border-color: {LINE_COLOR}; }}
@@ -737,6 +745,7 @@ def ghost_button_css():
             border-radius: 20px;
             padding: 10px 14px;
             font-weight: 700;
+            outline: none;
         }}
         QPushButton:hover {{ background: {ACCENT_TINT}; border-color: {SOFT_LINE_COLOR}; }}
         QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; border-color: {LINE_COLOR}; }}
@@ -758,6 +767,7 @@ def segmented_control_css():
             padding: 11px 14px;
             font-size: 13px;
             font-weight: 700;
+            outline: none;
         }}
         QPushButton:hover {{
             background: {HOVER_TINT};

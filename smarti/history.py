@@ -3,6 +3,11 @@ from .common import *
 
 CHAT_HISTORY_SCHEMA_VERSION = 1
 DEFAULT_CHAT_TITLE = "שיחה חדשה"
+DEFAULT_WELCOME_MESSAGE = (
+    "שלום, אני סמארטי - סוכן AI למחשב Windows. אני יכול לענות, לחפש מידע, "
+    "לעבוד עם קבצים, דפדפן, תוכנות וכלים, ולנהל תהליכים רב-שלביים עד לתוצאה. "
+    "מה נרצה לעשות?"
+)
 
 
 def _now_iso():
@@ -18,8 +23,10 @@ def _clean_title(value):
 def _message_text(message):
     if not isinstance(message, dict):
         return ""
-    text = str(message.get("content", "") or "")
     metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
+    if metadata.get("ui_only"):
+        return ""
+    text = str(message.get("content", "") or "")
     attachments = metadata.get("attachments", []) if isinstance(metadata.get("attachments"), list) else []
     if attachments:
         names = " ".join(str(item.get("name", "")) for item in attachments if isinstance(item, dict))
@@ -166,6 +173,30 @@ class ChatSessionStore:
             "context": {},
         }
 
+    def _session_has_welcome(self, session):
+        for message in session.get("messages", []) or []:
+            if not isinstance(message, dict):
+                continue
+            metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
+            if metadata.get("kind") == "welcome":
+                return True
+        return False
+
+    def _append_welcome_message(self, session, welcome_text=None, created_at=None):
+        if self._session_has_welcome(session):
+            return False
+        text = str(welcome_text or DEFAULT_WELCOME_MESSAGE).strip()
+        if not text:
+            return False
+        now = str(created_at or _now_iso())
+        session.setdefault("messages", []).insert(0, {
+            "role": "assistant",
+            "content": text,
+            "created_at": now,
+            "metadata": {"kind": "welcome", "ui_only": True},
+        })
+        return True
+
     def ensure_active_session(self):
         with self._lock:
             session = self._session_by_id(self.data.get("active_session_id"))
@@ -268,7 +299,7 @@ class ChatSessionStore:
             user_messages = [m for m in session.get("messages", []) if m.get("role") == "user"]
             return len(user_messages) == 0
 
-    def add_turn(self, user_text, assistant_text, assistant_raw=None, is_error=False, title="", context=None, user_metadata=None, assistant_metadata=None):
+    def add_turn(self, user_text, assistant_text, assistant_raw=None, is_error=False, title="", context=None, user_metadata=None, assistant_metadata=None, welcome_text=None):
         with self._lock:
             session = self._session_by_id(self.data.get("active_session_id"))
             if not session:
@@ -276,6 +307,8 @@ class ChatSessionStore:
                 self.data.setdefault("sessions", []).append(session)
                 self.data["active_session_id"] = session["id"]
             now = _now_iso()
+            if not session.get("messages"):
+                self._append_welcome_message(session, welcome_text or DEFAULT_WELCOME_MESSAGE, created_at=now)
             metadata = copy.deepcopy(user_metadata if isinstance(user_metadata, dict) else {})
             if str(user_text or "").strip() or metadata.get("attachments"):
                 session.setdefault("messages", []).append({

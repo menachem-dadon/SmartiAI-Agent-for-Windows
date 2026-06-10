@@ -6,14 +6,14 @@ from .ui_controls import *
 from .config import BUILT_IN_TOOLS, LEGACY_BUILTIN_TOOLS, PUBLIC_BUILTIN_TOOLS
 from .workers import AgentWorker, VoiceWorker, TTSWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
-from .history import DEFAULT_CHAT_TITLE
+from .history import DEFAULT_CHAT_TITLE, DEFAULT_WELCOME_MESSAGE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
 from PyQt6.QtCore import QEvent, QEventLoop
 from PyQt6.QtGui import QTextDocument, QTransform
 from PyQt6.QtWidgets import QBoxLayout
 
-WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
+WELCOME_MESSAGE = DEFAULT_WELCOME_MESSAGE
 
 def _asset_icon(*filenames):
     return themed_icon(*filenames)
@@ -703,7 +703,7 @@ class CodeBlockWidget(QFrame):
     def _button_css(self):
         return (
             "QPushButton { background: transparent; border: 1px solid transparent; border-radius: 14px; "
-            f"color: {TEXT_COLOR}; padding: 0px; font-size: 18px; font-weight: 800; }}"
+            f"color: {TEXT_COLOR}; padding: 0px; font-size: 18px; font-weight: 800; outline: none; }}"
             f"QPushButton:hover {{ background: {ACCENT_TINT}; border-color: {SOFT_LINE_COLOR}; }}"
             f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; border-color: {LINE_COLOR}; }}"
         )
@@ -2146,6 +2146,11 @@ class MessageBubble(QFrame):
         base = "\n\n".join(part for part in (process_text, final_text) if str(part or "").strip())
         return (str(base or "") + ("\n\n" + attachment_text if attachment_text else "")).strip()
 
+    def final_plain_text(self):
+        attachment_text = attachment_manifest_text(self.attachments)
+        final_text = self.copy_text or self.final_label.text()
+        return (str(final_text or "") + ("\n\n" + attachment_text if attachment_text else "")).strip()
+
 class ChatMessageContainer(QWidget):
     tts_button_clicked = pyqtSignal(object)
 
@@ -2260,7 +2265,7 @@ class ChatMessageContainer(QWidget):
         radius = max(1, int(self.ACTION_BUTTON_SIZE / 2))
         return (
             f"QPushButton {{ background: transparent; color: {color}; border: none; "
-            f"padding: 0px; border-radius: {radius}px; font-size: 15px; font-weight: 700; }}"
+            f"padding: 0px; border-radius: {radius}px; font-size: 15px; font-weight: 700; outline: none; }}"
             f"QPushButton:hover {{ background: {hover}; color: {TEXT_COLOR}; }}"
             f"QPushButton:pressed {{ background: {pressed}; }}"
             f"QPushButton:disabled {{ background: transparent; color: {SUBTLE_TEXT_COLOR}; }}"
@@ -2388,7 +2393,8 @@ class ChatMessageContainer(QWidget):
     def copy_message_text(self):
         if not self.copy_btn:
             return
-        QApplication.clipboard().setText(self.bubble.plain_text())
+        text = self.bubble.plain_text() if self.is_user else self.bubble.final_plain_text()
+        QApplication.clipboard().setText(text)
 
     def toggle_user_message_collapse(self):
         if self.user_collapse_btn:
@@ -3562,7 +3568,7 @@ class ChatWindow(QMainWindow):
     def _menu_button_stylesheet(self):
         return (
             f"QPushButton {{ color: {TEXT_COLOR}; background: transparent; border: 1px solid transparent; "
-            f"border-radius: 24px; padding-bottom: 3px; }}"
+            f"border-radius: 24px; padding-bottom: 3px; outline: none; }}"
             f"QPushButton:hover {{ background: {ACCENT_TINT}; border-color: {SOFT_LINE_COLOR}; }}"
             f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; border-color: {LINE_COLOR}; }}"
         )
@@ -3572,7 +3578,7 @@ class ChatWindow(QMainWindow):
             "QPushButton#UpdateButton {"
             f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_COLOR}, stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});"
             f"color: {ACCENT_TEXT_COLOR}; border: 2px solid {ACCENT_WARM_COLOR}; border-radius: 24px;"
-            "font-size: 20px; font-weight: 900; padding: 0px;"
+            "font-size: 20px; font-weight: 900; padding: 0px; outline: none;"
             "}"
             "QPushButton#UpdateButton:hover {"
             f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BRAND_ACCENT_COLOR}, stop:0.52 {BRAND_PINK_COLOR}, stop:1 {BRAND_SECONDARY_COLOR});"
@@ -3635,7 +3641,7 @@ class ChatWindow(QMainWindow):
         )
         self.attach_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {TEXT_COLOR}; border: 1px solid transparent; "
-            f"border-radius: 21px; padding: 0px; font-size: 28px; font-weight: 300; }}"
+            f"border-radius: 21px; padding: 0px; font-size: 28px; font-weight: 300; outline: none; }}"
             f"QPushButton:hover {{ color: {ACCENT_COLOR}; background: {ACCENT_TINT}; border-color: {SOFT_LINE_COLOR}; }}"
             f"QPushButton:pressed {{ color: {ACCENT_PINK_COLOR}; background: {ACCENT_TINT_STRONG}; border-color: {LINE_COLOR}; }}"
         )
@@ -4314,7 +4320,7 @@ class ChatWindow(QMainWindow):
 
         self.action_btn.setStyleSheet(
             f"QPushButton {{ background: {bg_color}; {border_css} padding: 0px; "
-            f"color: {fg_color}; font-size: 18px; font-weight: 700; }}"
+            f"color: {fg_color}; font-size: 18px; font-weight: 700; outline: none; }}"
             f"QPushButton:hover {{ background: {hover_bg}; }}"
             f"QPushButton:pressed {{ background: {pressed_bg}; }}"
             f"QPushButton:disabled {{ color: {SUBTLE_TEXT_COLOR}; background: transparent; }}"
@@ -4552,6 +4558,12 @@ class ChatWindow(QMainWindow):
                         child_widget.deleteLater()
                 layout.deleteLater()
 
+    def _is_welcome_history_message(self, message):
+        if not isinstance(message, dict):
+            return False
+        metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
+        return metadata.get("kind") == "welcome" or metadata.get("ui_only") is True
+
     def load_active_chat_session(self):
         self._clear_chat_widgets()
         messages = self.core.active_chat_messages()
@@ -4559,6 +4571,8 @@ class ChatWindow(QMainWindow):
             self.add_message(WELCOME_MESSAGE, is_user=False, show_actions=False)
             self.refresh_chat_title()
             return
+        if not any(self._is_welcome_history_message(message) for message in messages):
+            self.add_message(WELCOME_MESSAGE, is_user=False, show_actions=False)
         for message in messages:
             role = message.get("role")
             content = str(message.get("content", "") or "")
@@ -4566,7 +4580,8 @@ class ChatWindow(QMainWindow):
             attachments = normalize_attachments(metadata.get("attachments", []))
             if role not in {"user", "assistant"} or (not content.strip() and not attachments):
                 continue
-            container = self.add_message(content, is_user=(role == "user"), show_actions=True, attachments=attachments)
+            is_welcome = self._is_welcome_history_message(message)
+            container = self.add_message(content, is_user=(role == "user"), show_actions=not is_welcome, attachments=attachments)
             if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
                 container.bubble.restore_agent_process(metadata.get("agent_process"))
         self.refresh_chat_title()

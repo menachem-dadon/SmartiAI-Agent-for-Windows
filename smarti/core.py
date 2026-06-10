@@ -2,7 +2,7 @@
 from .common import *
 from .config import *
 from .managers import *
-from .history import ChatSessionStore, DEFAULT_CHAT_TITLE
+from .history import ChatSessionStore, DEFAULT_CHAT_TITLE, DEFAULT_WELCOME_MESSAGE
 from .attachments import *
 # Google Drive integration is parked until the OAuth flow is reliable for end users.
 # from .google_drive import GoogleDriveClient
@@ -2665,12 +2665,12 @@ class SmartiCore:
         except Exception:
             return ""
 
-    def _reserve_tool_call(self, call, tool_call_counts, similar_tool_signatures):
+    def _reserve_tool_call(self, call, tool_call_counts, similar_tool_signatures, allow_similar_repeat=False):
         action = call.get("action", "")
         args_dict = call.get("arguments", {}) or {}
         if getattr(self, "agent_runtime", None):
             similar_sig = self.agent_runtime.similarity_signature(action, args_dict)
-            if self.agent_runtime.is_similar_repeat(similar_tool_signatures, similar_sig):
+            if not allow_similar_repeat and self.agent_runtime.is_similar_repeat(similar_tool_signatures, similar_sig):
                 return f"ERROR: Similar repeated tool call blocked for '{action}'. שנה אסטרטגיה או סיים עם הסבר ברור."
             similar_tool_signatures.append(similar_sig)
         call_sig = hashlib.sha256(f"{action}\0{json.dumps(args_dict, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
@@ -2814,19 +2814,33 @@ class SmartiCore:
         return results
 
     def _append_tool_results_feedback(self, current_messages, tool_turn_text, results):
-        feedback_results = [r for r in results if r.get("feedback")]
+        feedback_results = []
+        for result in results:
+            feedback_text = result.get("feedback")
+            if feedback_text is None:
+                feedback_text = result.get("output")
+            if feedback_text is None:
+                feedback_text = result.get("message")
+            if feedback_text is None or not str(feedback_text).strip():
+                continue
+            item = dict(result)
+            item["_feedback_text"] = str(feedback_text)
+            feedback_results.append(item)
         if not feedback_results:
             return False
         if len(feedback_results) == 1:
             item = feedback_results[0]
-            self._append_tool_feedback(current_messages, tool_turn_text, item.get("action", ""), item.get("feedback", ""))
+            self._append_tool_feedback(current_messages, tool_turn_text, item.get("action", ""), item.get("_feedback_text", ""))
             return True
         blocks = ["[SMARTI_PARALLEL_TOOL_RESULTS_BEGIN]"]
         for idx, item in enumerate(feedback_results, start=1):
             action = item.get("action", "")
-            is_error = str(item.get("feedback", "")).startswith("ERROR:")
-            compact = self._compact_tool_feedback_for_model(action, item.get("feedback", ""), is_error=is_error)
-            blocks.append(f"Result {idx}/{len(feedback_results)} for tool `{action}`:\n{self._wrap_tool_output_for_model(action, compact, is_error=is_error)}")
+            effective = item.get("effective_action", action)
+            label = action if not effective or effective == action else f"{action} / {effective}"
+            feedback_text = item.get("_feedback_text", "")
+            is_error = str(feedback_text).startswith("ERROR:")
+            compact = self._compact_tool_feedback_for_model(action, feedback_text, is_error=is_error)
+            blocks.append(f"Result {idx}/{len(feedback_results)} for tool `{label}`:\n{self._wrap_tool_output_for_model(action, compact, is_error=is_error)}")
         blocks.append("[SMARTI_PARALLEL_TOOL_RESULTS_END]")
         payload = "\n\n".join(blocks)
         if self.mode == "gemini":
@@ -4603,6 +4617,9 @@ class SmartiCore:
         if self.mode == "gemini":
             history = []
             for message in messages:
+                metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
+                if metadata.get("ui_only"):
+                    continue
                 role = message.get("role")
                 content = str(message.get("content", "") or "")
                 if not content.strip():
@@ -4614,6 +4631,9 @@ class SmartiCore:
             return history
         history = [{"role": "system", "content": self.system_prompt}]
         for message in messages:
+            metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
+            if metadata.get("ui_only"):
+                continue
             role = message.get("role")
             content = str(message.get("content", "") or "")
             if not content.strip():
@@ -4957,6 +4977,7 @@ class SmartiCore:
             context=self._chat_context_snapshot(),
             user_metadata={"attachments": normalize_attachments(attachments or [])},
             assistant_metadata=assistant_metadata,
+            welcome_text=DEFAULT_WELCOME_MESSAGE,
         )
 
     def _load_settings(self):
@@ -5577,7 +5598,7 @@ CWD: {current_dir}
   "params": {{"name": "<tool>", "arguments": {{}}}}
 }}
 ```
-מותר להחזיר כמה בלוקי JSON רק כאשר מדובר בכמה פעולות עצמאיות לקריאה בלבד שאינן דורשות אישור משתמש ואינן תלויות זו בזו. פעולות כתיבה, מערכת, אימייל, התקנות, זיכרון, GUI/דפדפן, פתיחת קבצים/תוכנות או כל פעולה עם סיכון/הרשאות יש לבצע אחת-אחת.
+מותר ואף רצוי להחזיר כמה בלוקי JSON באותה תגובה כאשר מדובר בכמה פעולות עצמאיות לקריאה בלבד שאינן דורשות אישור משתמש ואינן תלויות זו בזו, למשל כמה חיפושים/קריאות מידע בלתי תלויות. המערכת תריץ אותן במקביל כאשר זה בטוח. לאחר קבלת התוצאות, התייחס לכל פלט בנפרד ואל תדלג על אף תוצאה לפני ניסוח התשובה. פעולות כתיבה, מערכת, אימייל, התקנות, זיכרון, GUI/דפדפן, פתיחת קבצים/תוכנות או כל פעולה עם סיכון/הרשאות יש לבצע אחת-אחת.
 
 **חוקים נוספים לכלים:**
 1. אם השאלה היא שיחה כללית או "מה היכולות שלך", ענה ישירות לפי רשימת הכלים וה-Skills שבהנחיה; אל תפעיל כלי רק כדי לענות.
@@ -6465,23 +6486,18 @@ CWD: {current_dir}
                             parallel = True
                             skipped_extra_calls = max(0, len(raw_tool_calls) - len(candidate_calls))
 
-                    unique_calls = []
-                    seen_batch_sigs = set()
-                    for call in selected_calls:
-                        batch_sig = f"{call.get('action', '')}\0{json.dumps(call.get('arguments', {}) or {}, sort_keys=True, ensure_ascii=False)}"
-                        if batch_sig in seen_batch_sigs:
-                            skipped_extra_calls += 1
-                            continue
-                        seen_batch_sigs.add(batch_sig)
-                        unique_calls.append(call)
-                    selected_calls = unique_calls or selected_calls[:1]
                     parallel = parallel and len(selected_calls) > 1
 
                     reserve_feedback = None
                     candidate_tool_call_counts = dict(tool_call_counts)
                     candidate_similar_tool_signatures = list(similar_tool_signatures)
                     for call in selected_calls:
-                        reserve_feedback = self._reserve_tool_call(call, candidate_tool_call_counts, candidate_similar_tool_signatures)
+                        reserve_feedback = self._reserve_tool_call(
+                            call,
+                            candidate_tool_call_counts,
+                            candidate_similar_tool_signatures,
+                            allow_similar_repeat=parallel and self._is_parallel_safe_tool_call(call),
+                        )
                         if reserve_feedback:
                             break
                     if reserve_feedback:
@@ -6562,7 +6578,7 @@ CWD: {current_dir}
                     self._record_results_in_task_state(task_state, results)
                     checkpoint("tool_results_observed")
 
-                    if any(result.get("feedback") for result in results):
+                    if any(result.get("feedback") or result.get("output") or result.get("message") for result in results):
                         if self.status_callback:
                             self.status_callback("מעבד תוצאות...")
                         self._append_tool_results_feedback(current_messages, tool_turn_text, results)
