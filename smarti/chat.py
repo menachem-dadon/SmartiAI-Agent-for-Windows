@@ -3,6 +3,7 @@ from .common import *
 from .attachments import *
 from .ui_styles import *
 from .ui_controls import *
+from .config import BUILT_IN_TOOLS, LEGACY_BUILTIN_TOOLS, PUBLIC_BUILTIN_TOOLS
 from .workers import AgentWorker, VoiceWorker, TTSWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
 from .history import DEFAULT_CHAT_TITLE
@@ -10,6 +11,7 @@ from .windows_notifications import TaskbarAttentionController, WindowsNotificati
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
 from PyQt6.QtCore import QEvent, QEventLoop
 from PyQt6.QtGui import QTextDocument, QTransform
+from PyQt6.QtWidgets import QBoxLayout
 
 WELCOME_MESSAGE = "שלום! אני סמארטי, סייען ה-AI האישי שלך. איך אוכל לעזור לך היום? 😊"
 
@@ -38,6 +40,25 @@ def _rotated_themed_icon(names, degrees=0, size=18):
         Qt.TransformationMode.SmoothTransformation,
     )
     return QIcon(rotated)
+
+def _fitted_plain_label_width(label, text, available, min_width=42, padding=10):
+    available = max(min_width, int(available or min_width))
+    text = str(text or "")
+    metrics = QFontMetrics(label.font())
+    raw_width = metrics.horizontalAdvance(text) + padding
+    if raw_width <= available:
+        return max(min_width, raw_width)
+    try:
+        doc = QTextDocument()
+        doc.setDefaultFont(label.font())
+        doc.setPlainText(text)
+        doc.setTextWidth(available)
+        ideal_width = int(doc.idealWidth() + 0.5) + padding
+        if ideal_width > 0:
+            return max(min_width, min(available, ideal_width))
+    except Exception:
+        pass
+    return available
 
 def _soft_break_escaped_token(token):
     token = html.escape(str(token or ""))
@@ -955,6 +976,65 @@ class AttachmentPreviewStrip(QWidget):
 
 # Google Drive picker UI is parked until OAuth sign-in is reworked.
 
+AGENT_TOOL_DEFAULT_ICON_NAMES = ("agent_tool_row_status",)
+AGENT_TOOL_GROUP_ICON_NAMES = ("agent_tool_status", "agent_tool_icon", "tools_icon")
+AGENT_TOOL_MCP_ACTIONS = {"search_mcp", "install_mcp", "run_mcp"}
+AGENT_TOOL_SKILL_ACTIONS = {"list_skills", "search_skills", "install_skill", "install_skill_requirements", "run_skill"}
+AGENT_TOOL_BUILTIN_ACTIONS = set(BUILT_IN_TOOLS) | set(LEGACY_BUILTIN_TOOLS) | set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner"}
+
+def _agent_tool_asset_stem(name):
+    stem = re.sub(r"[^0-9a-zA-Z]+", "_", str(name or "").strip().lower()).strip("_")
+    return stem
+
+def _agent_tool_unique_icon_names(names):
+    result = []
+    seen = set()
+    for name in names:
+        value = str(name or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return tuple(result)
+
+def _agent_tool_icon_names(tool):
+    tool = tool if isinstance(tool, dict) else {}
+    action = str(tool.get("action") or "").strip()
+    effective = str(tool.get("effective_action") or "").strip()
+    args = tool.get("arguments") if isinstance(tool.get("arguments"), dict) else {}
+    manager_action = str(args.get("action") or "").strip()
+    target = str(args.get("target") or "").strip()
+    action_names = {name for name in (action, effective, manager_action) if name}
+    candidates = []
+
+    if action == "extension_manager":
+        if manager_action in AGENT_TOOL_MCP_ACTIONS:
+            candidates.extend(("agent_tool_mcp", "agent_tool_extension_manager"))
+        elif manager_action in AGENT_TOOL_SKILL_ACTIONS:
+            candidates.extend(("agent_tool_skill", "agent_tool_extension_manager"))
+    if action_names & AGENT_TOOL_MCP_ACTIONS:
+        candidates.append("agent_tool_mcp")
+    if action_names & AGENT_TOOL_SKILL_ACTIONS:
+        candidates.append("agent_tool_skill")
+
+    if action == "automation_manager" and target:
+        target_stem = _agent_tool_asset_stem(target)
+        if target_stem:
+            candidates.append(f"agent_tool_automation_manager_{target_stem}")
+    if action and manager_action:
+        action_stem = _agent_tool_asset_stem(action)
+        manager_stem = _agent_tool_asset_stem(manager_action)
+        if action_stem and manager_stem:
+            candidates.append(f"agent_tool_{action_stem}_{manager_stem}")
+
+    for name in (effective, action):
+        if name in AGENT_TOOL_BUILTIN_ACTIONS:
+            stem = _agent_tool_asset_stem(name)
+            if stem:
+                candidates.append(f"agent_tool_{stem}")
+
+    candidates.extend(AGENT_TOOL_DEFAULT_ICON_NAMES)
+    return _agent_tool_unique_icon_names(candidates)
+
 def _agent_tool_display_name(tool):
     tool = tool if isinstance(tool, dict) else {}
     action = str(tool.get("action") or "").strip()
@@ -1008,7 +1088,6 @@ def _agent_tool_status_text(status):
 
 class AgentToolDetailWidget(QWidget):
     CHEVRON_ICON_NAMES = ("agent_tool_row_chevron", "agent_tool_detail_chevron", "agent_process_chevron", "message_collapse_arrow")
-    TOOL_ICON_NAMES = ("agent_tool_row_status", "agent_tool_detail_status", "agent_tool_status", "tools_icon")
     QUERY_TITLE = "קלט ופרמטרי הפעלה"
     OUTPUT_TITLE = "פלט הכלי"
 
@@ -1032,10 +1111,10 @@ class AgentToolDetailWidget(QWidget):
         self.row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         row_layout = QHBoxLayout(self.row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(0)
+        row_layout.setSpacing(1)
 
         self.arrow_label = QLabel()
-        self.arrow_label.setFixedSize(16, 16)
+        self.arrow_label.setFixedSize(14, 16)
         self.arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.arrow_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
@@ -1054,13 +1133,14 @@ class AgentToolDetailWidget(QWidget):
         self.name_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         row_layout.addStretch(1)
-        row_layout.addWidget(self.arrow_label, 0, Qt.AlignmentFlag.AlignTop)
+        row_layout.addWidget(self.arrow_label, 0, Qt.AlignmentFlag.AlignVCenter)
         row_layout.addWidget(self.name_label, 0)
-        row_layout.addWidget(self.tool_icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        row_layout.addWidget(self.tool_icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.row)
 
         self.panel = QFrame()
         self.panel.setObjectName("AgentToolDetailPanel")
+        self.panel.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.panel.setMinimumWidth(self.max_w)
         self.panel.setMaximumWidth(self.max_w)
         panel_layout = QVBoxLayout(self.panel)
@@ -1068,13 +1148,15 @@ class AgentToolDetailWidget(QWidget):
         panel_layout.setSpacing(5)
 
         self.query_title = QLabel(self.QUERY_TITLE)
-        self.query_title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.query_title.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.query_title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
         self.query_box = self._make_text_box()
         self.output_title = QLabel(self.OUTPUT_TITLE)
-        self.output_title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.output_title.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.output_title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
         self.output_box = self._make_text_box()
         self.status_label = QLabel()
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         panel_layout.addWidget(self.query_title)
         panel_layout.addWidget(self.query_box)
@@ -1134,11 +1216,13 @@ class AgentToolDetailWidget(QWidget):
     def _fit_name_label_width(self):
         available = max(120, self.max_w - 42)
         text = str(self.name_label.text() or "")
-        raw_width = QFontMetrics(self.name_label.font()).horizontalAdvance(text) + 10
-        self.name_label.setWordWrap(raw_width > available)
-        width = max(42, min(available, raw_width))
+        width = _fitted_plain_label_width(self.name_label, text, available, min_width=42, padding=8)
+        self.name_label.setWordWrap(width >= available)
         self.name_label.setMinimumWidth(width)
         self.name_label.setMaximumWidth(width)
+
+    def _refresh_tool_icon(self):
+        set_themed_label_icon(self.tool_icon_label, _agent_tool_icon_names(self.tool), "", 15)
 
     def update_tool(self, tool):
         if isinstance(tool, dict):
@@ -1160,6 +1244,7 @@ class AgentToolDetailWidget(QWidget):
             self.output_box.setPlainText(output_display)
             self._apply_dynamic_text_box_height(self.output_box, output_display, min_lines=1, max_lines=8)
         self.status_label.setText(status_text)
+        self._refresh_tool_icon()
         self._set_chevron_icon()
 
     def set_expanded(self, expanded):
@@ -1169,10 +1254,11 @@ class AgentToolDetailWidget(QWidget):
         self.updateGeometry()
 
     def _set_chevron_icon(self):
-        icon = _rotated_themed_icon(self.CHEVRON_ICON_NAMES, 90 if self.expanded else 0, 15)
+        icon_size = 14
+        icon = _rotated_themed_icon(self.CHEVRON_ICON_NAMES, 90 if self.expanded else 0, icon_size)
         if icon.isNull():
-            icon = _transparent_icon(15)
-        self.arrow_label.setPixmap(icon.pixmap(15, 15))
+            icon = _transparent_icon(icon_size)
+        self.arrow_label.setPixmap(icon.pixmap(icon_size, icon_size))
         self.arrow_label.setText("")
 
     def apply_theme(self):
@@ -1180,7 +1266,7 @@ class AgentToolDetailWidget(QWidget):
         self.name_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 15px; background: transparent; padding-right: 5px; padding-left: 0px;")
         self.arrow_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; background: transparent;")
         self.tool_icon_label.setStyleSheet("background: transparent; border: none;")
-        set_themed_label_icon(self.tool_icon_label, self.TOOL_ICON_NAMES, "", 15)
+        self._refresh_tool_icon()
         self.panel.setStyleSheet(
             f"QFrame#AgentToolDetailPanel {{ background: {FIELD_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 8px; }}"
             f"QPlainTextEdit {{ background: transparent; color: {SUBTLE_TEXT_COLOR}; border: none; "
@@ -1193,7 +1279,6 @@ class AgentToolDetailWidget(QWidget):
 
 class AgentToolGroupWidget(QWidget):
     CHEVRON_ICON_NAMES = ("agent_process_chevron", "message_collapse_arrow")
-    TOOL_ICON_NAMES = ("agent_tool_status", "agent_tool_icon", "tools_icon")
     TOOL_ROW_INDENT = 34
 
     def __init__(self, parent_width=450):
@@ -1220,7 +1305,7 @@ class AgentToolGroupWidget(QWidget):
         self.status_row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         status_layout = QHBoxLayout(self.status_row)
         status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(0)
+        status_layout.setSpacing(1)
 
         self.tool_icon_label = QLabel()
         self.tool_icon_label.setFixedSize(18, 18)
@@ -1237,13 +1322,13 @@ class AgentToolGroupWidget(QWidget):
         self.status_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         self.arrow_label = QLabel()
-        self.arrow_label.setFixedSize(18, 18)
+        self.arrow_label.setFixedSize(16, 18)
         self.arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.arrow_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         status_layout.addStretch(1)
-        status_layout.addWidget(self.arrow_label, 0, Qt.AlignmentFlag.AlignTop)
+        status_layout.addWidget(self.arrow_label, 0, Qt.AlignmentFlag.AlignVCenter)
         status_layout.addWidget(self.status_label, 0)
-        status_layout.addWidget(self.tool_icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        status_layout.addWidget(self.tool_icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.status_row)
 
         self.details_label = QLabel()
@@ -1289,7 +1374,7 @@ class AgentToolGroupWidget(QWidget):
         self.tool_icon_label.setStyleSheet("background: transparent; border: none;")
         self.details_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 15px; background: transparent; padding: 0px 0px 3px 0px;")
         self.thinking_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
-        set_themed_label_icon(self.tool_icon_label, self.TOOL_ICON_NAMES, "", 16)
+        self._refresh_tool_icon()
         self._set_chevron_icon()
         for widget in getattr(self, "tool_widgets", []):
             widget.apply_theme()
@@ -1308,11 +1393,13 @@ class AgentToolGroupWidget(QWidget):
     def _fit_status_label_width(self):
         available = max(120, self.max_w - 46)
         text = str(self.status_label.text() or "")
-        raw_width = QFontMetrics(self.status_label.font()).horizontalAdvance(text) + 10
-        self.status_label.setWordWrap(raw_width > available)
-        width = max(42, min(available, raw_width))
+        width = _fitted_plain_label_width(self.status_label, text, available, min_width=42, padding=8)
+        self.status_label.setWordWrap(width >= available)
         self.status_label.setMinimumWidth(width)
         self.status_label.setMaximumWidth(width)
+
+    def _refresh_tool_icon(self):
+        set_themed_label_icon(self.tool_icon_label, AGENT_TOOL_GROUP_ICON_NAMES, "", 16)
 
     def _add_tool_widget(self, item):
         widget = AgentToolDetailWidget(item, max(220, self.max_w - self.TOOL_ROW_INDENT))
@@ -1384,6 +1471,7 @@ class AgentToolGroupWidget(QWidget):
             item["status"] = "running"
             self.tools.append(item)
             self._add_tool_widget(item)
+        self._refresh_tool_icon()
         self.running = True
         if parallel and len(tools) > 1:
             text = f"מריץ: {len(tools)} כלים במקביל"
@@ -1401,14 +1489,27 @@ class AgentToolGroupWidget(QWidget):
             updated = False
             updated_index = -1
             result_action = str(result.get("action") or "")
+            result_event_id = str(result.get("event_id") or result.get("call_id") or "").strip()
+            result_args = result.get("arguments") if isinstance(result.get("arguments"), dict) else None
             for index in range(len(self.tools) - 1, -1, -1):
                 item = self.tools[index]
-                if item.get("status") == "running" and str(item.get("action") or "") == result_action:
-                    item.update(result)
-                    item["status"] = str(result.get("status") or "ok")
-                    updated = True
-                    updated_index = index
-                    break
+                if item.get("status") != "running":
+                    continue
+                item_event_id = str(item.get("event_id") or item.get("call_id") or "").strip()
+                if result_event_id or item_event_id:
+                    if result_event_id != item_event_id:
+                        continue
+                elif str(item.get("action") or "") != result_action:
+                    continue
+                else:
+                    item_args = item.get("arguments") if isinstance(item.get("arguments"), dict) else None
+                    if result_args is not None and item_args is not None and item_args != result_args:
+                        continue
+                item.update(result)
+                item["status"] = str(result.get("status") or "ok")
+                updated = True
+                updated_index = index
+                break
             if not updated:
                 item = dict(result)
                 item["status"] = str(result.get("status") or "ok")
@@ -1426,6 +1527,7 @@ class AgentToolGroupWidget(QWidget):
             self.status_label.setText(f"הורצו {self.run_count} כלים")
             self._fit_status_label_width()
         self.status_label.stop_shimmer()
+        self._refresh_tool_icon()
         self._refresh_details()
         self.show_thinking()
         self.show()
@@ -1440,10 +1542,17 @@ class MessageBubble(QFrame):
     def __init__(self, text, is_user=False, parent_width=450, attachments=None):
         super().__init__()
         self.is_user = is_user
-        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Maximum if self.is_user else QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(20, 16, 20, 16)
-        self.max_w = int(parent_width * 0.76) - 30
+        if self.is_user:
+            self.main_layout.setContentsMargins(20, 16, 20, 16)
+            self.max_w = max(220, int(parent_width * 0.76) - 30)
+        else:
+            self.main_layout.setContentsMargins(10, 8, 10, 8)
+            self.max_w = max(240, int(parent_width or 450) - 52)
         self.copy_text = str(text or "")
         self.attachments = normalize_attachments(attachments or [])
         self.code_blocks = []
@@ -1456,12 +1565,29 @@ class MessageBubble(QFrame):
         self.steps_layout.setContentsMargins(0, 0, 0, 8)
         self.steps_layout.setSpacing(8)
 
-        self.toggle_btn = QPushButton("")
-        self.toggle_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.toggle_btn.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.toggle_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.toggle_btn.setMaximumWidth(self.max_w)
-        self.toggle_btn.clicked.connect(self.toggle_steps)
+        self.process_header = QFrame()
+        self.process_header.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.process_header.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.process_header.setMaximumWidth(self.max_w)
+        process_header_layout = QHBoxLayout(self.process_header)
+        process_header_layout.setContentsMargins(0, 0, 0, 0)
+        process_header_layout.setSpacing(2)
+
+        self.process_arrow_label = QLabel()
+        self.process_arrow_label.setFixedSize(16, 18)
+        self.process_arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.process_arrow_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self.toggle_btn = QLabel("")
+        self.toggle_btn.setTextFormat(Qt.TextFormat.PlainText)
+        self.toggle_btn.setWordWrap(True)
+        self.toggle_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.toggle_btn.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
+        self.toggle_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.toggle_btn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        process_header_layout.addStretch(1)
+        process_header_layout.addWidget(self.process_arrow_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        process_header_layout.addWidget(self.toggle_btn, 0)
 
         self.process_details = QWidget()
         self.process_details.setStyleSheet("background: transparent; border: none;")
@@ -1471,7 +1597,7 @@ class MessageBubble(QFrame):
 
         self.steps_label = QLabel()
         self.steps_label.hide()
-        self.steps_layout.addWidget(self.toggle_btn)
+        self.steps_layout.addWidget(self.process_header)
         self.steps_layout.addWidget(self.process_details)
         self.steps_container.hide()
         
@@ -1510,6 +1636,7 @@ class MessageBubble(QFrame):
         self.agent_process_timer = QTimer(self)
         self.agent_process_timer.setInterval(1000)
         self.agent_process_timer.timeout.connect(self._update_agent_process_timer)
+        self.process_header.installEventFilter(self)
         
         if text:
             self.set_final_text(text)
@@ -1523,6 +1650,9 @@ class MessageBubble(QFrame):
         self.apply_theme()
 
     def eventFilter(self, obj, event):
+        if obj is getattr(self, "process_header", None) and event.type() == QEvent.Type.MouseButtonPress:
+            self.toggle_steps()
+            return True
         if obj is self.final_label and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
             QTimer.singleShot(0, self._update_user_text_fade_mask)
         return super().eventFilter(obj, event)
@@ -1542,28 +1672,23 @@ class MessageBubble(QFrame):
         label.setPalette(palette)
 
     def apply_theme(self):
-        bg = (
-            USER_BUBBLE_COLOR
-            if self.is_user
-            else f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:0.62 {BUBBLE_AGENT_END}, stop:1 {PANEL_COLOR})"
-        )
+        bg = USER_BUBBLE_COLOR if self.is_user else "transparent"
         color = BUBBLE_USER_TEXT if self.is_user else TEXT_COLOR
         link_color = self._link_color()
-        radius = "22px"
-        border = f"1px solid {USER_BUBBLE_BORDER if self.is_user else SOFT_LINE_COLOR}"
+        radius = "22px" if self.is_user else "0px"
+        border = f"1px solid {USER_BUBBLE_BORDER}" if self.is_user else "none"
+        margin = "5px 0px" if self.is_user else "2px 0px"
 
-        self.toggle_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {MUTED_TEXT_COLOR}; border: none; "
-            f"text-align: right; font-weight: 400; font-size: 15px; padding: 0px; }}"
-            f"QPushButton:hover {{ color: {TEXT_COLOR}; }}"
-        )
+        self.process_header.setStyleSheet("background: transparent; border: none;")
+        self.process_arrow_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; background: transparent;")
+        self.toggle_btn.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent; padding: 0px;")
         self.steps_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
         for group in getattr(self, "agent_process_groups", []):
             group.apply_theme()
         for label in self.findChildren(QLabel):
             self._apply_link_palette(label)
         self.setStyleSheet(
-            f"MessageBubble {{ background: {bg}; border: {border}; border-radius: {radius}; margin: 5px 0px; }}"
+            f"MessageBubble {{ background: {bg}; border: {border}; border-radius: {radius}; margin: {margin}; }}"
             f"QLabel {{ color: {color}; font-size: 15px; font-family: 'Segoe UI', Arial; background: transparent; }}"
             f"a {{ color: {link_color}; text-decoration: underline; font-weight: 700; }}"
             f"code {{ background-color: {CODE_BG_COLOR}; padding: 2px 4px; border-radius: 4px; font-family: Consolas; }}"
@@ -1576,11 +1701,18 @@ class MessageBubble(QFrame):
         for tile in self.findChildren(AttachmentTile):
             tile.apply_theme()
         self._apply_user_message_collapse_state()
-        apply_soft_shadow(self, blur=22, y=7, alpha=30)
+        if self.is_user:
+            apply_soft_shadow(self, blur=22, y=7, alpha=30)
+        else:
+            self.setGraphicsEffect(None)
 
     def update_parent_width(self, parent_width):
-        self.max_w = max(220, int(parent_width * 0.76) - 30)
-        self.toggle_btn.setMaximumWidth(self.max_w)
+        if self.is_user:
+            self.max_w = max(220, int(parent_width * 0.76) - 30)
+        else:
+            self.max_w = max(240, int(parent_width or 450) - 52)
+        self.process_header.setMaximumWidth(self.max_w)
+        self._fit_process_header_label_width()
         self.steps_label.setMaximumWidth(self.max_w)
         self.final_label.setMaximumWidth(self.max_w)
         for label in getattr(self, "agent_report_labels", []):
@@ -1594,6 +1726,16 @@ class MessageBubble(QFrame):
             tile.setMaximumWidth(self.max_w)
         self._apply_agent_process_width_lock()
         self._refresh_layout()
+
+    def _fit_process_header_label_width(self):
+        if not hasattr(self, "toggle_btn"):
+            return
+        available = max(120, self.max_w - 20)
+        text = str(self.toggle_btn.text() or "")
+        width = _fitted_plain_label_width(self.toggle_btn, text, available, min_width=42, padding=8)
+        self.toggle_btn.setWordWrap(width >= available)
+        self.toggle_btn.setMinimumWidth(width)
+        self.toggle_btn.setMaximumWidth(width)
 
     def _refresh_layout(self):
         self.updateGeometry()
@@ -1785,26 +1927,27 @@ class MessageBubble(QFrame):
         return f"{secs} שנ'"
 
     def _set_process_header_icon(self):
-        if not hasattr(self, "toggle_btn"):
+        if not hasattr(self, "process_arrow_label"):
             return
         icon = _rotated_themed_icon(self.PROCESS_CHEVRON_ICON_NAMES, -90 if self.is_expanded else 0, 16)
         if icon.isNull():
             icon = _transparent_icon(16)
-        self.toggle_btn.setIcon(icon)
-        self.toggle_btn.setIconSize(QSize(16, 16))
+        self.process_arrow_label.setPixmap(icon.pixmap(16, 16))
+        self.process_arrow_label.setText("")
 
     def _update_agent_process_header(self):
         if not self.agent_process_started:
             return
         prefix = "סמארטי עבד" if self.agent_process_finalized else "סמארטי עובד"
         self.toggle_btn.setText(f"{prefix} {self._format_agent_duration(self.agent_process_elapsed_seconds)}")
+        self._fit_process_header_label_width()
         self._set_process_header_icon()
 
     def _apply_agent_process_width_lock(self):
         if self.is_user:
             return
         if self.agent_process_started:
-            target = max(240, int(self.max_w) + 40)
+            target = max(260, int(self.max_w) + 20)
             self.setMinimumWidth(target)
             self.setMaximumWidth(target)
 
@@ -2027,6 +2170,7 @@ class ChatMessageContainer(QWidget):
         layout.setSpacing(0)
         self.content_wrap = QWidget()
         self.content_wrap.setStyleSheet("background: transparent;")
+        self.content_wrap.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.content_wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.content_wrap)
 
@@ -2036,12 +2180,12 @@ class ChatMessageContainer(QWidget):
 
         bubble_row = QHBoxLayout()
         bubble_row.setContentsMargins(0, 0, 0, 0)
+        bubble_row.setDirection(QBoxLayout.Direction.LeftToRight)
         if is_user:
-            bubble_row.addWidget(self.bubble)
+            bubble_row.addWidget(self.bubble, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute)
             bubble_row.addStretch()
         else:
-            bubble_row.addStretch()
-            bubble_row.addWidget(self.bubble)
+            bubble_row.addWidget(self.bubble, 1)
         layout.addLayout(bubble_row)
 
         self.actions_container = QWidget()

@@ -1181,7 +1181,7 @@ class SmartiCore:
         except Exception:
             pass
 
-    def _agent_tool_event_item(self, action, args_dict=None, status="", output=None, feedback=None, message=None):
+    def _agent_tool_event_item(self, action, args_dict=None, status="", output=None, feedback=None, message=None, event_id=None):
         args = args_dict if isinstance(args_dict, dict) else {}
         try:
             args_text = json.dumps(args or {}, ensure_ascii=False, indent=2, default=str)
@@ -1200,6 +1200,8 @@ class SmartiCore:
             "arguments": safe_args,
             "arguments_text": args_text[:12000],
         }
+        if event_id:
+            item["event_id"] = str(event_id)
         if status:
             item["status"] = str(status or "")
         output_text = output
@@ -2753,6 +2755,7 @@ class SmartiCore:
             "action": action,
             "effective_action": effective_action,
             "arguments": args_dict,
+            "event_id": str(call.get("_agent_process_event_id") or ""),
             "feedback": feedback_for_ai,
             "message": message_for_user,
             "status": status,
@@ -2790,13 +2793,24 @@ class SmartiCore:
                         "action": action,
                         "effective_action": self._effective_tool_action(action, call.get("arguments", {}) or {})[0],
                         "arguments": call.get("arguments", {}) or {},
+                        "event_id": str(call.get("_agent_process_event_id") or ""),
                         "feedback": f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(str(e), self.settings)}",
                         "message": None,
                         "status": "error",
                         "step_text": call.get("step_text", ""),
                         "output": str(e),
                     })
-        results.sort(key=lambda item: next((idx for idx, call in enumerate(calls) if call.get("action") == item.get("action") and call.get("arguments") == item.get("arguments")), 999))
+        results.sort(key=lambda item: next((
+            idx for idx, call in enumerate(calls)
+            if (
+                str(call.get("_agent_process_event_id") or "")
+                and str(call.get("_agent_process_event_id") or "") == str(item.get("event_id") or "")
+            ) or (
+                not str(item.get("event_id") or "")
+                and call.get("action") == item.get("action")
+                and call.get("arguments") == item.get("arguments")
+            )
+        ), 999))
         return results
 
     def _append_tool_results_feedback(self, current_messages, tool_turn_text, results):
@@ -6353,9 +6367,10 @@ CWD: {current_dir}
                             "output": failed_output,
                             "feedback": failed_output,
                         }
+                        failed_event_id = uuid.uuid4().hex
                         self._emit_agent_process_event(
                             "tool_start",
-                            tools=[self._agent_tool_event_item(failed_action, failed_args)],
+                            tools=[self._agent_tool_event_item(failed_action, failed_args, event_id=failed_event_id)],
                             parallel=False,
                         )
                         self._emit_agent_process_event(
@@ -6366,6 +6381,7 @@ CWD: {current_dir}
                                 status="error",
                                 output=failed_output,
                                 feedback=failed_output,
+                                event_id=failed_event_id,
                             )],
                         )
                         self._record_results_in_task_state(task_state, [failed_result])
@@ -6374,6 +6390,7 @@ CWD: {current_dir}
                         continue
 
                     if first_call.get("action") == "agent_planner":
+                        planner_event_id = uuid.uuid4().hex
                         planner_report = self._should_emit_agent_report(pre_text)
                         if planner_report:
                             self._emit_agent_process_event("report", text=planner_report, source="model")
@@ -6390,7 +6407,7 @@ CWD: {current_dir}
                             continue
                         self._emit_agent_process_event(
                             "tool_start",
-                            tools=[self._agent_tool_event_item("agent_planner", first_call.get("arguments", {}) or {})],
+                            tools=[self._agent_tool_event_item("agent_planner", first_call.get("arguments", {}) or {}, event_id=planner_event_id)],
                             parallel=False,
                         )
                         if getattr(self, "agent_runtime", None):
@@ -6412,6 +6429,7 @@ CWD: {current_dir}
                                 first_call.get("arguments", {}) or {},
                                 status="ok",
                                 output=planner_feedback,
+                                event_id=planner_event_id,
                             )],
                         )
                         self._append_internal_planner_feedback(current_messages, tool_turn_text, task_state, planner_feedback)
@@ -6472,6 +6490,8 @@ CWD: {current_dir}
                         continue
                     tool_call_counts = candidate_tool_call_counts
                     similar_tool_signatures = candidate_similar_tool_signatures
+                    for call in selected_calls:
+                        call["_agent_process_event_id"] = str(call.get("_agent_process_event_id") or uuid.uuid4().hex)
 
                     report_text = self._should_emit_agent_report(pre_text)
                     if report_text:
@@ -6490,7 +6510,11 @@ CWD: {current_dir}
                     self._emit_agent_process_event(
                         "tool_start",
                         tools=[
-                            self._agent_tool_event_item(call.get("action", ""), call.get("arguments", {}) or {})
+                            self._agent_tool_event_item(
+                                call.get("action", ""),
+                                call.get("arguments", {}) or {},
+                                event_id=call.get("_agent_process_event_id"),
+                            )
                             for call in selected_calls
                         ],
                         parallel=parallel,
@@ -6526,6 +6550,7 @@ CWD: {current_dir}
                                 output=result.get("output"),
                                 feedback=result.get("feedback"),
                                 message=result.get("message"),
+                                event_id=result.get("event_id"),
                             )
                             for result in results
                         ],
