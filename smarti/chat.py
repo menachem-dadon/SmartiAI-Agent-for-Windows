@@ -1601,7 +1601,7 @@ class MessageBubble(QFrame):
         self.steps_layout.addWidget(self.process_details)
         self.steps_container.hide()
         
-        self.final_label = QLabel()
+        self.final_label = QLabel(self)
         self.final_label.setTextFormat(Qt.TextFormat.RichText)
         self.final_label.setWordWrap(True)
         self.final_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction | Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -1767,9 +1767,11 @@ class MessageBubble(QFrame):
             widget = item.widget()
             if widget:
                 self.final_layout.removeWidget(widget)
-                widget.setParent(None)
                 if widget is not self.final_label:
+                    widget.setParent(None)
                     widget.deleteLater()
+                else:
+                    widget.setParent(self)
 
     def _user_collapsed_label_height(self):
         metrics = QFontMetrics(self.final_label.font())
@@ -2088,8 +2090,8 @@ class MessageBubble(QFrame):
             self.final_label.setMaximumWidth(self.max_w)
             self.final_label.setMaximumHeight(self.WIDGET_MAX_HEIGHT)
             self.final_label.setText(rendered_html if rendered_html.lstrip().startswith("<") else f"<span>{rendered_html}</span>")
-            self.final_label.show()
             self.final_layout.addWidget(self.final_label)
+            self.final_label.show()
             self._update_user_message_collapse_state()
             QTimer.singleShot(0, self._update_user_message_collapse_state)
         else:
