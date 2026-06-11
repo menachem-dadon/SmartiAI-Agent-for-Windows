@@ -64,12 +64,17 @@ class NoScrollComboBox(QComboBox):
         self.setMaxVisibleItems(8)
         self.view().setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.view().setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.view().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
     def wheelEvent(self, e): e.ignore()
 
     def showPopup(self):
         self.view().setMinimumWidth(max(180, self.width()))
         self.view().setMaximumWidth(max(220, self.width()))
+        popup_win = self.view().window()
+        if popup_win:
+            popup_win.setWindowFlags(popup_win.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+            popup_win.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         super().showPopup()
 
 class ModelSearchLineEdit(QLineEdit):
@@ -186,7 +191,8 @@ class SearchableModelComboBox(NoScrollComboBox):
     def _ensure_popup(self):
         if self._popup:
             return
-        self._popup = QFrame(None, Qt.WindowType.Popup)
+        self._popup = QFrame(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        self._popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._popup.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._popup.installEventFilter(self)
         layout = QVBoxLayout(self._popup)

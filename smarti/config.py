@@ -100,14 +100,24 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "schedule_background_task": {
-        "description": "מתזמן פעולה עתידית שתרוץ ברקע באופן עצמאי. ניתן ליצור פעולה חד-פעמית או פעולה מחזורית במרווח דקות.",
+        "description": "מתזמן פעולה עתידית שתרוץ ברקע באופן עצמאי. ניתן ליצור פעולה חד-פעמית, פעולה מחזורית במרווח דקות, או פעולה שבועית בימים ספציפיים. שים לב: לאחר קריאה לכלי זה, אין לבצע את המשימה עצמה כעת בשיחה הנוכחית; יש רק לדווח למשתמש שהמשימה תוכננה בהצלחה.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "delay_minutes": {"type": "number", "description": "מספר הדקות להמתנה"},
+                "delay_minutes": {"type": "number", "description": "מספר הדקות להמתנה עד להרצה הראשונה"},
                 "prompt": {"type": "string", "description": "ההוראה שיש לבצע כשהזמן יגיע"},
-                "repeat": {"type": "string", "enum": ["once", "interval"], "description": "once למשימה חד-פעמית, interval למשימה מחזורית"},
-                "interval_minutes": {"type": "number", "description": "מרווח הדקות בין ריצות חוזרות כאשר repeat=interval"}
+                "repeat": {"type": "string", "enum": ["once", "interval", "weekly"], "description": "once למשימה חד-פעמית, interval למשימה מחזורית, weekly למשימה שבועית בימים נבחרים"},
+                "interval_minutes": {"type": "number", "description": "מרווח הדקות בין ריצות חוזרות כאשר repeat=interval"},
+                "days_of_week": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "מערך של מספרים מ-0 (יום שני) עד 6 (יום ראשון) המייצג את ימי השבוע להרצה כאשר repeat=weekly"
+                },
+                "conversation_mode": {
+                    "type": "string",
+                    "enum": ["current", "new", "dedicated"],
+                    "description": "אופן ניתוב השיחה: current (שיחה נוכחית), new (שיחה חדשה בכל הרצה), dedicated (שיחה קבועה ייעודית למשימה זו)"
+                }
             },
             "required": ["delay_minutes", "prompt"]
         }

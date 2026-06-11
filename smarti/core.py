@@ -72,6 +72,9 @@ class SmartiCore:
         self.step_callback = None
         self.notification_callback = None
         self.tts_status_callback = None
+        self.background_task_start_callback = None
+        self.background_task_step_callback = None
+        self.background_task_finish_callback = None
         self.tts_lock = threading.Lock()
         self._stop_speech_flag = False
         self._background_cancel_events = {}
@@ -1168,14 +1171,22 @@ class SmartiCore:
                 pass
 
     def _emit_agent_process_event(self, event_type, **payload):
-        if not self.step_callback or self._is_background_context():
-            return
         event = {"type": str(event_type or ""), **(payload or {})}
         events = getattr(self, "_current_agent_process_events", None)
         if isinstance(events, list):
             events.append(self._json_safe_checkpoint_value(event))
             if len(events) > 120:
                 del events[:-120]
+        
+        if self._is_background_context() and getattr(self, "background_task_step_callback", None):
+            try:
+                task_id = getattr(self._execution_context, "current_task_id", "")
+                self.background_task_step_callback(task_id, event)
+            except Exception:
+                pass
+
+        if not self.step_callback or self._is_background_context():
+            return
         try:
             self.step_callback(event)
         except Exception:
@@ -3567,6 +3578,7 @@ class SmartiCore:
         generation = int(task.get("generation", 0) or 0)
         def worker():
             rescheduled = False
+            target_session_id = None
             try:
                 run_at = datetime.fromisoformat(task["run_at"])
                 delay = max(0, (run_at - datetime.now()).total_seconds())
@@ -3581,47 +3593,149 @@ class SmartiCore:
                     if not current or current.get("status") != "scheduled" or int(current.get("generation", 0) or 0) != generation:
                         return
                     delay = max(0, (run_at - datetime.now()).total_seconds())
-                current = self._get_background_task(task_id)
-                if not current or current.get("status") != "scheduled" or int(current.get("generation", 0) or 0) != generation: return
-                current["status"] = "running"
-                current["started_at"] = datetime.now().isoformat(timespec="seconds")
-                self._save_settings()
-                self._execution_context.policy_snapshot = current.get("policy_snapshot", {})
-                if current.get("kind") == "reminder":
-                    title = str(current.get("title") or "תזכורת מסמארטי").strip()
-                    message = str(current.get("message") or current.get("prompt") or "").strip()
-                    res = f"{title}\n\n{message}".strip()
-                else:
-                    res = self.send_message(f"[משימת רקע שקטה]: {current.get('prompt', '')}", is_background_task=True, cancel_event=cancel_event)
-                current = self._get_background_task(task_id) or current
-                if int(current.get("generation", 0) or 0) != generation:
+                
+                # Sleep is done, now we attempt to run!
+                # Let's acquire the agent lock with timeout.
+                acquired = self._agent_lock.acquire(timeout=60)
+                if not acquired:
+                    self._mark_background_task(task_id, "failed", "ERROR: Could not acquire agent lock (agent busy).")
                     return
-                if cancel_event.is_set() or current.get("status") == "cancelling":
-                    self._mark_background_task(task_id, "cancelled", res or "Cancelled.")
-                    return
-                success = bool(res and "ERROR" not in res)
-                if success and current.get("repeat") == "interval":
-                    interval = max(1.0, float(current.get("interval_minutes") or current.get("delay_minutes") or 60))
-                    current["status"] = "scheduled"
-                    current["run_at"] = (datetime.now() + timedelta(minutes=interval)).isoformat(timespec="seconds")
-                    current["finished_at"] = datetime.now().isoformat(timespec="seconds")
-                    current["last_result"] = self._truncate_tool_output(res)
+                try:
+                    current = self._get_background_task(task_id)
+                    if not current or current.get("status") != "scheduled" or int(current.get("generation", 0) or 0) != generation:
+                        return
+                    current["status"] = "running"
+                    current["started_at"] = datetime.now().isoformat(timespec="seconds")
                     self._save_settings()
-                    if self._background_threads.get(task_id) is threading.current_thread():
-                        self._background_threads.pop(task_id, None)
-                    self._schedule_background_task_thread(current)
-                    rescheduled = True
-                else:
-                    self._mark_background_task(task_id, "done" if success else "failed", res)
-                if res and "ERROR" not in res and self.print_callback:
-                    self.print_callback(res, False)
-                    if self.settings.get("read_aloud_all"): self.speak_text(res)
-                if res and "ERROR" not in res:
-                    self._emit_notification("background_task_finished", {"task": dict(current), "result": res})
+                    
+                    self._execution_context.policy_snapshot = current.get("policy_snapshot", {})
+                    self._execution_context.current_task_id = task_id
+                    
+                    # 1. Resolve target conversation session ID
+                    mode = current.get("conversation_mode") or "current"
+                    if mode == "current":
+                        active_sess = self.chat_store.active_session()
+                        target_session_id = active_sess.get("id") if active_sess else None
+                    elif mode == "new":
+                        session = self.chat_store.create_session(set_active=False)
+                        target_session_id = session.get("id")
+                    elif mode == "dedicated":
+                        target_session_id = current.get("target_conversation_id")
+                        exists = False
+                        if target_session_id:
+                            with self.chat_store._lock:
+                                exists = any(s.get("id") == target_session_id for s in self.chat_store.data.get("sessions", []))
+                        if not exists:
+                            session = self.chat_store.create_session(set_active=False)
+                            target_session_id = session.get("id")
+                            current["target_conversation_id"] = target_session_id
+                            self._save_settings()
+                    
+                    # Store target_session_id in execution context so step callback can use it!
+                    self._execution_context.target_session_id = target_session_id
+                    
+                    # Backup original active session
+                    original_sess = self.chat_store.active_session()
+                    original_session_id = original_sess.get("id") if original_sess else None
+                    
+                    # If target is different from active session, activate it!
+                    if target_session_id and target_session_id != original_session_id:
+                        self.activate_chat_session(target_session_id)
+                    
+                    if current.get("kind") == "reminder":
+                        title = str(current.get("title") or "תזכורת מסמארטי").strip()
+                        message = str(current.get("message") or current.get("prompt") or "").strip()
+                        res = f"{title}\n\n{message}".strip()
+                    else:
+                        prompt_text = current.get('prompt', '')
+                        # Emit start callback/signal
+                        if getattr(self, "background_task_start_callback", None):
+                            try:
+                                self.background_task_start_callback(target_session_id or "", task_id, prompt_text)
+                            except Exception:
+                                pass
+                        
+                        res = self.send_message(prompt_text, is_background_task=True, cancel_event=cancel_event)
+                        
+                        # Record the active chat turn manually for background task!
+                        try:
+                            self._record_active_chat_turn(prompt_text, res, attachments=None, is_background_task=True, session_id=target_session_id)
+                        except Exception as e:
+                            logging.warning(f"Failed to record background chat turn: {e}")
+                    
+                    # Restore original active session
+                    if original_session_id and original_session_id != self.chat_store.active_session().get("id"):
+                        self.activate_chat_session(original_session_id)
+                    
+                    current = self._get_background_task(task_id) or current
+                    if int(current.get("generation", 0) or 0) != generation:
+                        return
+                    if cancel_event.is_set() or current.get("status") == "cancelling":
+                        self._mark_background_task(task_id, "cancelled", res or "Cancelled.")
+                        if getattr(self, "background_task_finish_callback", None):
+                            try: self.background_task_finish_callback(target_session_id or "", task_id, "Cancelled.", False)
+                            except Exception: pass
+                        return
+                    
+                    success = bool(res and "ERROR" not in res)
+                    
+                    # Emit finish callback/signal
+                    if getattr(self, "background_task_finish_callback", None):
+                        try:
+                            self.background_task_finish_callback(target_session_id or "", task_id, res, success)
+                        except Exception:
+                            pass
+                    
+                    if success and current.get("repeat") == "interval":
+                        interval = max(1.0, float(current.get("interval_minutes") or current.get("delay_minutes") or 60))
+                        current["status"] = "scheduled"
+                        current["run_at"] = (datetime.now() + timedelta(minutes=interval)).isoformat(timespec="seconds")
+                        current["finished_at"] = datetime.now().isoformat(timespec="seconds")
+                        current["last_result"] = self._truncate_tool_output(res)
+                        self._save_settings()
+                        if self._background_threads.get(task_id) is threading.current_thread():
+                            self._background_threads.pop(task_id, None)
+                        self._schedule_background_task_thread(current)
+                        rescheduled = True
+                    elif success and current.get("repeat") == "weekly":
+                        days_of_week = current.get("days_of_week") or []
+                        base_dt = datetime.fromisoformat(current["run_at"])
+                        next_dt = base_dt
+                        for d in range(1, 8):
+                            candidate = base_dt + timedelta(days=d)
+                            if candidate.weekday() in days_of_week:
+                                next_dt = candidate
+                                break
+                        if next_dt <= base_dt:
+                            next_dt = base_dt + timedelta(days=7)
+                        while next_dt <= datetime.now():
+                            next_dt += timedelta(days=7)
+                        
+                        current["status"] = "scheduled"
+                        current["run_at"] = next_dt.isoformat(timespec="seconds")
+                        current["finished_at"] = datetime.now().isoformat(timespec="seconds")
+                        current["last_result"] = self._truncate_tool_output(res)
+                        self._save_settings()
+                        if self._background_threads.get(task_id) is threading.current_thread():
+                            self._background_threads.pop(task_id, None)
+                        self._schedule_background_task_thread(current)
+                        rescheduled = True
+                    else:
+                        self._mark_background_task(task_id, "done" if success else "failed", res)
+                        
+                    if res and "ERROR" not in res:
+                        if self.settings.get("read_aloud_all"): self.speak_text(res)
+                    if res and "ERROR" not in res:
+                        self._emit_notification("background_task_finished", {"task": dict(current), "result": res, "session_id": target_session_id or ""})
+                finally:
+                    self._agent_lock.release()
             except Exception as e:
                 logging.exception("Background task crashed unexpectedly.")
                 self._recover_after_agent_crash()
                 self._mark_background_task(task_id, "failed", f"ERROR: {e}")
+                if getattr(self, "background_task_finish_callback", None):
+                    try: self.background_task_finish_callback(target_session_id or "", task_id, f"ERROR: {e}", False)
+                    except Exception: pass
             finally:
                 if not rescheduled:
                     if self._background_threads.get(task_id) is threading.current_thread():
@@ -4956,7 +5070,7 @@ class SmartiCore:
             return f"שגיאה: {text.replace('ERROR_USER:', '').strip()}"
         return text
 
-    def _record_active_chat_turn(self, user_text, final_response, attachments=None):
+    def _record_active_chat_turn(self, user_text, final_response, attachments=None, is_background_task=False, session_id=None):
         if not getattr(self, "chat_store", None):
             return
         should_title = (
@@ -4968,6 +5082,14 @@ class SmartiCore:
         assistant_text = self._display_assistant_text_for_history(final_response)
         agent_process = self._current_agent_process_metadata()
         assistant_metadata = {"agent_process": agent_process} if agent_process else {}
+        
+        user_metadata = {"attachments": normalize_attachments(attachments or [])}
+        if is_background_task:
+            user_metadata["is_background_task"] = True
+            user_metadata["triggered_by_background"] = True
+            assistant_metadata["is_background_task"] = True
+            assistant_metadata["triggered_by_background"] = True
+            
         self.chat_store.add_turn(
             user_text,
             assistant_text,
@@ -4975,9 +5097,10 @@ class SmartiCore:
             is_error=str(final_response or "").startswith("ERROR_USER:"),
             title=title,
             context=self._chat_context_snapshot(),
-            user_metadata={"attachments": normalize_attachments(attachments or [])},
+            user_metadata=user_metadata,
             assistant_metadata=assistant_metadata,
             welcome_text=DEFAULT_WELCOME_MESSAGE,
+            session_id=session_id,
         )
 
     def _load_settings(self):
@@ -5608,6 +5731,10 @@ CWD: {current_dir}
 3א. לפני shell חופשי שאל את עצמך אם יש כלי מובנה טוב יותר: `run_project_check` לבדיקות/build מוכרות, `git_status` ל-git קריאה בלבד, `file_manager` לשמירה/פתיחה/חיפוש, `software_manager` לפתיחת אפליקציות, `web_manager` לרשת ומזג אוויר. אם בחרת shell בכל זאת, ודא שזה בגלל צורך אמיתי ולא קיצור דרך.
 3ב. נאמנות לדרך שביקש המשתמש: אם המשתמש ביקש במפורש לבצע פעולה באפליקציה, בתוך חלון, באמצעות כלי מסוים, או השתמש במילים כמו "דווקא", "בתוך", "באמצעות" או "פתח", זו דרישת ביצוע ולא רק רמז. נסה קודם את הדרך המבוקשת. אם היא נכשלת, בצע אבחון וניסיון בטוח נוסף בדרך קרובה לפני מעבר לחלופה. מעבר לחלופה מותר רק אחרי כשל חוזר ברור, כלי כבוי, חסימת הרשאות או דחיית משתמש, ואז אמור זאת למשתמש בקצרה ואל תטען שבוצעה הדרך המקורית.
 3ג. לתזכורות, התראות Windows, פתיחת Calendar/Clock, יצירת אירוע יומן או התראה שמושכת תשומת לב, העדף `notification_manager`. לתזכורת פשוטה השתמש `notification_manager` עם `action:"schedule_reminder"` כדי לקבל גם הודעת צ'אט וגם Windows toast בזמן הנכון, בלי להריץ מודל רק כדי להזכיר.
+3ד. בעת תזמון משימת רקע באמצעות `schedule_background_task`, עליך לבחור בחוכמה את `conversation_mode` המתאים:
+   * השתמש ב-`current` להמשך ישיר של השיחה הנוכחית (אם הבקשה היא ספציפית וממוקדת בשיחה זו).
+   * השתמש ב-`new` ליצירת שיחה חדשה לגמרי בכל פעם שהמשימה תרוץ (למשל, דוח יומי/שבועי עצמאי שצריך להתחיל נקי).
+   * השתמש ב-`dedicated` ליצירת שיחה קבועה ייעודית שתשמש רק את המשימה הזו בכל הרצותיה העתידיות (למשל, שיחה ייעודית לתיעוד היסטוריית מזג אוויר או התראות שרת קבועות, כדי לא ללכלך את השיחה הנוכחית של המשתמש אך עדיין לשמור על רצף היסטורי של המשימה).
 4. הורדת כלי חדש: לפני התקנת MCP חפש ובדוק חבילה, מפרסם, תיאור וגרסה נעולה; לפני התקנת Skill חפש ובדוק התאמה. אם המשתמש נתן מזהה מדויק וביקש התקנה ישירה, עדיין שקול בקצרה אם חיפוש מקדים נחוץ לבטיחות. צור כלי Python חדש רק עם JSON Schema מלא וקלט דרך sys.argv[1], ללא קוד קשיח למקרה חד-פעמי אלא אם המשתמש ביקש זאת במפורש.
 5. למזג אוויר ותחזית השתמש קודם ב-`get_weather` עם שם מיקום כללי ואל תמציא נתונים. Skill בשם weather הוא מדריך בלבד אלא אם הוא הותקן עם handler מפורש.
 5א. אם המשתמש ביקש במפורש MCP/שרת חיצוני עבור מזג אוויר, העדף MCP מותקן ומאושר על פני `get_weather`. אם MCP נכשל או חסום, אמור זאת ואל תטען שהשתמשת בו.
@@ -6212,10 +6339,15 @@ CWD: {current_dir}
             else:
                 current_manifest = attachment_manifest_text(attachments, title="Files attached to this turn")
                 history_user_text = (user_text + ("\n\n" + current_manifest if current_manifest else "")).strip()
+            if is_background_task:
+                history_user_text = f"[משימת רקע שהופעלה אוטומטית ברקע / Background task executed automatically]:\n{history_user_text}"
             self._execution_context.is_background = is_background_task
             self._execution_context.cancel_event = run_cancel_event
-            self._execution_context.current_task_id = str((resume_checkpoint or {}).get("task_id") or uuid.uuid4().hex[:12])
-            checkpoint_task_id = self._execution_context.current_task_id
+            if is_background_task and getattr(self._execution_context, "current_task_id", None):
+                checkpoint_task_id = self._execution_context.current_task_id
+            else:
+                self._execution_context.current_task_id = str((resume_checkpoint or {}).get("task_id") or uuid.uuid4().hex[:12])
+                checkpoint_task_id = self._execution_context.current_task_id
             self._execution_context.current_task_objective = (history_user_text or user_text)[:700]
             if not is_background_task:
                 self._foreground_cancel_event = run_cancel_event
@@ -6370,7 +6502,7 @@ CWD: {current_dir}
                     first_call, feedback_for_ai = self._decode_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
                     if feedback_for_ai or not first_call:
                         preview_step = self._preview_step_for_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
-                        if preview_step and self.step_callback and not self._is_background_context():
+                        if preview_step and (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)):
                             try:
                                 report = self._should_emit_agent_report(pre_text)
                                 if report:
@@ -6416,7 +6548,7 @@ CWD: {current_dir}
                         if planner_report:
                             self._emit_agent_process_event("report", text=planner_report, source="model")
                             process_report_emitted = True
-                        elif self.step_callback and not self._is_background_context() and not process_report_emitted and missing_process_report_feedbacks < 2:
+                        elif (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)) and not process_report_emitted and missing_process_report_feedbacks < 2:
                             missing_process_report_feedbacks += 1
                             self._append_tool_feedback(
                                 current_messages,
@@ -6513,7 +6645,7 @@ CWD: {current_dir}
                     if report_text:
                         self._emit_agent_process_event("report", text=report_text, source="model")
                         process_report_emitted = True
-                    elif self.step_callback and not self._is_background_context() and not process_report_emitted and missing_process_report_feedbacks < 2:
+                    elif (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)) and not process_report_emitted and missing_process_report_feedbacks < 2:
                         missing_process_report_feedbacks += 1
                         self._append_tool_feedback(
                             current_messages,
@@ -6689,7 +6821,7 @@ CWD: {current_dir}
                 except Exception as e:
                     logging.warning(f"Memory auto-capture skipped: {e}")
 
-            if final_response and not final_response.startswith("ERROR_USER") and not is_background_task:
+            if final_response and not final_response.startswith("ERROR_USER"):
                 if self.mode == "gemini":
                     self.gemini_history.append({"role": "user", "content": history_user_text or user_text})
                     self.gemini_history.append({"role": "model", "content": final_response})
@@ -8180,7 +8312,7 @@ else:
             elif action == "schedule_background_task":
                 allowed, err = self._ensure_capability_allowed("background_task", "אישור תזמון משימת רקע", f"דחייה: {args_dict.get('delay_minutes', 0)} דקות\n\n{args_dict.get('prompt', '')}", risk="medium")
                 if not allowed: return (err, None)
-                return (self.schedule_background_task([str(args_dict.get("delay_minutes", 0)), str(args_dict.get("prompt", "")), str(args_dict.get("repeat", "once")), str(args_dict.get("interval_minutes", ""))]), None)
+                return (self.schedule_background_task(args_dict), None)
             elif action == "list_background_tasks": return (self.list_background_tasks(), None)
             elif action == "cancel_background_task": return (self.cancel_background_task(str(args_dict.get("id", ""))), None)
             elif action == "retry_background_task": return (self.retry_background_task(str(args_dict.get("id", "")), args_dict.get("delay_minutes", 0)), None)
@@ -10709,20 +10841,48 @@ if __name__ == "__main__":
 
     def schedule_background_task(self, params):
         try:
-            delay = float(params[0])
+            if isinstance(params, dict):
+                args_dict = params
+            else:
+                args_dict = {
+                    "delay_minutes": params[0] if len(params) > 0 else 0,
+                    "prompt": params[1] if len(params) > 1 else "",
+                    "repeat": params[2] if len(params) > 2 else "once",
+                    "interval_minutes": params[3] if len(params) > 3 else ""
+                }
+            
+            delay = float(args_dict.get("delay_minutes") or 0)
             if delay < 0: return "ERROR: Delay must be positive."
-            repeat = str(params[2]).strip().lower() if len(params) > 2 and params[2] else "once"
-            if repeat not in {"once", "interval"}: repeat = "once"
-            interval_raw = params[3] if len(params) > 3 else ""
+            
+            repeat = str(args_dict.get("repeat") or "once").strip().lower()
+            if repeat not in {"once", "interval", "weekly"}: repeat = "once"
+            
+            interval_raw = args_dict.get("interval_minutes") or ""
             interval = float(interval_raw) if str(interval_raw).strip() else delay
             if repeat == "interval" and interval < 1: return "ERROR: Interval must be at least 1 minute."
+            
+            days_of_week = args_dict.get("days_of_week") or []
+            if repeat == "weekly":
+                if not isinstance(days_of_week, list):
+                    days_of_week = []
+                days_of_week = [int(d) for d in days_of_week if str(d).isdigit() and 0 <= int(d) <= 6]
+                if not days_of_week:
+                    return "ERROR: At least one valid day of the week (0-6) must be specified for weekly repeat."
+            
+            conversation_mode = str(args_dict.get("conversation_mode") or "current").strip().lower()
+            if conversation_mode not in {"current", "new", "dedicated"}:
+                conversation_mode = "current"
+                
             task = {
                 "id": str(uuid.uuid4())[:8],
-                "prompt": params[1],
+                "prompt": args_dict.get("prompt", ""),
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "run_at": (datetime.now() + timedelta(minutes=delay)).isoformat(timespec="seconds"),
                 "repeat": repeat,
                 "interval_minutes": interval if repeat == "interval" else None,
+                "days_of_week": days_of_week if repeat == "weekly" else None,
+                "conversation_mode": conversation_mode,
+                "target_conversation_id": None,
                 "policy_snapshot": self.background_scheduler.policy_snapshot() if getattr(self, "background_scheduler", None) else self._normalize_policy_matrix(),
                 "history": [],
                 "status": "scheduled",
@@ -10732,7 +10892,7 @@ if __name__ == "__main__":
             self.settings["background_jobs"] = self.settings["background_tasks"]
             self._save_settings()
             self._schedule_background_task_thread(task)
-            return f"SUCCESS: משימה תוכננה. מזהה: {task['id']}"
+            return f"SUCCESS: משימה תוכננה בהצלחה (מזהה: {task['id']}). המשימה תורץ ברקע בזמן המבוקש. אל תבצע את הפעולה בעצמך כעת בשיחה זו, אלא רק הודע למשתמש שהמשימה תוכננה בהצלחה ברקע."
         except Exception as e: return f"ERROR: {e}"
 
     def schedule_reminder(self, delay_minutes, message, title="", repeat="once", interval_minutes=""):

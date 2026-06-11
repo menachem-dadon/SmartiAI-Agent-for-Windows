@@ -299,13 +299,17 @@ class ChatSessionStore:
             user_messages = [m for m in session.get("messages", []) if m.get("role") == "user"]
             return len(user_messages) == 0
 
-    def add_turn(self, user_text, assistant_text, assistant_raw=None, is_error=False, title="", context=None, user_metadata=None, assistant_metadata=None, welcome_text=None):
+    def add_turn(self, user_text, assistant_text, assistant_raw=None, is_error=False, title="", context=None, user_metadata=None, assistant_metadata=None, welcome_text=None, session_id=None):
         with self._lock:
-            session = self._session_by_id(self.data.get("active_session_id"))
+            target_id = session_id or self.data.get("active_session_id")
+            session = self._session_by_id(target_id) if target_id else None
             if not session:
                 session = self._new_session()
+                if session_id:
+                    session["id"] = session_id
                 self.data.setdefault("sessions", []).append(session)
-                self.data["active_session_id"] = session["id"]
+                if not session_id:
+                    self.data["active_session_id"] = session["id"]
             now = _now_iso()
             if not session.get("messages"):
                 self._append_welcome_message(session, welcome_text or DEFAULT_WELCOME_MESSAGE, created_at=now)

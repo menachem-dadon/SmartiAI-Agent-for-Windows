@@ -1539,8 +1539,9 @@ class MessageBubble(QFrame):
     WIDGET_MAX_HEIGHT = 16777215
     PROCESS_CHEVRON_ICON_NAMES = ("agent_process_chevron", "message_collapse_arrow")
 
-    def __init__(self, text, is_user=False, parent_width=450, attachments=None):
+    def __init__(self, text, is_user=False, parent_width=450, attachments=None, is_background_task=False):
         super().__init__()
+        self.is_background_task = is_background_task
         self.is_user = is_user
         self.setSizePolicy(
             QSizePolicy.Policy.Maximum if self.is_user else QSizePolicy.Policy.Expanding,
@@ -1672,12 +1673,35 @@ class MessageBubble(QFrame):
         label.setPalette(palette)
 
     def apply_theme(self):
-        bg = USER_BUBBLE_COLOR if self.is_user else "transparent"
-        color = BUBBLE_USER_TEXT if self.is_user else TEXT_COLOR
-        link_color = self._link_color()
-        radius = "22px" if self.is_user else "0px"
-        border = f"1px solid {USER_BUBBLE_BORDER}" if self.is_user else "none"
-        margin = "5px 0px" if self.is_user else "2px 0px"
+        if self.is_background_task and self.is_user:
+            if not hasattr(self, "badge_label"):
+                self.badge_label = QLabel("⚡ משימת רקע")
+                self.badge_label.setStyleSheet("color: #FF9F0A; font-weight: bold; font-size: 11px; margin-bottom: 4px;")
+                self.main_layout.insertWidget(0, self.badge_label)
+            self.main_layout.setContentsMargins(20, 16, 20, 16)
+            bg = "rgba(255, 159, 10, 15)"
+            color = TEXT_COLOR
+            link_color = self._link_color()
+            radius = "22px"
+            border = "1px solid rgba(255, 159, 10, 70)"
+            margin = "5px 0px"
+        else:
+            if hasattr(self, "badge_label"):
+                try:
+                    self.badge_label.deleteLater()
+                except Exception:
+                    pass
+                delattr(self, "badge_label")
+            if self.is_user:
+                self.main_layout.setContentsMargins(20, 16, 20, 16)
+            else:
+                self.main_layout.setContentsMargins(10, 8, 10, 8)
+            bg = USER_BUBBLE_COLOR if self.is_user else "transparent"
+            color = BUBBLE_USER_TEXT if self.is_user else TEXT_COLOR
+            link_color = self._link_color()
+            radius = "22px" if self.is_user else "0px"
+            border = f"1px solid {USER_BUBBLE_BORDER}" if self.is_user else "none"
+            margin = "5px 0px" if self.is_user else "2px 0px"
 
         self.process_header.setStyleSheet("background: transparent; border: none;")
         self.process_arrow_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; background: transparent;")
@@ -2160,13 +2184,13 @@ class ChatMessageContainer(QWidget):
     ACTION_ICON_SIZE = 22
     ACTION_ROW_HEIGHT = 40
 
-    def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None, parent=None):
+    def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None, is_background_task=False, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setStyleSheet("background: transparent;")
-        self.bubble = MessageBubble(text, is_user, parent_width, attachments=attachments)
+        self.bubble = MessageBubble(text, is_user, parent_width, attachments=attachments, is_background_task=is_background_task)
         self.is_user = is_user
         self.show_actions = bool(show_actions)
         self._tts_active = False
@@ -3135,6 +3159,9 @@ class ChatWindow(QMainWindow):
     tts_status_signal = pyqtSignal(bool)
     core_notification_signal = pyqtSignal(str, object)
     voice_hotkey_signal = pyqtSignal()
+    background_task_start_signal = pyqtSignal(str, str, str)
+    background_task_step_signal = pyqtSignal(str, object)
+    background_task_finish_signal = pyqtSignal(str, str, str, bool)
 
     def format_model_name(self, name):
         name = str(name).replace("-", " ").replace("_", " ")
@@ -3179,13 +3206,23 @@ class ChatWindow(QMainWindow):
         self._update_dialog = None
         self._update_check_source = None
         self.pending_attachments = []
+        self._background_task_containers = {}
         self.taskbar_attention = TaskbarAttentionController(self)
         self.notifications = WindowsNotificationCenter(self)
         self.notifications.reply_requested.connect(self.handle_notification_reply)
         self.notifications.activate_requested.connect(self.handle_notification_activation)
         self.notifications.attention_cleared.connect(self._clear_taskbar_attention)
+        self.notifications.conversation_switch_requested.connect(self.handle_conversation_switch_requested)
         self.core_notification_signal.connect(self.handle_core_notification)
         self.core.notification_callback = lambda kind, payload=None: self.core_notification_signal.emit(kind, payload or {})
+        
+        self.background_task_start_signal.connect(self.handle_background_task_start)
+        self.background_task_step_signal.connect(self.handle_background_task_step)
+        self.background_task_finish_signal.connect(self.handle_background_task_finish)
+        
+        self.core.background_task_start_callback = lambda sess_id, task_id, prompt: self.background_task_start_signal.emit(sess_id, task_id, prompt)
+        self.core.background_task_step_callback = lambda task_id, event: self.background_task_step_signal.emit(task_id, event)
+        self.core.background_task_finish_callback = lambda sess_id, task_id, res, ok: self.background_task_finish_signal.emit(sess_id, task_id, res, ok)
         
         icon_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(icon_path):
@@ -3283,6 +3320,8 @@ class ChatWindow(QMainWindow):
 
     def _setup_tray_menu(self):
         self.tray_menu = QMenu()
+        self.tray_menu.setWindowFlags(self.tray_menu.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        self.tray_menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.tray_menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.tray_menu.setStyleSheet(menu_stylesheet())
         self.tray_open_action = self.tray_menu.addAction("פתח את SmartiAI")
@@ -3758,6 +3797,8 @@ class ChatWindow(QMainWindow):
         self.menu_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         
         self.menu = QMenu(self)
+        self.menu.setWindowFlags(self.menu.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        self.menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         if hasattr(self.menu, "setIconSize"):
             self.menu.setIconSize(QSize(22, 22))
@@ -4072,12 +4113,66 @@ class ChatWindow(QMainWindow):
             task = payload.get("task") or {}
             result = payload.get("result") or task.get("last_result") or ""
             is_reminder = task.get("kind") == "reminder"
-            if not is_reminder and not self._should_notify_user():
+            session_id = payload.get("session_id") or ""
+            active_session = self.core.active_chat_session()
+            active_sess_id = active_session.get("id") if active_session else None
+            
+            if not is_reminder and active_sess_id == session_id and not self._should_notify_user():
                 return
+            
             self._request_taskbar_attention()
             title = task.get("title") or ("תזכורת מסמארטי" if is_reminder else "משימת רקע הסתיימה")
             body = result or task.get("message") or task.get("prompt") or "המשימה הסתיימה."
-            self.notifications.show_notice(title, body, kind="reminder" if is_reminder else "default")
+            if not is_reminder and session_id:
+                self.notifications.show_background_task_notification(title, body, session_id)
+            else:
+                self.notifications.show_notice(title, body, kind="reminder" if is_reminder else "default")
+
+    def handle_background_task_start(self, session_id, task_id, prompt):
+        active_sess = self.core.active_chat_session()
+        active_sess_id = active_sess.get("id") if active_sess else None
+        if active_sess_id == session_id:
+            user_container = self.add_message(prompt, is_user=True, is_background_task=True)
+            available_width = self.scroll.viewport().width() or self.width()
+            container = ChatMessageContainer(
+                "",
+                is_user=False,
+                parent_width=available_width,
+                is_background_task=True,
+                parent=self.chat_widget,
+            )
+            self._wire_message_container(container)
+            self.chat_layout.addWidget(container)
+            self._background_task_containers[task_id] = (user_container, container)
+            self._schedule_scroll_last_user_to_view_top()
+
+    def handle_background_task_step(self, task_id, event):
+        if task_id in self._background_task_containers:
+            _, container = self._background_task_containers[task_id]
+            changed = container.bubble.handle_agent_event(event)
+            if changed:
+                container.bubble.show()
+                container.reveal_with_entry_animation()
+                self._schedule_scroll_last_user_to_view_top(delays=(50, 160))
+
+    def handle_background_task_finish(self, session_id, task_id, result, success):
+        if task_id in self._background_task_containers:
+            _, container = self._background_task_containers.pop(task_id, (None, None))
+            if container:
+                container.bubble.set_final_text(result)
+                container.bubble.apply_theme()
+                container.reveal_with_entry_animation()
+                self._schedule_scroll_last_user_to_view_top(delays=(50, 160))
+
+    def handle_conversation_switch_requested(self, session_id):
+        if self.agent_running:
+            QMessageBox.information(self, "שיחה פעילה", "אי אפשר להחליף שיחה בזמן שסמארטי עדיין עובד.")
+            return
+        if self.core.activate_chat_session(session_id):
+            self.load_active_chat_session()
+            self.refresh_chat_title()
+            self.stacked_widget.setCurrentWidget(self.chat_page)
+            self.bring_to_front()
 
     def submit_quick_reply(self, text):
         text = str(text or "").strip()
@@ -4339,7 +4434,7 @@ class ChatWindow(QMainWindow):
         self.update_action_btn_visuals()
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
-    def add_message(self, text, is_user, show_actions=True, attachments=None, anchor_user=False):
+    def add_message(self, text, is_user, show_actions=True, attachments=None, anchor_user=False, is_background_task=False):
         attachments = normalize_attachments(attachments or [])
         if not text and is_user and not attachments: return
         available_width = self.scroll.viewport().width() or self.width()
@@ -4349,6 +4444,7 @@ class ChatWindow(QMainWindow):
             available_width,
             show_actions=show_actions,
             attachments=attachments,
+            is_background_task=is_background_task,
             parent=self.chat_widget,
         )
         self._wire_message_container(container)
@@ -4583,7 +4679,8 @@ class ChatWindow(QMainWindow):
             if role not in {"user", "assistant"} or (not content.strip() and not attachments):
                 continue
             is_welcome = self._is_welcome_history_message(message)
-            container = self.add_message(content, is_user=(role == "user"), show_actions=not is_welcome, attachments=attachments)
+            is_bg = bool(metadata.get("triggered_by_background"))
+            container = self.add_message(content, is_user=(role == "user"), show_actions=not is_welcome, attachments=attachments, is_background_task=is_bg)
             if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
                 container.bubble.restore_agent_process(metadata.get("agent_process"))
         self.refresh_chat_title()

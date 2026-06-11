@@ -954,19 +954,51 @@ class TaskCenterPage(QWidget):
             card = QFrame()
             card.setStyleSheet(card_css(12, 8))
             card_layout = QVBoxLayout(card)
-            title = QLabel(f"{task.get('id')} | {task.get('status')} | {task.get('run_at', '')}")
-            title.setStyleSheet(f"color: {ACCENT_COLOR}; font-weight: 700; font-size: 14px; border: none;")
+            
+            repeat = task.get("repeat", "once")
+            freq_str = "חד-פעמית"
+            if repeat == "interval":
+                interval = task.get("interval_minutes") or task.get("delay_minutes") or 1
+                try:
+                    interval = int(float(interval))
+                except Exception:
+                    pass
+                freq_str = f"כל {interval} דקות"
+            elif repeat == "weekly":
+                days = task.get("days_of_week") or []
+                day_names = {0: "שני", 1: "שלישי", 2: "רביעי", 3: "חמישי", 4: "שישי", 5: "שבת", 6: "ראשון"}
+                days_list = [day_names.get(d, str(d)) for d in sorted(days)]
+                freq_str = f"שבועית בימים: {', '.join(days_list)}"
+            
+            conv_mode = task.get("conversation_mode", "current")
+            conv_names = {"current": "שיחה נוכחית", "new": "שיחה חדשה בכל פעם", "dedicated": "שיחה ייעודית קבועה"}
+            conv_str = conv_names.get(conv_mode, "שיחה נוכחית")
+            
+            status_hebrew = {"scheduled": "מתוזמן", "running": "רץ כעת", "cancelling": "בביטול", "done": "הושלם", "failed": "נכשל", "cancelled": "בוטל"}
+            status_str = status_hebrew.get(task.get("status", ""), task.get("status", ""))
+            
+            run_at_str = task.get('run_at', '')
+            if "T" in run_at_str:
+                run_at_str = run_at_str.replace("T", " ")
+            
+            title_text = f"מזהה: {task.get('id')} | סטטוס: {status_str} | תדירות: {freq_str} | ניתוב: {conv_str}\nזמן הרצה הבא: {run_at_str}"
+            
+            title = QLabel(title_text)
+            title.setStyleSheet(f"color: {ACCENT_COLOR}; font-weight: 700; font-size: 13px; line-height: 1.4; border: none;")
             title.setWordWrap(True)
             card_layout.addWidget(title)
+            
             body = QLabel(str(task.get("prompt", "")))
             body.setWordWrap(True)
-            body.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; border: none;")
+            body.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; border: none; margin-top: 4px;")
             card_layout.addWidget(body)
+            
             if task.get("last_result"):
                 result = QLabel(str(task.get("last_result", ""))[:500])
                 result.setWordWrap(True)
-                result.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 12px; border: none;")
+                result.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 12px; border: none; margin-top: 4px;")
                 card_layout.addWidget(result)
+            
             actions = QHBoxLayout()
             cancel_btn = QPushButton("בטל")
             retry_btn = QPushButton("הרץ שוב")
@@ -2401,6 +2433,8 @@ class SettingsPage(QWidget):
         slider_loops = self.loops_slider.value()
         self.core.settings["max_agent_loops"] = 0 if slider_loops > 30 else slider_loops
         changed = [key for key in sorted(set(before.keys()) | set(self.core.settings.keys())) if before.get(key) != self.core.settings.get(key)]
+        if selected_model and selected_model != "טוען מודלים...":
+            self.main_window.subtitle.setText(self.main_window.format_model_name(selected_model))
         if not changed:
             return
         self.core._save_settings()
@@ -2416,8 +2450,6 @@ class SettingsPage(QWidget):
         if needs_model_reload:
             self.core.system_prompt = self.core._load_system_prompt()
             self.core.setup_model()
-        if selected_model and selected_model != "טוען מודלים...":
-            self.main_window.subtitle.setText(self.main_window.format_model_name(selected_model))
         logging.info(f"SETTINGS | auto_saved | changed={', '.join(changed[:16])}{'...' if len(changed) > 16 else ''}")
         if getattr(self.core, "audit_logger", None):
             self.core.audit_logger.record("settings_auto_save", {"changed": changed}, self.core.settings)
