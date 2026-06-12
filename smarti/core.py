@@ -1565,7 +1565,9 @@ class SmartiCore:
                     args["action"] = "schedule"
                 else:
                     args["action"] = "list"
-            return {k: v for k, v in args.items() if k in {"action", "delay_minutes", "prompt", "repeat", "interval_minutes", "id"}}
+            return {k: v for k, v in args.items() if k in {
+                "action", "delay_minutes", "prompt", "repeat", "interval_minutes", "days_of_week", "conversation_mode", "id"
+            }}
 
         if action == "notification_manager":
             if "action" not in args:
@@ -1924,13 +1926,17 @@ class SmartiCore:
         if action == "background_task_manager":
             if op == "schedule":
                 self._require_unified_fields(op, args, ["delay_minutes", "prompt"])
-                routed = {k: args.get(k) for k in ("delay_minutes", "prompt", "repeat", "interval_minutes") if args.get(k) not in (None, "")}
+                routed = {k: args.get(k) for k in ("delay_minutes", "prompt", "repeat", "interval_minutes", "days_of_week", "conversation_mode") if args.get(k) not in (None, "")}
                 return "schedule_background_task", routed
             if op == "list":
                 return "list_background_tasks", {}
             if op == "cancel":
                 self._require_unified_fields(op, args, ["id"])
                 return "cancel_background_task", {"id": args.get("id")}
+            if op == "edit":
+                self._require_unified_fields(op, args, ["id"])
+                routed = {k: args.get(k) for k in ("id", "delay_minutes", "prompt", "repeat", "interval_minutes", "days_of_week", "conversation_mode") if args.get(k) not in (None, "")}
+                return "edit_background_task", routed
             if op == "retry":
                 self._require_unified_fields(op, args, ["id"])
                 return "retry_background_task", {"id": args.get("id"), "delay_minutes": args.get("delay_minutes", 0)}
@@ -5731,10 +5737,11 @@ CWD: {current_dir}
 3א. לפני shell חופשי שאל את עצמך אם יש כלי מובנה טוב יותר: `run_project_check` לבדיקות/build מוכרות, `git_status` ל-git קריאה בלבד, `file_manager` לשמירה/פתיחה/חיפוש, `software_manager` לפתיחת אפליקציות, `web_manager` לרשת ומזג אוויר. אם בחרת shell בכל זאת, ודא שזה בגלל צורך אמיתי ולא קיצור דרך.
 3ב. נאמנות לדרך שביקש המשתמש: אם המשתמש ביקש במפורש לבצע פעולה באפליקציה, בתוך חלון, באמצעות כלי מסוים, או השתמש במילים כמו "דווקא", "בתוך", "באמצעות" או "פתח", זו דרישת ביצוע ולא רק רמז. נסה קודם את הדרך המבוקשת. אם היא נכשלת, בצע אבחון וניסיון בטוח נוסף בדרך קרובה לפני מעבר לחלופה. מעבר לחלופה מותר רק אחרי כשל חוזר ברור, כלי כבוי, חסימת הרשאות או דחיית משתמש, ואז אמור זאת למשתמש בקצרה ואל תטען שבוצעה הדרך המקורית.
 3ג. לתזכורות, התראות Windows, פתיחת Calendar/Clock, יצירת אירוע יומן או התראה שמושכת תשומת לב, העדף `notification_manager`. לתזכורת פשוטה השתמש `notification_manager` עם `action:"schedule_reminder"` כדי לקבל גם הודעת צ'אט וגם Windows toast בזמן הנכון, בלי להריץ מודל רק כדי להזכיר.
-3ד. בעת תזמון משימת רקע באמצעות `schedule_background_task`, עליך לבחור בחוכמה את `conversation_mode` המתאים:
+3ד. בעת תזמון משימת רקע באמצעות `schedule_background_task` (או דרך `background_task_manager` עם `action: "schedule"`), עליך לבחור בחוכמה את `conversation_mode` המתאים:
    * השתמש ב-`current` להמשך ישיר של השיחה הנוכחית (אם הבקשה היא ספציפית וממוקדת בשיחה זו).
    * השתמש ב-`new` ליצירת שיחה חדשה לגמרי בכל פעם שהמשימה תרוץ (למשל, דוח יומי/שבועי עצמאי שצריך להתחיל נקי).
    * השתמש ב-`dedicated` ליצירת שיחה קבועה ייעודית שתשמש רק את המשימה הזו בכל הרצותיה העתידיות (למשל, שיחה ייעודית לתיעוד היסטוריית מזג אוויר או התראות שרת קבועות, כדי לא ללכלך את השיחה הנוכחית של המשתמש אך עדיין לשמור על רצף היסטורי של המשימה).
+3ה. איסור מוחלט על ביצוע מיידי של משימות עתידיות: כאשר המשתמש מבקש לבצע פעולה בעתיד (למשל: "בעוד שעה תוריד קובץ...", "כל יום בשעה 17:00 תשלח מייל...", "מחר בבוקר תבדוק מזג אוויר..."), עליך *רק* לתזמן את משימת הרקע/התזכורת באמצעות הכלי המתאים ולדווח על כך למשתמש. אסור בשום אופן לבצע את הפעולות עצמן (למשל, להוריד את הקובץ, לבדוק את מזג האוויר או לשלוח את המייל) כעת בתוך הדיאלוג הנוכחי! המערכת תריץ את משימת הרקע בעצמה רק כשיגיע הזמן המוגדר.
 4. הורדת כלי חדש: לפני התקנת MCP חפש ובדוק חבילה, מפרסם, תיאור וגרסה נעולה; לפני התקנת Skill חפש ובדוק התאמה. אם המשתמש נתן מזהה מדויק וביקש התקנה ישירה, עדיין שקול בקצרה אם חיפוש מקדים נחוץ לבטיחות. צור כלי Python חדש רק עם JSON Schema מלא וקלט דרך sys.argv[1], ללא קוד קשיח למקרה חד-פעמי אלא אם המשתמש ביקש זאת במפורש.
 5. למזג אוויר ותחזית השתמש קודם ב-`get_weather` עם שם מיקום כללי ואל תמציא נתונים. Skill בשם weather הוא מדריך בלבד אלא אם הוא הותקן עם handler מפורש.
 5א. אם המשתמש ביקש במפורש MCP/שרת חיצוני עבור מזג אוויר, העדף MCP מותקן ומאושר על פני `get_weather`. אם MCP נכשל או חסום, אמור זאת ואל תטען שהשתמשת בו.
@@ -8313,6 +8320,10 @@ else:
                 allowed, err = self._ensure_capability_allowed("background_task", "אישור תזמון משימת רקע", f"דחייה: {args_dict.get('delay_minutes', 0)} דקות\n\n{args_dict.get('prompt', '')}", risk="medium")
                 if not allowed: return (err, None)
                 return (self.schedule_background_task(args_dict), None)
+            elif action == "edit_background_task":
+                allowed, err = self._ensure_capability_allowed("background_task", "אישור עריכת משימת רקע", f"מזהה: {args_dict.get('id', '')}\n\nשינויים: {args_dict}", risk="medium")
+                if not allowed: return (err, None)
+                return (self.edit_background_task(args_dict), None)
             elif action == "list_background_tasks": return (self.list_background_tasks(), None)
             elif action == "cancel_background_task": return (self.cancel_background_task(str(args_dict.get("id", ""))), None)
             elif action == "retry_background_task": return (self.retry_background_task(str(args_dict.get("id", "")), args_dict.get("delay_minutes", 0)), None)
@@ -11136,6 +11147,79 @@ if __name__ == "__main__":
         self._save_settings()
         self._schedule_background_task_thread(task)
         return f"SUCCESS: משימת הרקע {task_id} תורצה מחדש."
+
+    def edit_background_task(self, params):
+        try:
+            if not isinstance(params, dict):
+                return "ERROR: Params must be a dictionary."
+            
+            task_id = str(params.get("id") or "").strip()
+            if not task_id: return "ERROR: Missing task id."
+            
+            task = self._get_background_task(task_id)
+            if not task: return f"ERROR: Task not found: {task_id}"
+            
+            # Cancel old execution thread safely first
+            old_event = self._background_cancel_events.get(task_id)
+            if old_event:
+                old_event.set()
+            self._background_threads.pop(task_id, None)
+            self._background_cancel_events.pop(task_id, None)
+            
+            # Update fields if provided
+            if "prompt" in params:
+                task["prompt"] = str(params["prompt"])
+            
+            if "repeat" in params:
+                repeat = str(params["repeat"]).strip().lower()
+                if repeat in {"once", "interval", "weekly"}:
+                    task["repeat"] = repeat
+                else:
+                    return f"ERROR: Invalid repeat value: {repeat}"
+            
+            if "interval_minutes" in params:
+                try:
+                    val = float(params["interval_minutes"])
+                    task["interval_minutes"] = val
+                except ValueError:
+                    task["interval_minutes"] = None
+                    
+            if "days_of_week" in params:
+                days = params["days_of_week"]
+                if isinstance(days, list):
+                    task["days_of_week"] = [int(d) for d in days if str(d).isdigit() and 0 <= int(d) <= 6]
+                else:
+                    task["days_of_week"] = None
+                    
+            if "conversation_mode" in params:
+                mode = str(params["conversation_mode"]).strip().lower()
+                if mode in {"current", "new", "dedicated"}:
+                    task["conversation_mode"] = mode
+                else:
+                    return f"ERROR: Invalid conversation_mode: {mode}"
+            
+            # If delay_minutes is provided, reschedule run_at
+            if "delay_minutes" in params:
+                try:
+                    delay = float(params["delay_minutes"])
+                    if delay >= 0:
+                        task["run_at"] = (datetime.now() + timedelta(minutes=delay)).isoformat(timespec="seconds")
+                        task.pop("finished_at", None)
+                except ValueError:
+                    pass
+            
+            # Reset status and increment generation so new thread can take over
+            task["generation"] = int(task.get("generation", 0) or 0) + 1
+            task["status"] = "scheduled"
+            task["policy_snapshot"] = self.background_scheduler.policy_snapshot() if getattr(self, "background_scheduler", None) else self._normalize_policy_matrix()
+            
+            self.settings["background_jobs"] = self.settings.get("background_tasks", [])
+            self._save_settings()
+            
+            self._schedule_background_task_thread(task)
+            return f"SUCCESS: משימת הרקע {task_id} עודכנה בהצלחה ותוזמנה מחדש."
+        except Exception as e:
+            return f"ERROR: {e}"
 
     def _legacy_update_memory_tool(self, mode, content):
         mode = str(mode or "").strip().lower()

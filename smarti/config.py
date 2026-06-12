@@ -661,16 +661,27 @@ BUILTIN_TOOL_SCHEMAS["screen_manager"] = {
 }
 
 BUILTIN_TOOL_SCHEMAS["background_task_manager"] = {
-    "description": "Unified background task tool for schedule, list, cancel, and retry.",
+    "description": "Unified background task tool for schedule, list, cancel, edit, and retry. "
+                   "IMPORTANT: When scheduling/editing a task for the future, DO NOT execute the user's prompt request in the current turn. Only call this tool and report success.",
     "inputSchema": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["schedule", "list", "cancel", "retry"], "description": "Background task operation."},
-            "delay_minutes": {"type": "number", "description": "Minutes until run/retry."},
+            "action": {"type": "string", "enum": ["schedule", "list", "cancel", "edit", "retry"], "description": "Background task operation."},
+            "delay_minutes": {"type": "number", "description": "Minutes until run/retry/edit rescheduled start."},
             "prompt": {"type": "string", "description": "Instruction to run later."},
-            "repeat": {"type": "string", "enum": ["once", "interval"], "description": "Repeat mode."},
-            "interval_minutes": {"type": "number", "description": "Minutes between repeated runs."},
-            "id": {"type": "string", "description": "Task id for cancel/retry."}
+            "repeat": {"type": "string", "enum": ["once", "interval", "weekly"], "description": "Repeat mode: once, interval, weekly."},
+            "interval_minutes": {"type": "number", "description": "Minutes between repeated runs when repeat=interval."},
+            "days_of_week": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Array of numbers from 0 (Monday) to 6 (Sunday) for repeat=weekly."
+            },
+            "conversation_mode": {
+                "type": "string",
+                "enum": ["current", "new", "dedicated"],
+                "description": "Routing mode: current (same chat), new (new chat each run), dedicated (same persistent run chat)."
+            },
+            "id": {"type": "string", "description": "Task id for cancel/retry/edit."}
         },
         "required": ["action"]
     }

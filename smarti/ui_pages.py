@@ -902,6 +902,69 @@ class UsageStatsPage(QWidget):
         card_layout.addWidget(details_lbl)
         self.content_layout.addWidget(card)
 
+def format_interval_hebrew(interval_minutes):
+    try:
+        minutes = int(float(interval_minutes))
+    except Exception:
+        return f"כל {interval_minutes} דקות"
+    
+    if minutes <= 0:
+        return "מיידית"
+    
+    if minutes == 1440:
+        return "כל יום"
+    if minutes == 60:
+        return "כל שעה"
+        
+    days = minutes // 1440
+    remaining_minutes = minutes % 1440
+    hours = remaining_minutes // 60
+    mins = remaining_minutes % 60
+    
+    parts = []
+    if days > 0:
+        if days == 1:
+            parts.append("יום")
+        elif days == 2:
+            parts.append("יומיים")
+        else:
+            parts.append(f"{days} ימים")
+            
+    if hours > 0:
+        if hours == 1:
+            parts.append("שעה")
+        elif hours == 2:
+            parts.append("שעתיים")
+        else:
+            parts.append(f"{hours} שעות")
+            
+    if mins > 0:
+        if mins == 1:
+            parts.append("דקה")
+        elif mins == 2:
+            parts.append("שתי דקות")
+        else:
+            parts.append(f"{mins} דקות")
+            
+    if not parts:
+        return "פחות מדקה"
+        
+    if len(parts) == 1:
+        return f"כל {parts[0]}"
+    
+    last = parts[-1]
+    if last[0].isdigit():
+        prefix = "ו-"
+    else:
+        prefix = "ו"
+        
+    last_formatted = f"{prefix}{last}"
+    
+    if len(parts) == 2:
+        return f"כל {parts[0]} {last_formatted}"
+    else:
+        return f"כל {', '.join(parts[:-1])} {last_formatted}"
+
 class TaskCenterPage(QWidget):
     def __init__(self, core, main_window):
         super().__init__(getattr(main_window, "stacked_widget", None))
@@ -959,11 +1022,7 @@ class TaskCenterPage(QWidget):
             freq_str = "חד-פעמית"
             if repeat == "interval":
                 interval = task.get("interval_minutes") or task.get("delay_minutes") or 1
-                try:
-                    interval = int(float(interval))
-                except Exception:
-                    pass
-                freq_str = f"כל {interval} דקות"
+                freq_str = format_interval_hebrew(interval)
             elif repeat == "weekly":
                 days = task.get("days_of_week") or []
                 day_names = {0: "שני", 1: "שלישי", 2: "רביעי", 3: "חמישי", 4: "שישי", 5: "שבת", 6: "ראשון"}
