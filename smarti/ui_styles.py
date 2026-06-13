@@ -386,10 +386,19 @@ def _refresh_theme_exports(mode=None, settings=None):
             width: 17px; height: 17px;
         }}
         QComboBox QAbstractItemView {{
-            background: {MENU_BG_COLOR}; color: {TEXT_COLOR};
+            background: {MENU_BG_COLOR}; background-color: {MENU_BG_COLOR}; color: {TEXT_COLOR};
             selection-background-color: {ACCENT_TINT_STRONG}; selection-color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; outline: 0px;
             padding: 8px;
+        }}
+        QComboBox QAbstractItemView::item {{
+            min-height: 28px; padding: 7px 10px; border-radius: 10px;
+        }}
+        QComboBox QAbstractItemView::item:hover {{
+            background-color: {HOVER_TINT};
+        }}
+        QComboBox QAbstractItemView::item:selected {{
+            background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR};
         }}
     """
 

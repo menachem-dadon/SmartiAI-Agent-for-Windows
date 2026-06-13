@@ -980,6 +980,7 @@ DEFAULT_SETTINGS = {
     "mcp_registry": {},
     "skill_registry": {},
     "background_jobs": [],
+    "background_recurring_catch_up_window_minutes": 15,
     "ui_preferences": {
         "developer_trace": True,
         "sanitize_html": True,

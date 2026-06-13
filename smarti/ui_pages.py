@@ -1759,6 +1759,16 @@ class SettingsPage(QWidget):
         self.loops_val_lbl.setMinimumSize(96, 30)
         self.loops_slider.valueChanged.connect(lambda val: self.loops_val_lbl.setText(self._loop_label_text(val)))
 
+        catch_up_value = self.core.settings.get("background_recurring_catch_up_window_minutes", 15)
+        try:
+            catch_up_value = int(round(float(catch_up_value)))
+        except Exception:
+            catch_up_value = 15
+        catch_up_value = 181 if catch_up_value < 0 else max(0, min(180, catch_up_value))
+        self.background_catch_up_control, self.background_catch_up_slider, self.background_catch_up_lbl = self._make_labeled_slider(
+            0, 181, catch_up_value, self._catch_up_window_label_text
+        )
+
     def _value_pill_css(self):
         return f"""
             background-color: {GLASS_COLOR};
@@ -1784,7 +1794,7 @@ class SettingsPage(QWidget):
         label = QLabel(formatter(slider.value()))
         label.setProperty("smartiValuePill", True)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setMinimumSize(104, 30)
+        label.setMinimumSize(122, 30)
         label.setStyleSheet(self._value_pill_css())
         slider.valueChanged.connect(lambda val: label.setText(formatter(val)))
         layout.addWidget(slider, 1)
@@ -1805,6 +1815,38 @@ class SettingsPage(QWidget):
 
     def _loop_label_text(self, val):
         return "ללא הגבלה" if val > 30 else f"{val} סבבים"
+
+    def _catch_up_window_label_text(self, val):
+        try:
+            val = int(round(float(val or 0)))
+        except Exception:
+            val = 0
+        if val >= 181:
+            return "ללא הגבלה"
+        if val <= 0:
+            return "לא להריץ באיחור"
+        if val == 1:
+            return "דקה אחת"
+        if val < 60:
+            return f"{val} דקות"
+        if val == 60:
+            return "שעה"
+        if val == 120:
+            return "שעתיים"
+        if val == 180:
+            return "3 שעות"
+        if val % 60 == 0:
+            return f"{val // 60} שעות"
+        return f"{val / 60:.1f} שעות"
+        val = int(val or 0)
+        if val <= 0:
+            return "׳׳׳ ׳׳™׳—׳•׳¨"
+        if val < 60:
+            return f"{val} ׳“׳§׳•׳×"
+        if val % 60 == 0:
+            hours = val // 60
+            return "׳©׳¢׳”" if hours == 1 else f"{hours} ׳©׳¢׳•׳×"
+        return f"{val / 60:.1f} ׳©׳¢׳•׳×"
 
     def _add_section_header(self, title_text, target_layout=None):
         layout = target_layout
@@ -1840,6 +1882,12 @@ class SettingsPage(QWidget):
     def _add_field(self, label_text, widget, target_layout=None, hint=None):
         layout = target_layout
         if layout is None: return
+        if widget is getattr(self, "background_catch_up_control", None):
+            label_text = "הרצת משימה מחזורית אחרי פספוס"
+            hint = (
+                "כמה זמן אחרי השעה המתוכננת עדיין מותר לסמארטי להריץ משימה שהוחמצה. "
+                "בקצה הסליידר: ללא הגבלה. לאחר מכן המשימה חוזרת לשעה הקבועה."
+            )
         lbl = QLabel(label_text)
         lbl.setWordWrap(True)
         lbl.setMinimumWidth(1)
@@ -2020,6 +2068,12 @@ class SettingsPage(QWidget):
         loops_layout.addWidget(self.loops_slider)
         loops_layout.addWidget(self.loops_val_lbl)
         advanced.addLayout(loops_layout)
+        self._add_field(
+            "׳”׳¨׳¦׳× ׳׳©׳™׳׳” ׳׳—׳–׳•׳¨׳™׳× ׳׳—׳¨׳™ ׳₪׳¡׳₪׳•׳¡",
+            self.background_catch_up_control,
+            advanced,
+            "׳›׳׳” ׳–׳׳ ׳׳—׳¨׳™ ׳”׳©׳¢׳” ׳”׳׳×׳•׳›׳ ׳ ׳× ׳¢׳“׳™׳™׳ ׳׳•׳×׳¨ ׳׳¡׳׳׳¨׳˜׳™ ׳׳”׳¨׳™׳¥ ׳׳©׳™׳׳” ׳©׳”׳•׳—׳׳¦׳”. ׳׳—׳¨׳™ ׳”׳—׳׳•׳ ׳”׳–׳”, ׳”׳׳©׳™׳׳” ׳×׳“׳•׳׳’ ׳׳₪׳¢׳ ׳”׳‘׳׳” ׳•׳×׳—׳–׳•׳¨ ׳׳©׳¢׳” ׳”׳§׳‘׳•׳¢׳”."
+        )
         advanced.addStretch()
 
         self._add_internal_back(developer, "הגדרות מפתחים")
@@ -2193,7 +2247,7 @@ class SettingsPage(QWidget):
         for slider in [
             self.tts_volume_slider, self.voice_sensitivity_slider,
             self.voice_pause_slider, self.voice_timeout_slider,
-            self.voice_ambient_slider
+            self.voice_ambient_slider, self.background_catch_up_slider
         ]:
             slider.valueChanged.connect(lambda _=None: self._schedule_autosave())
 
@@ -2491,6 +2545,8 @@ class SettingsPage(QWidget):
                 self.core.settings["budgets"][key] = 0
         slider_loops = self.loops_slider.value()
         self.core.settings["max_agent_loops"] = 0 if slider_loops > 30 else slider_loops
+        catch_up_slider_value = int(self.background_catch_up_slider.value())
+        self.core.settings["background_recurring_catch_up_window_minutes"] = -1 if catch_up_slider_value >= 181 else catch_up_slider_value
         changed = [key for key in sorted(set(before.keys()) | set(self.core.settings.keys())) if before.get(key) != self.core.settings.get(key)]
         if selected_model and selected_model != "טוען מודלים...":
             self.main_window.subtitle.setText(self.main_window.format_model_name(selected_model))

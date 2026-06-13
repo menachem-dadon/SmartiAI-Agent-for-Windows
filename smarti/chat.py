@@ -1,4 +1,6 @@
 """Chat bubbles, notifications, main window, and splash screen."""
+import random
+
 from .common import *
 from .attachments import *
 from .ui_styles import *
@@ -6,14 +8,144 @@ from .ui_controls import *
 from .config import BUILT_IN_TOOLS, LEGACY_BUILTIN_TOOLS, PUBLIC_BUILTIN_TOOLS
 from .workers import AgentWorker, VoiceWorker, TTSWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
-from .history import DEFAULT_CHAT_TITLE, DEFAULT_WELCOME_MESSAGE
+from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
 from PyQt6.QtCore import QEvent, QEventLoop
 from PyQt6.QtGui import QTextDocument, QTransform
 from PyQt6.QtWidgets import QBoxLayout
 
-WELCOME_MESSAGE = DEFAULT_WELCOME_MESSAGE
+_LEGACY_WELCOME_PROMPTS = [
+    "היי {name}, איך אוכל לעזור לך היום? אפשר לסכם קובץ, לחפש מידע או לארגן משימה.",
+    "היי {name}, במה תרצה שנתקדם? אני יכול לעזור עם מיילים, קבצים ותכנון צעדים.",
+    "היי {name}, איך אפשר להקל על היום שלך? אפשר לתזמן תזכורת, לבדוק מידע או לסדר קבצים.",
+    "היי {name}, מה כדאי לטפל בו עכשיו? אני יכול לחפש ברשת, להשוות מקורות ולחזור עם תשובה מסודרת.",
+    "היי {name}, צריך עזרה עם משהו יומיומי? אפשר לנסח הודעה, למצוא קובץ או להכין סיכום קצר.",
+    "היי {name}, איך אוכל לסייע? אפשר להפוך רעיון למסמך, רשימה או תוכנית פעולה.",
+    "היי {name}, במה נתחיל? אני יכול לעזור לסדר תיקיות, לשנות שמות קבצים ולמצוא מה חסר.",
+    "היי {name}, מה תרצה שאבדוק עבורך? אפשר לבדוק מיילים, שטח אחסון, קבצים או מידע עדכני.",
+    "היי {name}, איך אפשר לעזור היום? אפשר להכין תזכורת, משימת רקע או בדיקה חוזרת.",
+    "היי {name}, יש משהו שתרצה לקדם? אני יכול לאסוף מידע, לסכם אותו ולהציע המשך פעולה.",
+    "היי {name}, במה אוכל לעזור? אפשר לקרוא מסמך, לחלץ ממנו נקודות ולסדר משימות להמשך.",
+    "היי {name}, רוצה לקצר תהליך? אפשר לפתוח כלים, לחבר פעולות ולחסוך עבודה ידנית.",
+    "היי {name}, מה על הפרק? אני יכול לעזור במייל, בקובץ, בתזמון או בחיפוש מידע.",
+    "היי {name}, איך אוכל לעזור לך לעבוד יותר מסודר היום? אפשר לארגן קבצים ולבנות רשימת פעולות.",
+    "היי {name}, יש משהו שצריך לזכור או לבדוק בהמשך? אפשר ליצור תזכורת או משימת רקע.",
+    "היי {name}, במה תרצה שאטפל? אפשר לנסח מכתב, לסכם מסמך או למצוא מידע ברשת.",
+    "היי {name}, איך אפשר לעזור? אני יכול לעבור על מידע ארוך ולהחזיר לך רק את העיקר.",
+    "היי {name}, צריך יד עם סדר וארגון? אפשר למיין קבצים, להכין שמות ברורים ולרכז תוצרים.",
+    "היי {name}, מה תרצה שאעשה עבורך? אפשר לבדוק נתונים, להכין סיכום או לתזמן מעקב.",
+    "היי {name}, איך אוכל לסייע היום? אפשר לנתח תמונה או מסמך ולהפוך אותם לטקסט שימושי.",
+    "היי {name}, במה אפשר לעזור עכשיו? אני יכול להכין טיוטה, רשימת קניות, תזכורת או סיכום.",
+    "היי {name}, יש משימה שחוזרת על עצמה? אפשר להפוך אותה לאוטומציה עדינה ומבוקרת.",
+    "היי {name}, מה תרצה לברר? אפשר לחפש מידע עדכני, לאמת פרטים ולנסח תשובה ברורה.",
+    "היי {name}, איך נתקדם? אני יכול לחלק משימה מורכבת לצעדים קטנים ולבצע אותם איתך.",
+    "היי {name}, צריך להכין משהו לשיחה, לפגישה או למייל? אפשר לבנות תקציר ונקודות פעולה.",
+    "היי {name}, במה אוכל לעזור לך? אפשר לעבוד עם קבצים, מיילים, תזכורות וחיפוש באינטרנט.",
+    "היי {name}, רוצה שאסדר את זה עבורך? אפשר לקחת תוכן מבולגן ולהפוך אותו למסמך נקי.",
+    "היי {name}, יש משהו שדורש מעקב? אפשר להגדיר בדיקה מחזורית בלי להזיז את השעה הקבועה.",
+    "היי {name}, צריך עזרה טכנית קטנה? אפשר לבדוק קוד, לוג או שגיאה בלי להיכנס לפרויקט שלם.",
+    "היי {name}, איך אוכל לעזור לך לסיים את הדבר הבא? אפשר להתחיל מרעיון קצר ולהגיע לתוצאה מוכנה.",
+]
+
+WELCOME_PROMPTS = [
+    "היי {name}, איך אוכל לעזור היום?",
+    "היי {name}, במה נתחיל?",
+    "היי {name}, רוצה שאסכם קובץ או הודעה?",
+    "היי {name}, צריך עזרה עם מייל, קובץ או חיפוש?",
+    "היי {name}, אשמח לעזור לסדר את הדבר הבא.",
+    "היי {name}, מה תרצה לקדם עכשיו?",
+    "היי {name}, רוצה שאבדוק משהו באינטרנט?",
+    "היי {name}, אפשר לסדר לך קבצים או רשימה?",
+    "היי {name}, צריך תזכורת או משימת רקע?",
+    "היי {name}, רוצה שאנסח הודעה קצרה וברורה?",
+    "היי {name}, יש מסמך שכדאי לקצר לעיקר?",
+    "היי {name}, במה אפשר להקל על היום שלך?",
+    "היי {name}, רוצה שאמצא קובץ או מידע?",
+    "היי {name}, אפשר לעזור בתכנון צעדים להמשך?",
+    "היי {name}, צריך בדיקה חוזרת בזמן קבוע?",
+    "היי {name}, אשמח לעזור עם קבצים, מיילים או תזכורות.",
+    "היי {name}, רוצה להפוך רעיון לרשימה מסודרת?",
+    "היי {name}, יש משהו שצריך לברר או לאמת?",
+    "היי {name}, אפשר לעזור לארגן משימות להיום?",
+    "היי {name}, רוצה שאכין תקציר נקי ומהיר?",
+    "היי {name}, צריך עזרה קטנה עם קוד או שגיאה?",
+    "היי {name}, במה תרצה שאטפל קודם?",
+    "היי {name}, אפשר לחפש, לסכם או לתזמן עבורך.",
+    "היי {name}, רוצה שאבדוק שטח אחסון או מצב מערכת?",
+    "היי {name}, יש קובץ שתרצה שאקרא ואסכם?",
+    "היי {name}, צריך ניסוח למייל או הודעה?",
+    "היי {name}, אפשר לבנות לך תזכורת חכמה.",
+    "היי {name}, רוצה שאעזור להפוך בלגן לסדר?",
+    "היי {name}, מה המשימה הקטנה שנסיים עכשיו?",
+    "היי {name}, אפשר להתחיל מחיפוש, סיכום או ארגון קבצים.",
+]
+
+GENERIC_USER_NAMES = {
+    "user", "owner", "admin", "administrator", "defaultuser", "defaultuser0",
+    "guest", "pc", "computer", "windows", "desktop", "laptop",
+}
+
+
+def _clean_system_display_name(value):
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    if "\\" in name:
+        name = name.rsplit("\\", 1)[-1]
+    if "@" in name:
+        name = name.split("@", 1)[0]
+    name = re.sub(r"[_\-.]+", " ", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    name = re.sub(r"\d+$", "", name).strip()
+    folded = re.sub(r"\s+", "", name).lower()
+    if len(name) < 2 or folded in GENERIC_USER_NAMES or folded.startswith("defaultuser"):
+        return ""
+    if not re.search(r"[A-Za-z\u0590-\u05ff]", name):
+        return ""
+    return name[:36].rstrip()
+
+
+def _system_display_name():
+    candidates = []
+    if os.name == "nt":
+        try:
+            size = ctypes.c_ulong(0)
+            ctypes.windll.secur32.GetUserNameExW(3, None, ctypes.byref(size))
+            if size.value:
+                buffer = ctypes.create_unicode_buffer(size.value)
+                if ctypes.windll.secur32.GetUserNameExW(3, buffer, ctypes.byref(size)):
+                    candidates.append(buffer.value)
+        except Exception:
+            pass
+        try:
+            size = ctypes.c_ulong(256)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if ctypes.windll.advapi32.GetUserNameW(buffer, ctypes.byref(size)):
+                candidates.append(buffer.value)
+        except Exception:
+            pass
+    candidates.extend(os.environ.get(key, "") for key in ("USERNAME", "USER", "LOGNAME"))
+    try:
+        candidates.append(Path.home().name)
+    except Exception:
+        pass
+    for candidate in candidates:
+        cleaned = _clean_system_display_name(candidate)
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _welcome_prompt():
+    prompt = random.choice(WELCOME_PROMPTS)
+    name = _system_display_name()
+    if name:
+        return prompt.format(name=name)
+    generic = prompt.format(name="")
+    generic = re.sub(r"\s+([,?.!])", r"\1", generic)
+    generic = re.sub(r"\s{2,}", " ", generic)
+    return generic.strip()
 
 def _asset_icon(*filenames):
     return themed_icon(*filenames)
@@ -563,6 +695,41 @@ def _split_technical_details(text):
     main_text = "\n".join(main_lines).strip()
     detail_text = " ".join(detail_lines).strip()
     return main_text, detail_text
+
+
+class WelcomeWidget(QFrame):
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("WelcomeWidget")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.setMaximumWidth(860)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(12)
+
+        self.title_lbl = QLabel()
+        self.title_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_lbl.setWordWrap(True)
+        self.title_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.title_lbl)
+
+        self.refresh_text()
+        self.apply_theme()
+
+    def refresh_text(self):
+        self.title_lbl.setText(_welcome_prompt())
+
+    def apply_theme(self):
+        self.setStyleSheet("QFrame#WelcomeWidget { background: transparent; border: none; }")
+        self.title_lbl.setStyleSheet(
+            f"color: {TEXT_COLOR}; background: transparent; border: none; "
+            "font-family: 'Segoe UI'; font-size: 30px; font-weight: 800; line-height: 1.2;"
+        )
+
 
 class PillInputFrame(QFrame):
     CORNER_RADIUS = 40.5
@@ -3733,6 +3900,8 @@ class ChatWindow(QMainWindow):
             self.attachment_preview.apply_theme()
         if hasattr(self, "attach_menu"):
             self.attach_menu.setStyleSheet(menu_stylesheet())
+        if hasattr(self, "welcome_widget"):
+            self.welcome_widget.apply_theme()
         if hasattr(self, "logo_lbl"):
             logo_path = os.path.join(ASSETS_DIR, "logo.png")
             if os.path.exists(logo_path):
@@ -3888,6 +4057,20 @@ class ChatWindow(QMainWindow):
         self.chat_layout.setSpacing(8)
         self.scroll.setWidget(self.chat_widget)
         body_layout.addWidget(self.scroll, 0, 0)
+
+        self.welcome_overlay = QWidget()
+        self.welcome_overlay.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.welcome_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.welcome_overlay.setStyleSheet("background: transparent; border: none;")
+        welcome_layout = QVBoxLayout(self.welcome_overlay)
+        welcome_layout.setContentsMargins(24, 42, 24, 146)
+        welcome_layout.setSpacing(0)
+        welcome_layout.addStretch(1)
+        self.welcome_widget = WelcomeWidget()
+        welcome_layout.addWidget(self.welcome_widget, 0, Qt.AlignmentFlag.AlignCenter)
+        welcome_layout.addStretch(1)
+        self.welcome_overlay.hide()
+        body_layout.addWidget(self.welcome_overlay, 0, 0)
         
         self.input_overlay = QWidget()
         self.input_overlay.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -3956,6 +4139,7 @@ class ChatWindow(QMainWindow):
         bottom_layout.addWidget(self.input_frame, alignment=Qt.AlignmentFlag.AlignVCenter)
         overlay_layout.addLayout(bottom_layout)
         body_layout.addWidget(self.input_overlay, 0, 0, Qt.AlignmentFlag.AlignBottom)
+        self.input_overlay.raise_()
         main_layout.addWidget(self.chat_body, 1)
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
@@ -4195,6 +4379,17 @@ class ChatWindow(QMainWindow):
             self._update_chat_bottom_padding()
         except Exception:
             pass
+
+    def _set_welcome_visible(self, visible, refresh_text=False):
+        if not hasattr(self, "welcome_overlay") or not hasattr(self, "welcome_widget"):
+            return
+        if visible and refresh_text:
+            self.welcome_widget.refresh_text()
+        self.welcome_overlay.setVisible(bool(visible))
+        if visible:
+            self.welcome_overlay.raise_()
+            if hasattr(self, "input_overlay"):
+                self.input_overlay.raise_()
 
     def _update_chat_bottom_padding(self):
         if not hasattr(self, "chat_layout") or not hasattr(self, "input_overlay"):
@@ -4437,6 +4632,7 @@ class ChatWindow(QMainWindow):
     def add_message(self, text, is_user, show_actions=True, attachments=None, anchor_user=False, is_background_task=False):
         attachments = normalize_attachments(attachments or [])
         if not text and is_user and not attachments: return
+        self._set_welcome_visible(False)
         available_width = self.scroll.viewport().width() or self.width()
         container = ChatMessageContainer(
             text,
@@ -4665,22 +4861,27 @@ class ChatWindow(QMainWindow):
     def load_active_chat_session(self):
         self._clear_chat_widgets()
         messages = self.core.active_chat_messages()
-        if not messages:
-            self.add_message(WELCOME_MESSAGE, is_user=False, show_actions=False)
-            self.refresh_chat_title()
-            return
-        if not any(self._is_welcome_history_message(message) for message in messages):
-            self.add_message(WELCOME_MESSAGE, is_user=False, show_actions=False)
+        visible_messages = []
         for message in messages:
             role = message.get("role")
             content = str(message.get("content", "") or "")
             metadata = message.get("metadata", {}) if isinstance(message.get("metadata", {}), dict) else {}
             attachments = normalize_attachments(metadata.get("attachments", []))
-            if role not in {"user", "assistant"} or (not content.strip() and not attachments):
+            if role not in {"user", "assistant"} or self._is_welcome_history_message(message):
                 continue
-            is_welcome = self._is_welcome_history_message(message)
+            if not content.strip() and not attachments:
+                continue
+            visible_messages.append((role, content, metadata, attachments))
+
+        if not visible_messages:
+            self._set_welcome_visible(True, refresh_text=True)
+            self.refresh_chat_title()
+            return
+
+        self._set_welcome_visible(False)
+        for role, content, metadata, attachments in visible_messages:
             is_bg = bool(metadata.get("triggered_by_background"))
-            container = self.add_message(content, is_user=(role == "user"), show_actions=not is_welcome, attachments=attachments, is_background_task=is_bg)
+            container = self.add_message(content, is_user=(role == "user"), attachments=attachments, is_background_task=is_bg)
             if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
                 container.bubble.restore_agent_process(metadata.get("agent_process"))
         self.refresh_chat_title()
@@ -4702,10 +4903,26 @@ class ChatWindow(QMainWindow):
         self.start_new_chat()
 
 class AnimatedSplash(QWidget):
+    _LEGACY_STATUS_MESSAGES = [
+        "מסנכרן זיכרון, כלים והרשאות...",
+        "מחמם את מנוע התכנון של סמארטי...",
+        "מרענן מודלים ותצורת עבודה...",
+        "מכין אוטומציות ומשימות רקע...",
+        "פותח סביבת עבודה מוכנה לפעולה...",
+    ]
+
+    STATUS_MESSAGES = [
+        "מסנכרן זיכרון, הרשאות וכלים...",
+        "מרענן מודלים ותצורת עבודה...",
+        "מכין אוטומציות ומשימות רקע...",
+        "בודק שסביבת העבודה מוכנה...",
+        "מחבר את SmartiAI לשולחן העבודה...",
+    ]
+
     def __init__(self, anim_path, fallback_path, size, border_color, border_width, radius, bg_color):
         super().__init__()
         self.setWindowFlags(
-            Qt.WindowType.Tool
+            Qt.WindowType.SplashScreen
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.NoDropShadowWindowHint
@@ -4713,34 +4930,148 @@ class AnimatedSplash(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.setFixedSize(size, size)
-        self.border_width, self.border_color, self.radius, self.bg_color = border_width, QColor(border_color), radius, QColor(bg_color)
-        
-        mask_pixmap = QPixmap(size, size)
-        mask_pixmap.fill(Qt.GlobalColor.transparent)
-        mask_painter = QPainter(mask_pixmap)
-        mask_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        mask_path = QPainterPath()
-        mask_path.addRoundedRect(0.0, 0.0, float(size), float(size), float(radius), float(radius))
-        mask_painter.fillPath(mask_path, Qt.GlobalColor.black)
-        mask_painter.end()
-        self.setMask(mask_pixmap.mask())
-        
-        self.lbl = QLabel(self)
-        self.lbl.setGeometry(border_width, border_width, size - 2*border_width, size - 2*border_width)
-        self.lbl.setScaledContents(True) 
-        self.lbl.setStyleSheet(f"background-color: {bg_color};")
-        
-        if os.path.exists(anim_path):
-            self.movie = QMovie(anim_path)
-            self.lbl.setMovie(self.movie)
-            self.movie.start()
-        elif os.path.exists(fallback_path): self.lbl.setPixmap(QPixmap(fallback_path))
+        self.setStyleSheet("background: transparent; border: none;")
+        self.setWindowOpacity(1.0)
+
+        if isinstance(size, QSize):
+            splash_size = size
         else:
-            self.lbl.setText("S")
-            self.lbl.setFont(QFont("Segoe UI", int(size/3), QFont.Weight.Bold))
-            self.lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.lbl.setStyleSheet(f"color: {border_color}; background-color: {bg_color};")
+            base = max(220, int(size or 220))
+            splash_size = QSize(max(460, base * 2 + 42), max(286, base + 84))
+        self.setFixedSize(splash_size)
+        self._window_radius = max(1, int(radius or 30))
+
+        self._status_index = 0
+        self._finish_window = None
+        self._finishing = False
+        self._finish_progress_anim = None
+        self._fade_anim = None
+        self._progress_ticks = 0
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self.card = QFrame()
+        self.card.setObjectName("SplashCard")
+        self.card.setFrameShape(QFrame.Shape.NoFrame)
+        self.card.setLineWidth(0)
+        self.card.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        outer.addWidget(self.card)
+
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(36, 30, 36, 30)
+        card_layout.setSpacing(16)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(16)
+
+        self.logo_lbl = QLabel()
+        self.logo_lbl.setFixedSize(76, 76)
+        self.logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._set_splash_logo(fallback_path, border_color)
+        top_row.addWidget(self.logo_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        title_col = QVBoxLayout()
+        title_col.setContentsMargins(0, 0, 0, 0)
+        title_col.setSpacing(4)
+        self.title_lbl = QLabel(SMARTI_APP_DISPLAY_NAME)
+        self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.subtitle_lbl = QLabel("סוכן AI חכם ל-Windows")
+        self.subtitle_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        title_col.addStretch(1)
+        title_col.addWidget(self.title_lbl)
+        title_col.addWidget(self.subtitle_lbl)
+        title_col.addStretch(1)
+        top_row.addLayout(title_col, 1)
+        card_layout.addLayout(top_row)
+
+        card_layout.addStretch(1)
+
+        self.status_lbl = QLabel(self.STATUS_MESSAGES[0])
+        self.status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(self.status_lbl)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(7)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(7)
+        apply_soft_shadow(self.progress_bar, blur=18, y=0, alpha=105, color=ACCENT_PINK_COLOR)
+        card_layout.addWidget(self.progress_bar)
+
+        self.apply_theme()
+
+        self._status_timer = QTimer(self)
+        self._status_timer.timeout.connect(self._advance_status)
+        self._status_timer.start(1250)
+        self._progress_timer = QTimer(self)
+        self._progress_timer.timeout.connect(self._tick_progress)
+        self._progress_timer.start(90)
+
+    def _set_splash_logo(self, fallback_path, border_color):
+        if os.path.exists(fallback_path):
+            pixmap = make_circular_pixmap(fallback_path, 76, border_color=border_color, border_width=2, bg_color=BG_COLOR)
+            if pixmap:
+                self.logo_lbl.setPixmap(pixmap)
+                self.logo_lbl.setStyleSheet("background: transparent; border: none;")
+                return
+        self.logo_lbl.setText("S")
+        self.logo_lbl.setFont(QFont("Segoe UI", 28, QFont.Weight.Bold))
+        self.logo_lbl.setStyleSheet(
+            f"QLabel {{ color: {ACCENT_COLOR}; background: {PANEL_COLOR}; border: 2px solid {border_color}; border-radius: 38px; }}"
+        )
+
+    def apply_theme(self):
+        card_mid = "#101C42" if CURRENT_THEME == "dark" else "#F1F7FF"
+        card_end = "#231038" if CURRENT_THEME == "dark" else "#FFF4FD"
+        self.card.setStyleSheet(
+            "QFrame#SplashCard {"
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BG_ELEVATED_COLOR}, stop:0.55 {card_mid}, stop:1 {card_end});"
+            "border: none; border-radius: 30px;"
+            "}"
+        )
+        self.title_lbl.setStyleSheet(
+            f"color: {TEXT_COLOR}; background: transparent; border: none; "
+            "font-size: 28px; font-weight: 800; letter-spacing: 0px;"
+        )
+        self.subtitle_lbl.setStyleSheet(
+            f"color: {MUTED_TEXT_COLOR}; background: transparent; border: none; "
+            "font-size: 13px; font-weight: 700; letter-spacing: 0px;"
+        )
+        self.status_lbl.setStyleSheet(
+            f"color: {MUTED_TEXT_COLOR}; background: transparent; border: none; "
+            "font-size: 13px; font-weight: 700; letter-spacing: 0px;"
+        )
+        self.progress_bar.setStyleSheet(
+            f"QProgressBar {{ background: {PANEL_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+            "border-radius: 4px; padding: 0px; }}"
+            f"QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            f"stop:0 {ACCENT_PINK_COLOR}, stop:0.52 {BRAND_VIOLET_COLOR}, stop:1 {ACCENT_COLOR}); "
+            "border-radius: 3px; }}"
+        )
+
+    def _advance_status(self):
+        self._status_index = (self._status_index + 1) % len(self.STATUS_MESSAGES)
+        self.status_lbl.setText(self.STATUS_MESSAGES[self._status_index])
+
+    def _tick_progress(self):
+        if self._finishing:
+            return
+        self._progress_ticks += 1
+        current = int(self.progress_bar.value())
+        if current < 52:
+            step = 2
+        elif current < 78:
+            step = 1 if self._progress_ticks % 2 else 2
+        elif current < 91:
+            step = 1 if self._progress_ticks % 3 == 0 else 0
+        else:
+            step = 1 if self._progress_ticks % 9 == 0 else 0
+        if step:
+            self.progress_bar.setValue(min(94, current + step))
 
     def center_on_screen(self):
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
@@ -4751,22 +5082,65 @@ class AnimatedSplash(QWidget):
                 available.y() + max(0, (available.height() - self.height()) // 2),
             )
 
+    def _apply_window_mask(self):
+        mask_pixmap = QPixmap(self.size())
+        mask_pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(mask_pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        path = QPainterPath()
+        path.addRoundedRect(
+            QRectF(0, 0, self.width(), self.height()).adjusted(0.5, 0.5, -0.5, -0.5),
+            float(self._window_radius),
+            float(self._window_radius),
+        )
+        painter.fillPath(path, Qt.GlobalColor.black)
+        painter.end()
+        self.setMask(mask_pixmap.mask())
+
     def showEvent(self, event):
+        self._apply_window_mask()
         self.center_on_screen()
         super().showEvent(event)
-            
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(0.0, 0.0, float(self.width()), float(self.height()), float(self.radius), float(self.radius))
-        painter.fillPath(path, self.bg_color)
-        pen = QPen(self.border_color)
-        pen.setWidth(self.border_width * 2) 
-        painter.setPen(pen)
-        painter.drawPath(path)
 
-    def finish(self, window): self.close()
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_window_mask()
+
+    def finish(self, window):
+        if self._finishing:
+            return
+        self._finishing = True
+        self._finish_window = window
+        if self._status_timer:
+            self._status_timer.stop()
+        if getattr(self, "_progress_timer", None):
+            self._progress_timer.stop()
+        self.status_lbl.setText("סמארטי מוכן לעבודה.")
+        self._finish_progress_anim = QPropertyAnimation(self.progress_bar, b"value", self)
+        self._finish_progress_anim.setDuration(160)
+        self._finish_progress_anim.setStartValue(self.progress_bar.value())
+        self._finish_progress_anim.setEndValue(100)
+        self._finish_progress_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._finish_progress_anim.finished.connect(self._start_fade_out)
+        self._finish_progress_anim.start()
+
+    def _start_fade_out(self):
+        self._fade_anim = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade_anim.setDuration(300)
+        self._fade_anim.setStartValue(self.windowOpacity())
+        self._fade_anim.setEndValue(0.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.finished.connect(self._finish_close)
+        self._fade_anim.start()
+
+    def _finish_close(self):
+        self.close()
+        if self._finish_window:
+            try:
+                self._finish_window.raise_()
+                self._finish_window.activateWindow()
+            except Exception:
+                pass
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

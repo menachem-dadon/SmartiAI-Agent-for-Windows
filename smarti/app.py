@@ -10,6 +10,17 @@ from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 INSTANCE_SERVER_NAME = "SmartiAI-Agent-for-Windows"
 _UPDATE_MUTEX_HANDLE = None
 
+class StartupWorker(QThread):
+    finished_signal = pyqtSignal(object, str)
+
+    def run(self):
+        try:
+            self.finished_signal.emit(SmartiCore(), "")
+        except Exception as exc:
+            logging.exception("Smarti startup failed.")
+            self.finished_signal.emit(None, str(exc))
+
+
 def _startup_command():
     args = {str(arg or "").strip().lower() for arg in sys.argv[1:]}
     if "--quit-for-update" in args or "/quit-for-update" in args:
@@ -78,7 +89,7 @@ def main():
             sys.exit(0)
         accepted_legal_this_run = True
 
-    splash_size, border_width, radius = 220, 4, 5
+    splash_size, border_width, radius = QSize(500, 310), 1, 30
     gif_path = os.path.join(ASSETS_DIR, "logo.gif")
     if not os.path.exists(gif_path):
         gif_candidates = [p for p in glob.glob(os.path.join(ASSETS_DIR, "logo*.gif")) if os.path.getsize(p) < 5_000_000]
@@ -89,15 +100,29 @@ def main():
     splash.show()
     app.processEvents()
 
-    core = SmartiCore()
-    if accepted_legal_this_run:
-        record_legal_acceptance(core)
-    apply_app_theme(app, settings=core.settings)
-    window = ChatWindow(core)
-    if instance_server:
-        window.attach_instance_server(instance_server)
-    window.show()
-    splash.finish(window)
+    startup_worker = StartupWorker()
+    app._smarti_startup_worker = startup_worker
+    app._smarti_splash = splash
+
+    def finish_startup(core, error):
+        if error or core is None:
+            splash.finish(None)
+            QMessageBox.critical(None, SMARTI_APP_DISPLAY_NAME, f"שגיאה בפתיחת סמארטי:\n{error}")
+            app.quit()
+            return
+        if accepted_legal_this_run:
+            record_legal_acceptance(core)
+        apply_app_theme(app, settings=core.settings)
+        window = ChatWindow(core)
+        app._smarti_main_window = window
+        if instance_server:
+            window.attach_instance_server(instance_server)
+        window.show()
+        splash.finish(window)
+
+    startup_worker.finished_signal.connect(finish_startup)
+    startup_worker.finished.connect(lambda: setattr(app, "_smarti_startup_worker", None))
+    startup_worker.start()
     sys.exit(app.exec())
 
 

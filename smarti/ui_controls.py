@@ -64,17 +64,45 @@ class NoScrollComboBox(QComboBox):
         self.setMaxVisibleItems(8)
         self.view().setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.view().setTextElideMode(Qt.TextElideMode.ElideRight)
-        self.view().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.view().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self._apply_popup_theme()
 
     def wheelEvent(self, e): e.ignore()
 
+    def _apply_popup_theme(self):
+        view = self.view()
+        if not view:
+            return
+        view.setAutoFillBackground(True)
+        view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        if view.viewport():
+            view.viewport().setAutoFillBackground(True)
+            view.viewport().setStyleSheet(f"background-color: {MENU_BG_COLOR};")
+        palette = view.palette()
+        palette.setColor(QPalette.ColorRole.Base, qcolor_from_css(MENU_BG_COLOR))
+        palette.setColor(QPalette.ColorRole.Text, qcolor_from_css(TEXT_COLOR))
+        palette.setColor(QPalette.ColorRole.Highlight, qcolor_from_css(ACCENT_TINT_STRONG))
+        palette.setColor(QPalette.ColorRole.HighlightedText, qcolor_from_css(TEXT_COLOR))
+        view.setPalette(palette)
+        view.setStyleSheet(
+            f"QAbstractItemView {{ background-color: {MENU_BG_COLOR}; color: {TEXT_COLOR}; "
+            f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; padding: 8px; outline: 0px; "
+            f"selection-background-color: {ACCENT_TINT_STRONG}; selection-color: {TEXT_COLOR}; }}"
+            f"QAbstractItemView::item {{ min-height: 28px; padding: 7px 10px; border-radius: 10px; }}"
+            f"QAbstractItemView::item:hover {{ background-color: {HOVER_TINT}; }}"
+            f"QAbstractItemView::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
+        )
+
     def showPopup(self):
+        self._apply_popup_theme()
         self.view().setMinimumWidth(max(180, self.width()))
         self.view().setMaximumWidth(max(220, self.width()))
         popup_win = self.view().window()
         if popup_win:
             popup_win.setWindowFlags(popup_win.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
-            popup_win.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            popup_win.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+            popup_win.setAutoFillBackground(True)
+            popup_win.setStyleSheet(f"background-color: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px;")
         super().showPopup()
 
 class ModelSearchLineEdit(QLineEdit):
@@ -126,15 +154,16 @@ class SearchableModelComboBox(NoScrollComboBox):
             self.search_edit.setStyleSheet(LINE_EDIT_CSS)
         if self.results_list:
             self.results_list.setStyleSheet(
-                f"QListWidget {{ background: {GLASS_COLOR}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+                f"QListWidget {{ background-color: {MENU_BG_COLOR}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
                 f"border-radius: 14px; padding: 4px; outline: none; }}"
+                f"QListWidget viewport {{ background-color: {MENU_BG_COLOR}; }}"
                 f"QListWidget::item {{ padding: 8px 10px; border-radius: 10px; }}"
-                f"QListWidget::item:hover {{ background: {HOVER_TINT}; }}"
-                f"QListWidget::item:selected {{ background: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
+                f"QListWidget::item:hover {{ background-color: {HOVER_TINT}; }}"
+                f"QListWidget::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
             )
         if self._popup:
             self._popup.setStyleSheet(
-                f"QFrame {{ background: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+                f"QFrame#ModelPickerPopup {{ background-color: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
                 f"border-radius: 18px; padding: 6px; }}"
             )
 
@@ -192,7 +221,9 @@ class SearchableModelComboBox(NoScrollComboBox):
         if self._popup:
             return
         self._popup = QFrame(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
-        self._popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._popup.setObjectName("ModelPickerPopup")
+        self._popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self._popup.setAutoFillBackground(True)
         self._popup.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._popup.installEventFilter(self)
         layout = QVBoxLayout(self._popup)

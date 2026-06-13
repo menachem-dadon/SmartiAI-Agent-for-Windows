@@ -128,11 +128,14 @@ class ChatSessionStore:
             role = str(message.get("role") or "").strip().lower()
             if role not in {"user", "assistant", "system"}:
                 role = "assistant"
+            metadata = copy.deepcopy(message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {})
+            if metadata.get("ui_only") or metadata.get("kind") == "welcome":
+                continue
             messages.append({
                 "role": role,
                 "content": str(message.get("content", "") or ""),
                 "created_at": str(message.get("created_at") or session.get("updated_at") or now),
-                "metadata": copy.deepcopy(message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}),
+                "metadata": metadata,
             })
         return {
             "id": session_id,
@@ -172,30 +175,6 @@ class ChatSessionStore:
             "messages": [],
             "context": {},
         }
-
-    def _session_has_welcome(self, session):
-        for message in session.get("messages", []) or []:
-            if not isinstance(message, dict):
-                continue
-            metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
-            if metadata.get("kind") == "welcome":
-                return True
-        return False
-
-    def _append_welcome_message(self, session, welcome_text=None, created_at=None):
-        if self._session_has_welcome(session):
-            return False
-        text = str(welcome_text or DEFAULT_WELCOME_MESSAGE).strip()
-        if not text:
-            return False
-        now = str(created_at or _now_iso())
-        session.setdefault("messages", []).insert(0, {
-            "role": "assistant",
-            "content": text,
-            "created_at": now,
-            "metadata": {"kind": "welcome", "ui_only": True},
-        })
-        return True
 
     def ensure_active_session(self):
         with self._lock:
@@ -311,8 +290,6 @@ class ChatSessionStore:
                 if not session_id:
                     self.data["active_session_id"] = session["id"]
             now = _now_iso()
-            if not session.get("messages"):
-                self._append_welcome_message(session, welcome_text or DEFAULT_WELCOME_MESSAGE, created_at=now)
             metadata = copy.deepcopy(user_metadata if isinstance(user_metadata, dict) else {})
             if str(user_text or "").strip() or metadata.get("attachments"):
                 session.setdefault("messages", []).append({
