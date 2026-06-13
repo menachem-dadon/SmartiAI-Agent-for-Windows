@@ -1,4 +1,5 @@
 """Chat bubbles, notifications, main window, and splash screen."""
+import math
 import random
 
 from .common import *
@@ -51,34 +52,34 @@ _LEGACY_WELCOME_PROMPTS = [
 WELCOME_PROMPTS = [
     "היי {name}, איך אוכל לעזור היום?",
     "היי {name}, במה נתחיל?",
-    "היי {name}, רוצה שאסכם קובץ או הודעה?",
-    "היי {name}, צריך עזרה עם מייל, קובץ או חיפוש?",
-    "היי {name}, אשמח לעזור לסדר את הדבר הבא.",
-    "היי {name}, מה תרצה לקדם עכשיו?",
-    "היי {name}, רוצה שאבדוק משהו באינטרנט?",
-    "היי {name}, אפשר לסדר לך קבצים או רשימה?",
-    "היי {name}, צריך תזכורת או משימת רקע?",
-    "היי {name}, רוצה שאנסח הודעה קצרה וברורה?",
-    "היי {name}, יש מסמך שכדאי לקצר לעיקר?",
-    "היי {name}, במה אפשר להקל על היום שלך?",
-    "היי {name}, רוצה שאמצא קובץ או מידע?",
-    "היי {name}, אפשר לעזור בתכנון צעדים להמשך?",
-    "היי {name}, צריך בדיקה חוזרת בזמן קבוע?",
-    "היי {name}, אשמח לעזור עם קבצים, מיילים או תזכורות.",
-    "היי {name}, רוצה להפוך רעיון לרשימה מסודרת?",
-    "היי {name}, יש משהו שצריך לברר או לאמת?",
-    "היי {name}, אפשר לעזור לארגן משימות להיום?",
-    "היי {name}, רוצה שאכין תקציר נקי ומהיר?",
-    "היי {name}, צריך עזרה קטנה עם קוד או שגיאה?",
+    "היי {name}, רוצה שאסכם משהו?",
+    "היי {name}, צריך עזרה במייל?",
+    "היי {name}, אשמח לסדר את זה.",
+    "היי {name}, מה תרצה לקדם?",
+    "היי {name}, שאבדוק משהו ברשת?",
+    "היי {name}, שאסדר קבצים?",
+    "היי {name}, צריך תזכורת?",
+    "היי {name}, שאנסח הודעה?",
+    "היי {name}, יש מסמך לסיכום?",
+    "היי {name}, איך אקל על היום?",
+    "היי {name}, לחפש לך מידע?",
+    "היי {name}, לבנות רשימת צעדים?",
+    "היי {name}, להגדיר בדיקה חוזרת?",
+    "היי {name}, לטפל בקבצים או מיילים?",
+    "היי {name}, להפוך רעיון לרשימה?",
+    "היי {name}, לברר או לאמת משהו?",
+    "היי {name}, לארגן משימות להיום?",
+    "היי {name}, להכין תקציר קצר?",
+    "היי {name}, לבדוק קוד קטן?",
     "היי {name}, במה תרצה שאטפל קודם?",
-    "היי {name}, אפשר לחפש, לסכם או לתזמן עבורך.",
-    "היי {name}, רוצה שאבדוק שטח אחסון או מצב מערכת?",
-    "היי {name}, יש קובץ שתרצה שאקרא ואסכם?",
-    "היי {name}, צריך ניסוח למייל או הודעה?",
-    "היי {name}, אפשר לבנות לך תזכורת חכמה.",
-    "היי {name}, רוצה שאעזור להפוך בלגן לסדר?",
-    "היי {name}, מה המשימה הקטנה שנסיים עכשיו?",
-    "היי {name}, אפשר להתחיל מחיפוש, סיכום או ארגון קבצים.",
+    "היי {name}, לחפש, לסכם או לתזמן?",
+    "היי {name}, לבדוק מצב מערכת?",
+    "היי {name}, לקרוא קובץ עבורך?",
+    "היי {name}, לנסח מייל קצר?",
+    "היי {name}, לבנות תזכורת חכמה?",
+    "היי {name}, להפוך בלגן לסדר?",
+    "היי {name}, איזו משימה נסיים עכשיו?",
+    "היי {name}, להתחיל מחיפוש או סיכום?",
 ]
 
 GENERIC_USER_NAMES = {
@@ -703,18 +704,18 @@ class WelcomeWidget(QFrame):
         self.setObjectName("WelcomeWidget")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.setMaximumWidth(860)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 8, 16, 8)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 12, 18, 12)
+        layout.setSpacing(0)
 
         self.title_lbl = QLabel()
         self.title_lbl.setTextFormat(Qt.TextFormat.PlainText)
         self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_lbl.setWordWrap(True)
-        self.title_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.title_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         layout.addWidget(self.title_lbl)
 
         self.refresh_text()
@@ -722,13 +723,36 @@ class WelcomeWidget(QFrame):
 
     def refresh_text(self):
         self.title_lbl.setText(_welcome_prompt())
+        self._sync_text_height()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_text_height()
+
+    def _sync_text_height(self):
+        margins = self.layout().contentsMargins()
+        width = self.width() - margins.left() - margins.right()
+        if width <= 0:
+            width = self.title_lbl.width() or min(self.maximumWidth(), 720)
+        width = max(240, width)
+        doc = QTextDocument()
+        doc.setDefaultFont(self.title_lbl.font())
+        doc.setPlainText(self.title_lbl.text())
+        doc.setTextWidth(max(1, width))
+        text_height = int(math.ceil(doc.size().height())) + 8
+        self.title_lbl.setMinimumHeight(text_height)
+        self.setMinimumHeight(text_height + margins.top() + margins.bottom())
+        self.updateGeometry()
 
     def apply_theme(self):
         self.setStyleSheet("QFrame#WelcomeWidget { background: transparent; border: none; }")
+        font = QFont("Segoe UI", 26, QFont.Weight.Bold)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+        self.title_lbl.setFont(font)
         self.title_lbl.setStyleSheet(
             f"color: {TEXT_COLOR}; background: transparent; border: none; "
-            "font-family: 'Segoe UI'; font-size: 30px; font-weight: 800; line-height: 1.2;"
         )
+        self._sync_text_height()
 
 
 class PillInputFrame(QFrame):
@@ -4454,7 +4478,7 @@ class ChatWindow(QMainWindow):
     def start_message_tts(self, container):
         if not container or container.is_user:
             return
-        text = container.bubble.plain_text()
+        text = container.bubble.final_plain_text()
         if not str(text or "").strip():
             return
         self.active_tts_container = container

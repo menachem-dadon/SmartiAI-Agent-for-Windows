@@ -81,14 +81,6 @@ def main():
     instance_server = _create_instance_server()
     app._smarti_update_mutex_handle = _create_update_mutex()
 
-    migrate_legacy_runtime_state()
-    accepted_legal_this_run = False
-    if not raw_settings_have_current_legal_acceptance():
-        legal_dialog = LegalAgreementDialog()
-        if legal_dialog.exec() != QDialog.DialogCode.Accepted:
-            sys.exit(0)
-        accepted_legal_this_run = True
-
     splash_size, border_width, radius = QSize(500, 310), 1, 30
     gif_path = os.path.join(ASSETS_DIR, "logo.gif")
     if not os.path.exists(gif_path):
@@ -99,6 +91,19 @@ def main():
     splash.center_on_screen()
     splash.show()
     app.processEvents()
+
+    migrate_legacy_runtime_state()
+    accepted_legal_this_run = False
+    if not raw_settings_have_current_legal_acceptance():
+        splash.hide()
+        legal_dialog = LegalAgreementDialog()
+        if legal_dialog.exec() != QDialog.DialogCode.Accepted:
+            splash.close()
+            sys.exit(0)
+        accepted_legal_this_run = True
+        splash.show()
+        splash.raise_()
+        app.processEvents()
 
     startup_worker = StartupWorker()
     app._smarti_startup_worker = startup_worker

@@ -5845,6 +5845,12 @@ class SmartiCore:
             automation_instructions += "\n* **Login Walls:** עקיפת התחברויות חסומה. בקש מהמשתמש להתחבר לבדו באמצעות כלי 'open_in_browser'."
 
         background_note = "מצב רקע פעיל: פעל בשקט, אל תפתח חלונות/דפדפן/הקראה אלא אם ההוראה דורשת זאת במפורש." if self._is_background_context() else ""
+        final_answer_visibility_rule = (
+            "חשוב: דיווחי התהליך שמוצגים במהלך העבודה הם זמניים ומתקפלים בסיום. "
+            "התשובה הסופית היא הדבר המרכזי שהמשתמש יראה ושהמערכת תקריא, ולכן עליה לעמוד בפני עצמה: "
+            "סכם בה בקצרה מה נעשה, מה התוצאה, ומה המשתמש צריך לדעת או לעשות הלאה. "
+            "אל תניח שהמשתמש קרא או זוכר את הדיווחים הקודמים."
+        )
         skills_runtime_rule = (
             "כאשר `run_skill` מחזיר `SKILL_INSTRUCTIONS`, אל תציג את הדוגמאות כתשובה. השתמש בהוראות כדי לבצע את הפעולות עם הכלים הרגילים, ואז אמת וסכם. כאשר הוא מחזיר `SKILL_REQUIREMENTS_MISSING`, אל תריץ פקודת CLI; התקן דרישות עם `install_skill_requirements` או דווח שחסר כלי."
             if self.settings.get("enable_skills_beta", True)
@@ -5872,6 +5878,7 @@ class SmartiCore:
 CWD: {current_dir}
 תיקיית ברירת מחדל ליצירת קבצים כאשר המשתמש לא ציין מיקום: {default_output_dir}
 {background_note}
+{final_answer_visibility_rule}
 
 **פרוטוקול עבודה קצר:**
 הבן -> החלט אם צריך תכנון -> ענה ישירות או בחר כלי -> בדוק הרשאות -> בצע -> אמת -> סכם.
