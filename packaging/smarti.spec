@@ -23,6 +23,7 @@ hiddenimports = []
 for package in (
     "bs4",
     "docx",
+    "edge_tts",
     "gtts",
     "keyring",
     "litellm",

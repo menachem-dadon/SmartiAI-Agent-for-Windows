@@ -3,7 +3,7 @@ from .common import *
 from .config import *
 from .ui_styles import *
 from .ui_controls import *
-from .workers import FetchModelsWorker, ApiKeyValidationWorker
+from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker
 from PyQt6.QtGui import QKeySequence, QShortcut
 
 def refresh_back_button_icon(btn):
@@ -1396,6 +1396,7 @@ class SettingsPage(QWidget):
         self.api_key_validation_timer.setInterval(900)
         self.api_key_validation_timer.timeout.connect(self._validate_current_api_key_before_save)
         self.api_key_validation_worker = None
+        self.tts_preview_worker = None
         self._api_key_validation_generation = 0
         self._validated_api_keys = set()
         
@@ -1486,6 +1487,26 @@ class SettingsPage(QWidget):
         layout.addWidget(link_label, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
 
+    def _make_tts_preview_row(self):
+        row = QWidget(self)
+        row.setStyleSheet("background: transparent;")
+        row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.tts_preview_text = QLineEdit("שלום, זו תצוגה מקדימה של הקול הנוכחי.")
+        self.tts_preview_text.setStyleSheet(LINE_EDIT_CSS)
+        self.tts_preview_text.setMinimumWidth(0)
+        self.tts_preview_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.tts_preview_btn = QPushButton("השמע")
+        self.tts_preview_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.tts_preview_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        set_themed_button_icon(self.tts_preview_btn, ("speaker_icon",), "A", 18, clear_text=False)
+        self.tts_preview_btn.clicked.connect(self.preview_tts)
+        layout.addWidget(self.tts_preview_text, 1)
+        layout.addWidget(self.tts_preview_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
+
     def _set_external_link(self, label, url, text):
         apply_high_contrast_link_label(label)
         label.setText(high_contrast_link_markup(url, text) if url else "")
@@ -1500,6 +1521,12 @@ class SettingsPage(QWidget):
         instructions = provider_key_instructions(provider)
         self.api_key_help_hint.setText(instructions)
         self.api_key_help_hint.setVisible(bool(instructions and provider != "local"))
+
+    def _toggle_api_key_details(self, checked):
+        if hasattr(self, "api_key_details"):
+            self.api_key_details.setVisible(bool(checked))
+        if hasattr(self, "api_key_details_btn"):
+            self.api_key_details_btn.setText("הסתר הסבר" if checked else "מה זה מפתח API?")
 
     def _update_status_text(self):
         last = str(self.core.settings.get("updates_last_checked_at", "") or "").strip()
@@ -1550,6 +1577,20 @@ class SettingsPage(QWidget):
         self.api_key_help_hint = QLabel("", self)
         self.api_key_help_hint.setWordWrap(True)
         self.api_key_help_hint.setStyleSheet(muted_label_css(12))
+        self.api_key_details_btn = QPushButton("מה זה מפתח API?")
+        self.api_key_details_btn.setCheckable(True)
+        self.api_key_details_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.api_key_details_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        self.api_key_details_btn.toggled.connect(self._toggle_api_key_details)
+        self.api_key_details = QLabel(
+            "מפתח API הוא קוד גישה אישי שמאפשר לסמארטי לשלוח בקשות מאובטחות לספק המודל שבחרת. "
+            "הוא נדרש כדי שהספק ידע מי משתמש בשירות, יחייב את החשבון הנכון ויאפשר גישה למודלים. "
+            "הדבק כאן רק מפתח שיצרת באתר הרשמי של הספק; סמארטי שומר אותו כמפתח מוסתר ולא מציג אותו בלוגים."
+        )
+        self.api_key_details.setWordWrap(True)
+        self.api_key_details.setVisible(False)
+        self.api_key_details.setProperty("smartiInfoBubble", True)
+        self.api_key_details.setStyleSheet(muted_label_css(12) + f" padding: 10px 12px; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 14px; background: {GLASS_COLOR};")
         self.tavily_key = MaskedSecretLineEdit(self.core.settings.get("tavily_api_key", ""))
         self.tavily_key_help_link = QLabel(self)
         self.tavily_key_row = self._make_secret_link_row(self.tavily_key, self.tavily_key_help_link)
@@ -1691,6 +1732,7 @@ class SettingsPage(QWidget):
         self.tts_voice_combo = NoScrollComboBox()
         self.tts_voice_combo.setStyleSheet(COMBOBOX_CSS)
         self._populate_tts_voice_combo()
+        self.tts_preview_row = self._make_tts_preview_row()
         self.tts_volume_control, self.tts_volume_slider, self.tts_volume_lbl = self._make_labeled_slider(
             0, 100, self.core.settings.get("tts_volume", 100), lambda value: f"{value}%"
         )
@@ -1808,10 +1850,39 @@ class SettingsPage(QWidget):
             label = voice.get("name") or voice.get("id") or "Voice"
             self.tts_voice_combo.addItem(label, voice.get("id", ""))
         if not voices:
-            self.tts_voice_combo.addItem("Google TTS לא זמין", "co.il")
+            self.tts_voice_combo.addItem("טקסט לדיבור לא זמין", "co.il")
         selected_voice = str(self.core.settings.get("tts_voice_id", "co.il") or "co.il")
         index = self.tts_voice_combo.findData(selected_voice)
         self.tts_voice_combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def preview_tts(self):
+        worker = getattr(self, "tts_preview_worker", None)
+        if worker and worker.isRunning():
+            self.core.stop_speaking()
+            return
+        if not TTS_INSTALLED:
+            QMessageBox.information(self, "תצוגה מקדימה", "לא מותקן מנוע טקסט לדיבור.")
+            return
+        self.autosave_timer.stop()
+        self.core.settings["tts_voice_id"] = self.tts_voice_combo.currentData() or "co.il"
+        self.core.settings["tts_volume"] = int(self.tts_volume_slider.value())
+        text = self.tts_preview_text.text().strip() if hasattr(self, "tts_preview_text") else ""
+        text = text or "שלום, זו תצוגה מקדימה של הקול הנוכחי."
+        self.tts_preview_btn.setText("עצור")
+        self.tts_preview_btn.setEnabled(True)
+        worker = TTSWorker(self.core, text)
+        self.tts_preview_worker = worker
+        worker.finished.connect(lambda w=worker: self._on_tts_preview_finished(w))
+        worker.start()
+
+    def _on_tts_preview_finished(self, worker):
+        if getattr(self, "tts_preview_worker", None) is worker:
+            self.tts_preview_worker = None
+        if hasattr(self, "tts_preview_btn"):
+            self.tts_preview_btn.setText("השמע")
+            self.tts_preview_btn.setEnabled(True)
+            refresh_themed_button_icon(self.tts_preview_btn)
+        worker.deleteLater()
 
     def _loop_label_text(self, val):
         return "ללא הגבלה" if val > 30 else f"{val} סבבים"
@@ -1979,6 +2050,8 @@ class SettingsPage(QWidget):
         self._add_field("מפתח גישה לספק המודל", self.api_key_row, ai, "נדרש רק לספקים חיצוניים. המפתח נבדק מול הספק לפני שמירה, נשמר בצורה מוגנת ומוצג רק בסיומת מוסתרת.")
         ai.addWidget(self.api_key_status)
         ai.addWidget(self.api_key_help_hint)
+        ai.addWidget(self.api_key_details_btn)
+        ai.addWidget(self.api_key_details)
         self._add_field("מודל", self.model_combo, ai, "אפשר להקליד חיפוש חופשי כמו 70b llama instruct; הסינון סלחני לסדר מילים, מקפים ושמות ספקים.")
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי רק כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.")
         self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key_row, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.")
@@ -2034,8 +2107,9 @@ class SettingsPage(QWidget):
         self._add_section_header("קול", voice)
         self._add_checkbox(self.tts_cb, voice, "כאשר האפשרות פעילה, סמארטי יקריא בקול את כל התשובות.")
         self._add_checkbox(self.tts_voice_cb, voice, "כאשר האפשרות פעילה, הקריאה הקולית תופעל בעיקר לאחר פנייה קולית מצד המשתמש.")
-        self._add_field("קול הקראה", self.tts_voice_combo, voice, "בחירת נקודת קול של Google TTS לעברית.")
+        self._add_field("קול הקראה", self.tts_voice_combo, voice, "בחירת קול עברי. קולות Edge זמינים כאשר חבילת edge-tts מותקנת; Google TTS נשאר כגיבוי.")
         self._add_field("עוצמת הקראה", self.tts_volume_control, voice, "שולט בעוצמת השמע בזמן ההקראה.")
+        self._add_field("תצוגה מקדימה", self.tts_preview_row, voice, "משמיע את הטקסט לפי הקול והעוצמה שמוגדרים כרגע.")
         self._add_section_header("האזנה", voice)
         self._add_field("רגישות מיקרופון", self.voice_sensitivity_control, voice, "ערך גבוה מזהה דיבור חלש מהר יותר; בסביבה רועשת כדאי להוריד מעט.")
         self._add_field("סיום אחרי שקט", self.voice_pause_control, voice, "כמה זמן של שקט יסיים את ההאזנה וישלח את התמלול לעיבוד.")
@@ -2361,6 +2435,9 @@ class SettingsPage(QWidget):
         for label in self.findChildren(QLabel):
             if label.property("smartiHighContrastLink"):
                 apply_high_contrast_link_label(label)
+                continue
+            if label.property("smartiInfoBubble"):
+                label.setStyleSheet(muted_label_css(12) + f" padding: 10px 12px; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 14px; background: {GLASS_COLOR};")
                 continue
             if label.property("smartiValuePill"):
                 label.setStyleSheet(self._value_pill_css())

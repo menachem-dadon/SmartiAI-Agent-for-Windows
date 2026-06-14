@@ -174,15 +174,21 @@ def themed_asset_candidates(*names):
         stem, ext = os.path.splitext(raw)
         if ext:
             candidates.append(f"{stem}_{CURRENT_THEME}{ext}")
+            candidates.append(f"{stem}_{CURRENT_THEME} {ext}")
             candidates.append(raw)
+            candidates.append(f"{stem} {ext}")
             candidates.append(f"{stem}_{alternate_theme}{ext}")
+            candidates.append(f"{stem}_{alternate_theme} {ext}")
         else:
             for suffix in (".png", ".svg"):
                 candidates.append(f"{raw}_{CURRENT_THEME}{suffix}")
+                candidates.append(f"{raw}_{CURRENT_THEME} {suffix}")
             for suffix in (".png", ".svg"):
                 candidates.append(f"{raw}{suffix}")
+                candidates.append(f"{raw} {suffix}")
             for suffix in (".png", ".svg"):
                 candidates.append(f"{raw}_{alternate_theme}{suffix}")
+                candidates.append(f"{raw}_{alternate_theme} {suffix}")
     return list(dict.fromkeys(candidates))
 
 

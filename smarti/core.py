@@ -10425,10 +10425,99 @@ if __name__ == "__main__":
                 result.append(formataddr((name, addr)) if name else addr)
         return result
 
+    def _email_css_value(self, value, default=""):
+        text = str(value or "").strip()
+        if not text or any(ch in text for ch in "<>{}\r\n"):
+            return default
+        return text
+
+    def _email_wants_html(self, args):
+        mode = str(args.get("content_mode") or "auto").strip().lower()
+        if mode in {"html", "both"}:
+            return True
+        if mode == "plain":
+            return False
+        style_keys = ("direction", "text_align", "font_family", "font_size_px", "line_height", "text_color", "background_color", "custom_css")
+        return bool(args.get("html_body") or any(str(args.get(key) or "").strip() for key in style_keys))
+
+    def _email_html_document(self, args, body, html_body):
+        html_body = str(html_body or "")
+        if html_body and re.search(r"<\s*(?:!doctype|html|body)\b", html_body, flags=re.IGNORECASE):
+            return html_body
+        source_text = html_body or html.escape(str(body or " ")).replace("\n", "<br>\n")
+        direction = str(args.get("direction") or "auto").strip().lower()
+        if direction not in {"rtl", "ltr"}:
+            combined = html.unescape(re.sub(r"<[^>]+>", " ", source_text))
+            direction = "rtl" if re.search(r"[\u0590-\u05ff]", combined) else "ltr"
+        align = str(args.get("text_align") or "auto").strip().lower()
+        if align not in {"right", "left", "center", "justify"}:
+            align = "right" if direction == "rtl" else "left"
+        try:
+            font_size = int(args.get("font_size_px") or 16)
+        except Exception:
+            font_size = 16
+        font_size = max(10, min(36, font_size))
+        font_family = self._email_css_value(args.get("font_family"), "Arial, 'Segoe UI', sans-serif")
+        line_height = self._email_css_value(args.get("line_height"), "1.6")
+        text_color = self._email_css_value(args.get("text_color"), "#111111")
+        background_color = self._email_css_value(args.get("background_color"), "#ffffff")
+        custom_css = str(args.get("custom_css") or "").strip()
+        body_style = (
+            f"direction:{direction}; text-align:{align}; font-family:{font_family}; "
+            f"font-size:{font_size}px; line-height:{line_height}; color:{text_color}; "
+            f"background:{background_color}; margin:0; padding:24px;"
+        )
+        return (
+            "<!doctype html>\n"
+            f"<html lang=\"he\" dir=\"{direction}\">\n"
+            "<head>\n"
+            "<meta charset=\"utf-8\">\n"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+            f"<style>body {{{body_style}}} .smarti-email-body {{max-width: 760px; margin: 0 auto;}} {custom_css}</style>\n"
+            "</head>\n"
+            f"<body dir=\"{direction}\"><div class=\"smarti-email-body\" dir=\"{direction}\">{source_text}</div></body>\n"
+            "</html>"
+        )
+
+    def _email_apply_outbound_headers(self, msg, args, from_addr):
+        reply_to_list = self._email_recipients(args.get("reply_to"))
+        if reply_to_list:
+            msg["Reply-To"] = ", ".join(reply_to_list)
+        priority = str(args.get("priority") or "normal").strip().lower()
+        if priority == "high":
+            msg["Importance"] = "high"
+            msg["Priority"] = "urgent"
+            msg["X-Priority"] = "1"
+        elif priority == "low":
+            msg["Importance"] = "low"
+            msg["Priority"] = "non-urgent"
+            msg["X-Priority"] = "5"
+        if bool(args.get("request_read_receipt")):
+            msg["Disposition-Notification-To"] = ", ".join(reply_to_list) if reply_to_list else from_addr
+        headers = args.get("headers") or {}
+        if isinstance(headers, dict):
+            protected = {
+                "from", "to", "cc", "bcc", "subject", "date", "message-id", "mime-version",
+                "content-type", "content-transfer-encoding", "reply-to", "importance",
+                "priority", "x-priority", "disposition-notification-to",
+            }
+            for name, value in headers.items():
+                header_name = str(name or "").strip()
+                if not header_name or header_name.lower() in protected:
+                    continue
+                if not re.fullmatch(r"[A-Za-z0-9!#$%&'*+\-.^_`|~]+", header_name):
+                    continue
+                if isinstance(value, (list, tuple)):
+                    value = ", ".join(str(item) for item in value)
+                header_value = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+                if header_value:
+                    msg[header_name] = header_value
+
     def _email_build_outbound_message(self, args, original=None, mode="send"):
         cfg = self._email_require_credentials()
         msg = EmailMessage()
-        from_addr = formataddr((cfg["from_name"], cfg["user"])) if cfg["from_name"] else cfg["user"]
+        from_name = str(args.get("from_name") or cfg["from_name"] or "").strip()
+        from_addr = formataddr((from_name, cfg["user"])) if from_name else cfg["user"]
         msg["From"] = from_addr
         msg["Date"] = formatdate(localtime=True)
         msg["Message-ID"] = make_msgid(domain=cfg["user"].split("@")[-1] if "@" in cfg["user"] else None)
@@ -10445,6 +10534,7 @@ if __name__ == "__main__":
             msg["To"] = ", ".join(to_list)
         if cc_list:
             msg["Cc"] = ", ".join(cc_list)
+        self._email_apply_outbound_headers(msg, args, from_addr)
 
         subject = str(args.get("subject", "") or "").strip()
         if original is not None and not subject:
@@ -10474,11 +10564,12 @@ if __name__ == "__main__":
                 body += f"Subject: {self._email_decode_header(original.get('Subject', ''))}\n"
                 body += f"To: {self._email_decode_header(original.get('To', ''))}\n\n{original_text}"
 
-        if html_body:
-            msg.set_content(body or self._email_html_to_text(html_body) or " ")
-            msg.add_alternative(html_body, subtype="html")
+        if self._email_wants_html(args):
+            html_document = self._email_html_document(args, body, html_body)
+            msg.set_content(body or self._email_html_to_text(html_document) or " ", charset="utf-8")
+            msg.add_alternative(html_document, subtype="html", charset="utf-8")
         else:
-            msg.set_content(body or " ")
+            msg.set_content(body or " ", charset="utf-8")
 
         max_bytes = max(1, cfg["max_attachment_mb"]) * 1024 * 1024
         for path in args.get("attachments") or []:
@@ -11479,25 +11570,27 @@ if __name__ == "__main__":
             self._stop_speech_flag = False
             if self.tts_status_callback: self.tts_status_callback(True)
             try:
-                self._speak_text_with_gtts(clean)
+                voice_id = str(self.settings.get("tts_voice_id", "co.il") or "co.il").strip()
+                if voice_id.startswith("edge:") and EDGE_TTS_INSTALLED:
+                    self._speak_text_with_edge(clean, voice_id)
+                elif GTTS_INSTALLED:
+                    self._speak_text_with_gtts(clean)
             except Exception as e: logging.error(f"TTS Error: {e}")
             finally:
                 if self.tts_status_callback: self.tts_status_callback(False)
 
-    def _speak_text_with_gtts(self, clean):
-        from gtts import gTTS
-        import pygame
+    def _tts_volume_fraction(self):
         try:
             volume = float(self.settings.get("tts_volume", 100))
         except Exception:
             volume = 100
-        tld = str(self.settings.get("tts_voice_id", "co.il") or "co.il").strip()
-        tld = tld if any(tld == voice.get("id") for voice in GOOGLE_HEBREW_TTS_VOICES) else "co.il"
-        try: tts = gTTS(text=clean, lang='iw', tld=tld, slow=False)
-        except: tts = gTTS(text=clean, lang='he', tld=tld, slow=False)
-        audio_buffer = io.BytesIO()
-        tts.write_to_fp(audio_buffer)
-        audio_buffer.seek(0)
+        return max(0.0, min(1.0, volume / 100.0 if volume > 1 else volume))
+
+    def _play_tts_mp3_bytes(self, audio_bytes):
+        if not audio_bytes:
+            return
+        import pygame
+        audio_buffer = io.BytesIO(audio_bytes)
         path = ""
         try:
             pygame.mixer.init()
@@ -11508,7 +11601,7 @@ if __name__ == "__main__":
                     path = fp.name
                     fp.write(audio_buffer.getvalue())
                 pygame.mixer.music.load(path)
-            pygame.mixer.music.set_volume(max(0.0, min(1.0, volume / 100.0 if volume > 1 else volume)))
+            pygame.mixer.music.set_volume(self._tts_volume_fraction())
             pygame.mixer.music.play()
             while pygame.mixer.music.get_busy() and not self._stop_speech_flag: pygame.time.Clock().tick(10)
         finally:
@@ -11520,6 +11613,37 @@ if __name__ == "__main__":
             if path:
                 try: os.remove(path)
                 except: pass
+
+    def _speak_text_with_edge(self, clean, voice_id):
+        import asyncio
+        import edge_tts
+        voice_name = str(voice_id or "").split(":", 1)[-1].strip()
+        valid = {voice.get("voice") for voice in EDGE_HEBREW_TTS_VOICES}
+        if voice_name not in valid:
+            voice_name = "he-IL-HilaNeural"
+
+        async def collect_audio():
+            communicate = edge_tts.Communicate(clean, voice_name)
+            chunks = []
+            async for chunk in communicate.stream():
+                if self._stop_speech_flag:
+                    break
+                if chunk.get("type") == "audio":
+                    chunks.append(chunk.get("data", b""))
+            return b"".join(chunks)
+
+        audio_bytes = asyncio.run(collect_audio())
+        self._play_tts_mp3_bytes(audio_bytes)
+
+    def _speak_text_with_gtts(self, clean):
+        from gtts import gTTS
+        tld = str(self.settings.get("tts_voice_id", "co.il") or "co.il").strip()
+        tld = tld if any(tld == voice.get("id") for voice in GOOGLE_HEBREW_TTS_VOICES) else "co.il"
+        try: tts = gTTS(text=clean, lang='iw', tld=tld, slow=False)
+        except: tts = gTTS(text=clean, lang='he', tld=tld, slow=False)
+        audio_buffer = io.BytesIO()
+        tts.write_to_fp(audio_buffer)
+        self._play_tts_mp3_bytes(audio_buffer.getvalue())
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

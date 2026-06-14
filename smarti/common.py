@@ -301,7 +301,8 @@ PILLOW_INSTALLED = importlib.util.find_spec("PIL") is not None
 KEYBOARD_INSTALLED = importlib.util.find_spec("keyboard") is not None
 SPEECH_INSTALLED = importlib.util.find_spec("speech_recognition") is not None
 GTTS_INSTALLED = importlib.util.find_spec("gtts") is not None and importlib.util.find_spec("pygame") is not None
-TTS_INSTALLED = GTTS_INSTALLED
+EDGE_TTS_INSTALLED = importlib.util.find_spec("edge_tts") is not None and importlib.util.find_spec("pygame") is not None
+TTS_INSTALLED = GTTS_INSTALLED or EDGE_TTS_INSTALLED
 
 GOOGLE_HEBREW_TTS_VOICES = [
     {"id": "co.il", "name": "Google עברית - ישראל", "tld": "co.il"},
@@ -312,8 +313,36 @@ GOOGLE_HEBREW_TTS_VOICES = [
     {"id": "co.in", "name": "Google עברית - India", "tld": "co.in"},
 ]
 
+EDGE_HEBREW_TTS_VOICES = [
+    {"id": "edge:he-IL-HilaNeural", "name": "עברית - הילה (Edge Neural)", "engine": "edge", "voice": "he-IL-HilaNeural"},
+    {"id": "edge:he-IL-AvriNeural", "name": "עברית - אברי (Edge Neural)", "engine": "edge", "voice": "he-IL-AvriNeural"},
+]
+
+def _google_hebrew_tts_fallback_voices():
+    labels = {
+        "co.il": "עברית - Google ישראל",
+        "com": "עברית - Google כללי",
+        "co.uk": "עברית - Google שרת בריטניה",
+        "com.au": "עברית - Google שרת אוסטרליה",
+        "ca": "עברית - Google שרת קנדה",
+        "co.in": "עברית - Google שרת הודו",
+    }
+    voices = []
+    for voice in GOOGLE_HEBREW_TTS_VOICES:
+        item = dict(voice)
+        item.setdefault("engine", "gtts")
+        if item.get("id") in labels:
+            item["name"] = labels[item["id"]]
+        voices.append(item)
+    return voices
+
 def list_tts_voices(refresh=False):
-    return copy.deepcopy(GOOGLE_HEBREW_TTS_VOICES if GTTS_INSTALLED else [])
+    voices = []
+    if EDGE_TTS_INSTALLED:
+        voices.extend(copy.deepcopy(EDGE_HEBREW_TTS_VOICES))
+    if GTTS_INSTALLED:
+        voices.extend(_google_hebrew_tts_fallback_voices())
+    return voices
 
 APP_DIR = SMARTI_RUNTIME.app_dir
 RESOURCE_DIR = SMARTI_RUNTIME.resource_dir

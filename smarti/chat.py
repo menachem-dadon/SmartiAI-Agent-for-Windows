@@ -2839,6 +2839,10 @@ class ChatHistoryPage(QWidget):
         super().__init__(getattr(main_window, "stacked_widget", None))
         self.core = core
         self.main_window = main_window
+        self._open_session_menu = None
+        self._open_session_menu_button = None
+        self._suppress_session_menu_button = None
+        self.search_icon_action = None
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         layout = QVBoxLayout(self)
@@ -2870,6 +2874,7 @@ class ChatHistoryPage(QWidget):
         self.search_edit.setPlaceholderText("חיפוש לפי שם או תוכן")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.setStyleSheet(LINE_EDIT_CSS)
+        self._refresh_search_icon()
         self.search_edit.textChanged.connect(self.load_sessions)
         layout.addWidget(self.search_edit)
 
@@ -2890,8 +2895,18 @@ class ChatHistoryPage(QWidget):
         refresh_back_button_icon(self.back_btn)
         self.new_chat_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
         self.search_edit.setStyleSheet(LINE_EDIT_CSS)
+        self._refresh_search_icon()
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
         self.load_sessions()
+
+    def _refresh_search_icon(self):
+        icon = themed_icon("search_icon", "search")
+        if icon.isNull():
+            return
+        if self.search_icon_action is None:
+            self.search_icon_action = self.search_edit.addAction(icon, QLineEdit.ActionPosition.LeadingPosition)
+        else:
+            self.search_icon_action.setIcon(icon)
 
     def _format_time(self, value):
         try:
@@ -2901,6 +2916,13 @@ class ChatHistoryPage(QWidget):
             return str(value or "")
 
     def _clear_rows(self):
+        open_menu = self._open_session_menu
+        self._open_session_menu = None
+        self._open_session_menu_button = None
+        if open_menu and open_menu.isVisible():
+            open_menu.hide()
+        if open_menu:
+            open_menu.deleteLater()
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             widget = item.widget()
@@ -2938,26 +2960,29 @@ class ChatHistoryPage(QWidget):
         set_themed_button_icon(btn, filenames, fallback_text, 18, clear_text=True)
         return btn
 
-    def _session_row(self, record, active_id):
+    def _compact_session_row(self, record, active_id):
         session_id = record.get("id")
         row = ClickableSessionFrame(session_id)
         row.clicked.connect(self.open_session)
         row.setMinimumWidth(0)
         row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        row.setStyleSheet(card_css(10, 8))
-        row_layout = QVBoxLayout(row)
-        row_layout.setContentsMargins(12, 10, 12, 10)
-        row_layout.setSpacing(7)
+        row.setStyleSheet(card_css(4, 8))
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(10, 7, 8, 7)
+        row_layout.setSpacing(8)
+
+        content_layout = QVBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(3)
 
         title_row = QHBoxLayout()
-        title = QLabel()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
+        title = EndElideLabel(record.get("title") or DEFAULT_CHAT_TITLE)
         title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        title.setTextFormat(Qt.TextFormat.RichText)
-        title.setWordWrap(True)
         title.setMinimumWidth(0)
         title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        title.setText(_escape_plain_text_with_soft_breaks(record.get("title") or DEFAULT_CHAT_TITLE))
-        title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 15px; font-weight: 800; border: none;")
+        title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 800; border: none;")
         title_row.addWidget(title, 1)
 
         if record.get("id") == active_id:
@@ -2965,64 +2990,109 @@ class ChatHistoryPage(QWidget):
             active.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             active.setStyleSheet(
                 f"background: {GLASS_COLOR}; color: {ACCENT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-                "border-radius: 10px; padding: 3px 8px; font-size: 11px; font-weight: 800;"
+                "border-radius: 9px; padding: 2px 7px; font-size: 10px; font-weight: 800;"
             )
             title_row.addWidget(active)
-        row_layout.addLayout(title_row)
+        content_layout.addLayout(title_row)
 
-        preview = QLabel()
-        preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        preview.setTextFormat(Qt.TextFormat.RichText)
-        preview.setWordWrap(True)
-        preview.setMinimumWidth(0)
-        preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        preview_source = record.get("preview_source") or record.get("preview", "")
-        preview.setText(_render_markdown_html(_markdown_preview_source(preview_source), ACCENT_COLOR, style_blocks=False, clickable_links=False))
-        preview.setStyleSheet(muted_label_css(12) + " border: none;")
-        row_layout.addWidget(preview)
-
+        # Last-message preview is intentionally omitted to keep history rows compact.
         meta = QLabel(f"{self._format_time(record.get('updated_at'))} · {record.get('message_count', 0)} הודעות")
         meta.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         meta.setMinimumWidth(0)
         meta.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 11px; border: none;")
-        row_layout.addWidget(meta)
+        content_layout.addWidget(meta)
+        row_layout.addLayout(content_layout, 1)
 
-        actions = QGridLayout()
-        actions.setHorizontalSpacing(6)
-        actions.setVerticalSpacing(6)
-        pin_btn = self._icon_button(
+        menu_btn = self._icon_button("פעולות", ("menu_icon",), fallback_text="⋮")
+        menu_btn.setFixedSize(28, 28)
+        menu_btn.clicked.connect(lambda checked=False, rec=record, btn=menu_btn: self.show_session_menu(rec, btn))
+        row_layout.addWidget(menu_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
+
+    def _add_session_menu_action(self, menu, text, icon_names, callback):
+        action = menu.addAction(text)
+        icon = themed_icon(*tuple(icon_names or ()))
+        if not icon.isNull():
+            action.setIcon(icon)
+        action.triggered.connect(callback)
+        return action
+
+    def _clear_open_session_menu(self, menu):
+        if self._open_session_menu is menu:
+            self._open_session_menu = None
+            self._open_session_menu_button = None
+            menu.deleteLater()
+
+    def _clear_session_menu_reopen_guard(self):
+        self._suppress_session_menu_button = None
+
+    def _session_menu_button_contains_cursor(self, button):
+        return bool(button and button.rect().contains(button.mapFromGlobal(QCursor.pos())))
+
+    def _on_session_menu_about_to_hide(self, menu):
+        button = self._open_session_menu_button if self._open_session_menu is menu else None
+        if self._session_menu_button_contains_cursor(button):
+            self._suppress_session_menu_button = button
+            QTimer.singleShot(220, self._clear_session_menu_reopen_guard)
+        QTimer.singleShot(0, lambda m=menu: self._clear_open_session_menu(m))
+
+    def show_session_menu(self, record, button):
+        if self._suppress_session_menu_button is button:
+            self._suppress_session_menu_button = None
+            return
+        current = self._open_session_menu
+        if current and current.isVisible():
+            if self._open_session_menu_button is button:
+                self._open_session_menu = None
+                self._open_session_menu_button = None
+                current.hide()
+                current.deleteLater()
+                return
+            self._open_session_menu = None
+            self._open_session_menu_button = None
+            current.hide()
+            current.deleteLater()
+
+        session_id = record.get("id")
+        menu = QMenu(self)
+        menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        if hasattr(menu, "setIconSize"):
+            menu.setIconSize(QSize(20, 20))
+        menu.setStyleSheet(menu_stylesheet())
+        self._add_session_menu_action(
+            menu,
             "בטל הצמדה" if record.get("pinned") else "הצמד שיחה",
-            (
-                "unpin_icon" if record.get("pinned") else "pin_icon",
-            ),
-            fallback_text="★" if record.get("pinned") else "☆",
+            ("unpin_icon",) if record.get("pinned") else ("pin_icon",),
+            lambda checked=False, sid=session_id, pinned=not record.get("pinned"): self.set_pinned(sid, pinned),
         )
-        pin_btn.clicked.connect(lambda checked=False, sid=session_id, pinned=not record.get("pinned"): self.set_pinned(sid, pinned))
-        rename_btn = self._icon_button(
+        self._add_session_menu_action(
+            menu,
             "שנה שם",
             ("rename_icon",),
-            fallback_text="✎",
+            lambda checked=False, sid=session_id, current_title=record.get("title", ""): self.rename_session(sid, current_title),
         )
-        rename_btn.clicked.connect(lambda checked=False, sid=session_id, current=record.get("title", ""): self.rename_session(sid, current))
-        export_btn = self._icon_button(
+        self._add_session_menu_action(
+            menu,
             "יצוא JSON",
             ("export_json_icon", "export_icon"),
-            fallback_text="{}",
+            lambda checked=False, sid=session_id, title=record.get("title", ""): self.export_session(sid, title),
         )
-        export_btn.clicked.connect(lambda checked=False, sid=session_id, title=record.get("title", ""): self.export_session(sid, title))
-        delete_btn = self._icon_button(
+        menu.addSeparator()
+        self._add_session_menu_action(
+            menu,
             "מחק שיחה",
             ("delete_icon",),
-            fallback_text="×",
-            danger=True,
+            lambda checked=False, sid=session_id: self.delete_session(sid),
         )
-        delete_btn.clicked.connect(lambda checked=False, sid=session_id: self.delete_session(sid))
-        for index, btn in enumerate((pin_btn, rename_btn, export_btn, delete_btn)):
-            actions.addWidget(btn, 0, index)
-        for col in range(4):
-            actions.setColumnStretch(col, 1)
-        row_layout.addLayout(actions)
-        return row
+        self._open_session_menu = menu
+        self._open_session_menu_button = button
+        menu.aboutToHide.connect(lambda m=menu: self._on_session_menu_about_to_hide(m))
+        menu.popup(button.mapToGlobal(QPoint(0, button.height())))
+
+    def _session_row(self, record, active_id):
+        return self._compact_session_row(record, active_id)
 
     def start_new_chat(self):
         self.main_window.start_new_chat()

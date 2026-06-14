@@ -370,7 +370,9 @@ def _classify(status_code, blob, retry_after):
         return "permission", "none"
     if status_code == 402:
         return "billing_quota", "none"
-    if account_billing or (quota_exhausted and not (status_code == 429 and retry_after)):
+    if status_code == 429 or _contains_any(blob, rate_terms):
+        return "rate_limit", "delayed"
+    if account_billing or quota_exhausted:
         return "billing_quota", "none"
     if status_code == 413 or _contains_any(blob, too_large_terms):
         return "request_too_large", "none"
@@ -378,8 +380,6 @@ def _classify(status_code, blob, retry_after):
         return "provider_setup", "none"
     if status_code == 404 or _contains_any(blob, model_terms):
         return "model_unavailable", "none"
-    if status_code == 429 or _contains_any(blob, rate_terms):
-        return "rate_limit", "delayed"
     if status_code in {498, 500, 502, 503, 529} or _contains_any(blob, server_terms):
         return "server_overload", "delayed"
     if status_code in {400, 422} or _contains_any(blob, ("badrequesterror", "invalid_request", "invalid argument", "invalid_argument", "validation error", "unprocessable")):

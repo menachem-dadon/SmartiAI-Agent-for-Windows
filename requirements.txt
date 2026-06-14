@@ -10,6 +10,7 @@ keyboard>=0.13.5
 SpeechRecognition>=3.10
 PyAudio>=0.2.14
 gTTS>=2.5
+edge-tts>=6.1
 pygame>=2.5
 Markdown>=3.6
 keyring>=25.0
