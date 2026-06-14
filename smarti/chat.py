@@ -2842,7 +2842,7 @@ class ChatHistoryPage(QWidget):
         self._open_session_menu = None
         self._open_session_menu_button = None
         self._suppress_session_menu_button = None
-        self.search_icon_action = None
+        self.search_icon_label = None
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         layout = QVBoxLayout(self)
@@ -2870,13 +2870,28 @@ class ChatHistoryPage(QWidget):
         top_bar.addWidget(self.new_chat_btn)
         layout.addLayout(top_bar)
 
+        self.search_frame = QFrame()
+        self.search_frame.setObjectName("HistorySearchFrame")
+        self.search_frame.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.search_frame.setStyleSheet(self._search_frame_stylesheet())
+        search_layout = QHBoxLayout(self.search_frame)
+        search_layout.setContentsMargins(14, 0, 12, 0)
+        search_layout.setSpacing(8)
+
+        self.search_icon_label = QLabel()
+        self.search_icon_label.setFixedSize(30, 30)
+        self.search_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        search_layout.addWidget(self.search_icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self.search_edit = QLineEdit()
+        self._apply_search_edit_rtl()
         self.search_edit.setPlaceholderText("חיפוש לפי שם או תוכן")
         self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.setStyleSheet(LINE_EDIT_CSS)
+        self.search_edit.setStyleSheet(self._search_line_edit_stylesheet())
         self._refresh_search_icon()
         self.search_edit.textChanged.connect(self.load_sessions)
-        layout.addWidget(self.search_edit)
+        search_layout.addWidget(self.search_edit, 1)
+        layout.addWidget(self.search_frame)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -2894,19 +2909,59 @@ class ChatHistoryPage(QWidget):
     def apply_theme(self):
         refresh_back_button_icon(self.back_btn)
         self.new_chat_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
-        self.search_edit.setStyleSheet(LINE_EDIT_CSS)
+        self.search_frame.setStyleSheet(self._search_frame_stylesheet())
+        self.search_edit.setStyleSheet(self._search_line_edit_stylesheet())
+        self._apply_search_edit_rtl()
         self._refresh_search_icon()
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
         self.load_sessions()
 
+    def _apply_search_edit_rtl(self):
+        if not hasattr(self, "search_edit") or self.search_edit is None:
+            return
+        self.search_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.search_edit.setAlignment(
+            Qt.AlignmentFlag.AlignRight |
+            Qt.AlignmentFlag.AlignAbsolute |
+            Qt.AlignmentFlag.AlignVCenter
+        )
+        self.search_edit.setCursorMoveStyle(Qt.CursorMoveStyle.VisualMoveStyle)
+
+    def _search_frame_stylesheet(self):
+        return f"""
+            QFrame#HistorySearchFrame {{
+                background: {GLASS_COLOR};
+                border-radius: 20px;
+                border: 1px solid {SOFT_LINE_COLOR};
+            }}
+            QFrame#HistorySearchFrame:hover {{
+                background: {FIELD_HOVER_COLOR};
+                border-color: {LINE_COLOR};
+            }}
+        """
+
+    def _search_line_edit_stylesheet(self):
+        return f"""
+            QLineEdit {{
+                background: transparent;
+                color: {FIELD_TEXT_COLOR};
+                border: none;
+                padding: 13px 4px 13px 10px;
+                font-size: 14px;
+                selection-background-color: {ACCENT_TINT_STRONG};
+                selection-color: {TEXT_COLOR};
+            }}
+        """
+
     def _refresh_search_icon(self):
         icon = themed_icon("search_icon", "search")
         if icon.isNull():
+            if self.search_icon_label:
+                self.search_icon_label.hide()
             return
-        if self.search_icon_action is None:
-            self.search_icon_action = self.search_edit.addAction(icon, QLineEdit.ActionPosition.LeadingPosition)
-        else:
-            self.search_icon_action.setIcon(icon)
+        if self.search_icon_label:
+            self.search_icon_label.setPixmap(icon.pixmap(26, 26))
+            self.search_icon_label.show()
 
     def _format_time(self, value):
         try:
@@ -3005,7 +3060,7 @@ class ChatHistoryPage(QWidget):
 
         menu_btn = self._icon_button("פעולות", ("menu_icon",), fallback_text="⋮")
         menu_btn.setFixedSize(28, 28)
-        menu_btn.clicked.connect(lambda checked=False, rec=record, btn=menu_btn: self.show_session_menu(rec, btn))
+        menu_btn.pressed.connect(lambda rec=record, btn=menu_btn: self.show_session_menu(rec, btn))
         row_layout.addWidget(menu_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
 
