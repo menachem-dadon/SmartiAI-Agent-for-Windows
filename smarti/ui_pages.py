@@ -1770,7 +1770,7 @@ class SettingsPage(QWidget):
         popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         popup.setStyleSheet(
             f"QFrame#SettingsInfoPopup {{ background: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-            "border-radius: 14px; padding: 8px; }}"
+            "border-radius: 0px; padding: 8px; }}"
         )
         layout = QVBoxLayout(popup)
         layout.setContentsMargins(10, 8, 10, 8)
@@ -2095,7 +2095,7 @@ class SettingsPage(QWidget):
         except Exception:
             pass
         popup.setStyleSheet(
-            f"QFrame#SettingsRecentSearchPopup {{ background: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; padding: 6px; }}"
+            f"QFrame#SettingsRecentSearchPopup {{ background: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 0px; padding: 6px; }}"
         )
         layout = QVBoxLayout(popup)
         layout.setContentsMargins(7, 7, 7, 7)
@@ -2106,7 +2106,7 @@ class SettingsPage(QWidget):
         self.recent_search_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.recent_search_list.setStyleSheet(
             f"QListWidget {{ background: transparent; color: {TEXT_COLOR}; border: none; outline: none; }}"
-            f"QListWidget::item {{ min-height: 28px; padding: 7px 10px; border-radius: 10px; }}"
+            f"QListWidget::item {{ min-height: 28px; padding: 7px 10px; border-radius: 0px; }}"
             f"QListWidget::item:hover {{ background: {HOVER_TINT}; }}"
             f"QListWidget::item:selected {{ background: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
         )

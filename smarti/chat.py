@@ -5535,7 +5535,7 @@ class AnimatedSplash(QWidget):
         self.card.setStyleSheet(
             "QFrame#SplashCard {"
             f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BG_ELEVATED_COLOR}, stop:0.55 {card_mid}, stop:1 {card_end});"
-            "border: none; border-radius: 30px;"
+            "border: none; border-radius: 0px;"
             "}"
         )
         self.title_lbl.setStyleSheet(
@@ -5588,19 +5588,7 @@ class AnimatedSplash(QWidget):
             )
 
     def _apply_window_mask(self):
-        mask_pixmap = QPixmap(self.size())
-        mask_pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(mask_pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        path = QPainterPath()
-        path.addRoundedRect(
-            QRectF(0, 0, self.width(), self.height()).adjusted(0.5, 0.5, -0.5, -0.5),
-            float(self._window_radius),
-            float(self._window_radius),
-        )
-        painter.fillPath(path, Qt.GlobalColor.black)
-        painter.end()
-        self.setMask(mask_pixmap.mask())
+        self.clearMask()
 
     def showEvent(self, event):
         self._apply_window_mask()

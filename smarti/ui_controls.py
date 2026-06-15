@@ -86,9 +86,9 @@ class NoScrollComboBox(QComboBox):
         view.setPalette(palette)
         view.setStyleSheet(
             f"QAbstractItemView {{ background-color: {MENU_BG_COLOR}; color: {TEXT_COLOR}; "
-            f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; padding: 8px; outline: 0px; "
+            f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 0px; padding: 8px; outline: 0px; "
             f"selection-background-color: {ACCENT_TINT_STRONG}; selection-color: {TEXT_COLOR}; }}"
-            f"QAbstractItemView::item {{ min-height: 28px; padding: 7px 10px; border-radius: 10px; }}"
+            f"QAbstractItemView::item {{ min-height: 28px; padding: 7px 10px; border-radius: 0px; }}"
             f"QAbstractItemView::item:hover {{ background-color: {HOVER_TINT}; }}"
             f"QAbstractItemView::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
         )
@@ -102,7 +102,7 @@ class NoScrollComboBox(QComboBox):
             popup_win.setWindowFlags(popup_win.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
             popup_win.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
             popup_win.setAutoFillBackground(True)
-            popup_win.setStyleSheet(f"background-color: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px;")
+            popup_win.setStyleSheet(f"background-color: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 0px;")
         super().showPopup()
 
 class ModelSearchLineEdit(QLineEdit):
@@ -158,16 +158,16 @@ class SearchableModelComboBox(NoScrollComboBox):
         if self.results_list:
             self.results_list.setStyleSheet(
                 f"QListWidget {{ background-color: {MENU_BG_COLOR}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-                f"border-radius: 14px; padding: 4px; outline: none; }}"
+                f"border-radius: 0px; padding: 4px; outline: none; }}"
                 f"QListWidget viewport {{ background-color: {MENU_BG_COLOR}; }}"
-                f"QListWidget::item {{ padding: 4px 6px; border-radius: 10px; }}"
+                f"QListWidget::item {{ padding: 4px 6px; border-radius: 0px; }}"
                 f"QListWidget::item:hover {{ background-color: {HOVER_TINT}; }}"
                 f"QListWidget::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
             )
         if self._popup:
             self._popup.setStyleSheet(
                 f"QFrame#ModelPickerPopup {{ background-color: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-                f"border-radius: 18px; padding: 6px; }}"
+                f"border-radius: 0px; padding: 6px; }}"
             )
         self._refresh_result_star_buttons()
 

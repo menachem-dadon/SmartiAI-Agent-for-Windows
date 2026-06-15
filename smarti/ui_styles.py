@@ -394,11 +394,11 @@ def _refresh_theme_exports(mode=None, settings=None):
         QComboBox QAbstractItemView {{
             background: {MENU_BG_COLOR}; background-color: {MENU_BG_COLOR}; color: {TEXT_COLOR};
             selection-background-color: {ACCENT_TINT_STRONG}; selection-color: {TEXT_COLOR};
-            border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; outline: 0px;
+            border: 1px solid {SOFT_LINE_COLOR}; border-radius: 0px; outline: 0px;
             padding: 8px;
         }}
         QComboBox QAbstractItemView::item {{
-            min-height: 28px; padding: 7px 10px; border-radius: 10px;
+            min-height: 28px; padding: 7px 10px; border-radius: 0px;
         }}
         QComboBox QAbstractItemView::item:hover {{
             background-color: {HOVER_TINT};
@@ -629,7 +629,7 @@ def application_stylesheet():
             background: {MENU_BG_COLOR};
             color: {TEXT_COLOR};
             border: 0px solid transparent;
-            border-radius: 14px;
+            border-radius: 0px;
             padding: 6px 8px;
             font-size: 12px;
         }}
@@ -637,14 +637,14 @@ def application_stylesheet():
             background-color: {MENU_BG_COLOR};
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
-            border-radius: 18px;
+            border-radius: 0px;
             font-family: 'Segoe UI';
             font-size: 14px;
             padding: 7px;
         }}
         QMenu::item {{
             padding: 9px 30px 9px 10px;
-            border-radius: 14px;
+            border-radius: 0px;
             min-width: 118px;
         }}
         QMenu::icon {{
@@ -691,12 +691,12 @@ def menu_stylesheet():
             background-color: {MENU_BG_COLOR};
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
-            border-radius: 18px;
+            border-radius: 0px;
             font-family: 'Segoe UI';
             font-size: 14px;
             padding: 7px;
         }}
-        QMenu::item {{ padding: 9px 30px 9px 10px; border-radius: 14px; min-width: 118px; }}
+        QMenu::item {{ padding: 9px 30px 9px 10px; border-radius: 0px; min-width: 118px; }}
         QMenu::icon {{ padding-right: 4px; }}
         QMenu::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}
         QMenu::separator {{ height: 1px; background: {SOFT_LINE_COLOR}; margin: 7px 10px; }}
