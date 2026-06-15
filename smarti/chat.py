@@ -3115,7 +3115,7 @@ class ChatHistoryPage(QWidget):
         menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         if hasattr(menu, "setIconSize"):
             menu.setIconSize(QSize(20, 20))
-        menu.setStyleSheet(menu_stylesheet())
+        prepare_popup_menu(menu)
         self._add_session_menu_action(
             menu,
             "בטל הצמדה" if record.get("pinned") else "הצמד שיחה",
@@ -3652,7 +3652,7 @@ class ChatWindow(QMainWindow):
         self.tray_menu.setWindowFlags(self.tray_menu.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
         self.tray_menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.tray_menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.tray_menu.setStyleSheet(menu_stylesheet())
+        prepare_popup_menu(self.tray_menu)
         self.tray_open_action = self.tray_menu.addAction("פתח את SmartiAI")
         self.tray_open_action.triggered.connect(self.bring_to_front)
         self.tray_listen_action = self.tray_menu.addAction("התחל האזנה")
@@ -3994,6 +3994,225 @@ class ChatWindow(QMainWindow):
             f"{SCROLLBAR_CSS}"
         )
 
+    def _quick_input_button_stylesheet(self):
+        return f"""
+            QPushButton {{
+                background: transparent;
+                color: {TEXT_COLOR};
+                border: 1px solid transparent;
+                border-radius: 16px;
+                padding: 7px 28px 7px 12px;
+                font-size: 12px;
+                font-weight: 700;
+                min-height: 24px;
+            }}
+            QPushButton:hover {{
+                background: {ACCENT_TINT};
+                border-color: {SOFT_LINE_COLOR};
+            }}
+            QPushButton:pressed {{
+                background: {ACCENT_TINT_STRONG};
+                border-color: {ACCENT_PINK_COLOR};
+            }}
+        """
+
+    def _autonomy_items(self):
+        return [
+            ("locked_down", "בטוח ומבוקר"),
+            ("balanced", "מאוזן"),
+            ("max_autonomy", "אוטונומי מלא"),
+        ]
+
+    def _favorite_model_key(self, provider, model):
+        return (normalize_provider_name(provider), str(model or "").strip())
+
+    def _normalized_favorite_models(self):
+        seen = set()
+        favorites = []
+        for item in self.core.settings.get("favorite_models", []) or []:
+            if not isinstance(item, dict):
+                continue
+            provider, model = self._favorite_model_key(item.get("provider"), item.get("model"))
+            if not provider or not model or (provider, model) in seen:
+                continue
+            seen.add((provider, model))
+            favorites.append({"provider": provider, "model": model})
+        self.core.settings["favorite_models"] = favorites[:60]
+        return self.core.settings["favorite_models"]
+
+    def _ensure_current_model_favorite(self, *, save=False):
+        provider = normalize_provider_name(self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini")) or "gemini")
+        model = str(self.core.settings.get(f"selected_{provider}_model") or provider_default_model(provider) or "").strip()
+        if not provider or not model:
+            return
+        favorites = self._normalized_favorite_models()
+        key = self._favorite_model_key(provider, model)
+        if any(self._favorite_model_key(item.get("provider"), item.get("model")) == key for item in favorites):
+            return
+        favorites.insert(0, {"provider": provider, "model": model})
+        self.core.settings["favorite_models"] = favorites[:60]
+        if save:
+            self.core._save_settings()
+
+    def _favorite_model_label(self, provider, model):
+        return self.format_model_name(model)
+
+    def _fit_quick_input_button(self, button, text, base_width=150, max_width=320, min_width=92):
+        try:
+            text_width = button.fontMetrics().horizontalAdvance(str(text or ""))
+            icon_extra = 32 if not button.icon().isNull() else 22
+            width = max(int(base_width), int(text_width) + icon_extra)
+            button.setMinimumWidth(int(min_width))
+            button.setMaximumWidth(max(int(min_width), min(width, int(max_width))))
+        except Exception:
+            button.setMinimumWidth(int(min_width))
+            button.setMaximumWidth(int(max_width))
+
+    def refresh_favorite_model_controls(self):
+        if not hasattr(self, "favorite_model_btn"):
+            return
+        favorites = self._normalized_favorite_models()
+        current_provider = normalize_provider_name(self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini")) or "gemini")
+        current_model = str(self.core.settings.get(f"selected_{current_provider}_model") or provider_default_model(current_provider) or "").strip()
+        self.favorite_model_btn.setVisible(bool(favorites))
+        label = self._favorite_model_label(current_provider, current_model) or "מודל"
+        self.favorite_model_btn.setText(label)
+        self.favorite_model_btn.setIcon(QIcon())
+        self._fit_quick_input_button(self.favorite_model_btn, label, 150, 280, 96)
+        self.favorite_model_btn.setToolTip("מודלים מועדפים")
+
+    def _favorites_by_provider(self):
+        grouped = {}
+        for item in self._normalized_favorite_models():
+            grouped.setdefault(item["provider"], []).append(item["model"])
+        ordered = []
+        for provider in MODEL_PROVIDER_ORDER:
+            if provider in grouped:
+                ordered.append((provider, grouped.pop(provider)))
+        ordered.extend(sorted(grouped.items(), key=lambda item: provider_display_name(item[0]).lower()))
+        return ordered
+
+    def show_favorite_model_menu(self):
+        if not hasattr(self, "favorite_model_btn"):
+            return
+        menu = QMenu(self)
+        menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        prepare_popup_menu(menu)
+        for provider, models in self._favorites_by_provider():
+            sub = menu.addMenu(provider_display_name(provider))
+            sub.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            prepare_popup_menu(sub)
+            for model in models:
+                action = sub.addAction(self.format_model_name(model))
+                action.triggered.connect(lambda checked=False, p=provider, m=model: self._select_favorite_model(p, m))
+        if not menu.actions():
+            action = menu.addAction("אין מודלים מועדפים")
+            action.setEnabled(False)
+        self._popup_menu_near_button(menu, self.favorite_model_btn)
+
+    def _select_favorite_model(self, provider, model):
+        provider, model = self._favorite_model_key(provider, model)
+        if not provider or not model:
+            return
+        previous_provider = normalize_provider_name(self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini")))
+        previous_model = str(self.core.settings.get(f"selected_{provider}_model", "") or "")
+        if provider == previous_provider and model == previous_model:
+            return
+        self.core.settings["api_mode"] = provider
+        self.core.settings[f"selected_{provider}_model"] = model
+        self._ensure_current_model_favorite(save=False)
+        self.core._save_settings()
+        self.core.system_prompt = self.core._load_system_prompt()
+        self.core.setup_model()
+        if hasattr(self, "subtitle"):
+            self.subtitle.setText(self.format_model_name(model))
+        self.refresh_favorite_model_controls()
+        if getattr(self, "settings_page", None) is not None:
+            self.stacked_widget.removeWidget(self.settings_page)
+            self.settings_page.deleteLater()
+            self.settings_page = None
+
+    def _apply_autonomy_profile_to_settings(self, profile_key):
+        profile = AUTONOMY_PROFILES.get(profile_key, AUTONOMY_PROFILES["balanced"])
+        self.core.settings["autonomy_mode"] = profile_key
+        self.core.settings["permission_level"] = profile["permission_level"]
+        self.core.settings["policy_matrix"] = copy.deepcopy(profile["policy_matrix"])
+        self.core.settings["raw_shell_requires_approval"] = bool(profile["raw_shell_requires_approval"])
+        self.core.settings["marketplace_install_requires_approval"] = bool(profile["marketplace_install_requires_approval"])
+        self.core.settings["require_approval_for_cloud_upload"] = bool(profile["require_approval_for_cloud_upload"])
+        self.core.settings["write_outside_allowed_dirs_requires_approval"] = bool(profile["write_outside_allowed_dirs_requires_approval"])
+
+    def refresh_quick_autonomy_controls(self):
+        if not hasattr(self, "autonomy_quick_btn"):
+            return
+        current = str(self.core.settings.get("autonomy_mode", "balanced") or "balanced")
+        icon_names = {
+            "locked_down": ("autonomy_safe", "autonomy_safe_icon", "security_safe_icon", "shield_safe_icon"),
+            "balanced": ("autonomy_balanced", "autonomy_balanced_icon", "security_balanced_icon", "balance_icon"),
+            "max_autonomy": ("autonomy_full", "autonomy_full_icon", "security_full_icon", "full_access_icon"),
+        }
+        labels = dict(self._autonomy_items())
+        label = labels.get(current, labels["balanced"])
+        self.autonomy_quick_btn.setText(label)
+        icon = themed_icon(*icon_names.get(current, ()))
+        if not icon.isNull():
+            self.autonomy_quick_btn.setIcon(icon)
+            self.autonomy_quick_btn.setIconSize(QSize(18, 18))
+        else:
+            self.autonomy_quick_btn.setIcon(QIcon())
+        self._fit_quick_input_button(self.autonomy_quick_btn, label, 118, 170, 104)
+        self.autonomy_quick_btn.setToolTip("פרופיל בטיחות")
+
+    def show_quick_autonomy_menu(self):
+        if not hasattr(self, "autonomy_quick_btn"):
+            return
+        menu = QMenu(self)
+        menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        prepare_popup_menu(menu)
+        icon_names = {
+            "locked_down": ("autonomy_safe", "autonomy_safe_icon", "security_safe_icon", "shield_safe_icon"),
+            "balanced": ("autonomy_balanced", "autonomy_balanced_icon", "security_balanced_icon", "balance_icon"),
+            "max_autonomy": ("autonomy_full", "autonomy_full_icon", "security_full_icon", "full_access_icon"),
+        }
+        for key, label in self._autonomy_items():
+            action = menu.addAction(label)
+            icon = themed_icon(*icon_names.get(key, ()))
+            if not icon.isNull():
+                action.setIcon(icon)
+            action.triggered.connect(lambda checked=False, profile=key: self._select_quick_autonomy(profile))
+        self._popup_menu_near_button(menu, self.autonomy_quick_btn)
+
+    def _select_quick_autonomy(self, profile_key):
+        if profile_key not in AUTONOMY_PROFILES:
+            profile_key = "balanced"
+        if str(self.core.settings.get("autonomy_mode", "")) == profile_key:
+            return
+        self._apply_autonomy_profile_to_settings(profile_key)
+        self.core._save_settings()
+        self.refresh_quick_autonomy_controls()
+        if getattr(self, "settings_page", None) is not None:
+            self.stacked_widget.removeWidget(self.settings_page)
+            self.settings_page.deleteLater()
+            self.settings_page = None
+
+    def _popup_menu_near_button(self, menu, button):
+        menu.adjustSize()
+        pos = button.mapToGlobal(QPoint(0, button.height() + 4))
+        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            window_rect = self.frameGeometry().adjusted(8, 8, -8, -8)
+            if window_rect.isValid() and window_rect.width() > 80 and window_rect.height() > 80:
+                available = available.intersected(window_rect)
+            size = menu.sizeHint()
+            if pos.x() + size.width() > available.right():
+                pos.setX(max(available.left(), available.right() - size.width()))
+            if pos.y() + size.height() > available.bottom():
+                pos = button.mapToGlobal(QPoint(0, -size.height() - 4))
+            pos.setX(max(available.left(), min(pos.x(), available.right() - size.width())))
+            pos.setY(max(available.top(), min(pos.y(), available.bottom() - size.height())))
+        menu.popup(pos)
+
     def refresh_themed_icons(self):
         self._set_menu_button_icon()
         self._set_update_button_icon()
@@ -4034,7 +4253,7 @@ class ChatWindow(QMainWindow):
             apply_soft_shadow(self.update_btn, blur=26, y=7, alpha=72)
             self._set_update_button_icon()
         if hasattr(self, "menu"):
-            self.menu.setStyleSheet(menu_stylesheet())
+            prepare_popup_menu(self.menu)
         if hasattr(self, "title_label"):
             self.title_label.setStyleSheet(page_title_css(19))
             self.refresh_chat_title()
@@ -4056,12 +4275,18 @@ class ChatWindow(QMainWindow):
             apply_soft_shadow(self.input_frame, blur=42, y=12, alpha=42)
         if hasattr(self, "input_field"):
             self.input_field.setStyleSheet(self._chat_input_stylesheet())
+        if hasattr(self, "favorite_model_btn"):
+            self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
+            self.refresh_favorite_model_controls()
+        if hasattr(self, "autonomy_quick_btn"):
+            self.autonomy_quick_btn.setStyleSheet(self._quick_input_button_stylesheet())
+            self.refresh_quick_autonomy_controls()
         if hasattr(self, "attach_btn"):
             self._set_attach_button_icon()
         if hasattr(self, "attachment_preview"):
             self.attachment_preview.apply_theme()
         if hasattr(self, "attach_menu"):
-            self.attach_menu.setStyleSheet(menu_stylesheet())
+            prepare_popup_menu(self.attach_menu)
         if hasattr(self, "welcome_widget"):
             self.welcome_widget.apply_theme()
         if hasattr(self, "logo_lbl"):
@@ -4133,7 +4358,7 @@ class ChatWindow(QMainWindow):
         self.menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         if hasattr(self.menu, "setIconSize"):
             self.menu.setIconSize(QSize(22, 22))
-        self.menu.setStyleSheet(menu_stylesheet())
+        prepare_popup_menu(self.menu)
         self.menu.aboutToHide.connect(self._guard_menu_reopen_from_button)
         self._menu_actions = []
         self._add_menu_action("שיחה חדשה", self.start_new_chat, "new_chat_icon", "plus_icon")
@@ -4252,7 +4477,7 @@ class ChatWindow(QMainWindow):
         bottom_layout.setSpacing(0)
         
         self.input_frame = PillInputFrame()
-        self.input_frame.setMinimumHeight(82)
+        self.input_frame.setMinimumHeight(112)
         self.input_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.input_frame.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.input_frame.apply_theme()
@@ -4265,18 +4490,19 @@ class ChatWindow(QMainWindow):
         self.attachment_preview.remove_requested.connect(self.remove_pending_attachment)
         input_frame_layout.addWidget(self.attachment_preview)
 
-        input_row = QHBoxLayout()
-        input_row.setContentsMargins(0, 0, 0, 0)
-        input_row.setSpacing(8)
-
         self.input_field = ExpandingTextEdit()
-        self.input_field.setPlaceholderText("הודעה")
+        self.input_field.setPlaceholderText("בקש כל דבר")
         self.input_field.setStyleSheet(self._chat_input_stylesheet())
         self.input_field.textChanged.connect(self.on_text_change)
         self.input_field.send_signal.connect(self.send_text)
         self.input_field.files_pasted.connect(self.add_attachment_paths)
         self.input_field.image_pasted.connect(self.add_pasted_image)
-        input_row.addWidget(self.input_field, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
+        input_frame_layout.addWidget(self.input_field)
+
+        control_row = QHBoxLayout()
+        control_row.setDirection(QBoxLayout.Direction.LeftToRight)
+        control_row.setContentsMargins(0, 0, 0, 0)
+        control_row.setSpacing(8)
 
         self.attach_btn = QPushButton("+")
         self.attach_btn.setFixedSize(42, 42)
@@ -4285,7 +4511,6 @@ class ChatWindow(QMainWindow):
         self._set_attach_button_icon()
         # Google Drive upload is parked for now; the plus button opens the local file picker directly.
         self.attach_btn.clicked.connect(self.choose_local_attachments)
-        input_row.addWidget(self.attach_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
         
         self.action_btn = QPushButton()
         self.action_btn.setFixedSize(52, 52)
@@ -4294,10 +4519,31 @@ class ChatWindow(QMainWindow):
         self.refresh_themed_icons()
         self.update_action_btn_visuals()
         self.action_btn_host = PinnedActionButtonHost(self.action_btn)
-        input_row.insertWidget(0, self.action_btn_host, 0)
-        input_frame_layout.addLayout(input_row)
+        control_row.addWidget(self.action_btn_host, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        self.favorite_model_btn = DropdownPillButton("מודל")
+        self.favorite_model_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.favorite_model_btn.setMinimumWidth(96)
+        self.favorite_model_btn.setMaximumWidth(280)
+        self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
+        self.favorite_model_btn.clicked.connect(self.show_favorite_model_menu)
+        control_row.addWidget(self.favorite_model_btn, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        self.autonomy_quick_btn = DropdownPillButton("מאוזן")
+        self.autonomy_quick_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.autonomy_quick_btn.setMinimumWidth(104)
+        self.autonomy_quick_btn.setMaximumWidth(170)
+        self.autonomy_quick_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.autonomy_quick_btn.setStyleSheet(self._quick_input_button_stylesheet())
+        self.autonomy_quick_btn.clicked.connect(self.show_quick_autonomy_menu)
+        control_row.addWidget(self.autonomy_quick_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        control_row.addWidget(self.attach_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+        input_frame_layout.addLayout(control_row)
+        self.refresh_quick_autonomy_controls()
+        self.refresh_favorite_model_controls()
         
-        # Keep the action button visually on the left even inside the RTL chat.
         bottom_layout.addWidget(self.input_frame, alignment=Qt.AlignmentFlag.AlignVCenter)
         overlay_layout.addLayout(bottom_layout)
         body_layout.addWidget(self.input_overlay, 0, 0, Qt.AlignmentFlag.AlignBottom)

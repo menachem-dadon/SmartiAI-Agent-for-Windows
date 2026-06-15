@@ -702,6 +702,18 @@ def menu_stylesheet():
         QMenu::separator {{ height: 1px; background: {SOFT_LINE_COLOR}; margin: 7px 10px; }}
     """
 
+def prepare_popup_menu(menu):
+    if menu is None:
+        return menu
+    try:
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        menu.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        menu.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
+    except Exception:
+        pass
+    menu.setStyleSheet(menu_stylesheet())
+    return menu
+
 
 def page_title_css(size=18):
     return f"color: {TEXT_COLOR}; font-size: {int(size)}px; font-weight: 700; background: transparent;"

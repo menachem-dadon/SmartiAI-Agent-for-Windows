@@ -995,11 +995,14 @@ DEFAULT_SETTINGS = {
     "skill_registry": {},
     "background_jobs": [],
     "background_recurring_catch_up_window_minutes": 15,
+    "favorite_models": [],
+    "settings_recent_searches": [],
     "ui_preferences": {
         "developer_trace": True,
         "sanitize_html": True,
         "lazy_settings_pages": True,
-        "theme_mode": "dark"
+        "theme_mode": "dark",
+        "settings_show_advanced": False
     },
     "privacy": {
         "redact_logs": True,

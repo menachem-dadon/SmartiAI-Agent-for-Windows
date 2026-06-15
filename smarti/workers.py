@@ -171,5 +171,68 @@ class ApiKeyValidationWorker(QThread):
         )
         self.finished_signal.emit(self.provider, self.api_key, bool(ok), str(message or ""), models)
 
+class EmailConnectionTestWorker(QThread):
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, config, allow_insecure_ssl=False):
+        super().__init__()
+        self.config = copy.deepcopy(config or {})
+        self.allow_insecure_ssl = bool(allow_insecure_ssl)
+
+    def run(self):
+        mail = None
+        smtp = None
+        try:
+            cfg = self.config
+            if not cfg.get("user") or not cfg.get("password"):
+                raise ValueError("חסרים כתובת אימייל או סיסמת אפליקציה.")
+            context = ssl._create_unverified_context() if self.allow_insecure_ssl else None
+            if cfg.get("imap_ssl", True):
+                if context:
+                    mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30, ssl_context=context)
+                else:
+                    mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30)
+            else:
+                mail = imaplib.IMAP4(cfg["imap_host"], cfg["imap_port"], timeout=30)
+            mail.login(cfg["user"], cfg["password"])
+            status, data = mail.list()
+            if status != "OK":
+                raise RuntimeError(f"IMAP list failed: {data}")
+            try:
+                mail.logout()
+            except Exception:
+                pass
+            mail = None
+
+            if cfg["smtp_ssl"]:
+                if context is not None:
+                    smtp = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30, context=context)
+                else:
+                    smtp = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
+            else:
+                smtp = smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
+                smtp.ehlo()
+                if cfg["smtp_starttls"]:
+                    if context is not None:
+                        smtp.starttls(context=context)
+                    else:
+                        smtp.starttls()
+                    smtp.ehlo()
+            smtp.login(cfg["user"], cfg["password"])
+            self.finished_signal.emit(True, "חיבור האימייל תקין: IMAP ו-SMTP זמינים.")
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
+        finally:
+            try:
+                if mail is not None:
+                    mail.logout()
+            except Exception:
+                pass
+            try:
+                if smtp is not None:
+                    smtp.quit()
+            except Exception:
+                pass
+
 
 __all__ = [name for name in globals() if not name.startswith("__")]

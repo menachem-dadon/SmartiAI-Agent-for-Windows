@@ -3,8 +3,8 @@ from .common import *
 from .config import *
 from .ui_styles import *
 from .ui_controls import *
-from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker
-from PyQt6.QtGui import QKeySequence, QShortcut
+from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker, EmailConnectionTestWorker
+from PyQt6.QtGui import QKeySequence, QShortcut, QTransform
 
 def refresh_back_button_icon(btn):
     btn.setProperty("smartiBackButton", True)
@@ -1384,6 +1384,16 @@ class SettingsPage(QWidget):
         self.core = core
         self.main_window = main_window
         self._suppress_autosave = True
+        self._settings_ready = False
+        self._suppress_search = False
+        self._settings_search_entries = []
+        self._settings_entry_by_id = {}
+        self._settings_field_containers = {}
+        self._advanced_field_containers = []
+        self._checkbox_info_buttons = {}
+        self._info_popup = None
+        self._last_settings_page_before_search = None
+        self._settings_search_generation = 0
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -1397,8 +1407,13 @@ class SettingsPage(QWidget):
         self.api_key_validation_timer.timeout.connect(self._validate_current_api_key_before_save)
         self.api_key_validation_worker = None
         self.tts_preview_worker = None
+        self.email_test_worker = None
+        self._save_status_angle = 0
         self._api_key_validation_generation = 0
         self._validated_api_keys = set()
+        self.save_status_spin_timer = QTimer(self)
+        self.save_status_spin_timer.setInterval(70)
+        self.save_status_spin_timer.timeout.connect(self._spin_save_status_icon)
         
         top_bar = QHBoxLayout()
         self.back_btn = create_back_button(self.handle_back)
@@ -1408,11 +1423,26 @@ class SettingsPage(QWidget):
         top_bar.addWidget(title)
         top_bar.addStretch()
         layout.addLayout(top_bar)
+
+        header_controls = QWidget(self)
+        header_controls.setStyleSheet("background: transparent;")
+        header_controls.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        header_row = QHBoxLayout(header_controls)
+        header_row.setContentsMargins(6, 0, 6, 2)
+        header_row.setSpacing(0)
+        header_row.addStretch()
+        self._build_save_status_widget(header_row)
+        header_row.addSpacing(34)
+        self._build_advanced_toggle(header_row)
+        layout.addWidget(header_controls)
+        self._build_settings_toolbar(layout)
         
         self._init_widgets()
         self.settings_stack = AnimatedStackedWidget()
         self.settings_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
         self._build_ui_sections()
+        self._build_settings_search_index()
+        self._apply_advanced_visibility()
         self.settings_stack.currentChanged.connect(self._on_settings_section_changed)
         layout.addWidget(self.settings_stack)
         
@@ -1421,6 +1451,11 @@ class SettingsPage(QWidget):
         self.populate_models([self.core.settings.get(f"selected_{self.provider_combo.currentText()}_model", "")], self.provider_combo.currentText())
         self._register_autosave_handlers()
         self._suppress_autosave = False
+        QTimer.singleShot(0, self._mark_settings_ready)
+
+    def _mark_settings_ready(self):
+        self._settings_ready = True
+        self._set_save_status("idle")
 
     def handle_back(self):
         if hasattr(self, "settings_stack") and self.settings_stack.currentWidget() is not self.settings_home_page:
@@ -1431,6 +1466,11 @@ class SettingsPage(QWidget):
 
     def show_home(self):
         if hasattr(self, "settings_stack") and hasattr(self, "settings_home_page"):
+            if hasattr(self, "settings_search_edit"):
+                self._suppress_search = True
+                self.settings_search_edit.clear()
+                self._suppress_search = False
+                self._clear_search_results()
             self.settings_stack.setCurrentWidget(self.settings_home_page)
             self._reset_scrolls_in_widget(self.settings_home_page)
 
@@ -1459,6 +1499,681 @@ class SettingsPage(QWidget):
         self._reset_scrolls_in_widget(self.settings_stack.widget(index))
         if self.settings_stack.widget(index) is getattr(self, "developer_page", None):
             QTimer.singleShot(0, self.load_developer_logs)
+
+    def _settings_toolbar_css(self):
+        return f"""
+            QFrame#SettingsToolbar {{
+                background: transparent;
+                border: none;
+            }}
+        """
+
+    def _search_box_css(self):
+        return f"""
+            QLineEdit#SettingsSearchBox {{
+                background: transparent;
+                color: {FIELD_TEXT_COLOR};
+                border: none;
+                padding: 13px 4px 13px 10px;
+                font-size: 14px;
+                selection-background-color: {ACCENT_TINT_STRONG};
+                selection-color: {TEXT_COLOR};
+            }}
+        """
+
+    def _search_wrapper_css(self, focused=False):
+        border = LINE_COLOR if focused else SOFT_LINE_COLOR
+        background = FIELD_HOVER_COLOR if focused else GLASS_COLOR
+        return f"""
+            QFrame#SettingsSearchWrapper {{
+                background: {background};
+                border: 1px solid {border};
+                border-radius: 20px;
+            }}
+        """
+
+    def _small_tool_button_css(self):
+        return f"""
+            QPushButton {{
+                background-color: {ACCENT_TINT};
+                color: {TEXT_COLOR};
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 16px;
+                padding: 7px 10px;
+                font-size: 12px;
+                font-weight: 700;
+                outline: none;
+            }}
+            QPushButton:hover {{ background-color: {HOVER_TINT}; border-color: {LINE_COLOR}; }}
+            QPushButton:pressed {{ background-color: {ACCENT_TINT_STRONG}; border-color: {ACCENT_PINK_COLOR}; }}
+        """
+
+    def _field_container_css(self, highlighted=False):
+        border = ACCENT_COLOR if highlighted else "transparent"
+        background = ACCENT_TINT if highlighted else "transparent"
+        return f"""
+            QFrame#SettingsFieldContainer {{
+                background: {background};
+                border: 1px solid {border};
+                border-radius: 16px;
+            }}
+        """
+
+    def _build_settings_toolbar(self, parent_layout):
+        toolbar = QFrame(self)
+        toolbar.setObjectName("SettingsToolbar")
+        toolbar.setStyleSheet(self._settings_toolbar_css())
+        toolbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        row = QHBoxLayout(toolbar)
+        row.setContentsMargins(0, 4, 0, 8)
+        row.setSpacing(8)
+
+        self.settings_search_wrapper = QFrame()
+        self.settings_search_wrapper.setObjectName("SettingsSearchWrapper")
+        self.settings_search_wrapper.setStyleSheet(self._search_wrapper_css(False))
+        self.settings_search_wrapper.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        search_layout = QHBoxLayout(self.settings_search_wrapper)
+        search_layout.setContentsMargins(14, 0, 12, 0)
+        search_layout.setSpacing(8)
+        self.settings_search_icon = QLabel()
+        self.settings_search_icon.setFixedSize(30, 30)
+        self.settings_search_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        set_themed_label_icon(self.settings_search_icon, ("search_icon",), "⌕", 26)
+        search_layout.addWidget(self.settings_search_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.settings_search_edit = QLineEdit()
+        self.settings_search_edit.setObjectName("SettingsSearchBox")
+        self.settings_search_edit.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.settings_search_edit.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
+        self.settings_search_edit.setCursorMoveStyle(Qt.CursorMoveStyle.VisualMoveStyle)
+        self.settings_search_edit.setPlaceholderText("חפש הגדרה")
+        self.settings_search_edit.setClearButtonEnabled(True)
+        self.settings_search_edit.setStyleSheet(self._search_box_css())
+        self.settings_search_edit.installEventFilter(self)
+        self.settings_search_edit.textChanged.connect(self._on_settings_search_changed)
+        self.settings_search_edit.returnPressed.connect(self._activate_first_search_result)
+        search_layout.addWidget(self.settings_search_edit, 1, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.settings_search_wrapper, 1)
+        self._ensure_recent_search_popup()
+        parent_layout.addWidget(toolbar)
+
+    def _build_advanced_toggle(self, target_layout):
+        self.advanced_toggle_widget = QWidget()
+        self.advanced_toggle_widget.setStyleSheet("background: transparent;")
+        self.advanced_toggle_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        row = QHBoxLayout(self.advanced_toggle_widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        label = QLabel("הצג הגדרות מתקדמות")
+        label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; background: transparent;")
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.show_advanced_cb = SmartiCheckBox("")
+        self.show_advanced_cb.setStyleSheet(CHECKBOX_CSS)
+        self.show_advanced_cb.setFixedWidth(66)
+        self.show_advanced_cb.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.show_advanced_cb.setToolTip(self._tooltip_markup("מציג שדות טכניים כמו פורטים, SSL, מגבלות זמן, לוגים ומטריצת הרשאות."))
+        self.show_advanced_cb.setChecked(bool(self.core.settings.get("ui_preferences", {}).get("settings_show_advanced", False)))
+        self.show_advanced_cb.stateChanged.connect(self._on_advanced_visibility_changed)
+        row.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.show_advanced_cb, 0, Qt.AlignmentFlag.AlignVCenter)
+        target_layout.addWidget(self.advanced_toggle_widget, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def _build_save_status_widget(self, target_layout):
+        self.save_status_widget = QWidget()
+        self.save_status_widget.setStyleSheet("background: transparent;")
+        self.save_status_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.save_status_widget.setMinimumWidth(180)
+        row = QHBoxLayout(self.save_status_widget)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(5)
+        self.settings_save_icon = QLabel()
+        self.settings_save_icon.setFixedSize(20, 20)
+        self.settings_save_status = QLabel("אין שינויים חדשים")
+        self.settings_save_status.setStyleSheet(muted_label_css(12))
+        self.settings_save_status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.settings_save_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.settings_save_status, 0, Qt.AlignmentFlag.AlignVCenter)
+        target_layout.addWidget(self.save_status_widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._set_save_status("idle")
+
+    def _save_status_icon_pixmap(self, status):
+        if status == "saving":
+            icon = themed_icon("check_updates_icon", "update_icon", "refresh_icon", "reset_icon")
+        elif status == "saved":
+            icon = themed_icon("save_done", "save_done_icon", "saved_icon", "checkmark_icon", CHECKMARK_SVG_PATH)
+        else:
+            icon = themed_icon("save_done", "save_idle_icon", "saved_icon", "checkmark_icon", CHECKMARK_SVG_PATH)
+        return icon.pixmap(18, 18) if not icon.isNull() else QPixmap()
+
+    def _set_save_status(self, status):
+        if not hasattr(self, "settings_save_status"):
+            return
+        if hasattr(self, "_save_status_reset_timer"):
+            self._save_status_reset_timer.stop()
+        status = str(status or "idle")
+        self._save_status = status
+        if status == "saving":
+            self.settings_save_status.setText("שומר שינויים...")
+            self.settings_save_status.setStyleSheet(muted_label_css(12))
+            self._save_status_base_pixmap = self._save_status_icon_pixmap("saving")
+            self._save_status_angle = 0
+            if not self._save_status_base_pixmap.isNull():
+                self.settings_save_icon.setPixmap(self._save_status_base_pixmap)
+            self.save_status_spin_timer.start()
+            return
+        self.save_status_spin_timer.stop()
+        if status == "saved":
+            self.settings_save_status.setText("השינויים נשמרו!")
+            self.settings_save_status.setStyleSheet(f"color: {ACCENT_SECONDARY_COLOR}; font-size: 12px; background: transparent;")
+            pixmap = self._save_status_icon_pixmap("saved")
+            if not pixmap.isNull():
+                self.settings_save_icon.setPixmap(pixmap)
+            self._save_status_reset_timer = QTimer(self)
+            self._save_status_reset_timer.setSingleShot(True)
+            self._save_status_reset_timer.timeout.connect(lambda: self._set_save_status("idle"))
+            self._save_status_reset_timer.start(3000)
+            return
+        self.settings_save_status.setText("אין שינויים חדשים")
+        self.settings_save_status.setStyleSheet(muted_label_css(12))
+        pixmap = self._save_status_icon_pixmap("idle")
+        if not pixmap.isNull():
+            self.settings_save_icon.setPixmap(pixmap)
+        else:
+            self.settings_save_icon.clear()
+
+    def _spin_save_status_icon(self):
+        pixmap = getattr(self, "_save_status_base_pixmap", QPixmap())
+        if pixmap.isNull() or not hasattr(self, "settings_save_icon"):
+            return
+        self._save_status_angle = (int(getattr(self, "_save_status_angle", 0)) + 30) % 360
+        rotated = pixmap.transformed(QTransform().rotate(self._save_status_angle), Qt.TransformationMode.SmoothTransformation)
+        self.settings_save_icon.setPixmap(rotated.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+
+    def _make_info_button(self, text):
+        btn = QPushButton("i")
+        btn.setProperty("smartiInfoButton", True)
+        btn.setProperty("smartiInfoText", str(text or "").strip())
+        btn.setFixedSize(24, 24)
+        btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn.setToolTip("")
+        btn.installEventFilter(self)
+        btn.clicked.connect(lambda checked=False, b=btn: self._show_info_popup(b))
+        btn.setStyleSheet(
+            f"QPushButton {{ background: {ACCENT_TINT}; color: {ACCENT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+            "border-radius: 12px; padding: 0px; font-size: 12px; font-weight: 900; }}"
+            f"QPushButton:hover {{ background: {HOVER_TINT}; border-color: {LINE_COLOR}; color: {TEXT_COLOR}; }}"
+        )
+        return btn
+
+    def _tooltip_markup(self, text, width=280):
+        safe = html.escape(str(text or "").strip())
+        if not safe:
+            return ""
+        return f"<div dir='rtl' style='white-space: normal; max-width: {int(width)}px;'>{safe}</div>"
+
+    def _ensure_info_popup(self):
+        if self._info_popup:
+            return
+        popup = QFrame(None, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        popup.setObjectName("SettingsInfoPopup")
+        popup.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        popup.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        popup.setStyleSheet(
+            f"QFrame#SettingsInfoPopup {{ background: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+            "border-radius: 14px; padding: 8px; }}"
+        )
+        layout = QVBoxLayout(popup)
+        layout.setContentsMargins(10, 8, 10, 8)
+        self._info_popup_label = QLabel()
+        self._info_popup_label.setWordWrap(True)
+        self._info_popup_label.setFixedWidth(280)
+        self._info_popup_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
+        self._info_popup_label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 12px; line-height: 1.35; background: transparent;")
+        layout.addWidget(self._info_popup_label)
+        self._info_popup = popup
+
+    def _show_info_popup(self, button):
+        text = str(button.property("smartiInfoText") or "").strip()
+        if not text:
+            return
+        self._ensure_info_popup()
+        self._info_popup_label.setText(text)
+        self._info_popup_label.adjustSize()
+        self._info_popup.adjustSize()
+        self._info_popup.resize(self._info_popup.sizeHint())
+        pos = button.mapToGlobal(QPoint(button.width() - self._info_popup.width(), button.height() + 6))
+        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            window_rect = self.window().frameGeometry().adjusted(8, 8, -8, -8)
+            if window_rect.isValid() and window_rect.width() > 80 and window_rect.height() > 80:
+                available = available.intersected(window_rect)
+            if pos.y() + self._info_popup.height() > available.bottom():
+                pos = button.mapToGlobal(QPoint(button.width() - self._info_popup.width(), -self._info_popup.height() - 6))
+            pos.setX(max(available.left(), min(pos.x(), available.right() - self._info_popup.width())))
+            pos.setY(max(available.top(), min(pos.y(), available.bottom() - self._info_popup.height())))
+        self._info_popup.move(pos)
+        self._info_popup.show()
+
+    def _hide_info_popup(self):
+        if self._info_popup:
+            self._info_popup.hide()
+
+    def _attach_checkbox_info_button(self, widget, hint):
+        if not isinstance(widget, SmartiCheckBox):
+            return None
+        btn = self._make_info_button(hint)
+        btn.setParent(widget)
+        btn.raise_()
+        widget.setInfoButtonReserved(True)
+        widget.installEventFilter(self)
+        self._checkbox_info_buttons[widget] = btn
+        self._position_checkbox_info_button(widget)
+        return btn
+
+    def _position_checkbox_info_button(self, widget):
+        btn = self._checkbox_info_buttons.get(widget)
+        if not btn:
+            return
+        text_width = widget.fontMetrics().horizontalAdvance(widget.text())
+        x = max(58, widget.width() - text_width - btn.width() - 10)
+        x = min(x, max(0, widget.width() - btn.width()))
+        y = max(0, int((widget.height() - btn.height()) / 2))
+        btn.move(x, y)
+        btn.raise_()
+
+    def _setting_entry_id(self, label_text, widget):
+        raw = str(label_text or widget.objectName() or widget.__class__.__name__)
+        slug = re.sub(r"[^0-9A-Za-zא-ת_]+", "_", raw).strip("_") or f"setting_{len(self._settings_search_entries) + 1}"
+        candidate = slug
+        counter = 2
+        while candidate in self._settings_entry_by_id:
+            candidate = f"{slug}_{counter}"
+            counter += 1
+        return candidate
+
+    def _normalize_settings_search_text(self, text):
+        text = unicodedata.normalize("NFKD", str(text or "")).lower()
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = text.translate(str.maketrans({
+            "ך": "כ", "ם": "מ", "ן": "נ", "ף": "פ", "ץ": "צ",
+            "-": " ", "_": " ", "/": " ", "\\": " ", ".": " ", ",": " ",
+        }))
+        text = re.sub(r"[^0-9a-zא-ת]+", " ", text)
+        return " ".join(text.split())
+
+    def _expanded_search_terms(self, query):
+        base_terms = self._normalize_settings_search_text(query).split()
+        groups = [
+            ("api", "key", "token", "secret", "מפתח", "גישה", "סוד", "ספק", "מודל"),
+            ("model", "models", "llm", "ai", "מודל", "מודלים", "דגם", "בינה", "ספק", "chat"),
+            ("safe", "safety", "security", "privacy", "permission", "policy", "אבטחה", "בטיחות", "הרשאה", "הרשאות", "פרטיות", "אישור", "אישורים"),
+            ("autonomy", "agent", "approval", "אוטונומיה", "אוטונומי", "סוכן", "שליטה", "אישור", "עצמאי"),
+            ("sandbox", "folder", "directory", "path", "files", "ארגז", "חול", "תיקיה", "תיקייה", "נתיב", "קבצים", "פלט"),
+            ("mail", "email", "imap", "smtp", "port", "ssl", "דואר", "אימייל", "מייל", "שרת", "פורט", "סיסמה"),
+            ("voice", "tts", "audio", "microphone", "mic", "speech", "קול", "הקראה", "שמע", "מיקרופון", "דיבור", "האזנה"),
+            ("theme", "appearance", "dark", "light", "display", "תצוגה", "מראה", "כהה", "בהיר", "ערכת", "רקע"),
+            ("browser", "automation", "computer", "windows", "דפדפן", "אוטומציה", "מחשב", "חלונות", "שליטה"),
+            ("mcp", "skills", "extensions", "tools", "כלים", "הרחבות", "מיומנויות", "חיצוניים"),
+            ("timeout", "limit", "budget", "tokens", "cost", "loops", "זמן", "המתנה", "מגבלה", "תקציב", "טוקנים", "עלות", "סבבים"),
+            ("log", "trace", "audit", "developer", "debug", "לוג", "לוגים", "יומן", "אודיט", "מפתחים", "דיבאג"),
+            ("update", "version", "release", "עדכון", "עדכונים", "גרסה"),
+        ]
+        expanded = set(base_terms)
+        for term in list(base_terms):
+            for group in groups:
+                normalized_group = {self._normalize_settings_search_text(item) for item in group}
+                if term in normalized_group:
+                    expanded.update(t for t in normalized_group if t)
+        return [term for term in expanded if term]
+
+    def _register_setting_entry(self, label_text, widget, container, hint="", keywords=None, advanced=False, setting_id=""):
+        if widget is None or container is None:
+            return
+        layout = container.parentWidget().layout() if container.parentWidget() else None
+        target_page = getattr(container, "smarti_target_page", None)
+        section = getattr(container, "smarti_section_title", "") or ""
+        entry_id = setting_id or self._setting_entry_id(label_text, widget)
+        words = [
+            label_text, hint, section, entry_id,
+            "מתקדם advanced expert power user טכני מומחה" if advanced else "בסיסי פשוט מתחיל beginner",
+        ]
+        if keywords:
+            if isinstance(keywords, (list, tuple, set)):
+                words.extend(str(item) for item in keywords)
+            else:
+                words.append(str(keywords))
+        search_text = " ".join(str(part or "") for part in words)
+        entry = {
+            "id": entry_id,
+            "title": str(label_text or "").strip(),
+            "hint": str(hint or "").strip(),
+            "section": section,
+            "target_page": target_page,
+            "widget": widget,
+            "container": container,
+            "advanced": bool(advanced),
+            "search_text": search_text,
+            "search_text_norm": self._normalize_settings_search_text(search_text),
+        }
+        self._settings_search_entries.append(entry)
+        self._settings_entry_by_id[entry_id] = entry
+        self._settings_field_containers[entry_id] = container
+        widget.setProperty("smartiSettingsEntryId", entry_id)
+        container.setProperty("smartiSettingsEntryId", entry_id)
+        if advanced:
+            container.setProperty("smartiAdvancedSetting", True)
+            self._advanced_field_containers.append(container)
+
+    def _score_settings_entry(self, query, entry):
+        query_norm = self._normalize_settings_search_text(query)
+        if not query_norm:
+            return 0
+        text = entry.get("search_text_norm", "")
+        title = self._normalize_settings_search_text(entry.get("title", ""))
+        hint = self._normalize_settings_search_text(entry.get("hint", ""))
+        score = 0
+        if query_norm in title:
+            score += 80
+        elif query_norm in text:
+            score += 44
+        terms = self._expanded_search_terms(query)
+        text_tokens = text.split()
+        for term in terms:
+            if not term:
+                continue
+            if term in title:
+                score += 22
+            elif term in hint:
+                score += 13
+            elif term in text:
+                score += 10
+            elif text_tokens:
+                best = max((difflib.SequenceMatcher(None, term, token).ratio() for token in text_tokens), default=0)
+                if best >= 0.82:
+                    score += 7
+                elif best >= 0.72 and len(term) >= 4:
+                    score += 4
+        if entry.get("advanced"):
+            score -= 1
+        return score
+
+    def _build_settings_search_index(self):
+        # Entries are registered while the fields are built. This method keeps the hook explicit
+        # and leaves room for future generated/indexed settings without changing the UI builders.
+        for entry in self._settings_search_entries:
+            entry["search_text_norm"] = self._normalize_settings_search_text(entry.get("search_text", ""))
+
+    def _on_settings_search_changed(self, text):
+        if getattr(self, "_suppress_search", False) or not hasattr(self, "settings_stack"):
+            return
+        query = str(text or "").strip()
+        if not query:
+            if self.settings_stack.currentWidget() is getattr(self, "search_results_page", None):
+                self.settings_stack.setCurrentWidget(self._last_settings_page_before_search or self.settings_home_page)
+            self._clear_search_results()
+            return
+        if self.settings_stack.currentWidget() is not getattr(self, "search_results_page", None):
+            self._last_settings_page_before_search = self.settings_stack.currentWidget()
+        self._render_search_results(query)
+        self.settings_stack.setCurrentWidget(self.search_results_page)
+
+    def _clear_search_results(self):
+        if hasattr(self, "search_results_list"):
+            self.search_results_list.clear()
+        if hasattr(self, "search_results_hint"):
+            self.search_results_hint.setText("")
+
+    def _render_search_results(self, query):
+        if not hasattr(self, "search_results_list"):
+            return
+        self.search_results_list.clear()
+        scored = []
+        for entry in self._settings_search_entries:
+            score = self._score_settings_entry(query, entry)
+            if score > 0:
+                scored.append((score, entry))
+        scored.sort(key=lambda item: (-item[0], item[1].get("section", ""), item[1].get("title", "")))
+        if not scored:
+            self.search_results_hint.setText("לא נמצאו הגדרות. נסה מילה קרובה כמו מודל, קול, אימייל, אבטחה או תיקייה.")
+            return
+        self.search_results_hint.setText(f"נמצאו {len(scored)} תוצאות. לחיצה תפתח ותסמן את ההגדרה.")
+        for score, entry in scored[:40]:
+            title = entry.get("title") or "הגדרה"
+            section = entry.get("section") or "הגדרות"
+            badge = "  ·  מתקדם" if entry.get("advanced") else ""
+            item = QListWidgetItem("")
+            item.setData(Qt.ItemDataRole.UserRole, entry.get("id"))
+            item.setSizeHint(QSize(10, 58))
+            self.search_results_list.addItem(item)
+            self.search_results_list.setItemWidget(item, self._make_search_result_widget(title, section + badge))
+
+    def _make_search_result_widget(self, title, section):
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(3)
+        title_lbl = QLabel(str(title or ""))
+        title_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignAbsolute)
+        title_lbl.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 400; background: transparent;")
+        section_lbl = QLabel(str(section or ""))
+        section_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignAbsolute)
+        section_lbl.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 12px; background: transparent;")
+        layout.addWidget(title_lbl)
+        layout.addWidget(section_lbl)
+        return row
+
+    def _activate_first_search_result(self):
+        if not hasattr(self, "search_results_list"):
+            return
+        if self.search_results_list.count() <= 0:
+            return
+        self._activate_search_result(self.search_results_list.item(0))
+
+    def _activate_search_result(self, item):
+        if item is None:
+            return
+        entry_id = item.data(Qt.ItemDataRole.UserRole)
+        entry = self._settings_entry_by_id.get(entry_id)
+        if not entry:
+            return
+        self._save_recent_settings_search(self.settings_search_edit.text())
+        if entry.get("advanced") and not self._advanced_settings_visible():
+            self.show_advanced_cb.setChecked(True)
+        target_page = entry.get("target_page") or self.settings_home_page
+        self.settings_stack.setCurrentWidget(target_page)
+        self._reset_scrolls_in_widget(target_page)
+        QTimer.singleShot(80, lambda e=entry: self._scroll_to_and_highlight_setting(e))
+
+    def _scroll_to_and_highlight_setting(self, entry):
+        container = entry.get("container")
+        if not container:
+            return
+        for area in entry.get("target_page", self).findChildren(QScrollArea):
+            try:
+                area.ensureWidgetVisible(container, 30, 40)
+            except Exception:
+                pass
+        self._highlight_setting_container(container)
+
+    def _highlight_setting_container(self, container):
+        if container is None:
+            return
+        self._settings_search_generation += 1
+        generation = self._settings_search_generation
+        container.setStyleSheet(self._field_container_css(highlighted=True))
+        def restore():
+            if generation == self._settings_search_generation and container:
+                container.setStyleSheet(self._field_container_css(False))
+        QTimer.singleShot(1700, restore)
+
+    def _recent_settings_searches(self):
+        values = self.core.settings.get("settings_recent_searches", [])
+        if not isinstance(values, list):
+            return []
+        cleaned = []
+        for value in values:
+            text = str(value or "").strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        return cleaned[:10]
+
+    def _save_recent_settings_search(self, query):
+        query = str(query or "").strip()
+        if not query:
+            return
+        current = [item for item in self._recent_settings_searches() if item != query]
+        self.core.settings["settings_recent_searches"] = [query] + current[:9]
+        self.core._save_settings()
+
+    def _show_recent_search_menu(self):
+        return
+
+    def _ensure_recent_search_popup(self):
+        if getattr(self, "recent_search_popup", None):
+            return
+        popup = QFrame(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        popup.setObjectName("SettingsRecentSearchPopup")
+        popup.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        popup.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        try:
+            popup.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
+        except Exception:
+            pass
+        popup.setStyleSheet(
+            f"QFrame#SettingsRecentSearchPopup {{ background: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; padding: 6px; }}"
+        )
+        layout = QVBoxLayout(popup)
+        layout.setContentsMargins(7, 7, 7, 7)
+        layout.setSpacing(0)
+        self.recent_search_list = QListWidget()
+        self.recent_search_list.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.recent_search_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.recent_search_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.recent_search_list.setStyleSheet(
+            f"QListWidget {{ background: transparent; color: {TEXT_COLOR}; border: none; outline: none; }}"
+            f"QListWidget::item {{ min-height: 28px; padding: 7px 10px; border-radius: 10px; }}"
+            f"QListWidget::item:hover {{ background: {HOVER_TINT}; }}"
+            f"QListWidget::item:selected {{ background: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
+        )
+        self.recent_search_list.itemClicked.connect(lambda item: self._apply_recent_search(item.text()))
+        layout.addWidget(self.recent_search_list)
+        popup.installEventFilter(self)
+        self.recent_search_popup = popup
+
+    def _apply_recent_search(self, query):
+        self.settings_search_edit.setText(str(query or ""))
+        self.settings_search_edit.setFocus()
+        self._hide_recent_search_popup()
+
+    def _filtered_recent_searches(self):
+        query = self._normalize_settings_search_text(self.settings_search_edit.text())
+        searches = self._recent_settings_searches()
+        if not query:
+            return searches
+        return [item for item in searches if query in self._normalize_settings_search_text(item)]
+
+    def _show_recent_search_popup(self):
+        return
+        self._ensure_recent_search_popup()
+        searches = self._filtered_recent_searches()
+        self.recent_search_list.clear()
+        if not searches:
+            self._hide_recent_search_popup()
+            return
+        for query in searches:
+            self.recent_search_list.addItem(QListWidgetItem(query))
+        row_h = self.recent_search_list.sizeHintForRow(0)
+        row_h = row_h if row_h > 0 else 34
+        height = min(260, max(42, row_h * min(len(searches), 8) + 18))
+        width = max(280, self.settings_search_wrapper.width())
+        self.recent_search_list.setFixedHeight(height)
+        self.recent_search_popup.setFixedWidth(width)
+        self.recent_search_popup.adjustSize()
+        pos = self.settings_search_wrapper.mapToGlobal(QPoint(0, self.settings_search_wrapper.height() + 4))
+        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            window_rect = self.window().frameGeometry().adjusted(8, 8, -8, -8)
+            if window_rect.isValid() and window_rect.width() > 80 and window_rect.height() > 80:
+                available = available.intersected(window_rect)
+            if pos.x() + width > available.right():
+                pos.setX(max(available.left(), available.right() - width))
+            if pos.y() + self.recent_search_popup.height() > available.bottom():
+                pos = self.settings_search_wrapper.mapToGlobal(QPoint(0, -self.recent_search_popup.height() - 4))
+            pos.setX(max(available.left(), min(pos.x(), available.right() - width)))
+            pos.setY(max(available.top(), min(pos.y(), available.bottom() - self.recent_search_popup.height())))
+        self.recent_search_popup.move(pos)
+        self.recent_search_popup.show()
+
+    def _hide_recent_search_popup(self):
+        if getattr(self, "recent_search_popup", None):
+            self.recent_search_popup.hide()
+
+    def _hide_recent_search_popup_if_stale(self):
+        popup = getattr(self, "recent_search_popup", None)
+        edit = getattr(self, "settings_search_edit", None)
+        if not popup or not popup.isVisible():
+            return
+        focused = QApplication.focusWidget()
+        if focused is edit or (popup.isAncestorOf(focused) if focused else False):
+            return
+        cursor = QCursor.pos()
+        if popup.geometry().contains(cursor) or (hasattr(self, "settings_search_wrapper") and self.settings_search_wrapper.rect().contains(self.settings_search_wrapper.mapFromGlobal(cursor))):
+            return
+        self._hide_recent_search_popup()
+
+    def eventFilter(self, watched, event):
+        if getattr(watched, "property", lambda *_: None)("smartiInfoButton"):
+            if event.type() == QEvent.Type.Enter:
+                self._show_info_popup(watched)
+            elif event.type() == QEvent.Type.Leave:
+                QTimer.singleShot(120, self._hide_info_popup)
+        if watched in getattr(self, "_checkbox_info_buttons", {}):
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+                QTimer.singleShot(0, lambda w=watched: self._position_checkbox_info_button(w))
+        if watched is getattr(self, "settings_search_edit", None):
+            if event.type() == QEvent.Type.KeyPress:
+                if event.key() == Qt.Key.Key_Up:
+                    self.settings_search_edit.setCursorPosition(0)
+                    return True
+                if event.key() == Qt.Key.Key_Down:
+                    self.settings_search_edit.setCursorPosition(len(self.settings_search_edit.text()))
+                    return True
+            if event.type() == QEvent.Type.FocusIn:
+                if hasattr(self, "settings_search_wrapper"):
+                    self.settings_search_wrapper.setStyleSheet(self._search_wrapper_css(True))
+            elif event.type() == QEvent.Type.FocusOut:
+                if hasattr(self, "settings_search_wrapper"):
+                    self.settings_search_wrapper.setStyleSheet(self._search_wrapper_css(False))
+        return super().eventFilter(watched, event)
+
+    def _advanced_settings_visible(self):
+        return bool(getattr(self, "show_advanced_cb", None) and self.show_advanced_cb.isChecked())
+
+    def _on_advanced_visibility_changed(self, _state=None):
+        self.core.settings.setdefault("ui_preferences", {})["settings_show_advanced"] = self._advanced_settings_visible()
+        self.core._save_settings()
+        self._apply_advanced_visibility()
+
+    def _apply_advanced_visibility(self):
+        visible = self._advanced_settings_visible()
+        for container in getattr(self, "_advanced_field_containers", []):
+            container.setVisible(visible)
+        if hasattr(self, "advanced_home_card"):
+            self.advanced_home_card.setVisible(visible)
+        if (
+            not visible
+            and hasattr(self, "settings_stack")
+            and self.settings_stack.currentWidget() is getattr(self, "developer_page", None)
+            and hasattr(self, "settings_home_page")
+        ):
+            self.settings_stack.setCurrentWidget(self.settings_home_page)
 
     def _make_secret_link_row(self, edit, link_label):
         row = QWidget(self)
@@ -1507,6 +2222,112 @@ class SettingsPage(QWidget):
         layout.addWidget(self.tts_preview_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
 
+    def _make_email_test_row(self):
+        row = QWidget(self)
+        row.setStyleSheet("background: transparent;")
+        row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.email_test_status = QLabel("הבדיקה תרוץ רק בלחיצה.")
+        self.email_test_status.setWordWrap(True)
+        self.email_test_status.setStyleSheet(muted_label_css(12))
+        self.email_test_btn = QPushButton("בדוק חיבור")
+        self.email_test_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.email_test_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.email_test_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        set_themed_button_icon(self.email_test_btn, ("connection_test_icon", "check_updates_icon", "check_icon"), self.email_test_btn.text(), 18, clear_text=False)
+        self.email_test_btn.clicked.connect(self.test_email_connection)
+        layout.addWidget(self.email_test_status, 1)
+        layout.addWidget(self.email_test_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
+
+    def _make_model_picker_row(self):
+        row = QWidget(self)
+        row.setStyleSheet("background: transparent;")
+        row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.model_combo.setMinimumWidth(0)
+        self.model_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        if hasattr(self.model_combo, "set_favorite_callbacks"):
+            self.model_combo.set_favorite_callbacks(
+                lambda model: self._is_model_favorite(self.provider_combo.currentText(), model),
+                self._toggle_model_favorite_from_picker,
+            )
+        layout.addWidget(self.model_combo, 1)
+        return row
+
+    def _favorite_model_key(self, provider, model):
+        return (normalize_provider_name(provider), str(model or "").strip())
+
+    def _current_provider_and_model(self):
+        provider = normalize_provider_name(self.provider_combo.currentText()) if hasattr(self, "provider_combo") else ""
+        model = self.model_combo.selected_model() if hasattr(self.model_combo, "selected_model") else self.model_combo.currentText()
+        return provider, str(model or "").strip()
+
+    def _normalized_favorite_models(self):
+        seen = set()
+        favorites = []
+        for item in self.core.settings.get("favorite_models", []) or []:
+            if not isinstance(item, dict):
+                continue
+            provider = normalize_provider_name(item.get("provider", ""))
+            model = str(item.get("model", "") or "").strip()
+            if not provider or not model:
+                continue
+            key = self._favorite_model_key(provider, model)
+            if key in seen:
+                continue
+            seen.add(key)
+            favorites.append({"provider": provider, "model": model})
+        self.core.settings["favorite_models"] = favorites[:60]
+        return self.core.settings["favorite_models"]
+
+    def _is_model_favorite(self, provider, model):
+        key = self._favorite_model_key(provider, model)
+        return any(self._favorite_model_key(item.get("provider"), item.get("model")) == key for item in self._normalized_favorite_models())
+
+    def _ensure_model_favorite(self, provider, model, *, save=False):
+        provider, model = self._favorite_model_key(provider, model)
+        if not provider or not model:
+            return False
+        favorites = self._normalized_favorite_models()
+        if not any(self._favorite_model_key(item.get("provider"), item.get("model")) == (provider, model) for item in favorites):
+            favorites.insert(0, {"provider": provider, "model": model})
+            self.core.settings["favorite_models"] = favorites[:60]
+            if save:
+                self.core._save_settings()
+            if hasattr(self.main_window, "refresh_favorite_model_controls"):
+                self.main_window.refresh_favorite_model_controls()
+            return True
+        return False
+
+    def _remove_model_favorite(self, provider, model, *, save=False):
+        provider, model = self._favorite_model_key(provider, model)
+        favorites = [
+            item for item in self._normalized_favorite_models()
+            if self._favorite_model_key(item.get("provider"), item.get("model")) != (provider, model)
+        ]
+        self.core.settings["favorite_models"] = favorites
+        if save:
+            self.core._save_settings()
+        if hasattr(self.main_window, "refresh_favorite_model_controls"):
+            self.main_window.refresh_favorite_model_controls()
+
+    def _toggle_model_favorite_from_picker(self, model):
+        provider = self.provider_combo.currentText()
+        model = str(model or "").strip()
+        if not model:
+            return
+        if self._is_model_favorite(provider, model):
+            self._remove_model_favorite(provider, model, save=True)
+        else:
+            self._ensure_model_favorite(provider, model, save=True)
+        if hasattr(self.model_combo, "_refresh_result_star_buttons"):
+            self.model_combo._refresh_result_star_buttons()
+
     def _set_external_link(self, label, url, text):
         apply_high_contrast_link_label(label)
         label.setText(high_contrast_link_markup(url, text) if url else "")
@@ -1521,12 +2342,6 @@ class SettingsPage(QWidget):
         instructions = provider_key_instructions(provider)
         self.api_key_help_hint.setText(instructions)
         self.api_key_help_hint.setVisible(bool(instructions and provider != "local"))
-
-    def _toggle_api_key_details(self, checked):
-        if hasattr(self, "api_key_details"):
-            self.api_key_details.setVisible(bool(checked))
-        if hasattr(self, "api_key_details_btn"):
-            self.api_key_details_btn.setText("הסתר הסבר" if checked else "מה זה מפתח API?")
 
     def _update_status_text(self):
         last = str(self.core.settings.get("updates_last_checked_at", "") or "").strip()
@@ -1566,6 +2381,7 @@ class SettingsPage(QWidget):
         
         self.model_combo = SearchableModelComboBox()
         self.model_combo.setStyleSheet(COMBOBOX_CSS)
+        self.model_picker_row = self._make_model_picker_row()
         
         self.api_key_edit = MaskedSecretLineEdit()
         self.api_key_edit.setPlaceholderText("מפתח גישה לספק המודל")
@@ -1577,20 +2393,6 @@ class SettingsPage(QWidget):
         self.api_key_help_hint = QLabel("", self)
         self.api_key_help_hint.setWordWrap(True)
         self.api_key_help_hint.setStyleSheet(muted_label_css(12))
-        self.api_key_details_btn = QPushButton("מה זה מפתח API?")
-        self.api_key_details_btn.setCheckable(True)
-        self.api_key_details_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.api_key_details_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
-        self.api_key_details_btn.toggled.connect(self._toggle_api_key_details)
-        self.api_key_details = QLabel(
-            "מפתח API הוא קוד גישה אישי שמאפשר לסמארטי לשלוח בקשות מאובטחות לספק המודל שבחרת. "
-            "הוא נדרש כדי שהספק ידע מי משתמש בשירות, יחייב את החשבון הנכון ויאפשר גישה למודלים. "
-            "הדבק כאן רק מפתח שיצרת באתר הרשמי של הספק; סמארטי שומר אותו כמפתח מוסתר ולא מציג אותו בלוגים."
-        )
-        self.api_key_details.setWordWrap(True)
-        self.api_key_details.setVisible(False)
-        self.api_key_details.setProperty("smartiInfoBubble", True)
-        self.api_key_details.setStyleSheet(muted_label_css(12) + f" padding: 10px 12px; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 14px; background: {GLASS_COLOR};")
         self.tavily_key = MaskedSecretLineEdit(self.core.settings.get("tavily_api_key", ""))
         self.tavily_key_help_link = QLabel(self)
         self.tavily_key_row = self._make_secret_link_row(self.tavily_key, self.tavily_key_help_link)
@@ -1605,6 +2407,9 @@ class SettingsPage(QWidget):
         
         self.permission_combo = SegmentedControl()
         self.permission_combo.addItems(["בטוח", "מאוזן", "אוטונומי"])
+        self.permission_combo.setItemIconNames(0, ("autonomy_safe", "autonomy_safe_icon", "security_safe_icon", "shield_safe_icon"))
+        self.permission_combo.setItemIconNames(1, ("autonomy_balanced", "autonomy_balanced_icon", "security_balanced_icon", "balance_icon"))
+        self.permission_combo.setItemIconNames(2, ("autonomy_full", "autonomy_full_icon", "security_full_icon", "full_access_icon"))
         self.permission_combo.setCurrentIndex(max(0, min(2, self.core.settings.get("permission_level", 1) - 1)))
 
         self.autonomy_combo = SegmentedControl()
@@ -1624,6 +2429,9 @@ class SettingsPage(QWidget):
             ("light", "בהיר")
         ]
         self.theme_combo.addItems([label for _, label in self.theme_options])
+        self.theme_combo.setItemIconNames(0, ("theme_system", "system_theme", "monitor_icon", "settings_icon"))
+        self.theme_combo.setItemIconNames(1, ("theme_dark", "dark_theme", "moon_icon", "settings_icon"))
+        self.theme_combo.setItemIconNames(2, ("theme_light", "light_theme", "sun_icon", "settings_icon"))
         current_theme = self.core.settings.get("ui_preferences", {}).get("theme_mode", DEFAULT_THEME_MODE)
         theme_keys = [key for key, _ in self.theme_options]
         self.theme_combo.setCurrentIndex(theme_keys.index(current_theme) if current_theme in theme_keys else 0)
@@ -1689,16 +2497,16 @@ class SettingsPage(QWidget):
         self.marketplace_approval_cb.setChecked(self.core.settings.get("marketplace_install_requires_approval", True))
         self.marketplace_approval_cb.setStyleSheet(CHECKBOX_CSS)
 
-        self.browser_auto_cb = SmartiCheckBox("אפשר שליטה בדפדפן לצורך אוטומציה")
+        self.browser_auto_cb = SmartiCheckBox("שליטה בדפדפן")
         self.browser_auto_cb.setChecked(self.core.settings.get("enable_browser_automation", False))
         self.browser_auto_cb.setStyleSheet(CHECKBOX_CSS)
-        self.computer_control_cb = SmartiCheckBox("אפשר אוטומציית מחשב דרך עץ הנגישות של Windows")
+        self.computer_control_cb = SmartiCheckBox("שליטה במחשב")
         self.computer_control_cb.setChecked(self.core.settings.get("enable_computer_control", False))
         self.computer_control_cb.setStyleSheet(CHECKBOX_CSS)
-        self.mcp_cb = SmartiCheckBox("אפשר שימוש בכלים חיצוניים (MCP)")
+        self.mcp_cb = SmartiCheckBox("כלים חיצוניים (MCP)")
         self.mcp_cb.setChecked(self.core.settings.get("enable_mcp_clawhub", False))
         self.mcp_cb.setStyleSheet(CHECKBOX_CSS)
-        self.skills_beta_cb = SmartiCheckBox("אפשר Skills בטא")
+        self.skills_beta_cb = SmartiCheckBox("Skills בטא")
         self.skills_beta_cb.setChecked(self.core.settings.get("enable_skills_beta", True))
         self.skills_beta_cb.setStyleSheet(CHECKBOX_CSS)
 
@@ -1720,6 +2528,7 @@ class SettingsPage(QWidget):
         self.email_smtp_starttls_cb = SmartiCheckBox("Email SMTP STARTTLS")
         self.email_smtp_starttls_cb.setChecked(bool(self.core.settings.get("email_smtp_starttls", True)))
         self.email_smtp_starttls_cb.setStyleSheet(CHECKBOX_CSS)
+        self.email_test_row = self._make_email_test_row()
 
         self.tts_cb = SmartiCheckBox("הקראה קולית לכל התשובות")
         self.tts_cb.setChecked(self.core.settings.get("read_aloud_all", False))
@@ -1758,7 +2567,7 @@ class SettingsPage(QWidget):
         self.voice_beep_cb.setChecked(bool(self.core.settings.get("voice_beep_enabled", True)))
         self.voice_beep_cb.setStyleSheet(CHECKBOX_CSS)
 
-        self.insecure_ssl_cb = SmartiCheckBox("אפשר תאימות SSL לכלים חיצוניים (פחות בטוח)")
+        self.insecure_ssl_cb = SmartiCheckBox("תאימות SSL לכלים חיצוניים")
         self.insecure_ssl_cb.setChecked(self.core.settings.get("allow_insecure_ssl_compat", True))
         self.insecure_ssl_cb.setStyleSheet(CHECKBOX_CSS)
         self.cloud_upload_cb = SmartiCheckBox("אישור לפני שליחת נתונים למודל חיצוני")
@@ -1800,6 +2609,13 @@ class SettingsPage(QWidget):
         self.loops_val_lbl.setProperty("smartiValuePill", True)
         self.loops_val_lbl.setMinimumSize(96, 30)
         self.loops_slider.valueChanged.connect(lambda val: self.loops_val_lbl.setText(self._loop_label_text(val)))
+        self.loops_control = QWidget()
+        self.loops_control.setStyleSheet("background: transparent;")
+        loops_control_layout = QHBoxLayout(self.loops_control)
+        loops_control_layout.setContentsMargins(0, 0, 0, 0)
+        loops_control_layout.setSpacing(10)
+        loops_control_layout.addWidget(self.loops_slider, 1)
+        loops_control_layout.addWidget(self.loops_val_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
 
         catch_up_value = self.core.settings.get("background_recurring_catch_up_window_minutes", 15)
         try:
@@ -1909,15 +2725,6 @@ class SettingsPage(QWidget):
         if val % 60 == 0:
             return f"{val // 60} שעות"
         return f"{val / 60:.1f} שעות"
-        val = int(val or 0)
-        if val <= 0:
-            return "׳׳׳ ׳׳™׳—׳•׳¨"
-        if val < 60:
-            return f"{val} ׳“׳§׳•׳×"
-        if val % 60 == 0:
-            hours = val // 60
-            return "׳©׳¢׳”" if hours == 1 else f"{hours} ׳©׳¢׳•׳×"
-        return f"{val / 60:.1f} ׳©׳¢׳•׳×"
 
     def _add_section_header(self, title_text, target_layout=None):
         layout = target_layout
@@ -1941,16 +2748,43 @@ class SettingsPage(QWidget):
         lbl.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 12px; line-height: 1.35; padding: 0px 2px 4px 2px;")
         layout.addWidget(lbl)
 
-    def _add_checkbox(self, widget, target_layout=None, hint=None):
+    def _setting_needs_info(self, label_text, hint, advanced=False, info=None):
+        if info is not None:
+            return bool(info)
+        if advanced:
+            return True
+        text = f"{label_text or ''} {hint or ''}".lower()
+        technical_terms = [
+            "api", "imap", "smtp", "ssl", "mcp", "shell", "tavily", "token", "port",
+            "מפתח", "סיסמת", "שרת", "פורט", "ארגז חול", "הרשאות", "אוטונומי",
+            "אישור", "חיבור", "כלים חיצוניים", "תאימות", "לוג", "trace", "אודיט",
+        ]
+        return any(term in text for term in technical_terms)
+
+    def _add_checkbox(self, widget, target_layout=None, hint=None, *, keywords=None, setting_id="", advanced=False, info=None):
         layout = target_layout
         if layout is None: return
+        container = QFrame()
+        container.setObjectName("SettingsFieldContainer")
+        container.setStyleSheet(self._field_container_css(False))
+        container.setProperty("smartiSettingsFieldContainer", True)
+        container.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        container.smarti_target_page = getattr(layout, "smarti_target_page", None)
+        container.smarti_section_title = getattr(layout, "smarti_section_title", "")
+        inner = QHBoxLayout(container)
+        inner.setContentsMargins(8, 6, 8, 6)
+        inner.setSpacing(8)
         widget.setMinimumWidth(1)
         widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        layout.addWidget(widget)
-        if hint:
-            self._add_hint(hint, layout)
+        show_info = bool(hint and self._setting_needs_info(widget.text() if hasattr(widget, "text") else "", hint, advanced, info))
+        embedded_info = self._attach_checkbox_info_button(widget, hint) if show_info else None
+        if show_info and embedded_info is None:
+            inner.addWidget(self._make_info_button(hint), 0, Qt.AlignmentFlag.AlignTop)
+        inner.addWidget(widget, 1)
+        layout.addWidget(container)
+        self._register_setting_entry(widget.text() if hasattr(widget, "text") else "", widget, container, hint or "", keywords, advanced, setting_id)
 
-    def _add_field(self, label_text, widget, target_layout=None, hint=None):
+    def _add_field(self, label_text, widget, target_layout=None, hint=None, *, keywords=None, setting_id="", advanced=False, info=None):
         layout = target_layout
         if layout is None: return
         if widget is getattr(self, "background_catch_up_control", None):
@@ -1959,18 +2793,43 @@ class SettingsPage(QWidget):
                 "כמה זמן אחרי השעה המתוכננת עדיין מותר לסמארטי להריץ משימה שהוחמצה. "
                 "בקצה הסליידר: ללא הגבלה. לאחר מכן המשימה חוזרת לשעה הקבועה."
             )
+        container = QFrame()
+        container.setObjectName("SettingsFieldContainer")
+        container.setStyleSheet(self._field_container_css(False))
+        container.setProperty("smartiSettingsFieldContainer", True)
+        container.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        container.smarti_target_page = getattr(layout, "smarti_target_page", None)
+        container.smarti_section_title = getattr(layout, "smarti_section_title", "")
+        inner = QVBoxLayout(container)
+        inner.setContentsMargins(8, 6, 8, 6)
+        inner.setSpacing(6)
+        label_row = QHBoxLayout()
+        label_row.setContentsMargins(0, 0, 0, 0)
+        label_row.setSpacing(6)
+        label_group = QWidget()
+        label_group.setStyleSheet("background: transparent;")
+        label_group.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        group_layout = QHBoxLayout(label_group)
+        group_layout.setContentsMargins(0, 0, 0, 0)
+        group_layout.setSpacing(6)
         lbl = QLabel(label_text)
-        lbl.setWordWrap(True)
+        lbl.setWordWrap(False)
         lbl.setMinimumWidth(1)
+        lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
         lbl.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 13px; font-weight: 700; margin-top: 4px;")
-        layout.addWidget(lbl)
+        group_layout.addWidget(lbl, 0)
+        if hint and self._setting_needs_info(label_text, hint, advanced, info):
+            group_layout.addWidget(self._make_info_button(hint), 0, Qt.AlignmentFlag.AlignTop)
+        label_row.addWidget(label_group, 0, Qt.AlignmentFlag.AlignRight)
+        label_row.addStretch()
+        inner.addLayout(label_row)
         if isinstance(widget, QLineEdit): widget.setStyleSheet(LINE_EDIT_CSS)
         widget.setMinimumWidth(0)
         widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        layout.addWidget(widget)
-        if hint:
-            self._add_hint(hint, layout)
+        inner.addWidget(widget)
+        layout.addWidget(container)
+        self._register_setting_entry(label_text, widget, container, hint or "", keywords, advanced, setting_id)
         layout.addSpacing(10)
 
     def _make_scroll_page(self):
@@ -1993,12 +2852,15 @@ class SettingsPage(QWidget):
         vbox = QVBoxLayout(content)
         vbox.setContentsMargins(6, 6, 6, 6)
         vbox.setSpacing(16)
+        vbox.smarti_target_page = page
+        vbox.smarti_section_title = ""
         scroll.setWidget(content)
         outer.addWidget(scroll)
         self.settings_stack.addWidget(page)
         return page, vbox
 
     def _add_internal_back(self, target_layout, title):
+        target_layout.smarti_section_title = title
         row = QHBoxLayout()
         lbl = QLabel(title)
         lbl.setStyleSheet(page_title_css(18))
@@ -2023,138 +2885,165 @@ class SettingsPage(QWidget):
 
     def _build_ui_sections(self):
         self.settings_home_page, home = self._make_scroll_page()
+        self.search_results_page, search_results = self._make_scroll_page()
         ai_page, ai = self._make_scroll_page()
         safety_page, safety = self._make_scroll_page()
         policy_page, policy_layout = self._make_scroll_page()
         tools_page, tools = self._make_scroll_page()
-        voice_page, voice = self._make_scroll_page()
-        updates_page, updates = self._make_scroll_page()
+        app_page, app_settings = self._make_scroll_page()
         advanced_page, advanced = self._make_scroll_page()
-        developer_page, developer = self._make_scroll_page()
-        self.developer_page = developer_page
+        self.developer_page = advanced_page
 
-        home.addWidget(self._nav_card("מודלי AI", "בחירת ספק, מודל ומפתחות גישה", ai_page))
-        home.addWidget(self._nav_card("אבטחה והרשאות", "פרופיל אישורים, ארגז חול וברירת מחדל לקבצים", safety_page))
-        home.addWidget(self._nav_card("שליטה מתקדמת ביכולות", "בחירה אם לאפשר, לשאול או לחסום כל יכולת", policy_page))
-        home.addWidget(self._nav_card("כלים ואוטומציה", "דפדפן, מחשב, אימייל וכלים חיצוניים", tools_page))
-        home.addWidget(self._nav_card("קול ותצוגה", "אפשרויות הקראה ושימוש בקול", voice_page))
-        home.addWidget(self._nav_card("מתקדם", "זמני המתנה, לולאות ותאימות חיבור", advanced_page))
-        home.addWidget(self._nav_card("הגדרות מפתחים", "לוגים, Trace והרשאות נמוכות-רמה לכלים חיצוניים", developer_page))
-        home.addWidget(self._nav_card("עדכונים", "בדיקה אוטומטית וידנית מול GitHub Releases", updates_page))
+        self.search_results_hint = QLabel("")
+        self.search_results_hint.setWordWrap(True)
+        self.search_results_hint.setStyleSheet(muted_label_css(13))
+        search_results.addWidget(self.search_results_hint)
+        self.search_results_list = QListWidget()
+        self.search_results_list.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.search_results_list.setWordWrap(True)
+        self.search_results_list.setSpacing(8)
+        self.search_results_list.setMinimumWidth(0)
+        self.search_results_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.search_results_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.search_results_list.itemActivated.connect(self._activate_search_result)
+        self.search_results_list.itemClicked.connect(self._activate_search_result)
+        self.search_results_list.setStyleSheet(
+            f"QListWidget {{ background: transparent; color: {TEXT_COLOR}; border: none; outline: none; }}"
+            f"QListWidget::item {{ background: {GLASS_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; padding: 10px 12px; }}"
+            f"QListWidget::item:hover {{ background: {HOVER_TINT}; border-color: {LINE_COLOR}; }}"
+            f"QListWidget::item:selected {{ background: {ACCENT_TINT_STRONG}; border-color: {ACCENT_COLOR}; color: {TEXT_COLOR}; }}"
+        )
+        search_results.addWidget(self.search_results_list, 1)
+        search_results.addStretch()
+
+        home.addWidget(self._nav_card("מודלי AI וספקים", "ספק מודל, מודל פעיל, מפתחות גישה וחיפוש אינטרנט", ai_page))
+        home.addWidget(self._nav_card("אבטחה ופרטיות", "פרופיל בטיחות, אישורים, ארגז חול וקבצים", safety_page))
+        home.addWidget(self._nav_card("כלים ותקשורת", "דפדפן, מחשב, אימייל, MCP ו-Skills", tools_page))
+        home.addWidget(self._nav_card("קול, מראה ומערכת", "ערכת נושא, הקראה, האזנה ועדכונים", app_page))
+        self.advanced_home_card = self._nav_card("מתקדם ומפתחים", "זמני המתנה, תקציבים, תאימות, Trace ולוגים", advanced_page)
+        home.addWidget(self.advanced_home_card)
         home.addSpacing(8)
         home.addWidget(self._make_reset_button())
         home.addStretch()
 
-        self._add_internal_back(ai, "מודלי AI")
-        self._add_field("ספק המודל", self.provider_combo, ai, "בחר את שירות ה-AI שסמארטי ישתמש בו לתשובות ולתכנון פעולות.")
-        self._add_field("מפתח גישה לספק המודל", self.api_key_row, ai, "נדרש רק לספקים חיצוניים. המפתח נבדק מול הספק לפני שמירה, נשמר בצורה מוגנת ומוצג רק בסיומת מוסתרת.")
+        self._add_internal_back(ai, "מודלי AI וספקים")
+        self._add_field("ספק המודל", self.provider_combo, ai, "בחר את שירות ה-AI שסמארטי ישתמש בו לתשובות ולתכנון פעולות.", keywords="provider vendor engine gemini openai anthropic local openrouter groq nvidia cerebras huggingface deepseek qwen zhipu moonshot mistral together perplexity xai")
+        self._add_field(
+            "מפתח גישה לספק המודל",
+            self.api_key_row,
+            ai,
+            "מפתח API הוא קוד גישה אישי שמאפשר לסמארטי לשלוח בקשות מאובטחות לספק המודל. הוא נדרש לספקים חיצוניים, נבדק מול הספק לפני שמירה ונשמר כמפתח מוסתר שלא מוצג בלוגים.",
+            keywords="api key token secret validate connection authentication login billing",
+            info=True
+        )
         ai.addWidget(self.api_key_status)
         ai.addWidget(self.api_key_help_hint)
-        ai.addWidget(self.api_key_details_btn)
-        ai.addWidget(self.api_key_details)
-        self._add_field("מודל", self.model_combo, ai, "אפשר להקליד חיפוש חופשי כמו 70b llama instruct; הסינון סלחני לסדר מילים, מקפים ושמות ספקים.")
-        self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי רק כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.")
-        self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key_row, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.")
+        self._add_field("מודל", self.model_picker_row, ai, "בחירת המודל הפעיל לשיחה. בחירה נשמרת גם כמועדף כדי שאפשר יהיה להחליף אליו במהירות מהצ'אט.", keywords="favorite favourite star quick switch chat model picker spinner llm")
+        self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.", keywords="local server url lm studio ollama localhost endpoint base url")
+        self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key_row, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.", keywords="web search internet tavily live current latest")
         ai.addWidget(self.tavily_key_help_hint)
         ai.addStretch()
 
-        self._add_internal_back(safety, "אבטחה והרשאות")
-        self._add_field("פרופיל הרשאות", self.permission_combo, safety, "הפרופיל המאוזן משתמש בטבלת היכולות: פעולות רגילות רצות מהר, ופעולות רגישות עוצרות לאישור.")
+        self._add_internal_back(safety, "אבטחה ופרטיות")
+        self._add_field("פרופיל בטיחות", self.permission_combo, safety, "קובע כמה סמארטי יכול לפעול לבד: בטוח מבקש יותר אישורים, מאוזן מתאים לרוב העבודה, ואוטונומי מאפשר יותר רצף פעולה.", keywords="safe balanced autonomous full access permission autonomy approval security")
+        policy_btn = QPushButton("התאמה אישית של הרשאות")
+        policy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        policy_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        set_themed_button_icon(policy_btn, ("policy_icon", "security_icon", "settings_icon"), policy_btn.text(), 18, clear_text=False)
+        policy_btn.clicked.connect(lambda: self._set_settings_section(policy_page))
+        self._add_field("טבלת יכולות מפורטת", policy_btn, safety, "לוח מתקדם לקביעה פרטנית אם סמארטי ישאל, ירשה או יחסום כל יכולת.", keywords="matrix capability policy allow ask deny granular custom permissions", advanced=True)
         self._add_section_header("ארגז חול", safety)
-        self._add_checkbox(self.sandbox_cb, safety, "מגביל את סמארטי לתיקייה אחת. מצב זה מתאים לעבודה בטוחה על פרויקט או תיקייה מוגדרת.")
-        self._add_hint("כאשר ארגז חול פעיל, סמארטי וכלים מסוכנים מוגבלים לתיקייה שנבחרה. כתיבה או שינוי מחוץ אליה ייחסמו.", safety)
-        self._add_field("תיקיית ארגז החול", self.sandbox_root_picker, safety, "בחר את התיקייה שבה סמארטי רשאי לעבוד כאשר ארגז החול פעיל.")
-        self._add_checkbox(self.sandbox_read_outside_cb, safety, "מאפשר לסמארטי לקרוא קבצים מחוץ לארגז החול, אך עדיין חוסם כתיבה, שינוי ומחיקה מחוץ אליו.")
-        self._add_hint("אפשרות זו מתירה קריאה בלבד מחוץ לארגז החול. כתיבה, שינוי ומחיקה מחוץ לתיקייה עדיין חסומים.", safety)
+        self._add_checkbox(self.sandbox_cb, safety, "מגביל את סמארטי לתיקייה אחת. מצב זה מתאים לעבודה בטוחה על פרויקט או תיקייה מוגדרת.", keywords="sandbox project folder safe workspace")
+        self._add_field("תיקיית ארגז החול", self.sandbox_root_picker, safety, "בחר את התיקייה שבה סמארטי רשאי לעבוד כאשר ארגז החול פעיל.", keywords="workspace root allowed folder path")
+        self._add_checkbox(self.sandbox_read_outside_cb, safety, "מאפשר לסמארטי לקרוא קבצים מחוץ לארגז החול, אך עדיין חוסם כתיבה, שינוי ומחיקה מחוץ אליו.", keywords="read outside sandbox files privacy", advanced=True)
         self._add_section_header("קבצים ונתונים", safety)
-        self._add_field("תיקיית ברירת מחדל ליצירת קבצים", self.default_output_dir_picker, safety, "כאשר ביקשת ליצור או לשמור קובץ בלי לציין מיקום, סמארטי ישמור אותו כאן. זו לא מגבלת הרשאה ולא ארגז חול.")
-        self._add_checkbox(self.write_outside_dirs_approval_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני כתיבה מחוץ לתיקיית הפלט. באוטונומיה מלאה האפשרות נכבית אוטומטית, אלא אם ארגז חול פעיל.")
-        self._add_checkbox(self.cloud_upload_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני שליחת קבצים, צילום מסך או אימייל למודל חיצוני.")
-        self._add_checkbox(self.mcp_pin_cb, safety, "מחייב התקנת כלים חיצוניים בגרסה קבועה, כדי למנוע שינוי לא צפוי בהתנהגות הכלי.")
-        self._add_checkbox(self.raw_shell_approval_cb, safety, "גם במצב אוטונומי, פקודות מערכת בסיכון גבוה יעצרו לאישור משתמש.")
-        self._add_checkbox(self.marketplace_approval_cb, safety, "מונע התקנה שקטה של קוד חיצוני חדש ממאגרי MCP או Skills.")
+        self._add_field("תיקיית ברירת מחדל ליצירת קבצים", self.default_output_dir_picker, safety, "כאשר ביקשת ליצור או לשמור קובץ בלי לציין מיקום, סמארטי ישמור אותו כאן. זו לא מגבלת הרשאה ולא ארגז חול.", keywords="output save export write folder default")
+        self._add_checkbox(self.write_outside_dirs_approval_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני כתיבה מחוץ לתיקיית הפלט. באוטונומיה מלאה האפשרות נכבית אוטומטית, אלא אם ארגז חול פעיל.", keywords="write outside approval delete modify file safety")
+        self._add_checkbox(self.cloud_upload_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני שליחת קבצים, צילום מסך או אימייל למודל חיצוני.", keywords="cloud upload external model privacy screenshot email")
+        self._add_checkbox(self.mcp_pin_cb, safety, "מחייב התקנת כלים חיצוניים בגרסה קבועה, כדי למנוע שינוי לא צפוי בהתנהגות הכלי.", keywords="pinned versions mcp supply chain", advanced=True)
+        self._add_checkbox(self.raw_shell_approval_cb, safety, "גם במצב אוטונומי, פקודות מערכת בסיכון גבוה יעצרו לאישור משתמש.", keywords="shell command dangerous powershell cmd terminal approval", advanced=True)
+        self._add_checkbox(self.marketplace_approval_cb, safety, "מונע התקנה שקטה של קוד חיצוני חדש ממאגרי MCP או Skills.", keywords="marketplace install approval mcp skills external code", advanced=True)
         safety.addStretch()
 
         self._add_internal_back(policy_layout, "שליטה מתקדמת ביכולות")
         self._add_hint("הפרופיל הראשי מספיק לרוב השימושים. כאן אפשר לדייק יכולות בודדות בלי להפוך את כל מסך האבטחה למסובך.", policy_layout)
         for cap, label in CAPABILITY_LABELS.items():
-            self._add_field(label, self.policy_combos[cap], policy_layout, "בחר אם סמארטי יוכל להשתמש ביכולת הזו, יבקש אישור בכל פעם, או יחסום אותה לחלוטין.")
+            self._add_field(label, self.policy_combos[cap], policy_layout, "בחר אם סמארטי יוכל להשתמש ביכולת הזו, יבקש אישור בכל פעם, או יחסום אותה לחלוטין.", keywords=f"capability policy matrix allow ask deny {cap}", advanced=True)
         policy_layout.addStretch()
 
-        self._add_internal_back(tools, "כלים ואוטומציה")
-        self._add_checkbox(self.browser_auto_cb, tools, "מאפשר לסמארטי לפתוח דפדפן אוטומטי ולבצע פעולות בדפי אינטרנט, לאחר אישור לפי רמת ההרשאות.")
-        self._add_checkbox(self.computer_control_cb, tools, "מאפשר לסמארטי לקרוא את עץ הנגישות של Windows ולפעול על אלמנטים מזוהים. מקלדת/עכבר הם fallback מבוקר בלבד.")
-        self._add_checkbox(self.mcp_cb, tools, "מאפשר שימוש בכלים חיצוניים שמרחיבים את יכולות סמארטי, בכפוף להרשאות שהוגדרו.")
-        self._add_checkbox(self.skills_beta_cb, tools, "מאפשר שכבת Skills בטא: תהליכי עבודה גבוהים שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.")
+        self._add_internal_back(tools, "כלים ותקשורת")
+        self._add_checkbox(self.browser_auto_cb, tools, "פתיחת דפדפן וביצוע פעולות בדפי אינטרנט לפי רמת ההרשאות.", keywords="browser web automation selenium page click")
+        self._add_checkbox(self.computer_control_cb, tools, "קריאת עץ הנגישות של Windows ופעולה על רכיבים מזוהים.", keywords="computer control windows accessibility ui automation mouse keyboard")
+        self._add_checkbox(self.mcp_cb, tools, "שימוש בכלים חיצוניים שמרחיבים את סמארטי, בכפוף להרשאות.", keywords="mcp external tools extensions")
+        self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows beta instructions", advanced=True)
         # Google Drive settings section is intentionally hidden for now.
         self._add_section_header("אימייל", tools)
-        self._add_field("כתובת אימייל", self.email, tools, "כתובת האימייל שממנה סמארטי יקרא או ישלח הודעות, אם אישרת שימוש באימייל.")
-        self._add_field("סיסמת אפליקציה לאימייל", self.pwd, tools, "סיסמת אפליקציה ייעודית לחשבון האימייל. אל תשתמש בסיסמה הראשית של החשבון.")
-        self._add_field("שם שולח", self.email_from_name, tools, "שם תצוגה אופציונלי שיופיע בשדה From.")
-        self._add_field("IMAP host", self.email_imap_host, tools, "ריק = זיהוי אוטומטי לפי כתובת האימייל.")
-        self._add_field("IMAP port", self.email_imap_port, tools, "ברירת מחדל נפוצה: 993.")
-        self._add_checkbox(self.email_imap_ssl_cb, tools, "מומלץ להשאיר פעיל לרוב ספקי האימייל.")
-        self._add_field("SMTP host", self.email_smtp_host, tools, "ריק = זיהוי אוטומטי לפי כתובת האימייל.")
-        self._add_field("SMTP port", self.email_smtp_port, tools, "ברירת מחדל נפוצה: 587.")
-        self._add_checkbox(self.email_smtp_starttls_cb, tools, "מומלץ להשאיר פעיל עבור SMTP בפורט 587.")
-        self._add_checkbox(self.email_smtp_ssl_cb, tools, "הפעל רק אם הספק דורש SMTP SSL ישיר, לרוב בפורט 465.")
-        self._add_field("גודל מצורף מקסימלי (MB)", self.email_max_attachment_mb, tools, "מגבלת בטיחות לשליחת קבצים מצורפים.")
+        self._add_field("כתובת אימייל", self.email, tools, "כתובת האימייל שממנה סמארטי יקרא או ישלח הודעות, אם אישרת שימוש באימייל.", keywords="email address account username login")
+        self._add_field("סיסמת אפליקציה לאימייל", self.pwd, tools, "סיסמת אפליקציה ייעודית לחשבון האימייל. אל תשתמש בסיסמה הראשית של החשבון.", keywords="app password mail secret credentials")
+        self._add_field("בדיקת חיבור אימייל", self.email_test_row, tools, "בודק התחברות ל-IMAP ול-SMTP לפי הפרטים שהוזנו. הבדיקה לא שולחת הודעה.", keywords="test validate email connection imap smtp login check")
+        self._add_field("שם שולח", self.email_from_name, tools, "שם תצוגה אופציונלי שיופיע בשדה From.", keywords="from sender display name")
+        self._add_field("IMAP host", self.email_imap_host, tools, "ריק = זיהוי אוטומטי לפי כתובת האימייל.", keywords="incoming mail server gmail outlook yahoo", advanced=True)
+        self._add_field("IMAP port", self.email_imap_port, tools, "ברירת מחדל נפוצה: 993.", keywords="incoming port server", advanced=True)
+        self._add_checkbox(self.email_imap_ssl_cb, tools, "מומלץ להשאיר פעיל לרוב ספקי האימייל.", keywords="imap ssl tls encrypted", advanced=True)
+        self._add_field("SMTP host", self.email_smtp_host, tools, "ריק = זיהוי אוטומטי לפי כתובת האימייל.", keywords="outgoing mail server gmail outlook yahoo", advanced=True)
+        self._add_field("SMTP port", self.email_smtp_port, tools, "ברירת מחדל נפוצה: 587.", keywords="outgoing port server", advanced=True)
+        self._add_checkbox(self.email_smtp_starttls_cb, tools, "מומלץ להשאיר פעיל עבור SMTP בפורט 587.", keywords="smtp starttls encryption", advanced=True)
+        self._add_checkbox(self.email_smtp_ssl_cb, tools, "הפעל רק אם הספק דורש SMTP SSL ישיר, לרוב בפורט 465.", keywords="smtp ssl direct port 465", advanced=True)
+        self._add_field("גודל מצורף מקסימלי (MB)", self.email_max_attachment_mb, tools, "מגבלת בטיחות לשליחת קבצים מצורפים.", keywords="attachment size limit mb files", advanced=True)
         tools.addStretch()
 
-        self._add_internal_back(voice, "קול ותצוגה")
-        self._add_section_header("מראה", voice)
-        self._add_field("מצב תצוגה", self.theme_combo, voice, "בחר מצב כהה, בהיר או התאמה אוטומטית להגדרת המערכת של Windows.")
-        self._add_section_header("קול", voice)
-        self._add_checkbox(self.tts_cb, voice, "כאשר האפשרות פעילה, סמארטי יקריא בקול את כל התשובות.")
-        self._add_checkbox(self.tts_voice_cb, voice, "כאשר האפשרות פעילה, הקריאה הקולית תופעל בעיקר לאחר פנייה קולית מצד המשתמש.")
-        self._add_field("קול הקראה", self.tts_voice_combo, voice, "בחירת קול עברי. קולות Edge זמינים כאשר חבילת edge-tts מותקנת; Google TTS נשאר כגיבוי.")
-        self._add_field("עוצמת הקראה", self.tts_volume_control, voice, "שולט בעוצמת השמע בזמן ההקראה.")
-        self._add_field("תצוגה מקדימה", self.tts_preview_row, voice, "משמיע את הטקסט לפי הקול והעוצמה שמוגדרים כרגע.")
-        self._add_section_header("האזנה", voice)
-        self._add_field("רגישות מיקרופון", self.voice_sensitivity_control, voice, "ערך גבוה מזהה דיבור חלש מהר יותר; בסביבה רועשת כדאי להוריד מעט.")
-        self._add_field("סיום אחרי שקט", self.voice_pause_control, voice, "כמה זמן של שקט יסיים את ההאזנה וישלח את התמלול לעיבוד.")
-        self._add_field("המתנה לתחילת דיבור", self.voice_timeout_control, voice, "כמה זמן לחכות לדיבור אחרי הפעלת ההאזנה לפני ביטול.")
-        self._add_field("כיול רעש רקע לפני האזנה", self.voice_ambient_control, voice, "0 מתחיל הכי מהר. הגדלה משפרת דיוק בסביבה רועשת אבל מוסיפה השהיה.")
-        self._add_checkbox(self.voice_dynamic_energy_cb, voice, "מאפשר לספריית הזיהוי לשנות את סף הרגישות תוך כדי עבודה לפי רעש הרקע.")
-        self._add_checkbox(self.voice_beep_cb, voice, "כבוי כברירת מחדל כדי שההאזנה תתחיל מהר ככל האפשר.")
-        voice.addStretch()
+        self._add_internal_back(app_settings, "קול, מראה ומערכת")
+        self._add_section_header("מראה", app_settings)
+        self._add_field("מצב תצוגה", self.theme_combo, app_settings, "בחר מצב כהה, בהיר או התאמה אוטומטית להגדרת המערכת של Windows.", keywords="theme dark light system appearance background colors")
+        self._add_section_header("קול", app_settings)
+        self._add_checkbox(self.tts_cb, app_settings, "כאשר האפשרות פעילה, סמארטי יקריא בקול את כל התשובות.", keywords="tts read aloud speech voice speaker")
+        self._add_checkbox(self.tts_voice_cb, app_settings, "כאשר האפשרות פעילה, הקריאה הקולית תופעל בעיקר לאחר פנייה קולית מצד המשתמש.", keywords="voice only read aloud after dictation", advanced=True)
+        self._add_field("קול הקראה", self.tts_voice_combo, app_settings, "בחירת קול עברי. קולות Edge זמינים כאשר חבילת edge-tts מותקנת; Google TTS נשאר כגיבוי.", keywords="voice tts edge gtts hebrew")
+        self._add_field("עוצמת הקראה", self.tts_volume_control, app_settings, "שולט בעוצמת השמע בזמן ההקראה.", keywords="volume sound loudness")
+        self._add_field("תצוגה מקדימה", self.tts_preview_row, app_settings, "משמיע את הטקסט לפי הקול והעוצמה שמוגדרים כרגע.", keywords="preview test voice listen")
+        self._add_section_header("האזנה", app_settings)
+        self._add_field("רגישות מיקרופון", self.voice_sensitivity_control, app_settings, "ערך גבוה מזהה דיבור חלש מהר יותר; בסביבה רועשת כדאי להוריד מעט.", keywords="microphone sensitivity speech recognition")
+        self._add_field("סיום אחרי שקט", self.voice_pause_control, app_settings, "כמה זמן של שקט יסיים את ההאזנה וישלח את התמלול לעיבוד.", keywords="pause silence threshold", advanced=True)
+        self._add_field("המתנה לתחילת דיבור", self.voice_timeout_control, app_settings, "כמה זמן לחכות לדיבור אחרי הפעלת ההאזנה לפני ביטול.", keywords="listen timeout speech start wait", advanced=True)
+        self._add_field("כיול רעש רקע לפני האזנה", self.voice_ambient_control, app_settings, "0 מתחיל הכי מהר. הגדלה משפרת דיוק בסביבה רועשת אבל מוסיפה השהיה.", keywords="ambient noise calibration background", advanced=True)
+        self._add_checkbox(self.voice_dynamic_energy_cb, app_settings, "מאפשר לספריית הזיהוי לשנות את סף הרגישות תוך כדי עבודה לפי רעש הרקע.", keywords="dynamic energy threshold noise", advanced=True)
+        self._add_checkbox(self.voice_beep_cb, app_settings, "משמיע צליל קצר בתחילת וסיום האזנה.", keywords="beep sound start stop listening", advanced=True)
+        self._add_section_header("עדכונים", app_settings)
+        self._add_checkbox(self.update_auto_cb, app_settings, "כשאפשרות זו פעילה, סמארטי יבדוק ברקע אם פורסמה גרסה חדשה ב-GitHub Releases.", keywords="updates release github version auto check")
+        app_settings.addWidget(self.update_status_lbl)
+        app_settings.addWidget(self.check_updates_btn)
+        app_settings.addStretch()
 
-        self._add_internal_back(updates, "עדכונים")
-        self._add_checkbox(self.update_auto_cb, updates, "כשאפשרות זו פעילה, סמארטי יבדוק ברקע אם פורסמה גרסה חדשה ב-GitHub Releases.")
-        updates.addWidget(self.update_status_lbl)
-        updates.addWidget(self.check_updates_btn)
-        updates.addStretch()
-
-        self._add_internal_back(advanced, "מתקדם")
-        self._add_checkbox(self.insecure_ssl_cb, advanced, "הגדרת תאימות SSL שמרפה אימות תעודות עבור סביבות שבהן חיבורי HTTPS נחסמים או מוחלפים, למשל בסינוני רשת. פעיל כברירת מחדל כדי לצמצם תקלות חיבור בסביבות מסוננות.")
-        self._add_field("זמן המתנה לפקודות מחשב (שניות)", self.cmd_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לפקודת מערכת לפני עצירה.")
-        self._add_field("זמן המתנה לכלים מותאמים אישית (שניות)", self.tool_timeout, advanced, "משך הזמן המקסימלי להרצת כלי מותאם אישית לפני שסמארטי מפסיק אותו.")
-        self._add_field("זמן המתנה לכלים חיצוניים (שניות)", self.mcp_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לתשובה מכלי חיצוני.")
-        self._add_field("זמן כולל מקסימלי למשימה (שניות)", self.total_timeout, advanced, "מונע מלולאת הסוכן להיתקע זמן רב מדי בבקשה אחת.")
-        self._add_field("מגבלת תווים בתוצאת כלי", self.max_chars_edit, advanced, "מגביל את אורך פלט הכלים שנשלח חזרה למודל, כדי לשמור על יציבות ועל עלויות נמוכות.")
-        self._add_field("תקציב טוקנים יומי", self.daily_token_budget, advanced, "0 פירושו ללא מגבלה קשיחה כרגע; הנתון נשמר לשימוש במדיניות תקציב.")
-        self._add_field("תקציב עלות יומי בדולר", self.daily_cost_budget, advanced, "0 פירושו ללא מגבלה קשיחה כרגע; מוצג למעקב ובקרת עלויות.")
-        lbl_loops = QLabel("מספר סבבי פעולה מקסימלי")
-        lbl_loops.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 13px; font-weight: 700;")
-        advanced.addWidget(lbl_loops)
-        self._add_hint("קובע כמה פעמים סמארטי יכול לחשוב, לבחור כלי ולעבד תוצאה באותה בקשה. הערך העליון מאפשר עבודה ללא מגבלת סבבים.", advanced)
-        loops_layout = QHBoxLayout()
-        loops_layout.addWidget(self.loops_slider)
-        loops_layout.addWidget(self.loops_val_lbl)
-        advanced.addLayout(loops_layout)
+        self._add_internal_back(advanced, "מתקדם ומפתחים")
+        self._add_checkbox(self.insecure_ssl_cb, advanced, "הגדרת תאימות SSL שמרפה אימות תעודות עבור סביבות שבהן חיבורי HTTPS נחסמים או מוחלפים, למשל בסינוני רשת. פעיל כברירת מחדל כדי לצמצם תקלות חיבור בסביבות מסוננות.", keywords="ssl certificate verify insecure network filter proxy", advanced=True)
+        self._add_field("זמן המתנה לפקודות מחשב (שניות)", self.cmd_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לפקודת מערכת לפני עצירה.", keywords="command timeout shell seconds", advanced=True)
+        self._add_field("זמן המתנה לכלים מותאמים אישית (שניות)", self.tool_timeout, advanced, "משך הזמן המקסימלי להרצת כלי מותאם אישית לפני שסמארטי מפסיק אותו.", keywords="custom tool timeout seconds", advanced=True)
+        self._add_field("זמן המתנה לכלים חיצוניים (שניות)", self.mcp_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לתשובה מכלי חיצוני.", keywords="mcp timeout external tool seconds", advanced=True)
+        self._add_field("זמן כולל מקסימלי למשימה (שניות)", self.total_timeout, advanced, "מונע מלולאת הסוכן להיתקע זמן רב מדי בבקשה אחת.", keywords="task timeout total max seconds", advanced=True)
+        self._add_field("מגבלת תווים בתוצאת כלי", self.max_chars_edit, advanced, "מגביל את אורך פלט הכלים שנשלח חזרה למודל, כדי לשמור על יציבות ועל עלויות נמוכות.", keywords="tool output chars limit context token", advanced=True)
+        self._add_field("תקציב טוקנים יומי", self.daily_token_budget, advanced, "0 פירושו ללא מגבלה קשיחה כרגע; הנתון נשמר לשימוש במדיניות תקציב.", keywords="daily token budget usage cost", advanced=True)
+        self._add_field("תקציב עלות יומי בדולר", self.daily_cost_budget, advanced, "0 פירושו ללא מגבלה קשיחה כרגע; מוצג למעקב ובקרת עלויות.", keywords="daily cost budget usd money usage", advanced=True)
         self._add_field(
-            "׳”׳¨׳¦׳× ׳׳©׳™׳׳” ׳׳—׳–׳•׳¨׳™׳× ׳׳—׳¨׳™ ׳₪׳¡׳₪׳•׳¡",
+            "מספר סבבי פעולה מקסימלי",
+            self.loops_control,
+            advanced,
+            "קובע כמה פעמים סמארטי יכול לחשוב, לבחור כלי ולעבד תוצאה באותה בקשה. הערך העליון מאפשר עבודה ללא מגבלת סבבים.",
+            keywords="agent loops iterations max unlimited planning tool calls",
+            advanced=True
+        )
+        self._add_field(
+            "הרצת משימה מחזורית אחרי פספוס",
             self.background_catch_up_control,
             advanced,
-            "׳›׳׳” ׳–׳׳ ׳׳—׳¨׳™ ׳”׳©׳¢׳” ׳”׳׳×׳•׳›׳ ׳ ׳× ׳¢׳“׳™׳™׳ ׳׳•׳×׳¨ ׳׳¡׳׳׳¨׳˜׳™ ׳׳”׳¨׳™׳¥ ׳׳©׳™׳׳” ׳©׳”׳•׳—׳׳¦׳”. ׳׳—׳¨׳™ ׳”׳—׳׳•׳ ׳”׳–׳”, ׳”׳׳©׳™׳׳” ׳×׳“׳•׳׳’ ׳׳₪׳¢׳ ׳”׳‘׳׳” ׳•׳×׳—׳–׳•׳¨ ׳׳©׳¢׳” ׳”׳§׳‘׳•׳¢׳”."
+            "כמה זמן אחרי השעה המתוכננת עדיין מותר לסמארטי להריץ משימה שהוחמצה. אחרי החלון הזה המשימה תדלג לפעם הבאה.",
+            keywords="background recurring catch up missed scheduled task",
+            advanced=True
         )
-        advanced.addStretch()
-
-        self._add_internal_back(developer, "הגדרות מפתחים")
-        self._add_checkbox(self.developer_trace_cb, developer, "שומר Trace פנימי של תכנון, בחירת כלים, תוצאות ביניים ותשובה סופית.")
-        self._add_checkbox(self.audit_log_cb, developer, "שומר יומן אודיט מקומי של החלטות הרשאה, התחלת כלים וסיום כלים.")
-        self._add_checkbox(self.redact_logs_cb, developer, "מסתיר מפתחות, סיסמאות ופרטים רגישים מקובצי הלוג ככל האפשר.")
-        self._add_field("תיקיות גישה לכלים חיצוניים (MCP)", self.mcp_allowed_dirs, developer, "שורשי תיקיות שמותר להעביר לכלי MCP כתיאום גישה. זו אינה מגבלת כתיבה של סמארטי; כאשר ארגז חול פעיל, ארגז החול גובר על ההגדרה הזו.")
+        self._add_section_header("מפתחים ולוגים", advanced)
+        self._add_checkbox(self.developer_trace_cb, advanced, "שומר Trace פנימי של תכנון, בחירת כלים, תוצאות ביניים ותשובה סופית.", keywords="developer trace debug planning tool calls", advanced=True)
+        self._add_checkbox(self.audit_log_cb, advanced, "שומר יומן אודיט מקומי של החלטות הרשאה, התחלת כלים וסיום כלים.", keywords="audit log policy tool execution", advanced=True)
+        self._add_checkbox(self.redact_logs_cb, advanced, "מסתיר מפתחות, סיסמאות ופרטים רגישים מקובצי הלוג ככל האפשר.", keywords="redact logs secrets password privacy", advanced=True)
+        self._add_field("תיקיות גישה לכלים חיצוניים (MCP)", self.mcp_allowed_dirs, advanced, "שורשי תיקיות שמותר להעביר לכלי MCP כתיאום גישה. זו אינה מגבלת כתיבה של סמארטי; כאשר ארגז חול פעיל, ארגז החול גובר על ההגדרה הזו.", keywords="mcp allowed directories folders roots external tools", advanced=True)
         refresh_logs_btn = QPushButton("רענן לוגים")
         refresh_logs_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
         refresh_logs_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -2165,25 +3054,34 @@ class SettingsPage(QWidget):
         clear_logs_btn.clicked.connect(self.clear_selected_developer_log)
         self.selected_developer_log = getattr(self, "selected_developer_log", "agent")
         self.developer_log_buttons = {}
+        developer_log_panel = QWidget()
+        developer_log_panel.setStyleSheet("background: transparent;")
+        developer_log_panel_layout = QVBoxLayout(developer_log_panel)
+        developer_log_panel_layout.setContentsMargins(0, 0, 0, 0)
+        developer_log_panel_layout.setSpacing(8)
         log_actions = QHBoxLayout()
         log_actions.setSpacing(8)
+        refresh_logs_btn.setMinimumWidth(112)
+        clear_logs_btn.setMinimumWidth(112)
         log_actions.addWidget(refresh_logs_btn)
         log_actions.addWidget(clear_logs_btn)
         log_actions.addStretch()
-        developer.addLayout(log_actions)
-        log_switcher = QHBoxLayout()
-        log_switcher.setSpacing(8)
-        for key, label in [("agent", "Agent Log"), ("trace", "Runtime Trace"), ("audit", "Audit Log"), ("skills", "Skills Log")]:
+        developer_log_panel_layout.addLayout(log_actions)
+        log_switcher = QGridLayout()
+        log_switcher.setHorizontalSpacing(8)
+        log_switcher.setVerticalSpacing(8)
+        for index, (key, label) in enumerate([("agent", "Agent Log"), ("trace", "Runtime Trace"), ("audit", "Audit Log"), ("skills", "Skills Log")]):
             btn = QPushButton(label)
-            btn.setMinimumWidth(0)
+            btn.setMinimumWidth(118)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn.clicked.connect(lambda _=None, log_key=key: self.show_developer_log(log_key))
             self.developer_log_buttons[key] = btn
-            log_switcher.addWidget(btn)
-        developer.addLayout(log_switcher)
+            log_switcher.addWidget(btn, index // 2, index % 2)
+        developer_log_panel_layout.addLayout(log_switcher)
         self.developer_log_text = QTextEdit()
         self.developer_log_text.setReadOnly(True)
+        self.developer_log_text.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.developer_log_text.setMinimumWidth(0)
         self.developer_log_text.setMinimumHeight(360)
         self.developer_log_text.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
@@ -2195,7 +3093,9 @@ class SettingsPage(QWidget):
         log_palette.setColor(QPalette.ColorRole.Base, QColor(FIELD_COLOR))
         self.developer_log_text.setPalette(log_palette)
         self.developer_log_text.setStyleSheet(LOG_TEXT_CSS)
-        developer.addWidget(self.developer_log_text)
+        developer_log_panel_layout.addWidget(self.developer_log_text)
+        self._add_field("צפייה בלוגים", developer_log_panel, advanced, "צפייה ב-Agent Log, Runtime Trace, Audit Log ו-Skills Log מתוך מסך ההגדרות.", keywords="logs trace audit skills agent developer debug", advanced=True)
+        advanced.addStretch()
         self.load_developer_logs()
 
         self.settings_stack.setCurrentWidget(self.settings_home_page)
@@ -2275,6 +3175,95 @@ class SettingsPage(QWidget):
         # Google Drive settings UI is parked until OAuth sign-in is reworked.
         return
 
+    def _email_provider_from_address(self, address):
+        domain = str(address or "").lower().rsplit("@", 1)[-1] if "@" in str(address or "") else ""
+        if domain in {"gmail.com", "googlemail.com"}:
+            return "gmail"
+        if domain in {"outlook.com", "hotmail.com", "live.com", "msn.com"}:
+            return "outlook"
+        if domain in {"yahoo.com", "ymail.com", "rocketmail.com"}:
+            return "yahoo"
+        return "custom"
+
+    def _email_test_config_from_ui(self):
+        user = self.email.text().strip() if hasattr(self, "email") else ""
+        password = self.pwd.text().replace(" ", "") if hasattr(self, "pwd") else ""
+        provider = self._email_provider_from_address(user)
+        defaults = {
+            "gmail": {"imap_host": "imap.gmail.com", "imap_port": 993, "smtp_host": "smtp.gmail.com", "smtp_port": 587},
+            "outlook": {"imap_host": "outlook.office365.com", "imap_port": 993, "smtp_host": "smtp.office365.com", "smtp_port": 587},
+            "yahoo": {"imap_host": "imap.mail.yahoo.com", "imap_port": 993, "smtp_host": "smtp.mail.yahoo.com", "smtp_port": 587},
+            "custom": {"imap_host": "imap.gmail.com", "imap_port": 993, "smtp_host": "smtp.gmail.com", "smtp_port": 587},
+        }.get(provider, {})
+
+        def as_int(widget, fallback):
+            try:
+                return int(widget.text().strip())
+            except Exception:
+                return int(fallback)
+
+        cfg = {
+            "user": user,
+            "password": password,
+            "provider": provider,
+            "imap_host": self.email_imap_host.text().strip() or defaults.get("imap_host", "imap.gmail.com"),
+            "imap_port": as_int(self.email_imap_port, defaults.get("imap_port", 993)),
+            "imap_ssl": bool(self.email_imap_ssl_cb.isChecked()),
+            "smtp_host": self.email_smtp_host.text().strip() or defaults.get("smtp_host", "smtp.gmail.com"),
+            "smtp_port": as_int(self.email_smtp_port, defaults.get("smtp_port", 587)),
+            "smtp_ssl": bool(self.email_smtp_ssl_cb.isChecked()),
+            "smtp_starttls": bool(self.email_smtp_starttls_cb.isChecked()),
+        }
+        if not cfg["user"] or not cfg["password"]:
+            raise ValueError("חסרים כתובת אימייל או סיסמת אפליקציה.")
+        return cfg
+
+    def test_email_connection(self):
+        worker = getattr(self, "email_test_worker", None)
+        if worker and worker.isRunning():
+            return
+        if hasattr(self, "email_test_status"):
+            self.email_test_status.setText("בודק חיבור לאימייל...")
+        if hasattr(self, "email_test_btn"):
+            self.email_test_btn.setEnabled(False)
+            self.email_test_btn.clearFocus()
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        try:
+            email_cfg = self._email_test_config_from_ui()
+            allow_insecure_ssl = bool(self.insecure_ssl_cb.isChecked() if hasattr(self, "insecure_ssl_cb") else self.core.settings.get("allow_insecure_ssl_compat", True))
+        except Exception as exc:
+            if hasattr(self, "email_test_btn"):
+                self.email_test_btn.setEnabled(True)
+            if hasattr(self, "email_test_status"):
+                self.email_test_status.setText(f"החיבור נכשל: {exc}")
+                self.email_test_status.setStyleSheet(
+                    f"color: {DANGER_COLOR}; font-size: 12px; background: transparent;"
+                )
+            return
+        worker = EmailConnectionTestWorker(email_cfg, allow_insecure_ssl)
+        self.email_test_worker = worker
+        worker.finished_signal.connect(
+            self._on_email_test_finished_current,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_email_test_finished_current(self, ok, message):
+        self._on_email_test_finished(self.sender(), ok, message)
+
+    def _on_email_test_finished(self, worker, ok, message):
+        if getattr(self, "email_test_worker", None) is worker:
+            self.email_test_worker = None
+        if hasattr(self, "email_test_btn"):
+            self.email_test_btn.setEnabled(True)
+        text = str(message or "").strip()
+        if hasattr(self, "email_test_status"):
+            self.email_test_status.setText(text if ok else f"החיבור נכשל: {text or 'לא התקבלה שגיאה מפורטת'}")
+            self.email_test_status.setStyleSheet(
+                f"color: {ACCENT_SECONDARY_COLOR if ok else DANGER_COLOR}; font-size: 12px; background: transparent;"
+            )
+
     def _register_autosave_handlers(self):
         combos = [self.provider_combo, self.tts_voice_combo]
         combos.extend(self.policy_combos.values())
@@ -2326,8 +3315,9 @@ class SettingsPage(QWidget):
             slider.valueChanged.connect(lambda _=None: self._schedule_autosave())
 
     def _schedule_autosave(self):
-        if getattr(self, "_suppress_autosave", False):
+        if getattr(self, "_suppress_autosave", False) or not getattr(self, "_settings_ready", False):
             return
+        self._set_save_status("saving")
         self.autosave_timer.start()
 
     def _on_api_key_edited(self, _text=""):
@@ -2463,7 +3453,10 @@ class SettingsPage(QWidget):
         for segment in self.findChildren(SegmentedControl):
             segment.apply_theme()
         for edit in self.findChildren(QLineEdit):
-            edit.setStyleSheet(LINE_EDIT_CSS)
+            if edit.objectName() == "SettingsSearchBox":
+                edit.setStyleSheet(self._search_box_css())
+            else:
+                edit.setStyleSheet(LINE_EDIT_CSS)
         for picker in self.findChildren(DirectoryPicker):
             picker.apply_theme()
         log_buttons = set(getattr(self, "developer_log_buttons", {}).values())
@@ -2473,10 +3466,34 @@ class SettingsPage(QWidget):
             if button.property("smartiSecretClearButton"):
                 button.setStyleSheet(icon_button_css(34, danger=True))
                 continue
+            if button.property("smartiInfoButton"):
+                button.setStyleSheet(
+                    f"QPushButton {{ background: {ACCENT_TINT}; color: {ACCENT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+                    "border-radius: 12px; padding: 0px; font-size: 12px; font-weight: 900; }}"
+                    f"QPushButton:hover {{ background: {HOVER_TINT}; border-color: {LINE_COLOR}; color: {TEXT_COLOR}; }}"
+                )
+                continue
             parent = button.parent()
             if parent and parent.objectName() == "SegmentedControl":
                 continue
             button.setStyleSheet(SECONDARY_BUTTON_CSS)
+        if hasattr(self, "settings_save_status"):
+            self.settings_save_status.setStyleSheet(muted_label_css(12))
+        if hasattr(self, "settings_search_edit"):
+            self.settings_search_edit.setStyleSheet(self._search_box_css())
+        if hasattr(self, "settings_search_wrapper"):
+            self.settings_search_wrapper.setStyleSheet(self._search_wrapper_css(False))
+        for container in getattr(self, "_settings_field_containers", {}).values():
+            container.setStyleSheet(self._field_container_css(False))
+        if hasattr(self, "search_results_list"):
+            self.search_results_list.setStyleSheet(
+                f"QListWidget {{ background: transparent; color: {TEXT_COLOR}; border: none; outline: none; }}"
+                f"QListWidget::item {{ background: {GLASS_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 16px; padding: 10px 12px; }}"
+                f"QListWidget::item:hover {{ background: {HOVER_TINT}; border-color: {LINE_COLOR}; }}"
+                f"QListWidget::item:selected {{ background: {ACCENT_TINT_STRONG}; border-color: {ACCENT_COLOR}; color: {TEXT_COLOR}; }}"
+            )
+        for toolbar in self.findChildren(QFrame, "SettingsToolbar"):
+            toolbar.setStyleSheet(self._settings_toolbar_css())
         refresh_themed_widget_icons(self)
         for toggle in self.findChildren(SmartiCheckBox):
             toggle.update()
@@ -2532,16 +3549,20 @@ class SettingsPage(QWidget):
         self._schedule_autosave()
 
     def _save_from_ui(self):
-        if getattr(self, "_suppress_autosave", False):
+        if getattr(self, "_suppress_autosave", False) or not getattr(self, "_settings_ready", False):
             return
         before = copy.deepcopy(self.core.settings)
         provider = self.provider_combo.currentText()
         selected_model = self.model_combo.selected_model() if hasattr(self.model_combo, "selected_model") else self.model_combo.currentText()
+        previous_provider = normalize_provider_name(before.get("api_mode", provider))
+        previous_selected_model = str(before.get(f"selected_{provider}_model", "") or "")
         self.core.settings["api_mode"] = provider
         self.core.settings["autonomy_mode"] = self._autonomy_profile_key()
         self.core.settings.setdefault("ui_preferences", {})["theme_mode"] = self._theme_mode_key()
         if selected_model and selected_model != "טוען מודלים...":
             self.core.settings[f"selected_{provider}_model"] = selected_model
+            if normalize_provider_name(provider) != previous_provider or str(selected_model) != previous_selected_model:
+                self._ensure_model_favorite(provider, selected_model, save=False)
         if provider != "local":
             secret_key = provider_secret_key(provider)
             candidate_key = sanitize_secret_value(self.api_key_edit.secret())
@@ -2628,6 +3649,7 @@ class SettingsPage(QWidget):
         if selected_model and selected_model != "טוען מודלים...":
             self.main_window.subtitle.setText(self.main_window.format_model_name(selected_model))
         if not changed:
+            self._set_save_status("idle")
             return
         self.core._save_settings()
         model_reload_keys = {"api_mode", "local_server_url"} | model_provider_secret_keys()
@@ -2645,6 +3667,11 @@ class SettingsPage(QWidget):
         logging.info(f"SETTINGS | auto_saved | changed={', '.join(changed[:16])}{'...' if len(changed) > 16 else ''}")
         if getattr(self.core, "audit_logger", None):
             self.core.audit_logger.record("settings_auto_save", {"changed": changed}, self.core.settings)
+        self._set_save_status("saved")
+        if hasattr(self.main_window, "refresh_favorite_model_controls"):
+            self.main_window.refresh_favorite_model_controls()
+        if hasattr(self.main_window, "refresh_quick_autonomy_controls"):
+            self.main_window.refresh_quick_autonomy_controls()
 
     def save(self):
         self._save_from_ui()
@@ -2778,7 +3805,14 @@ class SettingsPage(QWidget):
             lines.extend(self._tail_file(AGENT_LOG_FILE, 300) or ["אין עדיין רשומות Agent Log."])
         if hasattr(self, "developer_log_text"):
             self.developer_log_text.setPlainText("\n".join(lines))
-            QTimer.singleShot(0, lambda: self.scroll_developer_log("bottom"))
+            QTimer.singleShot(0, self._reset_developer_log_view)
+
+    def _reset_developer_log_view(self):
+        if not hasattr(self, "developer_log_text"):
+            return
+        self.scroll_developer_log("bottom")
+        hbar = self.developer_log_text.horizontalScrollBar()
+        hbar.setValue(hbar.minimum())
 
     def scroll_developer_log(self, where):
         if not hasattr(self, "developer_log_text"):
@@ -2790,6 +3824,8 @@ class SettingsPage(QWidget):
             bar.setValue((bar.maximum() + bar.minimum()) // 2)
         else:
             bar.setValue(bar.maximum())
+        hbar = self.developer_log_text.horizontalScrollBar()
+        hbar.setValue(hbar.minimum())
 
 class AboutPage(QWidget):
     def __init__(self, main_window):

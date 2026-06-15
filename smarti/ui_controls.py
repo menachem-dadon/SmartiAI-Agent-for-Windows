@@ -142,6 +142,9 @@ class SearchableModelComboBox(NoScrollComboBox):
         self._suppress_next_show = False
         self._suppress_next_release = False
         self._app_filter_installed = False
+        self._favorite_state_callback = None
+        self._favorite_toggle_callback = None
+        self._ignore_next_item_activation = False
         self.search_edit = None
         self.results_list = None
         self.setEditable(False)
@@ -157,7 +160,7 @@ class SearchableModelComboBox(NoScrollComboBox):
                 f"QListWidget {{ background-color: {MENU_BG_COLOR}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
                 f"border-radius: 14px; padding: 4px; outline: none; }}"
                 f"QListWidget viewport {{ background-color: {MENU_BG_COLOR}; }}"
-                f"QListWidget::item {{ padding: 8px 10px; border-radius: 10px; }}"
+                f"QListWidget::item {{ padding: 4px 6px; border-radius: 10px; }}"
                 f"QListWidget::item:hover {{ background-color: {HOVER_TINT}; }}"
                 f"QListWidget::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
             )
@@ -166,6 +169,12 @@ class SearchableModelComboBox(NoScrollComboBox):
                 f"QFrame#ModelPickerPopup {{ background-color: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
                 f"border-radius: 18px; padding: 6px; }}"
             )
+        self._refresh_result_star_buttons()
+
+    def set_favorite_callbacks(self, state_callback=None, toggle_callback=None):
+        self._favorite_state_callback = state_callback
+        self._favorite_toggle_callback = toggle_callback
+        self._refresh_result_star_buttons()
 
     def set_loading_text(self, text):
         self._all_models = []
@@ -237,12 +246,12 @@ class SearchableModelComboBox(NoScrollComboBox):
         self.search_edit.commitRequested.connect(self._commit_from_keyboard)
         self.search_edit.dismissRequested.connect(self.hidePopup)
         self.results_list = QListWidget()
-        self.results_list.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.results_list.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.results_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.results_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.results_list.itemClicked.connect(lambda item: self._commit_model(item.text()))
-        self.results_list.itemActivated.connect(lambda item: self._commit_model(item.text()))
+        self.results_list.itemClicked.connect(self._commit_item)
+        self.results_list.itemActivated.connect(self._commit_item)
         layout.addWidget(self.search_edit)
         layout.addWidget(self.results_list)
         self.apply_theme()
@@ -378,19 +387,102 @@ class SearchableModelComboBox(NoScrollComboBox):
             self.results_list.addItem(item)
         else:
             for model in matches:
-                self.results_list.addItem(QListWidgetItem(model))
+                item = QListWidgetItem("")
+                item.setData(Qt.ItemDataRole.UserRole, model)
+                item.setSizeHint(QSize(10, 42))
+                self.results_list.addItem(item)
+                self.results_list.setItemWidget(item, self._make_model_result_row(model))
         self.results_list.clearSelection()
         current_row = self._row_for_model(self._selected_model)
         self.results_list.setCurrentRow(current_row if current_row >= 0 else -1)
+
+    def _model_is_favorite(self, model):
+        if not self._favorite_state_callback:
+            return False
+        try:
+            return bool(self._favorite_state_callback(str(model or "").strip()))
+        except Exception:
+            return False
+
+    def _star_button_css(self):
+        return (
+            f"QPushButton {{ background: transparent; color: {ACCENT_COLOR}; border: 1px solid transparent; "
+            "border-radius: 14px; padding: 0px; font-size: 17px; font-weight: 700; }}"
+            f"QPushButton:hover {{ background: {ACCENT_TINT}; border-color: {SOFT_LINE_COLOR}; }}"
+        )
+
+    def _set_star_button_icon(self, button, model):
+        favorite = self._model_is_favorite(model)
+        names = ("star_filled", "star_filled_icon", "favorite_model_on_icon", "favorite_on_icon") if favorite else ("star_empty", "star_empty_icon", "favorite_model_off_icon", "favorite_off_icon")
+        fallback = "★" if favorite else "☆"
+        set_themed_button_icon(button, names, fallback, 18, clear_text=True)
+        button.setToolTip("הסר מהמועדפים" if favorite else "הוסף למועדפים")
+        button.setStyleSheet(self._star_button_css())
+
+    def _make_model_result_row(self, model):
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(8)
+        star_btn = QPushButton()
+        star_btn.setProperty("smartiModelFavoriteStar", True)
+        star_btn.setProperty("smartiModelName", str(model or ""))
+        star_btn.setFixedSize(30, 30)
+        star_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._set_star_button_icon(star_btn, model)
+        star_btn.clicked.connect(lambda checked=False, m=str(model or ""), b=star_btn: self._toggle_model_favorite_from_popup(m, b))
+        label = QLabel(str(model or ""))
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignAbsolute)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; background: transparent;")
+        label.setWordWrap(False)
+        layout.addWidget(star_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(label, 1, Qt.AlignmentFlag.AlignVCenter)
+        return row
+
+    def _toggle_model_favorite_from_popup(self, model, button):
+        if not self._favorite_toggle_callback:
+            return
+        self._ignore_next_item_activation = True
+        try:
+            self._favorite_toggle_callback(str(model or "").strip())
+        except Exception:
+            QTimer.singleShot(160, lambda: setattr(self, "_ignore_next_item_activation", False))
+            return
+        self._set_star_button_icon(button, model)
+        self._refresh_result_star_buttons()
+        QTimer.singleShot(160, lambda: setattr(self, "_ignore_next_item_activation", False))
+
+    def _refresh_result_star_buttons(self):
+        if not self.results_list:
+            return
+        for button in self.results_list.findChildren(QPushButton):
+            if button.property("smartiModelFavoriteStar"):
+                self._set_star_button_icon(button, button.property("smartiModelName") or "")
 
     def _row_for_model(self, model):
         model = str(model or "")
         if not model or not self.results_list:
             return -1
         for row in range(self.results_list.count()):
-            if self.results_list.item(row).text() == model:
+            item = self.results_list.item(row)
+            if self._model_from_item(item) == model:
                 return row
         return -1
+
+    def _model_from_item(self, item):
+        if not item:
+            return ""
+        value = item.data(Qt.ItemDataRole.UserRole)
+        return str(value if value is not None else item.text() or "").strip()
+
+    def _commit_item(self, item):
+        if self._ignore_next_item_activation:
+            self._ignore_next_item_activation = False
+            return
+        self._commit_model(self._model_from_item(item))
 
     def _move_highlight(self, direction):
         self._ensure_popup()
@@ -417,7 +509,7 @@ class SearchableModelComboBox(NoScrollComboBox):
         if row >= 0:
             item = self.results_list.item(row)
             if item and item.flags() & Qt.ItemFlag.ItemIsSelectable:
-                self._commit_model(item.text())
+                self._commit_model(self._model_from_item(item))
 
     def _commit_model(self, model):
         model = str(model or "").strip()
@@ -451,10 +543,17 @@ class SearchableModelComboBox(NoScrollComboBox):
         screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
         if screen:
             available = screen.availableGeometry()
+            window = self.window()
+            if window:
+                window_rect = window.frameGeometry().adjusted(8, 8, -8, -8)
+                if window_rect.isValid() and window_rect.width() > 80 and window_rect.height() > 80:
+                    available = available.intersected(window_rect)
             if pos.x() + popup_w > available.right():
                 pos.setX(max(available.left(), available.right() - popup_w))
             if pos.y() + self._popup.height() > available.bottom():
                 pos = self.mapToGlobal(QPoint(0, -self._popup.height()))
+            pos.setX(max(available.left(), min(pos.x(), available.right() - popup_w)))
+            pos.setY(max(available.top(), min(pos.y(), available.bottom() - self._popup.height())))
         self._popup.move(pos)
         self._popup.show()
         self._popup.move(pos)
@@ -564,6 +663,7 @@ class SegmentedControl(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._items = []
         self._buttons = []
+        self._button_icon_names = {}
         self._current_index = -1
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(4, 4, 4, 4)
@@ -582,6 +682,7 @@ class SegmentedControl(QWidget):
         self._items.append(str(text))
         btn = QPushButton(str(text))
         btn.setCheckable(True)
+        btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setMinimumHeight(34)
         btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -606,10 +707,12 @@ class SegmentedControl(QWidget):
         if index == self._current_index:
             for i, btn in enumerate(self._buttons):
                 btn.setChecked(i == index)
+                self._apply_button_icon(i)
             return
         self._current_index = index
         for i, btn in enumerate(self._buttons):
             btn.setChecked(i == index)
+            self._apply_button_icon(i)
         if emit:
             self.currentIndexChanged.emit(index)
 
@@ -618,12 +721,77 @@ class SegmentedControl(QWidget):
         if text in self._items:
             self.setCurrentIndex(self._items.index(text))
 
+    def setItemIconNames(self, index, names, fallback_text=""):
+        try:
+            index = int(index)
+        except Exception:
+            return
+        if not (0 <= index < len(self._buttons)):
+            return
+        if isinstance(names, str):
+            names = (names,)
+        self._button_icon_names[index] = (tuple(names or ()), str(fallback_text or ""))
+        self._apply_button_icon(index)
+
+    def _apply_button_icon(self, index):
+        data = self._button_icon_names.get(index)
+        if not data or not (0 <= index < len(self._buttons)):
+            return
+        names, fallback_text = data
+        button = self._buttons[index]
+        candidates = []
+        if button.isChecked():
+            selected_theme = "light" if CURRENT_THEME == "dark" else "dark"
+            for name in names:
+                raw = str(name or "").strip()
+                if not raw or os.path.isabs(raw) or os.path.dirname(raw):
+                    continue
+                stem, ext = os.path.splitext(raw)
+                if ext:
+                    candidates.append(f"{stem}_{selected_theme}{ext}")
+                else:
+                    candidates.extend([f"{raw}_{selected_theme}.png", f"{raw}_{selected_theme}.svg"])
+        icon = themed_icon(*(candidates + list(names)))
+        if not icon.isNull():
+            button.setIcon(icon)
+            button.setIconSize(QSize(18, 18))
+        else:
+            button.setIcon(QIcon())
+
     def apply_theme(self):
         self.setStyleSheet(segmented_control_css())
+        for index in range(len(self._buttons)):
+            self._apply_button_icon(index)
+
+class DropdownPillButton(QPushButton):
+    def __init__(self, *args, arrow_names=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._arrow_icon_names = tuple(arrow_names or ("message_collapse_arrow", "message_collapse_arrow_icon", "dropdown"))
+        self._arrow_size = 13
+
+    def setArrowIconNames(self, names):
+        self._arrow_icon_names = tuple(names or ())
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        icon = themed_icon(*self._arrow_icon_names)
+        if icon.isNull():
+            return
+        pixmap = icon.pixmap(self._arrow_size, self._arrow_size)
+        if pixmap.isNull():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        x = max(6, self.width() - pixmap.width() - 10)
+        y = int((self.height() - pixmap.height()) / 2)
+        painter.drawPixmap(x, y, pixmap)
+        painter.end()
 
 class SmartiCheckBox(QCheckBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._smarti_info_reserved = False
         self.setMinimumWidth(1)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -631,6 +799,10 @@ class SmartiCheckBox(QCheckBox):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumHeight(38)
         self.setStyleSheet("background: transparent;")
+
+    def setInfoButtonReserved(self, reserved=True):
+        self._smarti_info_reserved = bool(reserved)
+        self.update()
 
     def sizeHint(self):
         hint = super().sizeHint()
@@ -654,10 +826,10 @@ class SmartiCheckBox(QCheckBox):
             track.setColorAt(0.56, qcolor_from_css(ACCENT_PINK_COLOR))
             track.setColorAt(1.0, qcolor_from_css(ACCENT_SECONDARY_COLOR))
         else:
-            track.setColorAt(0.0, qcolor_from_css(GLASS_COLOR))
-            track.setColorAt(1.0, qcolor_from_css(PANEL_ELEVATED_COLOR))
-        pen = QPen(qcolor_from_css(LINE_COLOR if self.isChecked() else SOFT_LINE_COLOR))
-        pen.setWidth(1)
+            track.setColorAt(0.0, qcolor_from_css(FIELD_COLOR))
+            track.setColorAt(1.0, qcolor_from_css(FIELD_HOVER_COLOR))
+        pen = QPen(qcolor_from_css(LINE_COLOR if self.isChecked() else "rgba(142,107,255,0.62)"))
+        pen.setWidth(1 if self.isChecked() else 2)
         painter.setPen(pen)
         painter.setBrush(QBrush(track))
         painter.drawRoundedRect(switch_rect, switch_h / 2, switch_h / 2)
@@ -670,7 +842,8 @@ class SmartiCheckBox(QCheckBox):
         painter.setPen(QPen(qcolor_from_css("rgba(255,255,255,0.46)" if self.isChecked() else SOFT_LINE_COLOR), 1))
         painter.drawEllipse(knob_rect)
 
-        text_rect = QRectF(switch_w + 16, 0, max(1, self.width() - switch_w - 18), self.height())
+        text_left = switch_w + (44 if self._smarti_info_reserved else 16)
+        text_rect = QRectF(text_left, 0, max(1, self.width() - text_left - 2), self.height())
         painter.setPen(qcolor_from_css(TEXT_COLOR if self.isEnabled() else SUBTLE_TEXT_COLOR))
         painter.setFont(self.font())
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignAbsolute, self.text())
@@ -1052,44 +1225,68 @@ class DirectoryPicker(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        self.path_label = QLabel()
-        self.path_label.setWordWrap(True)
-        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.path_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
-        self.path_label.setMinimumWidth(1)
-        self.path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        layout.addWidget(self.path_label)
+        self.path_frame = QFrame()
+        self.path_frame.setObjectName("DirectoryPickerPathFrame")
+        self.path_frame.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        path_layout = QHBoxLayout(self.path_frame)
+        path_layout.setContentsMargins(10, 6, 6, 6)
+        path_layout.setSpacing(8)
 
-        button_row = QHBoxLayout()
-        button_row.setSpacing(8)
-        self.choose_btn = QPushButton("בחר תיקייה" if not allow_multiple else "הוסף תיקייה")
-        self.choose_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        self.path_edit = QLineEdit()
+        self.path_edit.setReadOnly(True)
+        self.path_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.path_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.path_edit.setMinimumWidth(1)
+        self.path_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.path_label = self.path_edit
+        path_layout.addWidget(self.path_edit, 1)
+
+        self.choose_btn = QPushButton()
+        self.choose_btn.setFixedSize(34, 34)
         self.choose_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.choose_btn.setToolTip("בחר תיקייה" if not allow_multiple else "הוסף תיקייה")
         self.choose_btn.clicked.connect(self.choose_directory)
-        button_row.addWidget(self.choose_btn)
+        path_layout.addWidget(self.choose_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.path_frame)
 
         if allow_multiple:
             self.clear_btn = QPushButton("נקה")
             self.clear_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
             self.clear_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             self.clear_btn.clicked.connect(self.clear_paths)
-            button_row.addWidget(self.clear_btn)
-
-        button_row.addStretch()
-        layout.addLayout(button_row)
+            layout.addWidget(self.clear_btn, 0, Qt.AlignmentFlag.AlignLeft)
         self.apply_theme()
         self.set_paths(paths or [])
 
     def apply_theme(self):
-        self.path_label.setStyleSheet(f"""
-            QLabel {{
+        self.path_frame.setStyleSheet(f"""
+            QFrame#DirectoryPickerPathFrame {{
                 background: {GLASS_COLOR}; color: {FIELD_TEXT_COLOR};
                 border: 1px solid {SOFT_LINE_COLOR};
-                border-radius: 20px; padding: 13px 14px;
+                border-radius: 20px;
+            }}
+        """)
+        self.path_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background: transparent;
+                color: {FIELD_TEXT_COLOR};
+                border: none;
+                padding: 6px 4px;
                 font-size: 13px;
             }}
         """)
-        self.choose_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        set_themed_button_icon(
+            self.choose_btn,
+            ("folder_icon", "directory_icon", "choose_folder_icon", "open_folder_icon", "file_icon"),
+            "",
+            20,
+            clear_text=True,
+        )
+        self.choose_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; border-radius: 17px; padding: 0px; }}"
+            f"QPushButton:hover {{ background: {HOVER_TINT}; border: none; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_TINT}; border: none; }}"
+        )
         if hasattr(self, "clear_btn"):
             self.clear_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
 
@@ -1133,9 +1330,9 @@ class DirectoryPicker(QWidget):
                 path.replace("\\", "\\\u200b").replace("/", "/\u200b")
                 for path in self._paths
             ]
-            self.path_label.setText("\n".join(display_paths))
+            self.path_edit.setText("   ".join(display_paths))
         else:
-            self.path_label.setText("לא נבחרה תיקייה")
+            self.path_edit.setText("לא נבחרה תיקייה")
 
 class ExpandingTextEdit(QTextEdit):
     send_signal = pyqtSignal()
