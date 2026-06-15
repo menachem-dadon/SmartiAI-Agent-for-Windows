@@ -768,24 +768,80 @@ class DropdownPillButton(QPushButton):
         super().__init__(*args, **kwargs)
         self._arrow_icon_names = tuple(arrow_names or ("message_collapse_arrow", "message_collapse_arrow_icon", "dropdown"))
         self._arrow_size = 13
+        self._content_gap = 6
 
     def setArrowIconNames(self, names):
         self._arrow_icon_names = tuple(names or ())
         self.update()
 
     def paintEvent(self, event):
-        super().paintEvent(event)
-        icon = themed_icon(*self._arrow_icon_names)
-        if icon.isNull():
-            return
-        pixmap = icon.pixmap(self._arrow_size, self._arrow_size)
-        if pixmap.isNull():
-            return
         painter = QPainter(self)
+        option = QStyleOptionButton()
+        option.initFrom(self)
+        option.rect = self.rect().adjusted(1, 1, -1, -1)
+        option.text = ""
+        option.icon = QIcon()
+        if self.isDown():
+            option.state |= QStyle.StateFlag.State_Sunken
+        if self.isChecked():
+            option.state |= QStyle.StateFlag.State_On
+        self.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self)
+
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        x = max(6, self.width() - pixmap.width() - 10)
-        y = int((self.height() - pixmap.height()) / 2)
-        painter.drawPixmap(x, y, pixmap)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+
+        arrow_icon = themed_icon(*self._arrow_icon_names)
+        arrow_pixmap = QPixmap()
+        if not arrow_icon.isNull():
+            mode = QIcon.Mode.Disabled if not self.isEnabled() else QIcon.Mode.Normal
+            arrow_pixmap = arrow_icon.pixmap(self._arrow_size, self._arrow_size, mode)
+
+        main_icon = self.icon()
+        icon_size = self.iconSize()
+        icon_pixmap = QPixmap()
+        if not main_icon.isNull() and icon_size.width() > 0 and icon_size.height() > 0:
+            mode = QIcon.Mode.Disabled if not self.isEnabled() else QIcon.Mode.Normal
+            icon_pixmap = main_icon.pixmap(icon_size, mode)
+
+        text = str(self.text() or "")
+        metrics = QFontMetrics(self.font())
+        text_width = metrics.horizontalAdvance(text) if text else 0
+        gap = int(self._content_gap)
+        icon_w = 0 if icon_pixmap.isNull() else icon_pixmap.width()
+        arrow_w = 0 if arrow_pixmap.isNull() else arrow_pixmap.width()
+        group_width = icon_w + text_width + arrow_w
+        if icon_w and text_width:
+            group_width += gap
+        if arrow_w and (text_width or icon_w):
+            group_width += gap
+
+        content = option.rect.adjusted(8, 0, -8, 0)
+        if group_width > content.width():
+            text_budget = max(12, content.width() - icon_w - arrow_w - (gap if icon_w else 0) - (gap if arrow_w else 0))
+            text = metrics.elidedText(text, Qt.TextElideMode.ElideRight, text_budget)
+            text_width = metrics.horizontalAdvance(text)
+            group_width = icon_w + text_width + arrow_w
+            if icon_w and text_width:
+                group_width += gap
+            if arrow_w and (text_width or icon_w):
+                group_width += gap
+
+        x = int(content.x() + max(0, (content.width() - group_width) / 2))
+        center_y = int(option.rect.center().y())
+
+        if not icon_pixmap.isNull():
+            painter.drawPixmap(x, center_y - icon_pixmap.height() // 2, icon_pixmap)
+            x += icon_pixmap.width() + (gap if text_width else 0)
+
+        painter.setPen(self.palette().color(QPalette.ColorRole.ButtonText))
+        if text_width:
+            text_bounds = metrics.tightBoundingRect(text)
+            baseline_y = center_y - (text_bounds.top() + text_bounds.bottom()) / 2.0
+            painter.drawText(int(round(x - text_bounds.left())), int(round(baseline_y)), text)
+            x += text_width + (gap if arrow_w else 0)
+
+        if not arrow_pixmap.isNull():
+            painter.drawPixmap(x, center_y - arrow_pixmap.height() // 2, arrow_pixmap)
         painter.end()
 
 class SmartiCheckBox(QCheckBox):

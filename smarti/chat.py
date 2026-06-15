@@ -683,11 +683,22 @@ def _render_markdown_html(text, link_color=None, is_user=False, style_blocks=Tru
             rendered_html = _sanitize_rendered_links(rendered_html, link_color, clickable_links)
             if style_blocks:
                 rendered_html = _style_markdown_blocks(rendered_html, is_user, None)
+            rendered_html = _suppress_asset_font_italic_html(rendered_html)
             return _soft_break_rendered_text(rendered_html)
         except Exception:
             pass
     rendered_html = _render_markdown_links_fallback(text, link_color, clickable_links)
+    rendered_html = _suppress_asset_font_italic_html(rendered_html)
     return _sanitize_rendered_links(rendered_html, link_color, clickable_links)
+
+
+def _suppress_asset_font_italic_html(rendered_html):
+    if not app_uses_asset_font():
+        return rendered_html
+    html_text = str(rendered_html or "")
+    html_text = re.sub(r"font-style\s*:\s*italic\s*;?", "font-style:normal;", html_text, flags=re.IGNORECASE)
+    html_text = re.sub(r"<(/?)(?:em|i)(\b[^>]*)>", r"<\1span\2>", html_text, flags=re.IGNORECASE)
+    return html_text
 
 def _clean_step_for_display(text):
     clean = html.unescape(str(text or "")).strip()
@@ -2143,9 +2154,10 @@ class MessageBubble(QFrame):
 
     def _technical_details_html(self, details):
         safe_details = _escape_with_soft_breaks(details)
+        font_style = "normal" if app_uses_asset_font() else "italic"
         return (
             f'<div dir="rtl" align="right" style="color:{MUTED_TEXT_COLOR}; '
-            'font-size:12px; font-style:italic; line-height:1.35; '
+            f'font-size:12px; font-style:{font_style}; line-height:1.35; '
             'margin-top:8px; padding-top:2px;">'
             f'{safe_details}</div>'
         )
@@ -3403,6 +3415,7 @@ class UpdateDialog(QDialog):
         self.notes_browser.set_release_html(
             "<html><head><style>"
             f"body {{ direction: rtl; text-align: right; color: {TEXT_COLOR}; font-family: {ui_font_family_css()}; font-size: 13px; }}"
+            f"{asset_font_normal_italic_html_css()}"
             "p, li { line-height: 1.45; } ul, ol { margin-right: 18px; padding-right: 18px; margin-left: 0; padding-left: 0; }"
             "pre, code { direction: ltr; text-align: left; unicode-bidi: embed; }"
             "img { max-width: 100%; height: auto; }"
@@ -3492,19 +3505,66 @@ class VoicePulseWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._phase = 0.0
-        self.setFixedSize(52, 52)
+        self._movie = None
+        self._movie_path = ""
+        self.setFixedSize(42, 42)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet("background: transparent; border: none;")
         self._timer = QTimer(self)
-        self._timer.setInterval(38)
+        self._timer.setInterval(45)
         self._timer.timeout.connect(self._tick)
+        self._load_animation_asset()
+
+    def _animation_asset_path(self):
+        candidates = themed_asset_candidates(
+            "voice_listening.gif",
+            "listen_animation.gif",
+            "smarti_listening.gif",
+            "voice_listening",
+            "listen_animation",
+            "smarti_listening",
+        )
+        for filename in candidates:
+            if not str(filename).lower().endswith(".gif"):
+                continue
+            path = filename if os.path.isabs(filename) or os.path.dirname(filename) else os.path.join(ASSETS_DIR, filename)
+            if os.path.exists(path):
+                return path
+        return ""
+
+    def _load_animation_asset(self):
+        path = self._animation_asset_path()
+        if path == self._movie_path:
+            return
+        if self._movie is not None:
+            try:
+                self._movie.stop()
+                self._movie.frameChanged.disconnect()
+            except Exception:
+                pass
+            self._movie = None
+        self._movie_path = path
+        if not path:
+            return
+        movie = QMovie(path)
+        movie.setCacheMode(QMovie.CacheMode.CacheAll)
+        movie.setScaledSize(QSize(40, 40))
+        movie.frameChanged.connect(lambda _=None: self.update())
+        self._movie = movie
 
     def start(self):
-        if not self._timer.isActive():
+        self._load_animation_asset()
+        if self._movie is not None and self._movie.isValid():
+            self._movie.start()
+        elif not self._timer.isActive():
             self._timer.start()
         self.show()
 
     def stop(self):
         self._timer.stop()
+        if self._movie is not None:
+            self._movie.stop()
         self.update()
 
     def _tick(self):
@@ -3514,31 +3574,54 @@ class VoicePulseWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.fillRect(self.rect(), qcolor_from_css(GLASS_STRONG_COLOR))
+        badge_rect = QRectF(2, 2, self.width() - 4, self.height() - 4)
+        painter.setPen(QPen(qcolor_from_css(LINE_COLOR), 1.4))
+        painter.setBrush(qcolor_from_css(ACCENT_TINT))
+        painter.drawEllipse(badge_rect)
+
+        if self._movie is not None and self._movie.isValid():
+            pixmap = self._movie.currentPixmap()
+            if not pixmap.isNull():
+                clip = QPainterPath()
+                clip.addEllipse(badge_rect.adjusted(4, 4, -4, -4))
+                painter.save()
+                painter.setClipPath(clip)
+                target = badge_rect.adjusted(0.5, 0.5, -0.5, -0.5).toRect()
+                painter.drawPixmap(target, pixmap)
+                painter.restore()
+                painter.setPen(QPen(qcolor_from_css(LINE_COLOR), 2.6))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(badge_rect.adjusted(1.3, 1.3, -1.3, -1.3))
+                painter.end()
+                return
+
         center = self.rect().center()
         accent = qcolor_from_css(ACCENT_COLOR)
         pink = qcolor_from_css(ACCENT_PINK_COLOR)
         secondary = qcolor_from_css(ACCENT_SECONDARY_COLOR)
 
-        for index, base_radius in enumerate((15, 20, 25)):
+        for index, base_radius in enumerate((9, 14, 18)):
             pulse = (math.sin(self._phase + index * 0.8) + 1.0) / 2.0
             color = QColor(accent)
-            color.setAlpha(int(34 + pulse * 46))
-            painter.setPen(QPen(color, 1.4))
-            radius = base_radius + pulse * 3.0
+            color.setAlpha(int(42 + pulse * 50))
+            painter.setPen(QPen(color, 1.2))
+            radius = base_radius + pulse * 2.0
             painter.drawEllipse(center, int(radius), int(radius))
 
         painter.setPen(Qt.PenStyle.NoPen)
         core = QColor(pink)
         core.setAlpha(225)
         painter.setBrush(core)
-        painter.drawEllipse(center, 13, 13)
+        painter.drawEllipse(center, 8, 8)
 
-        bar_width = 4
-        gap = 4
+        bar_width = 3
+        gap = 3
         start_x = center.x() - bar_width - gap
         for index, color in enumerate((secondary, accent, secondary)):
             level = (math.sin(self._phase * 1.7 + index * 1.25) + 1.0) / 2.0
-            height = 11 + level * 18
+            height = 7 + level * 12
             rect = QRectF(start_x + index * (bar_width + gap), center.y() - height / 2, bar_width, height)
             bar_color = QColor(color)
             bar_color.setAlpha(235)
@@ -3554,7 +3637,6 @@ class VoiceListeningOverlay(QWidget):
     def __init__(self, owner=None):
         super().__init__(None)
         self.owner = owner
-        self._fade_anim = None
         self.setObjectName("VoiceListeningOverlay")
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -3562,33 +3644,30 @@ class VoiceListeningOverlay(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAutoFillBackground(True)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-
-        self._opacity = QGraphicsOpacityEffect(self)
-        self._opacity.setOpacity(0.0)
-        self.setGraphicsEffect(self._opacity)
+        self.setFixedSize(342, 70)
 
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(10, 10, 10, 12)
+        root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
         self.card = QFrame()
         self.card.setObjectName("VoiceOverlayCard")
-        self.card.setMinimumWidth(338)
-        self.card.setMaximumWidth(390)
+        self.card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         card_layout = QHBoxLayout(self.card)
-        card_layout.setContentsMargins(12, 10, 12, 10)
-        card_layout.setSpacing(10)
+        card_layout.setContentsMargins(10, 8, 10, 8)
+        card_layout.setSpacing(8)
 
         self.cancel_btn = QPushButton()
-        self.cancel_btn.setFixedSize(38, 38)
+        self.cancel_btn.setFixedSize(36, 36)
         self.cancel_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.cancel_btn.setToolTip("בטל האזנה")
         self.cancel_btn.clicked.connect(lambda checked=False: self.cancel_requested.emit())
 
-        self.open_btn = QPushButton("פתח")
-        self.open_btn.setMinimumHeight(38)
+        self.open_btn = QPushButton()
+        self.open_btn.setFixedSize(36, 36)
         self.open_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.open_btn.setToolTip("פתח את סמארטי")
         self.open_btn.clicked.connect(lambda checked=False: self.open_requested.emit())
@@ -3596,7 +3675,7 @@ class VoiceListeningOverlay(QWidget):
         text_col = QVBoxLayout()
         text_col.setSpacing(1)
         text_col.setContentsMargins(0, 0, 0, 0)
-        self.title_lbl = QLabel("מקשיב...")
+        self.title_lbl = QLabel("האזנה פעילה")
         self.title_lbl.setTextFormat(Qt.TextFormat.PlainText)
         self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
         self.status_lbl = QLabel("אפשר לדבר עכשיו")
@@ -3617,29 +3696,56 @@ class VoiceListeningOverlay(QWidget):
         self.hide()
 
     def apply_theme(self):
-        self.setStyleSheet("QWidget#VoiceListeningOverlay { background: transparent; border: none; }")
+        self.setStyleSheet(
+            f"QWidget#VoiceListeningOverlay {{ background: {GLASS_STRONG_COLOR}; border: 1px solid {LINE_COLOR}; }}"
+        )
         self.card.setStyleSheet(
-            f"QFrame#VoiceOverlayCard {{ background: {GLASS_STRONG_COLOR}; border: 1px solid {LINE_COLOR}; "
-            "border-radius: 28px; }}"
+            f"QFrame#VoiceOverlayCard {{ background: {GLASS_STRONG_COLOR}; border: none; border-radius: 0px; }}"
         )
         self.title_lbl.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 900; background: transparent; border: none;")
         self.status_lbl.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 12px; font-weight: 700; background: transparent; border: none;")
         button_css = (
             f"QPushButton {{ background: {ACCENT_TINT}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-            "border-radius: 19px; padding: 0px 12px; font-size: 12px; font-weight: 800; outline: none; }}"
-            f"QPushButton:hover {{ background: {HOVER_TINT}; border-color: {LINE_COLOR}; }}"
-            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
+            "border-radius: 18px; padding: 0px 10px; font-size: 12px; font-weight: 800; outline: none; }}"
+            f"QPushButton:hover {{ background: {FIELD_HOVER_COLOR}; color: {TEXT_COLOR}; border-color: {LINE_COLOR}; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
+            f"QPushButton:disabled {{ background: {PANEL_ELEVATED_COLOR}; color: {SUBTLE_TEXT_COLOR}; border-color: {SOFT_LINE_COLOR}; }}"
         )
         self.open_btn.setStyleSheet(button_css)
         self.cancel_btn.setStyleSheet(button_css)
-        set_themed_button_icon(self.open_btn, ("logo", "app_icon"), "פתח", 18, clear_text=False)
-        set_themed_button_icon(self.cancel_btn, ("stop_audio_icon", "stop_agent_icon", "close_icon"), "×", 18, clear_text=True)
-        apply_soft_shadow(self.card, blur=34, y=10, alpha=66)
+        set_themed_button_icon(
+            self.open_btn,
+            ("voice_overlay_open", "open_smarti_icon", "open_icon", "logo"),
+            "פתח",
+            18,
+            clear_text=True,
+        )
+        set_themed_button_icon(
+            self.cancel_btn,
+            ("voice_overlay_cancel", "cancel_listening_icon", "close_icon", "stop_agent_icon"),
+            "×",
+            18,
+            clear_text=True,
+        )
         self.pulse.update()
 
     def set_status(self, text):
         text = str(text or "").strip()
-        if text:
+        if not text:
+            return
+        if "מקשיב" in text:
+            self.title_lbl.setText("האזנה פעילה")
+            self.status_lbl.setText("אפשר לדבר עכשיו")
+        elif "מפעיל" in text or "פותח" in text:
+            self.title_lbl.setText("מפעיל האזנה")
+            self.status_lbl.setText(text)
+        elif "מתמלל" in text:
+            self.title_lbl.setText("מעבד קול")
+            self.status_lbl.setText(text)
+        elif "מפסיק" in text:
+            self.title_lbl.setText("מפסיק האזנה")
+            self.status_lbl.setText("מסיים את ההאזנה...")
+        else:
             self.status_lbl.setText(text)
 
     def set_cancel_enabled(self, enabled):
@@ -3655,30 +3761,13 @@ class VoiceListeningOverlay(QWidget):
         self.position_near_owner()
         self.show()
         self.raise_()
-        self._opacity.setOpacity(0.0)
-        self._fade_anim = QPropertyAnimation(self._opacity, b"opacity", self)
-        self._fade_anim.setDuration(180)
-        self._fade_anim.setStartValue(0.0)
-        self._fade_anim.setEndValue(1.0)
-        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._fade_anim.start()
 
     def hide_listening(self):
         self.pulse.stop()
-        if not self.isVisible():
-            self.hide()
-            return
-        self._fade_anim = QPropertyAnimation(self._opacity, b"opacity", self)
-        self._fade_anim.setDuration(130)
-        self._fade_anim.setStartValue(self._opacity.opacity())
-        self._fade_anim.setEndValue(0.0)
-        self._fade_anim.setEasingCurve(QEasingCurve.Type.InCubic)
-        self._fade_anim.finished.connect(self.hide)
-        self._fade_anim.start()
+        self.hide()
 
     def position_near_owner(self):
-        self.adjustSize()
-        size = self.sizeHint()
+        size = self.size()
         owner = self.owner
         screen = None
         owner_visible = False
@@ -3693,9 +3782,6 @@ class VoiceListeningOverlay(QWidget):
             screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
             geom = screen.availableGeometry() if screen else QRectF(0, 0, 800, 600).toRect()
         available = screen.availableGeometry() if screen else geom
-        width = min(size.width(), max(280, available.width() - 24))
-        self.setFixedWidth(width)
-        size = self.sizeHint()
         if owner_visible:
             x = geom.x() + max(0, (geom.width() - size.width()) // 2)
             y = geom.y() - size.height() - 12
@@ -4233,7 +4319,7 @@ class ChatWindow(QMainWindow):
                 color: {TEXT_COLOR};
                 border: 1px solid transparent;
                 border-radius: 16px;
-                padding: 7px 30px 7px 12px;
+                padding: 7px 40px 7px 14px;
                 font-size: 12px;
                 font-weight: 700;
                 min-height: 24px;
@@ -4295,8 +4381,8 @@ class ChatWindow(QMainWindow):
             button.setProperty("smartiFullQuickText", text)
             text_width = button.fontMetrics().horizontalAdvance(str(text or ""))
             icon_extra = 28 if not button.icon().isNull() else 0
-            arrow_extra = int(getattr(button, "_arrow_size", 13) or 13) + 18
-            padding_extra = 38
+            arrow_extra = int(getattr(button, "_arrow_size", 13) or 13) + 28
+            padding_extra = 54
             width = max(int(base_width), int(text_width) + icon_extra + arrow_extra + padding_extra)
             width = max(int(min_width), min(width, int(max_width)))
             text_budget = max(36, width - icon_extra - arrow_extra - padding_extra)
@@ -4311,6 +4397,10 @@ class ChatWindow(QMainWindow):
     def _quick_input_available_width(self):
         if not all(hasattr(self, attr) for attr in ("input_frame", "quick_control_row", "action_btn_host", "attach_btn")):
             return 0
+        model_in_input = bool(
+            hasattr(self, "favorite_model_btn")
+            and self.favorite_model_btn.property("smartiModelPickerLocation") != "header"
+        )
         row_width = int(self.quick_control_row.geometry().width() or 0)
         if row_width <= 0:
             row_width = int(self.input_frame.width() or 0)
@@ -4321,12 +4411,21 @@ class ChatWindow(QMainWindow):
         spacing = max(0, int(self.quick_control_row.spacing()))
         fixed_width = int(self.action_btn_host.width() or self.action_btn_host.sizeHint().width() or 52)
         fixed_width += int(self.attach_btn.width() or self.attach_btn.sizeHint().width() or 42)
-        return max(0, row_width - fixed_width - (spacing * 4))
+        gap_count = 4 if model_in_input else 3
+        return max(0, row_width - fixed_width - (spacing * gap_count))
 
     def _quick_input_button_widths(self):
         available = self._quick_input_available_width()
+        model_in_input = bool(
+            hasattr(self, "favorite_model_btn")
+            and self.favorite_model_btn.property("smartiModelPickerLocation") != "header"
+        )
+        if not model_in_input:
+            if available <= 0:
+                return 0, 220
+            return 0, max(128, min(available, 260))
         if available <= 0:
-            return 168, 152
+            return 168, 168
         if available < 216:
             autonomy_width = max(86, int(available * 0.54))
             return max(48, available - autonomy_width), autonomy_width
@@ -4343,17 +4442,35 @@ class ChatWindow(QMainWindow):
 
     def _resize_quick_input_controls(self):
         if hasattr(self, "favorite_model_btn"):
-            model_width, _ = self._quick_input_button_widths()
             text = self.favorite_model_btn.property("smartiFullQuickText") or self.favorite_model_btn.text()
-            self._fit_quick_input_button(self.favorite_model_btn, text, model_width, model_width, min(model_width, 88))
+            if self.favorite_model_btn.property("smartiModelPickerLocation") == "header":
+                self._fit_header_model_button(text)
+            else:
+                model_width, _ = self._quick_input_button_widths()
+                self._fit_quick_input_button(self.favorite_model_btn, text, model_width, model_width, min(model_width, 88))
         if hasattr(self, "autonomy_quick_btn"):
             _, autonomy_width = self._quick_input_button_widths()
             text = self.autonomy_quick_btn.property("smartiFullQuickText") or self.autonomy_quick_btn.text()
-            self._fit_quick_input_button(self.autonomy_quick_btn, text, autonomy_width, autonomy_width, min(autonomy_width, 118))
+            self._fit_quick_input_button(
+                self.autonomy_quick_btn,
+                text,
+                min(152, autonomy_width),
+                autonomy_width,
+                min(118, autonomy_width),
+            )
+
+    def _fit_header_model_button(self, label):
+        if not hasattr(self, "favorite_model_btn"):
+            return
+        available = 248
+        if hasattr(self, "titles_widget"):
+            available = max(132, min(292, int(self.titles_widget.width() or 248) - 6))
+        self._fit_quick_input_button(self.favorite_model_btn, label, min(190, available), available, min(124, available))
 
     def refresh_favorite_model_controls(self):
         if not hasattr(self, "favorite_model_btn"):
             return
+        self._ensure_current_model_favorite(save=False)
         favorites = self._normalized_favorite_models()
         current_provider = normalize_provider_name(self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini")) or "gemini")
         current_model = str(self.core.settings.get(f"selected_{current_provider}_model") or provider_default_model(current_provider) or "").strip()
@@ -4361,8 +4478,11 @@ class ChatWindow(QMainWindow):
         label = self._favorite_model_label(current_provider, current_model) or "מודל"
         self.favorite_model_btn.setText(label)
         self.favorite_model_btn.setIcon(QIcon())
-        model_width, _ = self._quick_input_button_widths()
-        self._fit_quick_input_button(self.favorite_model_btn, label, model_width, model_width, min(model_width, 88))
+        if self.favorite_model_btn.property("smartiModelPickerLocation") == "header":
+            self._fit_header_model_button(label)
+        else:
+            model_width, _ = self._quick_input_button_widths()
+            self._fit_quick_input_button(self.favorite_model_btn, label, model_width, model_width, min(model_width, 88))
         self.favorite_model_btn.setToolTip("מודלים מועדפים")
 
     def _favorites_by_provider(self):
@@ -4445,7 +4565,13 @@ class ChatWindow(QMainWindow):
         else:
             self.autonomy_quick_btn.setIcon(QIcon())
         _, autonomy_width = self._quick_input_button_widths()
-        self._fit_quick_input_button(self.autonomy_quick_btn, label, autonomy_width, autonomy_width, min(autonomy_width, 118))
+        self._fit_quick_input_button(
+            self.autonomy_quick_btn,
+            label,
+            min(152, autonomy_width),
+            autonomy_width,
+            min(118, autonomy_width),
+        )
         self.autonomy_quick_btn.setToolTip("פרופיל בטיחות")
 
     def show_quick_autonomy_menu(self):
@@ -4494,9 +4620,9 @@ class ChatWindow(QMainWindow):
 
     def _on_quick_menu_about_to_hide(self, menu):
         button = self._open_quick_menu_button if self._open_quick_menu is menu else None
-        if self._quick_menu_button_contains_cursor(button):
+        if button is not None:
             self._suppress_quick_menu_button = button
-            QTimer.singleShot(220, self._clear_quick_menu_reopen_guard)
+            QTimer.singleShot(360, self._clear_quick_menu_reopen_guard)
         QTimer.singleShot(0, lambda m=menu: self._clear_open_quick_menu(m))
 
     def _popup_menu_near_button(self, menu, button):
@@ -4513,7 +4639,7 @@ class ChatWindow(QMainWindow):
             current.deleteLater()
             if current_button is button and self._quick_menu_button_contains_cursor(button):
                 self._suppress_quick_menu_button = button
-                QTimer.singleShot(220, self._clear_quick_menu_reopen_guard)
+                QTimer.singleShot(360, self._clear_quick_menu_reopen_guard)
                 menu.deleteLater()
                 return False
         menu.adjustSize()
@@ -4581,7 +4707,7 @@ class ChatWindow(QMainWindow):
         if hasattr(self, "title_label"):
             self.title_label.setStyleSheet(page_title_css(19))
             self.refresh_chat_title()
-        if hasattr(self, "subtitle"):
+        if hasattr(self, "subtitle") and self.subtitle is not getattr(self, "favorite_model_btn", None):
             self.subtitle.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 12px; font-weight: 700;")
             if hasattr(self.subtitle, "fullText"):
                 self.subtitle.setText(self.subtitle.fullText())
@@ -4667,10 +4793,10 @@ class ChatWindow(QMainWindow):
         top_bar = QWidget()
         self.top_bar = top_bar
         top_bar.setObjectName("TopBar")
-        top_bar.setFixedHeight(64)
+        top_bar.setFixedHeight(88)
         top_bar.setStyleSheet(self._top_bar_stylesheet())
         top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(15, 7, 15, 7)
+        top_layout.setContentsMargins(15, 7, 15, 14)
         top_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         
         self.menu_btn = QPushButton("⋮")
@@ -4716,18 +4842,22 @@ class ChatWindow(QMainWindow):
         titles_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         titles_widget.setStyleSheet("background: transparent; border: none;")
         titles_layout = QVBoxLayout(titles_widget)
-        titles_layout.setContentsMargins(8, 0, 8, 0)
-        titles_layout.setSpacing(0)
+        titles_layout.setContentsMargins(8, 0, 8, 3)
+        titles_layout.setSpacing(2)
         self.title_label = EndElideLabel(self.active_chat_title())
         self.title_label.setStyleSheet(page_title_css(19))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        raw_model = self.core.settings.get(f"selected_{self.core.mode}_model", "Gemini")
-        self.subtitle = EndElideLabel(self.format_model_name(raw_model))
-        self.subtitle.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 12px; font-weight: 700;")
-        self.subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.favorite_model_btn = DropdownPillButton("מודל")
+        self.favorite_model_btn.setProperty("smartiModelPickerLocation", "header")
+        self.favorite_model_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.favorite_model_btn.setFixedWidth(172)
+        self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
+        self.favorite_model_btn.clicked.connect(self.show_favorite_model_menu)
+        self.subtitle = self.favorite_model_btn
         titles_layout.addWidget(self.title_label)
-        titles_layout.addWidget(self.subtitle)
+        titles_layout.addWidget(self.favorite_model_btn, 0, Qt.AlignmentFlag.AlignCenter)
         
         self.logo_lbl = QLabel()
         self.logo_lbl.setFixedSize(50, 50)
@@ -4850,13 +4980,14 @@ class ChatWindow(QMainWindow):
         self.action_btn_host = PinnedActionButtonHost(self.action_btn)
         control_row.addWidget(self.action_btn_host, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
-        self.favorite_model_btn = DropdownPillButton("מודל")
-        self.favorite_model_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.favorite_model_btn.setFixedWidth(168)
-        self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
-        self.favorite_model_btn.clicked.connect(self.show_favorite_model_menu)
-        control_row.addWidget(self.favorite_model_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+        # Restore the chat-box model picker here if you want it back inside the input controls:
+        # self.favorite_model_btn = DropdownPillButton("מודל")
+        # self.favorite_model_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        # self.favorite_model_btn.setFixedWidth(168)
+        # self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
+        # self.favorite_model_btn.clicked.connect(self.show_favorite_model_menu)
+        # control_row.addWidget(self.favorite_model_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         self.autonomy_quick_btn = DropdownPillButton("מאוזן")
         self.autonomy_quick_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))

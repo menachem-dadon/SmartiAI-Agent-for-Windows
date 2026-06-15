@@ -58,6 +58,7 @@ class AgentWorker(QThread):
 class VoiceWorker(QThread):
     finished_signal = pyqtSignal(str)
     status_signal = pyqtSignal(str)
+    _sound_lock = threading.Lock()
 
     def __init__(self, settings=None):
         super().__init__()
@@ -86,18 +87,43 @@ class VoiceWorker(QThread):
         ratio = (100 - sensitivity) / 99.0
         return int(50 + (4000 - 50) * (ratio ** 2.3))
 
-    def _voice_sound_path(self, kind):
+    def _voice_sound_path(self, kind, extensions=(".mp3", ".wav")):
         names_by_kind = {
             "start": ("voice_listen_start", "voice_start", "listen_start"),
             "end": ("voice_listen_end", "voice_end", "listen_end"),
             "timeout": ("voice_listen_timeout", "voice_timeout", "listen_timeout"),
         }
         for stem in names_by_kind.get(str(kind or ""), ()):
-            for ext in (".wav", ".mp3", ".ogg"):
+            for ext in extensions:
                 path = os.path.join(ASSETS_DIR, f"{stem}{ext}")
                 if os.path.exists(path):
                     return path
         return ""
+
+    def _mci_send(self, command):
+        result = ctypes.windll.winmm.mciSendStringW(str(command), None, 0, None)
+        if result:
+            buffer = ctypes.create_unicode_buffer(256)
+            try:
+                ctypes.windll.winmm.mciGetErrorStringW(result, buffer, len(buffer))
+            except Exception:
+                pass
+            message = buffer.value or f"MCI error {result}"
+            raise RuntimeError(message)
+
+    def _play_mp3_voice_sound(self, path):
+        alias = f"smarti_voice_{uuid.uuid4().hex}"
+        opened = False
+        try:
+            self._mci_send(f'open "{path}" type mpegvideo alias {alias}')
+            opened = True
+            self._mci_send(f"play {alias} wait")
+        finally:
+            if opened:
+                try:
+                    self._mci_send(f"close {alias}")
+                except Exception:
+                    pass
 
     def _play_fallback_voice_sound(self, kind):
         alias = {
@@ -106,7 +132,8 @@ class VoiceWorker(QThread):
             "timeout": "SystemExclamation",
         }.get(str(kind or ""), "SystemNotification")
         try:
-            winsound.PlaySound(alias, winsound.SND_ALIAS | winsound.SND_ASYNC)
+            with self._sound_lock:
+                winsound.PlaySound(alias, winsound.SND_ALIAS | winsound.SND_NOSTOP)
         except Exception:
             try:
                 winsound.MessageBeep()
@@ -120,34 +147,32 @@ class VoiceWorker(QThread):
         if not path:
             self._play_fallback_voice_sound(kind)
             return
-        ext = os.path.splitext(path)[1].lower()
-        if ext == ".wav":
-            try:
-                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-                return
-            except Exception as exc:
-                logging.warning(f"Voice sound failed ({path}): {exc}")
-                self._play_fallback_voice_sound(kind)
-                return
-
-        def play_media_file():
-            try:
-                import pygame
-                pygame.mixer.init()
-                sound = pygame.mixer.Sound(path)
-                channel = sound.play()
-                while channel and channel.get_busy():
-                    time.sleep(0.02)
-            except Exception as exc:
-                logging.warning(f"Voice media sound failed ({path}): {exc}")
-                self._play_fallback_voice_sound(kind)
-            finally:
+        try:
+            with self._sound_lock:
+                if os.path.splitext(path)[1].lower() == ".mp3":
+                    self._play_mp3_voice_sound(path)
+                else:
+                    winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_NOSTOP)
+        except Exception as exc:
+            logging.warning(f"Voice sound failed ({path}): {exc}")
+            wav_path = self._voice_sound_path(kind, extensions=(".wav",))
+            if wav_path and wav_path != path:
                 try:
-                    pygame.mixer.quit()
-                except Exception:
-                    pass
+                    with self._sound_lock:
+                        winsound.PlaySound(wav_path, winsound.SND_FILENAME | winsound.SND_NOSTOP)
+                    return
+                except Exception as wav_exc:
+                    logging.warning(f"Voice WAV fallback failed ({wav_path}): {wav_exc}")
+            self._play_fallback_voice_sound(kind)
 
-        threading.Thread(target=play_media_file, daemon=True).start()
+    def _play_voice_sound_background(self, kind):
+        if not bool(self.settings.get("voice_beep_enabled", True)):
+            return
+        threading.Thread(
+            target=lambda: self._play_voice_sound(kind),
+            name=f"SmartiVoiceSound-{kind}",
+            daemon=True,
+        ).start()
 
     def run(self):
         if not SPEECH_INSTALLED:
@@ -177,8 +202,8 @@ class VoiceWorker(QThread):
                 if self._cancel_requested.is_set():
                     self.finished_signal.emit("")
                     return
-                self._play_voice_sound("start")
                 self.status_signal.emit("מקשיב...")
+                self._play_voice_sound_background("start")
                 try: audio = r.listen(source, timeout=listen_timeout)
                 except sr.WaitTimeoutError:
                     self._play_voice_sound("timeout")

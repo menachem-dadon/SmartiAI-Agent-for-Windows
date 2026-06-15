@@ -265,7 +265,22 @@ def app_font(point_size=10, weight=None):
     font = QFont(resolve_app_font_family(), int(point_size))
     if weight is not None:
         font.setWeight(weight)
+    if app_uses_asset_font():
+        font.setItalic(False)
     return font
+
+
+def app_uses_asset_font():
+    resolve_app_font_family()
+    return bool(APP_FONT_SOURCE_PATH)
+
+
+def asset_font_normal_italic_widget_css():
+    return "font-style: normal;" if app_uses_asset_font() else ""
+
+
+def asset_font_normal_italic_html_css():
+    return "i, em { font-style: normal; }" if app_uses_asset_font() else ""
 
 
 def themed_icon(*names):
@@ -679,6 +694,7 @@ def application_stylesheet():
             color: {TEXT_COLOR};
             selection-background-color: {ACCENT_TINT_STRONG};
             selection-color: {TEXT_COLOR};
+            {asset_font_normal_italic_widget_css()}
         }}
         QMainWindow, QDialog, QMessageBox {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
