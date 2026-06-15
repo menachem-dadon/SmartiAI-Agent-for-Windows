@@ -62,6 +62,10 @@ class VoiceWorker(QThread):
     def __init__(self, settings=None):
         super().__init__()
         self.settings = copy.deepcopy(settings or {})
+        self._cancel_requested = threading.Event()
+
+    def request_stop(self):
+        self._cancel_requested.set()
 
     def _setting_float(self, key, default, minimum, maximum):
         try:
@@ -82,6 +86,69 @@ class VoiceWorker(QThread):
         ratio = (100 - sensitivity) / 99.0
         return int(50 + (4000 - 50) * (ratio ** 2.3))
 
+    def _voice_sound_path(self, kind):
+        names_by_kind = {
+            "start": ("voice_listen_start", "voice_start", "listen_start"),
+            "end": ("voice_listen_end", "voice_end", "listen_end"),
+            "timeout": ("voice_listen_timeout", "voice_timeout", "listen_timeout"),
+        }
+        for stem in names_by_kind.get(str(kind or ""), ()):
+            for ext in (".wav", ".mp3", ".ogg"):
+                path = os.path.join(ASSETS_DIR, f"{stem}{ext}")
+                if os.path.exists(path):
+                    return path
+        return ""
+
+    def _play_fallback_voice_sound(self, kind):
+        alias = {
+            "start": "SystemAsterisk",
+            "end": "SystemNotification",
+            "timeout": "SystemExclamation",
+        }.get(str(kind or ""), "SystemNotification")
+        try:
+            winsound.PlaySound(alias, winsound.SND_ALIAS | winsound.SND_ASYNC)
+        except Exception:
+            try:
+                winsound.MessageBeep()
+            except Exception:
+                pass
+
+    def _play_voice_sound(self, kind):
+        if not bool(self.settings.get("voice_beep_enabled", True)):
+            return
+        path = self._voice_sound_path(kind)
+        if not path:
+            self._play_fallback_voice_sound(kind)
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".wav":
+            try:
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                return
+            except Exception as exc:
+                logging.warning(f"Voice sound failed ({path}): {exc}")
+                self._play_fallback_voice_sound(kind)
+                return
+
+        def play_media_file():
+            try:
+                import pygame
+                pygame.mixer.init()
+                sound = pygame.mixer.Sound(path)
+                channel = sound.play()
+                while channel and channel.get_busy():
+                    time.sleep(0.02)
+            except Exception as exc:
+                logging.warning(f"Voice media sound failed ({path}): {exc}")
+                self._play_fallback_voice_sound(kind)
+            finally:
+                try:
+                    pygame.mixer.quit()
+                except Exception:
+                    pass
+
+        threading.Thread(target=play_media_file, daemon=True).start()
+
     def run(self):
         if not SPEECH_INSTALLED:
             self.finished_signal.emit("")
@@ -101,22 +168,30 @@ class VoiceWorker(QThread):
         try:
             self.status_signal.emit("פותח מיקרופון...")
             with sr.Microphone() as source:
+                if self._cancel_requested.is_set():
+                    self.finished_signal.emit("")
+                    return
                 if ambient_duration > 0:
                     self.status_signal.emit("מכוון רעש רקע...")
                     r.adjust_for_ambient_noise(source, duration=ambient_duration)
-                if bool(self.settings.get("voice_beep_enabled", False)):
-                    try: winsound.Beep(1000, 90)
-                    except: pass
+                if self._cancel_requested.is_set():
+                    self.finished_signal.emit("")
+                    return
+                self._play_voice_sound("start")
                 self.status_signal.emit("מקשיב...")
                 try: audio = r.listen(source, timeout=listen_timeout)
                 except sr.WaitTimeoutError:
+                    self._play_voice_sound("timeout")
                     self.finished_signal.emit("")
                     return
-                if bool(self.settings.get("voice_beep_enabled", False)):
-                    try: winsound.Beep(800, 90)
-                    except: pass
+                if self._cancel_requested.is_set():
+                    self.finished_signal.emit("")
+                    return
+                self._play_voice_sound("end")
                 self.status_signal.emit("מתמלל...")
                 text = r.recognize_google(audio, language="he-IL").replace("סמרטי", "סמארטי").replace("סמארט", "סמארטי")
+                if self._cancel_requested.is_set():
+                    text = ""
                 self.finished_signal.emit(text)
         except Exception:
             logging.exception("Voice recognition failed.")

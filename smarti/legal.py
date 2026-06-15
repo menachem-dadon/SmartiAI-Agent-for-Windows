@@ -1,6 +1,7 @@
 """First-run legal agreement gate for Smarti."""
 from .common import *
 from .ui_styles import *
+from .ui_controls import make_circular_pixmap
 from PyQt6.QtWidgets import QTextBrowser
 
 
@@ -115,62 +116,100 @@ class LegalAgreementDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setModal(True)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setWindowTitle("אישור תנאי שימוש ופרטיות")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.resize(780, 680)
-        self.setMinimumSize(560, 480)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setSizeGripEnabled(False)
         self.setStyleSheet(self._stylesheet())
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(0)
 
-        title = QLabel("מדיניות פרטיות וכתב ויתור")
+        surface = QFrame()
+        surface.setObjectName("LegalSurface")
+        surface_layout = QVBoxLayout(surface)
+        surface_layout.setContentsMargins(16, 16, 16, 14)
+        surface_layout.setSpacing(12)
+        layout.addWidget(surface)
+
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        self.logo_lbl = QLabel()
+        self.logo_lbl.setObjectName("LegalLogo")
+        self.logo_lbl.setFixedSize(48, 48)
+        logo_path = os.path.join(ASSETS_DIR, "logo.png")
+        if os.path.exists(logo_path):
+            pixmap = make_circular_pixmap(logo_path, 48, border_color=LINE_COLOR, border_width=1, bg_color=PANEL_COLOR)
+            if pixmap:
+                self.logo_lbl.setPixmap(pixmap)
+        if self.logo_lbl.pixmap() is None:
+            self.logo_lbl.setText("S")
+            self.logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(self.logo_lbl, 0, Qt.AlignmentFlag.AlignTop)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(3)
+        title = QLabel("מדיניות פרטיות ותנאי שימוש")
         title.setObjectName("LegalTitle")
         title.setWordWrap(True)
-        layout.addWidget(title)
+        meta = QLabel(f"SmartiAI • גרסת מסמך {LEGAL_AGREEMENT_VERSION}")
+        meta.setObjectName("LegalMeta")
+        meta.setWordWrap(True)
+        title_col.addWidget(title)
+        title_col.addWidget(meta)
+        header.addLayout(title_col, 1)
+        surface_layout.addLayout(header)
 
-        intro = QLabel("כדי להפעיל את Smarti יש לקרוא ולאשר את התנאים. ללא אישור מפורש התוכנה תיסגר.")
+        intro = QLabel("לפני הכניסה הראשונה לצ'אט נדרש אישור מפורש. בלי אישור, סמארטי ייסגר ולא ימשיך להפעלה.")
         intro.setObjectName("LegalIntro")
         intro.setWordWrap(True)
-        layout.addWidget(intro)
+        surface_layout.addWidget(intro)
 
         self.document_view = QTextBrowser()
         self.document_view.setObjectName("LegalDocument")
         self.document_view.setReadOnly(True)
-        self.document_view.setOpenExternalLinks(True)
+        self.document_view.setOpenExternalLinks(False)
         self.document_view.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.document_view.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse |
             Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
+        option = self.document_view.document().defaultTextOption()
+        option.setTextDirection(Qt.LayoutDirection.RightToLeft)
+        option.setAlignment(Qt.AlignmentFlag.AlignRight)
+        option.setWrapMode(QTextOption.WrapMode.WordWrap)
+        self.document_view.document().setDefaultTextOption(option)
         self.document_view.setPlainText(LEGAL_AGREEMENT_TEXT)
         self.document_view.verticalScrollBar().setStyleSheet(SCROLLBAR_CSS)
         self.document_view.horizontalScrollBar().setStyleSheet(SCROLLBAR_CSS)
-        layout.addWidget(self.document_view, 1)
+        surface_layout.addWidget(self.document_view, 1)
 
         self.confirm_checkbox = QCheckBox("קראתי את המסמך ואני מאשר/ת שאני מסכים/ה לכל תנאיו")
         self.confirm_checkbox.setObjectName("LegalConfirmCheck")
         self.confirm_checkbox.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.confirm_checkbox.toggled.connect(self._set_agree_enabled)
-        layout.addWidget(self.confirm_checkbox)
+        surface_layout.addWidget(self.confirm_checkbox)
 
         button_row = QHBoxLayout()
         button_row.setSpacing(10)
-        button_row.addStretch()
 
         self.decline_button = QPushButton("לא מסכים - סגור")
         self.decline_button.setObjectName("LegalDeclineButton")
+        self.decline_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.decline_button.clicked.connect(self.reject)
-        button_row.addWidget(self.decline_button)
 
         self.agree_button = QPushButton("אני מסכים")
         self.agree_button.setObjectName("LegalAgreeButton")
+        self.agree_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.agree_button.setEnabled(False)
         self.agree_button.clicked.connect(self.accept)
-        button_row.addWidget(self.agree_button)
+        button_row.addWidget(self.decline_button, 1)
+        button_row.addWidget(self.agree_button, 1)
 
-        layout.addLayout(button_row)
+        surface_layout.addLayout(button_row)
+        self._fit_to_smarti_window()
 
     def _set_agree_enabled(self, checked):
         self.agree_button.setEnabled(bool(checked))
@@ -178,24 +217,74 @@ class LegalAgreementDialog(QDialog):
     def reject(self):
         super().reject()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._fit_to_smarti_window)
+
+    def _fit_to_smarti_window(self):
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        if available:
+            max_w = min(450, max(340, available.width() - 28))
+            max_h = min(740, max(500, available.height() - 34))
+            target_w = min(430, max_w)
+            target_h = min(700, max_h)
+            min_w = min(360, target_w)
+            min_h = min(520, target_h)
+            self.setMinimumSize(min_w, min_h)
+            self.setMaximumSize(max_w, max_h)
+            self.resize(target_w, target_h)
+            self.move(
+                available.x() + max(0, (available.width() - self.width()) // 2),
+                available.y() + max(0, (available.height() - self.height()) // 2),
+            )
+        else:
+            self.setMinimumSize(360, 520)
+            self.setMaximumSize(450, 740)
+            self.resize(430, 700)
+
     def _stylesheet(self):
         return dialog_stylesheet() + f"""
+            QDialog {{
+                background: transparent;
+            }}
+            QFrame#LegalSurface {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {GLASS_STRONG_COLOR}, stop:0.54 {PANEL_COLOR}, stop:1 {BG_ELEVATED_COLOR});
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 26px;
+            }}
+            QLabel#LegalLogo {{
+                background: {ACCENT_TINT};
+                color: {ACCENT_COLOR};
+                border: 1px solid {LINE_COLOR};
+                border-radius: 24px;
+                font-size: 22px;
+                font-weight: 900;
+            }}
             QLabel#LegalTitle {{
                 color: {TEXT_COLOR};
-                font-size: 22px;
+                font-size: 19px;
+                font-weight: 900;
+                background: transparent;
+            }}
+            QLabel#LegalMeta {{
+                color: {ACCENT_COLOR};
+                font-size: 11px;
                 font-weight: 800;
                 background: transparent;
             }}
             QLabel#LegalIntro {{
                 color: {MUTED_TEXT_COLOR};
-                font-size: 13px;
+                font-size: 12px;
+                font-weight: 700;
                 background: transparent;
             }}
             QTextBrowser#LegalDocument {{
                 background: {GLASS_COLOR};
                 color: {FIELD_TEXT_COLOR};
                 border: 1px solid {SOFT_LINE_COLOR};
-                border-radius: 14px;
+                border-radius: 16px;
                 padding: 12px;
                 font-size: 13px;
                 line-height: 1.45;
@@ -206,7 +295,8 @@ class LegalAgreementDialog(QDialog):
             }}
             QCheckBox#LegalConfirmCheck {{
                 color: {TEXT_COLOR};
-                font-weight: 700;
+                font-size: 12px;
+                font-weight: 800;
                 spacing: 10px;
                 background: transparent;
             }}
@@ -216,10 +306,10 @@ class LegalAgreementDialog(QDialog):
                 color: {ACCENT_TEXT_COLOR};
                 border: 1px solid rgba(255,255,255,0.18);
                 border-radius: 22px;
-                padding: 14px 22px;
-                font-size: 15px;
-                font-weight: 700;
-                min-width: 130px;
+                padding: 12px 14px;
+                font-size: 14px;
+                font-weight: 900;
+                min-height: 42px;
             }}
             QPushButton#LegalAgreeButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -233,16 +323,17 @@ class LegalAgreementDialog(QDialog):
             QPushButton#LegalAgreeButton:disabled {{
                 background: {PANEL_ELEVATED_COLOR};
                 color: {SUBTLE_TEXT_COLOR};
+                border-color: {SOFT_LINE_COLOR};
             }}
             QPushButton#LegalDeclineButton {{
                 background-color: {ACCENT_TINT};
                 color: {TEXT_COLOR};
                 border: 1px solid {SOFT_LINE_COLOR};
                 border-radius: 20px;
-                padding: 11px 17px;
+                padding: 11px 12px;
                 font-size: 13px;
-                font-weight: 700;
-                min-width: 130px;
+                font-weight: 800;
+                min-height: 40px;
             }}
             QPushButton#LegalDeclineButton:hover {{
                 background-color: {HOVER_TINT};

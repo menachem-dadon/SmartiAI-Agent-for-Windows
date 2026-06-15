@@ -7,6 +7,10 @@ from .common import *
 
 THEME_OPTIONS = ("system", "dark", "light")
 DEFAULT_THEME_MODE = "dark"
+APP_FONT_FAMILY = "Segoe UI"
+APP_FONT_SOURCE_PATH = ""
+_APP_FONT_CACHE_PATH = None
+_APP_FONT_CACHE_FAMILY = None
 
 BRAND_ACCENT_COLOR = "#35D9FF"
 BRAND_SECONDARY_COLOR = "#88FFB8"
@@ -200,6 +204,70 @@ def themed_asset_path(*names):
     return ""
 
 
+def _app_font_asset_path():
+    preferred = []
+    for stem in ("smarti_font", "app_font", "ui_font", "font"):
+        for ext in (".ttf", ".otf"):
+            preferred.append(os.path.join(ASSETS_DIR, f"{stem}{ext}"))
+    for path in preferred:
+        if os.path.exists(path):
+            return path
+    try:
+        for pattern in ("*.ttf", "*.otf"):
+            matches = sorted(glob.glob(os.path.join(ASSETS_DIR, pattern)))
+            if matches:
+                return matches[0]
+    except Exception:
+        pass
+    return ""
+
+
+def resolve_app_font_family(default="Segoe UI"):
+    global APP_FONT_FAMILY, APP_FONT_SOURCE_PATH, _APP_FONT_CACHE_PATH, _APP_FONT_CACHE_FAMILY
+    path = _app_font_asset_path()
+    if not path:
+        APP_FONT_FAMILY = default
+        APP_FONT_SOURCE_PATH = ""
+        _APP_FONT_CACHE_PATH = ""
+        _APP_FONT_CACHE_FAMILY = default
+        return APP_FONT_FAMILY
+    if QApplication.instance() is None:
+        APP_FONT_FAMILY = default
+        APP_FONT_SOURCE_PATH = path
+        return APP_FONT_FAMILY
+    if _APP_FONT_CACHE_PATH == path and _APP_FONT_CACHE_FAMILY:
+        APP_FONT_FAMILY = _APP_FONT_CACHE_FAMILY
+        APP_FONT_SOURCE_PATH = path
+        return APP_FONT_FAMILY
+    try:
+        font_id = QFontDatabase.addApplicationFont(path)
+        families = QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
+        family = str(families[0]).strip() if families else default
+    except Exception as exc:
+        logging.warning(f"Failed to load Smarti UI font asset {path}: {exc}")
+        family = default
+    _APP_FONT_CACHE_PATH = path
+    _APP_FONT_CACHE_FAMILY = family
+    APP_FONT_FAMILY = family
+    APP_FONT_SOURCE_PATH = path
+    return APP_FONT_FAMILY
+
+
+def ui_font_family_css():
+    family = resolve_app_font_family()
+    safe_family = str(family or "Segoe UI").replace("\\", "\\\\").replace("'", "\\'")
+    if safe_family.lower() == "segoe ui":
+        return "'Segoe UI', Arial"
+    return f"'{safe_family}', 'Segoe UI', Arial"
+
+
+def app_font(point_size=10, weight=None):
+    font = QFont(resolve_app_font_family(), int(point_size))
+    if weight is not None:
+        font.setWeight(weight)
+    return font
+
+
 def themed_icon(*names):
     for filename in themed_asset_candidates(*names):
         path = filename if os.path.isabs(filename) or os.path.dirname(filename) else os.path.join(ASSETS_DIR, filename)
@@ -302,6 +370,7 @@ def refresh_themed_widget_icons(root):
 
 def _refresh_theme_exports(mode=None, settings=None):
     global CURRENT_THEME_MODE, CURRENT_THEME
+    global APP_FONT_FAMILY, APP_FONT_SOURCE_PATH
     global BG_COLOR, BG_ELEVATED_COLOR, PANEL_COLOR, PANEL_ELEVATED_COLOR
     global FIELD_COLOR, FIELD_HOVER_COLOR, TEXT_COLOR, MUTED_TEXT_COLOR
     global SUBTLE_TEXT_COLOR, ACCENT_COLOR, ACCENT_SECONDARY_COLOR
@@ -327,6 +396,7 @@ def _refresh_theme_exports(mode=None, settings=None):
     CURRENT_THEME = resolve_theme_mode(CURRENT_THEME_MODE, settings)
     palette = THEME_PALETTES[CURRENT_THEME]
     globals().update(palette)
+    APP_FONT_FAMILY = resolve_app_font_family()
 
     CHECKMARK_SVG_PATH = _svg_asset(
         f"checkmark_{CURRENT_THEME}.svg",
@@ -605,7 +675,7 @@ def apply_app_theme(app=None, mode=None, settings=None):
 def application_stylesheet():
     return f"""
         QWidget {{
-            font-family: 'Segoe UI', Arial;
+            font-family: {ui_font_family_css()};
             color: {TEXT_COLOR};
             selection-background-color: {ACCENT_TINT_STRONG};
             selection-color: {TEXT_COLOR};
@@ -638,7 +708,7 @@ def application_stylesheet():
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 0px;
-            font-family: 'Segoe UI';
+            font-family: {ui_font_family_css()};
             font-size: 14px;
             padding: 7px;
         }}
@@ -692,7 +762,7 @@ def menu_stylesheet():
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 0px;
-            font-family: 'Segoe UI';
+            font-family: {ui_font_family_css()};
             font-size: 14px;
             padding: 7px;
         }}

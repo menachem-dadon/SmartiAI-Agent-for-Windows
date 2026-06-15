@@ -71,7 +71,7 @@ def main():
     app.setOrganizationName(SMARTI_APP_DISPLAY_NAME)
     app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
     app.setCursorFlashTime(1000)
-    app.setFont(QFont("Segoe UI", 10))
+    app.setFont(app_font(10))
     app.setQuitOnLastWindowClosed(False)
     apply_app_theme(app)
 

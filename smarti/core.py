@@ -11560,9 +11560,46 @@ if __name__ == "__main__":
     def stop_speaking(self):
         self._stop_speech_flag = True
 
+    def _clean_text_for_tts(self, text):
+        clean = html.unescape(str(text or ""))
+        clean = re.sub(r"```.*?```", " קטע קוד. ", clean, flags=re.DOTALL)
+        clean = re.sub(r"`([^`]+)`", r"\1", clean)
+        clean = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", clean)
+        clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", clean)
+        clean = re.sub(r"\b(?:https?|file)://\S+", " קישור ", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"<[^>]+>", " ", clean)
+        clean = re.sub(r"^[ \t]*[-*•●▪▫◦]+[ \t]+", "", clean, flags=re.MULTILINE)
+        clean = re.sub(r"^[ \t]*(?:#{1,6}|>+)[ \t]*", "", clean, flags=re.MULTILINE)
+        clean = re.sub(r"[*_#`~]+", "", clean)
+        clean = re.sub(r"[|{}\[\]<>^=\\]+", " ", clean)
+
+        emoji_ranges = (
+            (0x1F000, 0x1FAFF),
+            (0x2600, 0x27BF),
+            (0xFE00, 0xFE0F),
+            (0x200D, 0x200D),
+        )
+        chars = []
+        for ch in clean:
+            cp = ord(ch)
+            if any(start <= cp <= end for start, end in emoji_ranges):
+                continue
+            category = unicodedata.category(ch)
+            if category[0] == "C" and ch not in "\n\t ":
+                continue
+            if category in {"So", "Sk", "Co"}:
+                continue
+            chars.append(ch)
+        clean = "".join(chars)
+        clean = re.sub(r"[ \t]+", " ", clean)
+        clean = re.sub(r"\s*[\r\n]+\s*", ". ", clean)
+        clean = re.sub(r"([.!?]){2,}", r"\1", clean)
+        clean = re.sub(r"\s+([,.!?;:])", r"\1", clean)
+        return clean.strip(" \t\r\n.-")
+
     def speak_text(self, text):
         if not TTS_INSTALLED: return
-        clean = re.sub(r'[*_#`~]', '', str(text or ""))
+        clean = self._clean_text_for_tts(text)
         if not clean.strip():
             return
         self.stop_speaking()

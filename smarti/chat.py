@@ -519,7 +519,7 @@ def _style_markdown_blocks(rendered_html, is_user=False, code_blocks=None):
             f'<div dir="ltr" align="left" style="background-color:{header_bg}; color:{muted}; '
             f'border:1px solid {border}; border-bottom:0; padding:7px 12px; margin:8px 0 0 0;">'
             '<table width="100%" cellspacing="0" cellpadding="0" style="border:0; margin:0;">'
-            f'<tr><td align="left" style="border:0; color:{muted}; font-family:Segoe UI, Arial; font-size:12px; font-weight:700;">{html.escape(language)}</td>'
+            f'<tr><td align="left" style="border:0; color:{muted}; font-family:{ui_font_family_css()}; font-size:12px; font-weight:700;">{html.escape(language)}</td>'
             f'<td align="right" style="border:0;">{copy_link}</td></tr></table></div>'
         )
         body = (
@@ -759,7 +759,7 @@ class WelcomeWidget(QFrame):
 
     def apply_theme(self):
         self.setStyleSheet("QFrame#WelcomeWidget { background: transparent; border: none; }")
-        font = QFont("Segoe UI", 26, QFont.Weight.Bold)
+        font = app_font(26, QFont.Weight.Bold)
         font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         self.title_lbl.setFont(font)
         self.title_lbl.setStyleSheet(
@@ -873,7 +873,7 @@ class CodeBlockWidget(QFrame):
 
         self.language_lbl = QLabel(_code_display_language(self.language))
         self.language_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.language_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.language_lbl.setFont(app_font(10, QFont.Weight.Bold))
         self.language_lbl.setStyleSheet("border: none; background: transparent;")
         header.addWidget(self.language_lbl)
         layout.addLayout(header)
@@ -1603,7 +1603,12 @@ class AgentToolGroupWidget(QWidget):
         self.status_label.setMaximumWidth(width)
 
     def _refresh_tool_icon(self):
-        set_themed_label_icon(self.tool_icon_label, AGENT_TOOL_GROUP_ICON_NAMES, "", 16)
+        icon_names = AGENT_TOOL_GROUP_ICON_NAMES
+        if self.running:
+            running_tools = [tool for tool in self.tools if str(tool.get("status") or "").strip().lower() in {"running", "active", "started"}]
+            if len(running_tools) == 1:
+                icon_names = _agent_tool_icon_names(running_tools[0])
+        set_themed_label_icon(self.tool_icon_label, icon_names, "", 16)
 
     def _add_tool_widget(self, item):
         widget = AgentToolDetailWidget(item, max(220, self.max_w - self.TOOL_ROW_INDENT))
@@ -1675,8 +1680,8 @@ class AgentToolGroupWidget(QWidget):
             item["status"] = "running"
             self.tools.append(item)
             self._add_tool_widget(item)
-        self._refresh_tool_icon()
         self.running = True
+        self._refresh_tool_icon()
         if parallel and len(tools) > 1:
             text = f"מריץ: {len(tools)} כלים במקביל"
         else:
@@ -1917,7 +1922,7 @@ class MessageBubble(QFrame):
             self._apply_link_palette(label)
         self.setStyleSheet(
             f"MessageBubble {{ background: {bg}; border: {border}; border-radius: {radius}; margin: {margin}; }}"
-            f"QLabel {{ color: {color}; font-size: 15px; font-family: 'Segoe UI', Arial; background: transparent; }}"
+            f"QLabel {{ color: {color}; font-size: 15px; font-family: {ui_font_family_css()}; background: transparent; }}"
             f"a {{ color: {link_color}; text-decoration: underline; font-weight: 700; }}"
             f"code {{ background-color: {CODE_BG_COLOR}; padding: 2px 4px; border-radius: 4px; font-family: Consolas; }}"
             f"pre {{ background-color: {CODE_BG_COLOR}; padding: 12px; border-radius: 14px; margin: 0; }}"
@@ -2650,7 +2655,7 @@ class QuickReplyToast(QWidget):
             QWidget {{
                 background: {GLASS_STRONG_COLOR};
                 color: {TEXT_COLOR};
-                font-family: 'Segoe UI', Arial;
+                font-family: {ui_font_family_css()};
                 border: 1px solid {SOFT_LINE_COLOR};
                 border-radius: 22px;
             }}
@@ -3397,7 +3402,7 @@ class UpdateDialog(QDialog):
         notes_html = _style_release_note_images(_render_markdown_html(notes, ACCENT_COLOR, style_blocks=True, clickable_links=True))
         self.notes_browser.set_release_html(
             "<html><head><style>"
-            f"body {{ direction: rtl; text-align: right; color: {TEXT_COLOR}; font-family: 'Segoe UI', Arial; font-size: 13px; }}"
+            f"body {{ direction: rtl; text-align: right; color: {TEXT_COLOR}; font-family: {ui_font_family_css()}; font-size: 13px; }}"
             "p, li { line-height: 1.45; } ul, ol { margin-right: 18px; padding-right: 18px; margin-left: 0; padding-left: 0; }"
             "pre, code { direction: ltr; text-align: left; unicode-bidi: embed; }"
             "img { max-width: 100%; height: auto; }"
@@ -3483,6 +3488,227 @@ class UpdateDialog(QDialog):
         self.status_lbl.setText(f"שגיאת עדכון: {message}")
 
 
+class VoicePulseWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._phase = 0.0
+        self.setFixedSize(52, 52)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._timer = QTimer(self)
+        self._timer.setInterval(38)
+        self._timer.timeout.connect(self._tick)
+
+    def start(self):
+        if not self._timer.isActive():
+            self._timer.start()
+        self.show()
+
+    def stop(self):
+        self._timer.stop()
+        self.update()
+
+    def _tick(self):
+        self._phase = (self._phase + 0.16) % (math.pi * 2)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        center = self.rect().center()
+        accent = qcolor_from_css(ACCENT_COLOR)
+        pink = qcolor_from_css(ACCENT_PINK_COLOR)
+        secondary = qcolor_from_css(ACCENT_SECONDARY_COLOR)
+
+        for index, base_radius in enumerate((15, 20, 25)):
+            pulse = (math.sin(self._phase + index * 0.8) + 1.0) / 2.0
+            color = QColor(accent)
+            color.setAlpha(int(34 + pulse * 46))
+            painter.setPen(QPen(color, 1.4))
+            radius = base_radius + pulse * 3.0
+            painter.drawEllipse(center, int(radius), int(radius))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        core = QColor(pink)
+        core.setAlpha(225)
+        painter.setBrush(core)
+        painter.drawEllipse(center, 13, 13)
+
+        bar_width = 4
+        gap = 4
+        start_x = center.x() - bar_width - gap
+        for index, color in enumerate((secondary, accent, secondary)):
+            level = (math.sin(self._phase * 1.7 + index * 1.25) + 1.0) / 2.0
+            height = 11 + level * 18
+            rect = QRectF(start_x + index * (bar_width + gap), center.y() - height / 2, bar_width, height)
+            bar_color = QColor(color)
+            bar_color.setAlpha(235)
+            painter.setBrush(bar_color)
+            painter.drawRoundedRect(rect, 2, 2)
+        painter.end()
+
+
+class VoiceListeningOverlay(QWidget):
+    open_requested = pyqtSignal()
+    cancel_requested = pyqtSignal()
+
+    def __init__(self, owner=None):
+        super().__init__(None)
+        self.owner = owner
+        self._fade_anim = None
+        self.setObjectName("VoiceListeningOverlay")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        self._opacity = QGraphicsOpacityEffect(self)
+        self._opacity.setOpacity(0.0)
+        self.setGraphicsEffect(self._opacity)
+
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(10, 10, 10, 12)
+        root_layout.setSpacing(0)
+
+        self.card = QFrame()
+        self.card.setObjectName("VoiceOverlayCard")
+        self.card.setMinimumWidth(338)
+        self.card.setMaximumWidth(390)
+        card_layout = QHBoxLayout(self.card)
+        card_layout.setContentsMargins(12, 10, 12, 10)
+        card_layout.setSpacing(10)
+
+        self.cancel_btn = QPushButton()
+        self.cancel_btn.setFixedSize(38, 38)
+        self.cancel_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.cancel_btn.setToolTip("בטל האזנה")
+        self.cancel_btn.clicked.connect(lambda checked=False: self.cancel_requested.emit())
+
+        self.open_btn = QPushButton("פתח")
+        self.open_btn.setMinimumHeight(38)
+        self.open_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.open_btn.setToolTip("פתח את סמארטי")
+        self.open_btn.clicked.connect(lambda checked=False: self.open_requested.emit())
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(1)
+        text_col.setContentsMargins(0, 0, 0, 0)
+        self.title_lbl = QLabel("מקשיב...")
+        self.title_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
+        self.status_lbl = QLabel("אפשר לדבר עכשיו")
+        self.status_lbl.setTextFormat(Qt.TextFormat.PlainText)
+        self.status_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
+        self.status_lbl.setWordWrap(True)
+        text_col.addWidget(self.title_lbl)
+        text_col.addWidget(self.status_lbl)
+
+        self.pulse = VoicePulseWidget()
+        card_layout.addWidget(self.cancel_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        card_layout.addWidget(self.open_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        card_layout.addLayout(text_col, 1)
+        card_layout.addWidget(self.pulse, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        root_layout.addWidget(self.card)
+        self.apply_theme()
+        self.hide()
+
+    def apply_theme(self):
+        self.setStyleSheet("QWidget#VoiceListeningOverlay { background: transparent; border: none; }")
+        self.card.setStyleSheet(
+            f"QFrame#VoiceOverlayCard {{ background: {GLASS_STRONG_COLOR}; border: 1px solid {LINE_COLOR}; "
+            "border-radius: 28px; }}"
+        )
+        self.title_lbl.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 900; background: transparent; border: none;")
+        self.status_lbl.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 12px; font-weight: 700; background: transparent; border: none;")
+        button_css = (
+            f"QPushButton {{ background: {ACCENT_TINT}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+            "border-radius: 19px; padding: 0px 12px; font-size: 12px; font-weight: 800; outline: none; }}"
+            f"QPushButton:hover {{ background: {HOVER_TINT}; border-color: {LINE_COLOR}; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_TINT_STRONG}; }}"
+        )
+        self.open_btn.setStyleSheet(button_css)
+        self.cancel_btn.setStyleSheet(button_css)
+        set_themed_button_icon(self.open_btn, ("logo", "app_icon"), "פתח", 18, clear_text=False)
+        set_themed_button_icon(self.cancel_btn, ("stop_audio_icon", "stop_agent_icon", "close_icon"), "×", 18, clear_text=True)
+        apply_soft_shadow(self.card, blur=34, y=10, alpha=66)
+        self.pulse.update()
+
+    def set_status(self, text):
+        text = str(text or "").strip()
+        if text:
+            self.status_lbl.setText(text)
+
+    def set_cancel_enabled(self, enabled):
+        self.cancel_btn.setEnabled(bool(enabled))
+
+    def show_listening(self, owner=None):
+        if owner is not None:
+            self.owner = owner
+        self.apply_theme()
+        self.set_cancel_enabled(True)
+        self.pulse.start()
+        self.adjustSize()
+        self.position_near_owner()
+        self.show()
+        self.raise_()
+        self._opacity.setOpacity(0.0)
+        self._fade_anim = QPropertyAnimation(self._opacity, b"opacity", self)
+        self._fade_anim.setDuration(180)
+        self._fade_anim.setStartValue(0.0)
+        self._fade_anim.setEndValue(1.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade_anim.start()
+
+    def hide_listening(self):
+        self.pulse.stop()
+        if not self.isVisible():
+            self.hide()
+            return
+        self._fade_anim = QPropertyAnimation(self._opacity, b"opacity", self)
+        self._fade_anim.setDuration(130)
+        self._fade_anim.setStartValue(self._opacity.opacity())
+        self._fade_anim.setEndValue(0.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        self._fade_anim.finished.connect(self.hide)
+        self._fade_anim.start()
+
+    def position_near_owner(self):
+        self.adjustSize()
+        size = self.sizeHint()
+        owner = self.owner
+        screen = None
+        owner_visible = False
+        try:
+            owner_visible = bool(owner and owner.isVisible() and not owner.isMinimized())
+        except Exception:
+            owner_visible = False
+        if owner_visible:
+            geom = owner.frameGeometry()
+            screen = QApplication.screenAt(geom.center()) or QApplication.primaryScreen()
+        else:
+            screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+            geom = screen.availableGeometry() if screen else QRectF(0, 0, 800, 600).toRect()
+        available = screen.availableGeometry() if screen else geom
+        width = min(size.width(), max(280, available.width() - 24))
+        self.setFixedWidth(width)
+        size = self.sizeHint()
+        if owner_visible:
+            x = geom.x() + max(0, (geom.width() - size.width()) // 2)
+            y = geom.y() - size.height() - 12
+            if y < available.top() + 8:
+                y = geom.y() + 12
+        else:
+            x = available.x() + max(0, (available.width() - size.width()) // 2)
+            y = available.bottom() - size.height() - 34
+        x = max(available.left() + 8, min(x, available.right() - size.width() - 8))
+        y = max(available.top() + 8, min(y, available.bottom() - size.height() - 8))
+        self.move(int(x), int(y))
+
+
 class ChatWindow(QMainWindow):
     gui_message_signal = pyqtSignal(str, bool)
     tts_status_signal = pyqtSignal(bool)
@@ -3547,6 +3773,9 @@ class ChatWindow(QMainWindow):
         self.notifications.conversation_switch_requested.connect(self.handle_conversation_switch_requested)
         self.core_notification_signal.connect(self.handle_core_notification)
         self.core.notification_callback = lambda kind, payload=None: self.core_notification_signal.emit(kind, payload or {})
+        self.voice_overlay = VoiceListeningOverlay(self)
+        self.voice_overlay.open_requested.connect(self.bring_to_front)
+        self.voice_overlay.cancel_requested.connect(self.cancel_voice)
         
         self.background_task_start_signal.connect(self.handle_background_task_start)
         self.background_task_step_signal.connect(self.handle_background_task_step)
@@ -3685,7 +3914,6 @@ class ChatWindow(QMainWindow):
             self.bring_to_front()
 
     def start_voice_from_tray(self):
-        self.bring_to_front()
         self.trigger_voice_from_hotkey()
 
     def stop_tts_from_tray(self):
@@ -3742,9 +3970,10 @@ class ChatWindow(QMainWindow):
         if not self.agent_running:
             self.start_new_chat()
         self.stacked_widget.setCurrentWidget(self.chat_page)
-        self.bring_to_front()
         if start_listening and not self.agent_running:
             QTimer.singleShot(150, self.start_voice)
+        else:
+            self.bring_to_front()
 
     def _utc_now_iso(self):
         return datetime.utcnow().isoformat(timespec="seconds") + "Z"
@@ -3991,7 +4220,7 @@ class ChatWindow(QMainWindow):
     def _chat_input_stylesheet(self):
         return (
             f"QTextEdit {{ background-color: transparent; color: {FIELD_TEXT_COLOR}; border: none; "
-            f"padding: 4px 10px; font-size: 17px; font-family: 'Segoe UI'; outline: none; text-align: left; }}"
+            f"padding: 4px 10px; font-size: 17px; font-family: {ui_font_family_css()}; outline: none; text-align: left; }}"
             f"QTextEdit:disabled {{ color: {SUBTLE_TEXT_COLOR}; }}"
             f"QTextEdit viewport {{ background-color: transparent; border: none; }}"
             f"{SCROLLBAR_CSS}"
@@ -4394,6 +4623,10 @@ class ChatWindow(QMainWindow):
         if hasattr(self, "action_btn"):
             self.refresh_themed_icons()
             self.update_action_btn_visuals()
+        if hasattr(self, "voice_overlay"):
+            self.voice_overlay.apply_theme()
+            if self.voice_overlay.isVisible():
+                self.voice_overlay.position_near_owner()
         if getattr(self, "history_page", None) is not None:
             self.history_page.apply_theme()
         if refresh_messages:
@@ -4505,7 +4738,7 @@ class ChatWindow(QMainWindow):
             self.logo_lbl.setStyleSheet("border: none; background-color: transparent;")
         else:
             self.logo_lbl.setText("S")
-            self.logo_lbl.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+            self.logo_lbl.setFont(app_font(20, QFont.Weight.Bold))
             self.logo_lbl.setStyleSheet(f"border: none; border-radius: 25px; background-color: transparent; color: {ACCENT_COLOR};")
             self.logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             
@@ -4732,6 +4965,8 @@ class ChatWindow(QMainWindow):
         self.show()
         self.activateWindow()
         self.raise_()
+        if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
+            QTimer.singleShot(0, self.voice_overlay.position_near_owner)
 
     def _request_taskbar_attention(self):
         if self._should_notify_user() and hasattr(self, "taskbar_attention"):
@@ -4753,16 +4988,23 @@ class ChatWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             self._clear_taskbar_attention()
+        if event.type() in (QEvent.Type.ActivationChange, QEvent.Type.WindowStateChange):
+            if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
+                QTimer.singleShot(0, self.voice_overlay.position_near_owner)
 
     def closeEvent(self, event):
         if getattr(self, "_quit_requested", False) or not self.core.settings.get("keep_running_in_tray", True):
             self.unregister_voice_hotkey()
+            if hasattr(self, "voice_overlay"):
+                self.voice_overlay.hide()
             if hasattr(self, "tray_icon"):
                 self.tray_icon.hide()
             event.accept()
             return
         event.ignore()
         self.hide()
+        if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
+            QTimer.singleShot(0, self.voice_overlay.position_near_owner)
 
     def _plain_notification_text(self, text, limit=520):
         cleaned = html.unescape(str(text or ""))
@@ -4882,8 +5124,15 @@ class ChatWindow(QMainWindow):
                 bubble.update_parent_width(available_width)
             self._resize_quick_input_controls()
             self._update_chat_bottom_padding()
+            if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
+                self.voice_overlay.position_near_owner()
         except Exception:
             pass
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
+            QTimer.singleShot(0, self.voice_overlay.position_near_owner)
 
     def _set_welcome_visible(self, visible, refresh_text=False):
         if not hasattr(self, "welcome_overlay") or not hasattr(self, "welcome_widget"):
@@ -5173,8 +5422,29 @@ class ChatWindow(QMainWindow):
         was_hidden = not self.isVisible()
         if was_hidden:
             self.start_new_chat()
-        self.bring_to_front()
         QTimer.singleShot(0, self.start_voice)
+
+    def on_voice_status(self, status):
+        status = str(status or "")
+        self.status_lbl.setText(status)
+        if hasattr(self, "voice_overlay"):
+            self.voice_overlay.set_status(status)
+            self.voice_overlay.position_near_owner()
+
+    def cancel_voice(self):
+        worker = getattr(self, "voice_thread", None)
+        if worker and worker.isRunning():
+            try:
+                worker.request_stop()
+            except Exception:
+                pass
+            if hasattr(self, "voice_overlay"):
+                self.voice_overlay.set_status("מפסיק האזנה...")
+                self.voice_overlay.set_cancel_enabled(False)
+            self.status_lbl.setText("מפסיק האזנה...")
+        else:
+            if hasattr(self, "voice_overlay"):
+                self.voice_overlay.hide_listening()
 
     def start_voice(self):
         if self.agent_running:
@@ -5183,18 +5453,24 @@ class ChatWindow(QMainWindow):
             return
         self.core.stop_speaking() 
         self.status_lbl.setText("מפעיל האזנה...")
+        if hasattr(self, "voice_overlay"):
+            self.voice_overlay.set_status("מפעיל האזנה...")
+            self.voice_overlay.show_listening(self)
         self.input_field.setEnabled(False)
         self.action_btn.setEnabled(False)
         self.voice_thread = VoiceWorker(self.core.settings)
-        self.voice_thread.status_signal.connect(lambda s: self.status_lbl.setText(s))
+        self.voice_thread.status_signal.connect(self.on_voice_status)
         self.voice_thread.finished_signal.connect(self.on_voice_finished)
         self.voice_thread.start()
 
     def on_voice_finished(self, text):
         self.voice_thread = None
         self.status_lbl.setText("")
+        if hasattr(self, "voice_overlay"):
+            self.voice_overlay.hide_listening()
         self.input_field.setEnabled(True)
         self.action_btn.setEnabled(True)
+        self.update_action_btn_visuals()
         if text:
             self.add_message(text, is_user=True, anchor_user=True)
             self.process_request(text, is_voice=True)
@@ -5524,7 +5800,7 @@ class AnimatedSplash(QWidget):
                 self.logo_lbl.setStyleSheet("background: transparent; border: none;")
                 return
         self.logo_lbl.setText("S")
-        self.logo_lbl.setFont(QFont("Segoe UI", 28, QFont.Weight.Bold))
+        self.logo_lbl.setFont(app_font(28, QFont.Weight.Bold))
         self.logo_lbl.setStyleSheet(
             f"QLabel {{ color: {ACCENT_COLOR}; background: {PANEL_COLOR}; border: 2px solid {border_color}; border-radius: 38px; }}"
         )

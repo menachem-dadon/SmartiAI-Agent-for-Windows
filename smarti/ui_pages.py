@@ -2612,7 +2612,7 @@ class SettingsPage(QWidget):
         self.voice_dynamic_energy_cb = SmartiCheckBox("התאמת רגישות אוטומטית לרעש רקע")
         self.voice_dynamic_energy_cb.setChecked(bool(self.core.settings.get("voice_dynamic_energy_threshold", False)))
         self.voice_dynamic_energy_cb.setStyleSheet(CHECKBOX_CSS)
-        self.voice_beep_cb = SmartiCheckBox("צפצוף בתחילת וסיום האזנה")
+        self.voice_beep_cb = SmartiCheckBox("צליל בתחילת וסיום האזנה")
         self.voice_beep_cb.setChecked(bool(self.core.settings.get("voice_beep_enabled", True)))
         self.voice_beep_cb.setStyleSheet(CHECKBOX_CSS)
 
@@ -3058,7 +3058,7 @@ class SettingsPage(QWidget):
         self._add_field("המתנה לתחילת דיבור", self.voice_timeout_control, app_settings, "כמה זמן לחכות לדיבור אחרי הפעלת ההאזנה לפני ביטול.", keywords="listen timeout speech start wait", advanced=True)
         self._add_field("כיול רעש רקע לפני האזנה", self.voice_ambient_control, app_settings, "0 מתחיל הכי מהר. הגדלה משפרת דיוק בסביבה רועשת אבל מוסיפה השהיה.", keywords="ambient noise calibration background", advanced=True)
         self._add_checkbox(self.voice_dynamic_energy_cb, app_settings, "מאפשר לספריית הזיהוי לשנות את סף הרגישות תוך כדי עבודה לפי רעש הרקע.", keywords="dynamic energy threshold noise", advanced=True)
-        self._add_checkbox(self.voice_beep_cb, app_settings, "משמיע צליל קצר בתחילת וסיום האזנה.", keywords="beep sound start stop listening", advanced=True)
+        self._add_checkbox(self.voice_beep_cb, app_settings, "משמיע צלילי האזנה קצרים מהנכסים בתחילת האזנה, בסיום האזנה ובביטול מחוסר דיבור.", keywords="beep sound start stop listening timeout", advanced=True)
         self._add_section_header("עדכונים", app_settings)
         self._add_checkbox(self.update_auto_cb, app_settings, "כשאפשרות זו פעילה, סמארטי יבדוק ברקע אם פורסמה גרסה חדשה ב-GitHub Releases.", keywords="updates release github version auto check")
         app_settings.addWidget(self.update_status_lbl)
@@ -3932,7 +3932,7 @@ class AboutPage(QWidget):
                 logo_lbl.setPixmap(canvas)
         else:
             logo_lbl.setText("S")
-            logo_lbl.setFont(QFont("Segoe UI", 46, QFont.Weight.Bold))
+            logo_lbl.setFont(app_font(46, QFont.Weight.Bold))
             logo_lbl.setStyleSheet(f"color: {ACCENT_COLOR}; border: none; background: transparent;")
 
         hero_text = QVBoxLayout()
