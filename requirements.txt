@@ -4,13 +4,14 @@ urllib3>=2.2
 openai>=1.40
 selenium>=4.20
 PyAutoGUI>=0.9.54
-uiautomation>=2.0.20
+uiautomation>=2.0.20; sys_platform == 'win32'
 pyperclip>=1.8
-keyboard>=0.13.5
+keyboard>=0.13.5; sys_platform == 'win32'
+pynput>=1.7.6; sys_platform != 'win32'
 SpeechRecognition>=3.10
-PyAudio>=0.2.14
+PyAudio>=0.2.14; sys_platform == 'win32'
 gTTS>=2.5
-pygame>=2.5
+pygame>=2.5; sys_platform == 'win32'
 Markdown>=3.6
 keyring>=25.0
 litellm>=1.40
@@ -19,4 +20,7 @@ python-docx>=1.1
 PyPDF2>=3.0
 Pillow>=10.0
 pytesseract>=0.3.10
-windows-toasts>=1.3.1
+windows-toasts>=1.3.1; sys_platform == 'win32'
+sounddevice>=0.4.6; sys_platform == 'darwin'
+numpy>=1.20.0; sys_platform == 'darwin'
+quickmachotkey>=2025.7.28; sys_platform == 'darwin'

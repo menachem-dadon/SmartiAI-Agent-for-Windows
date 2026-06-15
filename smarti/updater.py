@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import platform
 
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -25,7 +26,10 @@ GITHUB_OWNER = "menachem-dadon"
 GITHUB_REPO = "SmartiAI-Agent-for-Windows"
 GITHUB_API_RELEASE_LATEST = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
-SETUP_ASSET_RE = re.compile(r"(?i)\bsetup\b.*\.exe$")
+if platform.system() == "Windows":
+    SETUP_ASSET_RE = re.compile(r"(?i)\bsetup\b.*\.exe$")
+else:
+    SETUP_ASSET_RE = re.compile(r"(?i)\b(macos|osx|darwin)\b.*\.(dmg|zip|pkg)$")
 
 
 @dataclass
@@ -105,17 +109,24 @@ def _select_setup_asset(release):
     if not isinstance(assets, list):
         return {}
     setup_assets = []
-    exe_assets = []
+    fallback_assets = []
+    is_windows = platform.system() == "Windows"
     for asset in assets:
         if not isinstance(asset, dict):
             continue
         name = str(asset.get("name") or "")
         lower = name.lower()
-        if lower.endswith(".exe"):
-            exe_assets.append(asset)
-            if SETUP_ASSET_RE.search(name) or "setup" in lower:
-                setup_assets.append(asset)
-    return (setup_assets or exe_assets or [{}])[0]
+        if is_windows:
+            if lower.endswith(".exe"):
+                fallback_assets.append(asset)
+                if SETUP_ASSET_RE.search(name) or "setup" in lower:
+                    setup_assets.append(asset)
+        else:
+            if lower.endswith(".dmg") or lower.endswith(".pkg") or lower.endswith(".zip"):
+                fallback_assets.append(asset)
+                if SETUP_ASSET_RE.search(name) or "macos" in lower or "darwin" in lower or "osx" in lower:
+                    setup_assets.append(asset)
+    return (setup_assets or fallback_assets or [{}])[0]
 
 
 def check_for_updates(settings=None):
@@ -150,7 +161,8 @@ def check_for_updates(settings=None):
 def _safe_asset_name(name, version):
     name = os.path.basename(str(name or "").strip())
     if not name:
-        name = f"SmartiAI-Agent-for-Windows-{version}-Setup.exe"
+        ext = ".exe" if platform.system() == "Windows" else ".zip"
+        name = f"SmartiAI-Agent-{platform.system()}-{version}{ext}"
     return re.sub(r"[^A-Za-z0-9_.() -]+", "-", name)[:180]
 
 
@@ -163,7 +175,8 @@ def _expected_sha256(digest):
 def download_update(update_info, settings=None, progress_callback=None):
     info = UpdateInfo.from_dict(update_info)
     if not info.asset_url:
-        raise RuntimeError("No Windows Setup EXE was attached to the GitHub release.")
+        ext_desc = "Windows Setup EXE" if platform.system() == "Windows" else "macOS DMG/ZIP package"
+        raise RuntimeError(f"No {ext_desc} was attached to the GitHub release.")
 
     target_dir = os.path.join(USER_DATA_DIR, "updates", _safe_asset_name(info.version, info.version))
     os.makedirs(target_dir, exist_ok=True)
@@ -205,10 +218,19 @@ def _ps_quote(value):
 
 
 def _default_app_exe():
-    candidate = os.path.join(SMARTI_RUNTIME.install_dir, "SmartiAI.exe")
-    if os.path.exists(candidate) or not getattr(sys, "frozen", False):
-        return candidate
-    return sys.executable
+    if platform.system() == "Windows":
+        candidate = os.path.join(SMARTI_RUNTIME.install_dir, "SmartiAI.exe")
+        if os.path.exists(candidate) or not getattr(sys, "frozen", False):
+            return candidate
+        return sys.executable
+    else:
+        exe = sys.executable
+        if getattr(sys, "frozen", False) and platform.system() == "Darwin":
+            if ".app/Contents/MacOS/" in exe:
+                app_dir = exe.split(".app/Contents/MacOS/")[0] + ".app"
+                if os.path.exists(app_dir):
+                    return app_dir
+        return exe
 
 
 def launch_update_installer(installer_path, app_pid=None, app_exe=None):
@@ -220,10 +242,11 @@ def launch_update_installer(installer_path, app_pid=None, app_exe=None):
     app_pid = int(app_pid or os.getpid())
     script_dir = os.path.join(USER_DATA_DIR, "updates")
     os.makedirs(script_dir, exist_ok=True)
-    script_path = os.path.join(script_dir, f"apply_update_{app_pid}.ps1")
-    log_path = os.path.join(script_dir, "last_update.log")
 
-    script = f"""
+    if platform.system() == "Windows":
+        script_path = os.path.join(script_dir, f"apply_update_{app_pid}.ps1")
+        log_path = os.path.join(script_dir, "last_update.log")
+        script = f"""
 $ErrorActionPreference = 'SilentlyContinue'
 $installer = {_ps_quote(installer_path)}
 $appPid = {app_pid}
@@ -288,15 +311,82 @@ if ($null -eq $setup.ExitCode -or $setup.ExitCode -eq 0 -or $setup.ExitCode -eq 
     }}
 }}
 """
-    with open(script_path, "w", encoding="utf-8-sig") as f:
-        f.write(script.lstrip())
+        with open(script_path, "w", encoding="utf-8-sig") as f:
+            f.write(script.lstrip())
 
-    subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path],
-        cwd=script_dir,
-        creationflags=WIN_CREATE_NO_WINDOW,
-    )
-    return script_path
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path],
+            cwd=script_dir,
+            creationflags=WIN_CREATE_NO_WINDOW,
+        )
+        return script_path
+    else:
+        script_path = os.path.join(script_dir, f"apply_update_{app_pid}.sh")
+        log_path = os.path.join(script_dir, "last_update.log")
+        script = f"""#!/bin/bash
+log_file='{log_path}'
+echo "Starting update process..." > "$log_file"
+APP_PID={app_pid}
+INSTALLER='{installer_path}'
+APP_EXE='{app_exe}'
+
+if [ "$APP_PID" -gt 0 ]; then
+    for i in {{1..25}}; do
+        if ! kill -0 "$APP_PID" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+    kill -9 "$APP_PID" 2>/dev/null
+fi
+
+if [[ "$INSTALLER" == *.zip ]]; then
+    echo "Extracting ZIP update..." >> "$log_file"
+    tmp_dir="/tmp/smarti_update"
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir"
+    unzip -o "$INSTALLER" -d "$tmp_dir" >> "$log_file" 2>&1
+    new_app=$(find "$tmp_dir" -name "SmartiAI.app" -type d | head -n 1)
+    if [ -n "$new_app" ]; then
+        dest_dir=$(dirname "$APP_EXE")
+        echo "Copying $new_app to $dest_dir..." >> "$log_file"
+        rm -rf "$APP_EXE"
+        cp -R "$new_app" "$dest_dir" >> "$log_file" 2>&1
+        echo "Update applied successfully." >> "$log_file"
+        open "$APP_EXE"
+    else
+        echo "ERROR: SmartiAI.app not found in zip." >> "$log_file"
+    fi
+elif [[ "$INSTALLER" == *.dmg ]]; then
+    echo "Mounting DMG update..." >> "$log_file"
+    mount_point=$(hdiutil attach "$INSTALLER" -nobrowse | grep -o '/Volumes/.*' | head -n 1)
+    if [ -n "$mount_point" ]; then
+        new_app=$(find "$mount_point" -name "SmartiAI.app" -type d | head -n 1)
+        if [ -n "$new_app" ]; then
+            dest_dir=$(dirname "$APP_EXE")
+            echo "Copying $new_app to $dest_dir..." >> "$log_file"
+            rm -rf "$APP_EXE"
+            cp -R "$new_app" "$dest_dir" >> "$log_file" 2>&1
+            echo "Update applied successfully." >> "$log_file"
+            hdiutil detach "$mount_point"
+            open "$APP_EXE"
+        else
+            echo "ERROR: SmartiAI.app not found in DMG." >> "$log_file"
+            hdiutil detach "$mount_point"
+        fi
+    else
+        echo "ERROR: Failed to mount DMG." >> "$log_file"
+    fi
+fi
+"""
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script.lstrip())
+        os.chmod(script_path, 0o755)
+        subprocess.Popen(
+            ["/bin/bash", script_path],
+            cwd=script_dir,
+        )
+        return script_path
 
 
 def human_size(num_bytes):

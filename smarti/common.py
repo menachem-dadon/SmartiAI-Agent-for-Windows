@@ -40,7 +40,10 @@ from email.parser import BytesParser
 from email.utils import formataddr, formatdate, getaddresses, make_msgid, parsedate_to_datetime
 import copy
 import hashlib
-import winsound
+try:
+    import winsound
+except ImportError:
+    winsound = None
 import tempfile
 import uuid
 import ctypes
@@ -277,7 +280,10 @@ MODEL_PROVIDER_CONFIGS = {
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources is deprecated.*")
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
-WIN_CREATE_NO_WINDOW = 0x08000000
+if platform.system() == "Windows":
+    WIN_CREATE_NO_WINDOW = 0x08000000
+else:
+    WIN_CREATE_NO_WINDOW = 0
 SMARTI_BROWSER_DEBUG_PORT = 49223
 SMARTI_BROWSER_PROFILE_NAME = "SmartiChromeProfile"
 SMARTI_APP_DISPLAY_NAME = "SmartiAI"
@@ -298,9 +304,12 @@ PDF_INSTALLED = importlib.util.find_spec("PyPDF2") is not None
 BS4_INSTALLED = importlib.util.find_spec("bs4") is not None
 MARKDOWN_INSTALLED = importlib.util.find_spec("markdown") is not None
 PILLOW_INSTALLED = importlib.util.find_spec("PIL") is not None
-KEYBOARD_INSTALLED = importlib.util.find_spec("keyboard") is not None
+KEYBOARD_INSTALLED = True if platform.system() == "Darwin" else (importlib.util.find_spec("keyboard") is not None or importlib.util.find_spec("pynput") is not None)
 SPEECH_INSTALLED = importlib.util.find_spec("speech_recognition") is not None
-GTTS_INSTALLED = importlib.util.find_spec("gtts") is not None and importlib.util.find_spec("pygame") is not None
+if platform.system() == "Darwin":
+    GTTS_INSTALLED = importlib.util.find_spec("gtts") is not None
+else:
+    GTTS_INSTALLED = importlib.util.find_spec("gtts") is not None and importlib.util.find_spec("pygame") is not None
 TTS_INSTALLED = GTTS_INSTALLED
 
 GOOGLE_HEBREW_TTS_VOICES = [
@@ -324,6 +333,8 @@ def _resolve_user_data_dir():
     candidates = []
     if override:
         candidates.append(os.path.abspath(os.path.expanduser(os.path.expandvars(override))))
+    if platform.system() == "Darwin":
+        candidates.append(os.path.join(os.path.expanduser("~"), "Library", "Application Support", "SmartiAI"))
     for base in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")):
         if base:
             candidates.append(os.path.join(base, "SmartiAI"))
@@ -337,7 +348,7 @@ def _resolve_user_data_dir():
     return APP_DIR
 
 def _resolve_default_outputs_dir():
-    user_profile = os.environ.get("USERPROFILE", "")
+    user_profile = os.environ.get("USERPROFILE") or os.path.expanduser("~")
     documents = os.path.join(user_profile, "Documents") if user_profile else ""
     if documents and os.path.isdir(documents):
         return os.path.join(documents, "Smarti_Outputs")
@@ -508,7 +519,7 @@ CAPABILITY_LABELS = {
     "file_open": "פתיחת קבצים ותיקיות",
     "software_run": "הרצת תוכנה וקבצים",
     "browser_automation": "אוטומציית דפדפן",
-    "computer_control": "אוטומציית מחשב דרך עץ הנגישות של Windows",
+    "computer_control": f"אוטומציית מחשב דרך עץ הנגישות של {'macOS' if platform.system() == 'Darwin' else 'Windows'}",
     "email": "דואר אלקטרוני",
     "screenshot": "צילום מסך",
     "software_open": "פתיחת תוכנות",

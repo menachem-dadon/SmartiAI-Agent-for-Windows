@@ -3262,9 +3262,69 @@ class ChatWindow(QMainWindow):
         try:
             if self._voice_hotkey_handle is not None:
                 self.unregister_voice_hotkey()
-            import keyboard
-            hotkey = str(self.core.settings.get("voice_hotkey", "alt+v") or "alt+v")
-            self._voice_hotkey_handle = keyboard.add_hotkey(hotkey, lambda: self.voice_hotkey_signal.emit())
+            hotkey_str = str(self.core.settings.get("voice_hotkey", "alt+v") or "alt+v").strip().lower()
+            if platform.system() == "Windows":
+                import keyboard
+                self._voice_hotkey_handle = keyboard.add_hotkey(hotkey_str, lambda: self.voice_hotkey_signal.emit())
+            else:
+                from quickmachotkey import quickHotKey, mask
+                from quickmachotkey.constants import optionKey, cmdKey, controlKey, shiftKey
+                
+                parts = [p.strip().lower() for p in hotkey_str.split("+")]
+                required_modifiers = []
+                key_char = ""
+                for p in parts:
+                    if p in {"alt", "option"}:
+                        required_modifiers.append("alt")
+                    elif p in {"cmd", "command", "win"}:
+                        required_modifiers.append("cmd")
+                    elif p in {"ctrl", "control"}:
+                        required_modifiers.append("ctrl")
+                    elif p in {"shift"}:
+                        required_modifiers.append("shift")
+                    else:
+                        key_char = p
+                
+                # Hebrew-to-QWERTY mapping for layout-agnostic hotkeys
+                hebrew_to_qwerty = {
+                    'ש': 'a', 'נ': 'b', 'ב': 'c', 'ג': 'd', 'ק': 'e', 'כ': 'f', 'ע': 'g', 'י': 'h',
+                    'ן': 'i', 'ח': 'j', 'ל': 'k', 'ך': 'l', 'צ': 'm', 'מ': 'n', 'ם': 'o', 'פ': 'p',
+                    'א': 't', 'ט': 'y', 'ו': 'u', 'ז': 'z', 'ס': 'x', 'ה': 'v', 'ף': ';', 'ץ': '.',
+                    'ת': ',', '׳': 'w', '״': '"'
+                }
+                if key_char in hebrew_to_qwerty:
+                    key_char = hebrew_to_qwerty[key_char]
+                
+                vk_map = {
+                    "a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5, "h": 4, "i": 34,
+                    "j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35, "q": 12, "r": 15,
+                    "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
+                    "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25,
+                    "space": 49, "tab": 48, "return": 36, "enter": 76, "escape": 53, "delete": 51,
+                    "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97, "f7": 98,
+                    "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111
+                }
+                
+                vk_code = vk_map.get(key_char, 9) # Default to 'v' key code 9
+                
+                mod_mask = 0
+                for m in required_modifiers:
+                    if m == "alt":
+                        mod_mask |= optionKey
+                    elif m == "cmd":
+                        mod_mask |= cmdKey
+                    elif m == "ctrl":
+                        mod_mask |= controlKey
+                    elif m == "shift":
+                        mod_mask |= shiftKey
+                
+                if not mod_mask and not required_modifiers:
+                    # Default to optionKey if no modifiers specified
+                    mod_mask = optionKey
+                
+                reg_decorator = quickHotKey(virtualKey=vk_code, modifierMask=mask(mod_mask), immediately=True)
+                self._voice_hotkey_handle = reg_decorator(lambda: self.voice_hotkey_signal.emit())
+                logging.info(f"Registered global voice hotkey: {hotkey_str} (vk_code={vk_code}, mod_mask={mod_mask}) using RegisterEventHotKey")
         except Exception as e:
             logging.warning(f"Voice hotkey registration failed: {e}")
 
@@ -3273,11 +3333,16 @@ class ChatWindow(QMainWindow):
         if handle is None:
             return
         try:
-            import keyboard
-            keyboard.remove_hotkey(handle)
-        except Exception:
-            pass
+            if platform.system() == "Windows":
+                import keyboard
+                keyboard.remove_hotkey(handle)
+            else:
+                handle.unregister()
+                logging.info("Unregistered global voice hotkey")
+        except Exception as e:
+            logging.warning(f"Failed to unregister hotkey: {e}")
         self._voice_hotkey_handle = None
+
 
     def _setup_tray_menu(self):
         self.tray_menu = QMenu()

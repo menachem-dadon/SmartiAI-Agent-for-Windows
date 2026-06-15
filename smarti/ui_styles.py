@@ -536,7 +536,7 @@ def _refresh_theme_exports(mode=None, settings=None):
             background: {FIELD_COLOR}; color: {FIELD_TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 20px; padding: 12px;
-            font-family: Consolas, 'Courier New';
+            font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
             font-size: 12px;
             selection-background-color: {ACCENT_TINT_STRONG};
             selection-color: {TEXT_COLOR};
@@ -590,7 +590,7 @@ def apply_app_theme(app=None, mode=None, settings=None):
 def application_stylesheet():
     return f"""
         QWidget {{
-            font-family: 'Segoe UI', Arial;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             color: {TEXT_COLOR};
             selection-background-color: {ACCENT_TINT_STRONG};
             selection-color: {TEXT_COLOR};
@@ -623,7 +623,7 @@ def application_stylesheet():
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 18px;
-            font-family: 'Segoe UI';
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             font-size: 14px;
             padding: 7px;
         }}
@@ -677,7 +677,7 @@ def menu_stylesheet():
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 18px;
-            font-family: 'Segoe UI';
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             font-size: 14px;
             padding: 7px;
         }}

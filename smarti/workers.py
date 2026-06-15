@@ -1,5 +1,69 @@
 """Qt worker threads for agent, speech, TTS, and model loading."""
+import sys
+import queue
+import numpy as np
 from .common import *
+
+# ==========================================
+try:
+    import speech_recognition as sr
+    AudioSourceBase = sr.AudioSource
+except ImportError:
+    AudioSourceBase = object
+
+class SounddeviceMicrophone(AudioSourceBase):
+    def __init__(self, sample_rate=16000, chunk_size=1024):
+        self.SAMPLE_RATE = sample_rate
+        self.CHUNK = chunk_size
+        self.SAMPLE_WIDTH = 2
+        self.stream = None
+        self._queue = None
+        self._sd_stream = None
+
+    class SounddeviceStream:
+        def __init__(self, mic):
+            self.mic = mic
+            self.buffer = np.empty((0, 1), dtype=np.float32)
+
+        def read(self, num_frames):
+            while len(self.buffer) < num_frames:
+                try:
+                    chunk = self.mic._queue.get(timeout=1.0)
+                    self.buffer = np.concatenate((self.buffer, chunk), axis=0)
+                except queue.Empty:
+                    silence_len = num_frames - len(self.buffer)
+                    silence = np.zeros((silence_len, 1), dtype=np.float32)
+                    self.buffer = np.concatenate((self.buffer, silence), axis=0)
+                    break
+            
+            chunk_to_return = self.buffer[:num_frames]
+            self.buffer = self.buffer[num_frames:]
+            
+            pcm = np.clip(chunk_to_return * 32767.0, -32768, 32767).astype(np.int16)
+            return pcm.tobytes()
+
+    def __enter__(self):
+        import sounddevice as sd
+        self._queue = queue.Queue()
+        self.stream = self.SounddeviceStream(self)
+        self._sd_stream = sd.InputStream(
+            samplerate=self.SAMPLE_RATE,
+            blocksize=self.CHUNK,
+            channels=1,
+            dtype='float32',
+            callback=lambda indata, frames, time, status: self._queue.put(indata.copy())
+        )
+        self._sd_stream.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self._sd_stream:
+            try:
+                self._sd_stream.stop()
+                self._sd_stream.close()
+            except Exception:
+                pass
+            self._sd_stream = None
 
 # ==========================================
 # תהליכי רקע (QThreads) ל-GUI למניעת קפיאות
@@ -100,12 +164,20 @@ class VoiceWorker(QThread):
         ambient_duration = self._setting_float("voice_ambient_noise_duration", 0.0, 0.0, 3.0)
         try:
             self.status_signal.emit("פותח מיקרופון...")
-            with sr.Microphone() as source:
+            if sys.platform == 'darwin':
+                source_context = SounddeviceMicrophone()
+            else:
+                source_context = sr.Microphone()
+            with source_context as source:
                 if ambient_duration > 0:
                     self.status_signal.emit("מכוון רעש רקע...")
                     r.adjust_for_ambient_noise(source, duration=ambient_duration)
                 if bool(self.settings.get("voice_beep_enabled", False)):
-                    try: winsound.Beep(1000, 90)
+                    try:
+                        if winsound:
+                            winsound.Beep(1000, 90)
+                        else:
+                            QApplication.beep()
                     except: pass
                 self.status_signal.emit("מקשיב...")
                 try: audio = r.listen(source, timeout=listen_timeout)
@@ -113,7 +185,11 @@ class VoiceWorker(QThread):
                     self.finished_signal.emit("")
                     return
                 if bool(self.settings.get("voice_beep_enabled", False)):
-                    try: winsound.Beep(800, 90)
+                    try:
+                        if winsound:
+                            winsound.Beep(800, 90)
+                        else:
+                            QApplication.beep()
                     except: pass
                 self.status_signal.emit("מתמלל...")
                 text = r.recognize_google(audio, language="he-IL").replace("סמרטי", "סמארטי").replace("סמארט", "סמארטי")

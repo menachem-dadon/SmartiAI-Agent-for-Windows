@@ -1436,6 +1436,7 @@ class SettingsPage(QWidget):
             self.main_window.check_for_updates_manual(self)
 
     def _init_widgets(self):
+        os_label = "macOS" if platform.system() == "Darwin" else "Windows"
         self.core.ensure_provider_secret(self.core.settings.get("api_mode", "gemini"))
         for secret_key in ("tavily_api_key", "email_address", "email_password"):
             self.core._ensure_secret_loaded(secret_key)
@@ -1560,7 +1561,7 @@ class SettingsPage(QWidget):
         self.browser_auto_cb = SmartiCheckBox("אפשר שליטה בדפדפן לצורך אוטומציה")
         self.browser_auto_cb.setChecked(self.core.settings.get("enable_browser_automation", False))
         self.browser_auto_cb.setStyleSheet(CHECKBOX_CSS)
-        self.computer_control_cb = SmartiCheckBox("אפשר אוטומציית מחשב דרך עץ הנגישות של Windows")
+        self.computer_control_cb = SmartiCheckBox(f"אפשר אוטומציית מחשב דרך עץ הנגישות של {os_label}")
         self.computer_control_cb.setChecked(self.core.settings.get("enable_computer_control", False))
         self.computer_control_cb.setStyleSheet(CHECKBOX_CSS)
         self.mcp_cb = SmartiCheckBox("אפשר שימוש בכלים חיצוניים (MCP)")
@@ -1812,6 +1813,7 @@ class SettingsPage(QWidget):
         return btn
 
     def _build_ui_sections(self):
+        os_label = "macOS" if platform.system() == "Darwin" else "Windows"
         self.settings_home_page, home = self._make_scroll_page()
         ai_page, ai = self._make_scroll_page()
         safety_page, safety = self._make_scroll_page()
@@ -1871,7 +1873,7 @@ class SettingsPage(QWidget):
 
         self._add_internal_back(tools, "כלים ואוטומציה")
         self._add_checkbox(self.browser_auto_cb, tools, "מאפשר לסמארטי לפתוח דפדפן אוטומטי ולבצע פעולות בדפי אינטרנט, לאחר אישור לפי רמת ההרשאות.")
-        self._add_checkbox(self.computer_control_cb, tools, "מאפשר לסמארטי לקרוא את עץ הנגישות של Windows ולפעול על אלמנטים מזוהים. מקלדת/עכבר הם fallback מבוקר בלבד.")
+        self._add_checkbox(self.computer_control_cb, tools, f"מאפשר לסמארטי לקרוא את עץ הנגישות של {os_label} ולפעול על אלמנטים מזוהים. מקלדת/עכבר הם fallback מבוקר בלבד.")
         self._add_checkbox(self.mcp_cb, tools, "מאפשר שימוש בכלים חיצוניים שמרחיבים את יכולות סמארטי, בכפוף להרשאות שהוגדרו.")
         self._add_checkbox(self.skills_beta_cb, tools, "מאפשר שכבת Skills בטא: תהליכי עבודה גבוהים שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.")
         # Google Drive settings section is intentionally hidden for now.
@@ -1891,7 +1893,7 @@ class SettingsPage(QWidget):
 
         self._add_internal_back(voice, "קול ותצוגה")
         self._add_section_header("מראה", voice)
-        self._add_field("מצב תצוגה", self.theme_combo, voice, "בחר מצב כהה, בהיר או התאמה אוטומטית להגדרת המערכת של Windows.")
+        self._add_field("מצב תצוגה", self.theme_combo, voice, f"בחר מצב כהה, בהיר או התאמה אוטומטית להגדרת המערכת של {os_label}.")
         self._add_section_header("קול", voice)
         self._add_checkbox(self.tts_cb, voice, "כאשר האפשרות פעילה, סמארטי יקריא בקול את כל התשובות.")
         self._add_checkbox(self.tts_voice_cb, voice, "כאשר האפשרות פעילה, הקריאה הקולית תופעל בעיקר לאחר פנייה קולית מצד המשתמש.")
@@ -2624,11 +2626,12 @@ class AboutPage(QWidget):
 
         hero_text = QVBoxLayout()
         hero_text.setSpacing(7)
-        app_name = QLabel("Smarti AI Agent for Windows")
+        os_label = "macOS" if platform.system() == "Darwin" else "Windows"
+        app_name = QLabel(f"Smarti AI Agent for {os_label}")
         app_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         app_name.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 20px; font-weight: 800; border: none;")
         app_name.setWordWrap(True)
-        tagline = QLabel("סוכן עבודה אישי ל-Windows שמבין משימות, מפעיל כלים מקומיים, עובד עם קבצים, אינטרנט, דפדפן, אימייל ומשימות רקע, ומסכם תוצאות בעברית.")
+        tagline = QLabel(f"סוכן עבודה אישי ל-{os_label} שמבין משימות, מפעיל כלים מקומיים, עובד עם קבצים, אינטרנט, דפדפן, אימייל ומשימות רקע, ומסכם תוצאות בעברית.")
         tagline.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tagline.setStyleSheet(muted_label_css(13) + " border: none;")
         tagline.setWordWrap(True)
@@ -2699,7 +2702,7 @@ class AboutPage(QWidget):
         note_layout.setSpacing(6)
         note_title = QLabel("פרטיות ובטיחות")
         note_title.setStyleSheet(f"color: {ACCENT_COLOR}; font-size: 15px; font-weight: 800; border: none;")
-        note_body = QLabel("פעולות רגישות נשלטות דרך פרופיל האוטונומיה ומדיניות הכלים. מחיקת קבצים עוברת לסל המחזור, וסודות נשמרים במנגנוני האחסון המאובטחים של Windows כשהם זמינים.")
+        note_body = QLabel(f"פעולות רגישות נשלטות דרך פרופיל האוטונומיה ומדיניות הכלים. מחיקת קבצים עוברת לסל המחזור, וסודות נשמרים במנגנוני האחסון המאובטחים של {os_label} כשהם זמינים.")
         note_body.setWordWrap(True)
         note_body.setStyleSheet(muted_label_css(13) + " border: none;")
         note_layout.addWidget(note_title)

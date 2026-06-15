@@ -15,6 +15,58 @@ except Exception:
 from PyQt6.QtCore import QObject
 
 
+if platform.system() == "Darwin":
+    try:
+        import objc
+        from Foundation import NSObject, NSUserNotification, NSUserNotificationCenter
+
+        class macOSNotificationDelegate(NSObject):
+            def initWithCenter_(self, center_instance):
+                self = objc.super(macOSNotificationDelegate, self).init()
+                if self:
+                    self.center_instance = center_instance
+                    self.permission_callbacks = {}
+                return self
+
+            def userNotificationCenter_didActivateNotification_(self, center, notification):
+                try:
+                    act_type = notification.activationType()
+                    userInfo = notification.userInfo()
+                    notif_type = userInfo.get("type") if userInfo else None
+                    
+                    if notif_type == "response":
+                        if act_type == 3:  # Replied
+                            reply = notification.response()
+                            if reply:
+                                reply_str = reply.string()
+                                self.center_instance.reply_requested.emit(reply_str)
+                        else:
+                            self.center_instance.activate_requested.emit()
+                    elif notif_type == "permission":
+                        notif_id = userInfo.get("id") if userInfo else None
+                        callback = self.permission_callbacks.pop(notif_id, None)
+                        if callback:
+                            if act_type == 2:  # ActionButtonClicked ("אשר")
+                                callback(True)
+                            elif act_type == 1:  # ContentsClicked
+                                self.center_instance.activate_requested.emit()
+                                callback(None)
+                            else:  # Other/Declined
+                                callback(False)
+                    else:
+                        self.center_instance.activate_requested.emit()
+                    
+                    self.center_instance.attention_cleared.emit()
+                    center.removeDeliveredNotification_(notification)
+                except Exception as e:
+                    logging.exception("macOS notification activation failed")
+
+            def userNotificationCenter_shouldPresentNotification_(self, center, notification):
+                return True
+    except Exception as e:
+        logging.warning("Failed to define macOS notification delegate: %s", e)
+
+
 def ensure_windows_notification_identity():
     if platform.system() != "Windows" or winreg is None:
         return False
@@ -42,27 +94,44 @@ class TaskbarAttentionController(QObject):
         self._flashing = False
 
     def request_attention(self):
-        if platform.system() != "Windows" or wintypes is None:
+        if platform.system() == "Windows":
+            if wintypes is None or not self.window or self.window.isActiveWindow():
+                return False
+            hwnd = self._window_handle()
+            if not hwnd:
+                return False
+            if self._flash(hwnd, self.FLASHW_TRAY | self.FLASHW_TIMERNOFG):
+                self._flashing = True
+                return True
             return False
-        if not self.window or self.window.isActiveWindow():
-            return False
-        hwnd = self._window_handle()
-        if not hwnd:
-            return False
-        if self._flash(hwnd, self.FLASHW_TRAY | self.FLASHW_TIMERNOFG):
-            self._flashing = True
-            return True
-        return False
+        else:
+            if not self.window or self.window.isActiveWindow():
+                return False
+            try:
+                QApplication.alert(self.window)
+                self._flashing = True
+                return True
+            except Exception:
+                return False
 
     def stop(self):
-        if not self._flashing or platform.system() != "Windows" or wintypes is None:
-            self._flashing = False
+        if not self._flashing:
             return False
-        hwnd = self._window_handle()
         self._flashing = False
-        if not hwnd:
-            return False
-        return self._flash(hwnd, self.FLASHW_STOP)
+        if platform.system() == "Windows":
+            if wintypes is None:
+                return False
+            hwnd = self._window_handle()
+            if not hwnd:
+                return False
+            return self._flash(hwnd, self.FLASHW_STOP)
+        else:
+            if self.window:
+                try:
+                    QApplication.alert(self.window, 0)
+                except Exception:
+                    pass
+            return True
 
     def _window_handle(self):
         try:
@@ -246,7 +315,7 @@ class SmartiGlassToast(QWidget):
                 background: transparent;
                 border: none;
                 color: {TEXT_COLOR};
-                font-family: 'Segoe UI', Arial;
+                font-family: '.AppleSystemUIFont', 'Segoe UI', Arial;
             }}
             QLabel#SmartiGlassAppName {{
                 color: {MUTED_TEXT_COLOR};
@@ -282,7 +351,7 @@ class SmartiGlassToast(QWidget):
                 border-color: {ACCENT_PINK_COLOR};
             }}
             QPushButton {{
-                font-family: 'Segoe UI', Arial;
+                font-family: '.AppleSystemUIFont', 'Segoe UI', Arial;
                 border: 1px solid transparent;
                 border-radius: 10px;
                 padding: 9px 14px;
@@ -380,6 +449,12 @@ class WindowsNotificationCenter(QObject):
         self._api = None
         self._native_toasts = []
         self._fallback_toasts = []
+        if platform.system() == "Darwin":
+            try:
+                self._delegate = macOSNotificationDelegate.alloc().initWithCenter_(self)
+                NSUserNotificationCenter.defaultUserNotificationCenter().setDelegate_(self._delegate)
+            except Exception as e:
+                logging.warning("Failed to initialize macOS notification delegate: %s", e)
 
     def available_status(self):
         return "native" if self._ensure_native() else f"fallback: {self._native_error or 'native unavailable'}"
@@ -506,6 +581,18 @@ class WindowsNotificationCenter(QObject):
     def show_response(self, response):
         title = "סמארטי השיב"
         body = self._plain_text(response, 360) or "התשובה מוכנה."
+        if platform.system() == "Darwin":
+            try:
+                notif = NSUserNotification.alloc().init()
+                notif.setTitle_(title)
+                notif.setInformativeText_(body)
+                notif.setHasReplyButton_(True)
+                notif.setResponsePlaceholder_("כתוב תגובה")
+                notif.setUserInfo_({"type": "response"})
+                NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(notif)
+                return True
+            except Exception as exc:
+                logging.warning("macOS native response failed: %s", exc)
         if self._ensure_native():
             try:
                 api = self._api
@@ -559,6 +646,25 @@ class WindowsNotificationCenter(QObject):
     def show_permission_request(self, title, details, risk="medium", callback=None):
         heading = "בקשת הרשאה"
         body = self._plain_text(f"{title}\n{details}", 620) or str(title or heading)
+        if platform.system() == "Darwin":
+            try:
+                notif = NSUserNotification.alloc().init()
+                notif.setTitle_(heading)
+                notif.setInformativeText_(body)
+                notif.setHasActionButton_(True)
+                notif.setActionButtonTitle_("אשר")
+                notif.setOtherButtonTitle_("דחה")
+                
+                notif_id = uuid.uuid4().hex
+                notif.setUserInfo_({"type": "permission", "id": notif_id})
+                
+                if hasattr(self, "_delegate") and self._delegate:
+                    self._delegate.permission_callbacks[notif_id] = callback
+                    
+                NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(notif)
+                return True
+            except Exception as exc:
+                logging.warning("macOS native permission request failed: %s", exc)
         if self._ensure_native():
             try:
                 api = self._api
@@ -620,6 +726,16 @@ class WindowsNotificationCenter(QObject):
     def show_notice(self, title, body, *, kind="default", open_button=True):
         title = self._plain_text(title, 90) or SMARTI_APP_DISPLAY_NAME
         body = self._plain_text(body, 520) or "יש עדכון מסמארטי."
+        if platform.system() == "Darwin":
+            try:
+                notif = NSUserNotification.alloc().init()
+                notif.setTitle_(title)
+                notif.setInformativeText_(body)
+                notif.setUserInfo_({"type": "notice"})
+                NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(notif)
+                return True
+            except Exception as exc:
+                logging.warning("macOS native notice failed: %s", exc)
         if self._ensure_native():
             try:
                 api = self._api
