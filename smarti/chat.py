@@ -4063,6 +4063,7 @@ class ChatWindow(QMainWindow):
     def _fit_quick_input_button(self, button, text, base_width=150, max_width=320, min_width=92):
         try:
             text = str(text or "")
+            button.setProperty("smartiFullQuickText", text)
             text_width = button.fontMetrics().horizontalAdvance(str(text or ""))
             icon_extra = 28 if not button.icon().isNull() else 0
             arrow_extra = int(getattr(button, "_arrow_size", 13) or 13) + 18
@@ -4078,6 +4079,49 @@ class ChatWindow(QMainWindow):
         except Exception:
             button.setFixedWidth(int(min_width))
 
+    def _quick_input_available_width(self):
+        if not all(hasattr(self, attr) for attr in ("input_frame", "quick_control_row", "action_btn_host", "attach_btn")):
+            return 0
+        row_width = int(self.quick_control_row.geometry().width() or 0)
+        if row_width <= 0:
+            row_width = int(self.input_frame.width() or 0)
+            layout = self.input_frame.layout()
+            if layout is not None:
+                margins = layout.contentsMargins()
+                row_width -= int(margins.left() + margins.right())
+        spacing = max(0, int(self.quick_control_row.spacing()))
+        fixed_width = int(self.action_btn_host.width() or self.action_btn_host.sizeHint().width() or 52)
+        fixed_width += int(self.attach_btn.width() or self.attach_btn.sizeHint().width() or 42)
+        return max(0, row_width - fixed_width - (spacing * 4))
+
+    def _quick_input_button_widths(self):
+        available = self._quick_input_available_width()
+        if available <= 0:
+            return 168, 152
+        if available < 216:
+            autonomy_width = max(86, int(available * 0.54))
+            return max(48, available - autonomy_width), autonomy_width
+        autonomy_width = min(152, max(128, int(available * 0.42)))
+        model_width = max(88, available - autonomy_width)
+        if model_width > 210:
+            extra = model_width - 210
+            model_width = 210
+            autonomy_width = min(152, autonomy_width + extra)
+        if model_width + autonomy_width > available:
+            autonomy_width = max(104, min(autonomy_width, available - 72))
+            model_width = max(48, available - autonomy_width)
+        return int(model_width), int(autonomy_width)
+
+    def _resize_quick_input_controls(self):
+        if hasattr(self, "favorite_model_btn"):
+            model_width, _ = self._quick_input_button_widths()
+            text = self.favorite_model_btn.property("smartiFullQuickText") or self.favorite_model_btn.text()
+            self._fit_quick_input_button(self.favorite_model_btn, text, model_width, model_width, min(model_width, 88))
+        if hasattr(self, "autonomy_quick_btn"):
+            _, autonomy_width = self._quick_input_button_widths()
+            text = self.autonomy_quick_btn.property("smartiFullQuickText") or self.autonomy_quick_btn.text()
+            self._fit_quick_input_button(self.autonomy_quick_btn, text, autonomy_width, autonomy_width, min(autonomy_width, 118))
+
     def refresh_favorite_model_controls(self):
         if not hasattr(self, "favorite_model_btn"):
             return
@@ -4088,7 +4132,8 @@ class ChatWindow(QMainWindow):
         label = self._favorite_model_label(current_provider, current_model) or "מודל"
         self.favorite_model_btn.setText(label)
         self.favorite_model_btn.setIcon(QIcon())
-        self._fit_quick_input_button(self.favorite_model_btn, label, 168, 210, 132)
+        model_width, _ = self._quick_input_button_widths()
+        self._fit_quick_input_button(self.favorite_model_btn, label, model_width, model_width, min(model_width, 88))
         self.favorite_model_btn.setToolTip("מודלים מועדפים")
 
     def _favorites_by_provider(self):
@@ -4170,7 +4215,8 @@ class ChatWindow(QMainWindow):
             self.autonomy_quick_btn.setIconSize(QSize(18, 18))
         else:
             self.autonomy_quick_btn.setIcon(QIcon())
-        self._fit_quick_input_button(self.autonomy_quick_btn, label, 152, 154, 146)
+        _, autonomy_width = self._quick_input_button_widths()
+        self._fit_quick_input_button(self.autonomy_quick_btn, label, autonomy_width, autonomy_width, min(autonomy_width, 118))
         self.autonomy_quick_btn.setToolTip("פרופיל בטיחות")
 
     def show_quick_autonomy_menu(self):
@@ -4549,6 +4595,7 @@ class ChatWindow(QMainWindow):
         input_frame_layout.addWidget(self.input_field)
 
         control_row = QHBoxLayout()
+        self.quick_control_row = control_row
         control_row.setDirection(QBoxLayout.Direction.LeftToRight)
         control_row.setContentsMargins(0, 0, 0, 0)
         control_row.setSpacing(10)
@@ -4576,7 +4623,7 @@ class ChatWindow(QMainWindow):
         self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
         self.favorite_model_btn.clicked.connect(self.show_favorite_model_menu)
-        control_row.addWidget(self.favorite_model_btn, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
+        control_row.addWidget(self.favorite_model_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         self.autonomy_quick_btn = DropdownPillButton("מאוזן")
         self.autonomy_quick_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -4586,10 +4633,12 @@ class ChatWindow(QMainWindow):
         self.autonomy_quick_btn.clicked.connect(self.show_quick_autonomy_menu)
         control_row.addWidget(self.autonomy_quick_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
+        control_row.addStretch(1)
         control_row.addWidget(self.attach_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
         input_frame_layout.addLayout(control_row)
         self.refresh_quick_autonomy_controls()
         self.refresh_favorite_model_controls()
+        QTimer.singleShot(0, self._resize_quick_input_controls)
         
         bottom_layout.addWidget(self.input_frame, alignment=Qt.AlignmentFlag.AlignVCenter)
         overlay_layout.addLayout(bottom_layout)
@@ -4831,6 +4880,7 @@ class ChatWindow(QMainWindow):
             available_width = self.scroll.viewport().width() or self.width()
             for bubble in self.findChildren(MessageBubble):
                 bubble.update_parent_width(available_width)
+            self._resize_quick_input_controls()
             self._update_chat_bottom_padding()
         except Exception:
             pass
