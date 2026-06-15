@@ -3647,7 +3647,10 @@ class VoiceListeningOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setAutoFillBackground(True)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.setFixedSize(342, 70)
+        self._expanded_width = 342
+        self._compact_width = 298
+        self._overlay_height = 70
+        self.setFixedSize(self._expanded_width, self._overlay_height)
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -3729,6 +3732,23 @@ class VoiceListeningOverlay(QWidget):
         )
         self.pulse.update()
 
+    def _owner_is_foreground(self):
+        owner = self.owner
+        try:
+            if not owner or not owner.isVisible() or owner.isMinimized():
+                return False
+            active = QApplication.activeWindow()
+            return bool(owner.isActiveWindow() or active is owner or (active is not None and owner.isAncestorOf(active)))
+        except Exception:
+            return False
+
+    def update_open_button_visibility(self):
+        show_open = not self._owner_is_foreground()
+        self.open_btn.setVisible(show_open)
+        target_width = self._expanded_width if show_open else self._compact_width
+        if self.width() != target_width or self.height() != self._overlay_height:
+            self.setFixedSize(target_width, self._overlay_height)
+
     def set_status(self, text):
         text = str(text or "").strip()
         if not text:
@@ -3756,6 +3776,7 @@ class VoiceListeningOverlay(QWidget):
             self.owner = owner
         self.apply_theme()
         self.set_cancel_enabled(True)
+        self.update_open_button_visibility()
         self.pulse.start()
         self.adjustSize()
         self.position_near_owner()
@@ -3767,6 +3788,7 @@ class VoiceListeningOverlay(QWidget):
         self.hide()
 
     def position_near_owner(self):
+        self.update_open_button_visibility()
         size = self.size()
         owner = self.owner
         screen = None
