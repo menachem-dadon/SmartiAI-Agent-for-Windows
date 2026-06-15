@@ -3529,6 +3529,9 @@ class ChatWindow(QMainWindow):
         self._quit_requested = False
         self._tray_close_hint_shown = False
         self._suppress_menu_open_once = False
+        self._open_quick_menu = None
+        self._open_quick_menu_button = None
+        self._suppress_quick_menu_button = None
         self.available_update = None
         self.update_check_worker = None
         self.update_download_worker = None
@@ -4001,7 +4004,7 @@ class ChatWindow(QMainWindow):
                 color: {TEXT_COLOR};
                 border: 1px solid transparent;
                 border-radius: 16px;
-                padding: 7px 28px 7px 12px;
+                padding: 7px 30px 7px 12px;
                 font-size: 12px;
                 font-weight: 700;
                 min-height: 24px;
@@ -4018,9 +4021,9 @@ class ChatWindow(QMainWindow):
 
     def _autonomy_items(self):
         return [
-            ("locked_down", "בטוח ומבוקר"),
+            ("locked_down", "בטוח"),
             ("balanced", "מאוזן"),
-            ("max_autonomy", "אוטונומי מלא"),
+            ("max_autonomy", "אוטונומי"),
         ]
 
     def _favorite_model_key(self, provider, model):
@@ -4059,14 +4062,21 @@ class ChatWindow(QMainWindow):
 
     def _fit_quick_input_button(self, button, text, base_width=150, max_width=320, min_width=92):
         try:
+            text = str(text or "")
             text_width = button.fontMetrics().horizontalAdvance(str(text or ""))
-            icon_extra = 32 if not button.icon().isNull() else 22
-            width = max(int(base_width), int(text_width) + icon_extra)
-            button.setMinimumWidth(int(min_width))
-            button.setMaximumWidth(max(int(min_width), min(width, int(max_width))))
+            icon_extra = 28 if not button.icon().isNull() else 0
+            arrow_extra = int(getattr(button, "_arrow_size", 13) or 13) + 18
+            padding_extra = 38
+            width = max(int(base_width), int(text_width) + icon_extra + arrow_extra + padding_extra)
+            width = max(int(min_width), min(width, int(max_width)))
+            text_budget = max(36, width - icon_extra - arrow_extra - padding_extra)
+            if text_width > text_budget:
+                button.setText(button.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, text_budget))
+            else:
+                button.setText(text)
+            button.setFixedWidth(width)
         except Exception:
-            button.setMinimumWidth(int(min_width))
-            button.setMaximumWidth(int(max_width))
+            button.setFixedWidth(int(min_width))
 
     def refresh_favorite_model_controls(self):
         if not hasattr(self, "favorite_model_btn"):
@@ -4078,7 +4088,7 @@ class ChatWindow(QMainWindow):
         label = self._favorite_model_label(current_provider, current_model) or "מודל"
         self.favorite_model_btn.setText(label)
         self.favorite_model_btn.setIcon(QIcon())
-        self._fit_quick_input_button(self.favorite_model_btn, label, 150, 280, 96)
+        self._fit_quick_input_button(self.favorite_model_btn, label, 168, 210, 132)
         self.favorite_model_btn.setToolTip("מודלים מועדפים")
 
     def _favorites_by_provider(self):
@@ -4160,7 +4170,7 @@ class ChatWindow(QMainWindow):
             self.autonomy_quick_btn.setIconSize(QSize(18, 18))
         else:
             self.autonomy_quick_btn.setIcon(QIcon())
-        self._fit_quick_input_button(self.autonomy_quick_btn, label, 118, 170, 104)
+        self._fit_quick_input_button(self.autonomy_quick_btn, label, 152, 154, 146)
         self.autonomy_quick_btn.setToolTip("פרופיל בטיחות")
 
     def show_quick_autonomy_menu(self):
@@ -4195,7 +4205,42 @@ class ChatWindow(QMainWindow):
             self.settings_page.deleteLater()
             self.settings_page = None
 
+    def _quick_menu_button_contains_cursor(self, button):
+        return bool(button and button.rect().contains(button.mapFromGlobal(QCursor.pos())))
+
+    def _clear_quick_menu_reopen_guard(self):
+        self._suppress_quick_menu_button = None
+
+    def _clear_open_quick_menu(self, menu):
+        if self._open_quick_menu is menu:
+            self._open_quick_menu = None
+            self._open_quick_menu_button = None
+            menu.deleteLater()
+
+    def _on_quick_menu_about_to_hide(self, menu):
+        button = self._open_quick_menu_button if self._open_quick_menu is menu else None
+        if self._quick_menu_button_contains_cursor(button):
+            self._suppress_quick_menu_button = button
+            QTimer.singleShot(220, self._clear_quick_menu_reopen_guard)
+        QTimer.singleShot(0, lambda m=menu: self._clear_open_quick_menu(m))
+
     def _popup_menu_near_button(self, menu, button):
+        if self._suppress_quick_menu_button is button:
+            self._suppress_quick_menu_button = None
+            menu.deleteLater()
+            return False
+        current = self._open_quick_menu
+        if current and current.isVisible():
+            current_button = self._open_quick_menu_button
+            self._open_quick_menu = None
+            self._open_quick_menu_button = None
+            current.hide()
+            current.deleteLater()
+            if current_button is button and self._quick_menu_button_contains_cursor(button):
+                self._suppress_quick_menu_button = button
+                QTimer.singleShot(220, self._clear_quick_menu_reopen_guard)
+                menu.deleteLater()
+                return False
         menu.adjustSize()
         pos = button.mapToGlobal(QPoint(0, button.height() + 4))
         screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
@@ -4211,7 +4256,11 @@ class ChatWindow(QMainWindow):
                 pos = button.mapToGlobal(QPoint(0, -size.height() - 4))
             pos.setX(max(available.left(), min(pos.x(), available.right() - size.width())))
             pos.setY(max(available.top(), min(pos.y(), available.bottom() - size.height())))
+        self._open_quick_menu = menu
+        self._open_quick_menu_button = button
+        menu.aboutToHide.connect(lambda m=menu: self._on_quick_menu_about_to_hide(m))
         menu.popup(pos)
+        return True
 
     def refresh_themed_icons(self):
         self._set_menu_button_icon()
@@ -4502,7 +4551,7 @@ class ChatWindow(QMainWindow):
         control_row = QHBoxLayout()
         control_row.setDirection(QBoxLayout.Direction.LeftToRight)
         control_row.setContentsMargins(0, 0, 0, 0)
-        control_row.setSpacing(8)
+        control_row.setSpacing(10)
 
         self.attach_btn = QPushButton("+")
         self.attach_btn.setFixedSize(42, 42)
@@ -4523,17 +4572,15 @@ class ChatWindow(QMainWindow):
 
         self.favorite_model_btn = DropdownPillButton("מודל")
         self.favorite_model_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.favorite_model_btn.setMinimumWidth(96)
-        self.favorite_model_btn.setMaximumWidth(280)
-        self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.favorite_model_btn.setFixedWidth(168)
+        self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
         self.favorite_model_btn.clicked.connect(self.show_favorite_model_menu)
         control_row.addWidget(self.favorite_model_btn, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         self.autonomy_quick_btn = DropdownPillButton("מאוזן")
         self.autonomy_quick_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.autonomy_quick_btn.setMinimumWidth(104)
-        self.autonomy_quick_btn.setMaximumWidth(170)
+        self.autonomy_quick_btn.setFixedWidth(152)
         self.autonomy_quick_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.autonomy_quick_btn.setStyleSheet(self._quick_input_button_stylesheet())
         self.autonomy_quick_btn.clicked.connect(self.show_quick_autonomy_menu)

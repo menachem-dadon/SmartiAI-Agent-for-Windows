@@ -4,7 +4,7 @@ from .config import *
 from .ui_styles import *
 from .ui_controls import *
 from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker, EmailConnectionTestWorker
-from PyQt6.QtGui import QKeySequence, QShortcut, QTransform
+from PyQt6.QtGui import QKeySequence, QShortcut
 
 def refresh_back_button_icon(btn):
     btn.setProperty("smartiBackButton", True)
@@ -1428,11 +1428,10 @@ class SettingsPage(QWidget):
         header_controls.setStyleSheet("background: transparent;")
         header_controls.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         header_row = QHBoxLayout(header_controls)
-        header_row.setContentsMargins(6, 0, 6, 2)
+        header_row.setContentsMargins(0, 0, 18, 2)
         header_row.setSpacing(0)
-        header_row.addStretch()
         self._build_save_status_widget(header_row)
-        header_row.addSpacing(34)
+        header_row.addStretch()
         self._build_advanced_toggle(header_row)
         layout.addWidget(header_controls)
         self._build_settings_toolbar(layout)
@@ -1532,6 +1531,19 @@ class SettingsPage(QWidget):
             }}
         """
 
+    def _advanced_toggle_css(self):
+        return f"""
+            QFrame#AdvancedTogglePill {{
+                background: {GLASS_COLOR};
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 20px;
+            }}
+            QFrame#AdvancedTogglePill:hover {{
+                background: {FIELD_HOVER_COLOR};
+                border-color: {LINE_COLOR};
+            }}
+        """
+
     def _small_tool_button_css(self):
         return f"""
             QPushButton {{
@@ -1598,18 +1610,22 @@ class SettingsPage(QWidget):
         parent_layout.addWidget(toolbar)
 
     def _build_advanced_toggle(self, target_layout):
-        self.advanced_toggle_widget = QWidget()
-        self.advanced_toggle_widget.setStyleSheet("background: transparent;")
+        self.advanced_toggle_widget = QFrame()
+        self.advanced_toggle_widget.setObjectName("AdvancedTogglePill")
+        self.advanced_toggle_widget.setStyleSheet(self._advanced_toggle_css())
         self.advanced_toggle_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.advanced_toggle_widget.setFixedHeight(40)
+        self.advanced_toggle_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         row = QHBoxLayout(self.advanced_toggle_widget)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        row.setContentsMargins(10, 0, 8, 0)
+        row.setSpacing(6)
         label = QLabel("הצג הגדרות מתקדמות")
         label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; background: transparent;")
         label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.show_advanced_cb = SmartiCheckBox("")
         self.show_advanced_cb.setStyleSheet(CHECKBOX_CSS)
-        self.show_advanced_cb.setFixedWidth(66)
+        self.show_advanced_cb.setFixedSize(56, 38)
         self.show_advanced_cb.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.show_advanced_cb.setToolTip(self._tooltip_markup("מציג שדות טכניים כמו פורטים, SSL, מגבלות זמן, לוגים ומטריצת הרשאות."))
         self.show_advanced_cb.setChecked(bool(self.core.settings.get("ui_preferences", {}).get("settings_show_advanced", False)))
@@ -1622,15 +1638,17 @@ class SettingsPage(QWidget):
         self.save_status_widget = QWidget()
         self.save_status_widget.setStyleSheet("background: transparent;")
         self.save_status_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.save_status_widget.setMinimumWidth(180)
+        self.save_status_widget.setFixedHeight(40)
+        self.save_status_widget.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         row = QHBoxLayout(self.save_status_widget)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(5)
+        row.setSpacing(4)
         self.settings_save_icon = QLabel()
         self.settings_save_icon.setFixedSize(20, 20)
         self.settings_save_status = QLabel("אין שינויים חדשים")
         self.settings_save_status.setStyleSheet(muted_label_css(12))
         self.settings_save_status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.settings_save_status.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         row.addWidget(self.settings_save_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(self.settings_save_status, 0, Qt.AlignmentFlag.AlignVCenter)
         target_layout.addWidget(self.save_status_widget, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -1645,6 +1663,38 @@ class SettingsPage(QWidget):
             icon = themed_icon("save_done", "save_idle_icon", "saved_icon", "checkmark_icon", CHECKMARK_SVG_PATH)
         return icon.pixmap(18, 18) if not icon.isNull() else QPixmap()
 
+    def _pixmap_alpha_center(self, pixmap):
+        image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        left, top = image.width(), image.height()
+        right, bottom = -1, -1
+        for y in range(image.height()):
+            for x in range(image.width()):
+                if image.pixelColor(x, y).alpha() <= 8:
+                    continue
+                left = min(left, x)
+                top = min(top, y)
+                right = max(right, x)
+                bottom = max(bottom, y)
+        if right < left or bottom < top:
+            return pixmap.width() / 2, pixmap.height() / 2
+        return (left + right + 1) / 2, (top + bottom + 1) / 2
+
+    def _save_status_icon_canvas(self, pixmap, angle=0):
+        if pixmap.isNull():
+            return QPixmap()
+        base = pixmap.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        visual_x, visual_y = self._pixmap_alpha_center(base)
+        canvas = QPixmap(20, 20)
+        canvas.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.translate(canvas.width() / 2, canvas.height() / 2)
+        if angle:
+            painter.rotate(float(angle))
+        painter.drawPixmap(QRectF(-visual_x, -visual_y, base.width(), base.height()), base, QRectF(base.rect()))
+        painter.end()
+        return canvas
+
     def _set_save_status(self, status):
         if not hasattr(self, "settings_save_status"):
             return
@@ -1658,7 +1708,7 @@ class SettingsPage(QWidget):
             self._save_status_base_pixmap = self._save_status_icon_pixmap("saving")
             self._save_status_angle = 0
             if not self._save_status_base_pixmap.isNull():
-                self.settings_save_icon.setPixmap(self._save_status_base_pixmap)
+                self.settings_save_icon.setPixmap(self._save_status_icon_canvas(self._save_status_base_pixmap))
             self.save_status_spin_timer.start()
             return
         self.save_status_spin_timer.stop()
@@ -1686,8 +1736,7 @@ class SettingsPage(QWidget):
         if pixmap.isNull() or not hasattr(self, "settings_save_icon"):
             return
         self._save_status_angle = (int(getattr(self, "_save_status_angle", 0)) + 30) % 360
-        rotated = pixmap.transformed(QTransform().rotate(self._save_status_angle), Qt.TransformationMode.SmoothTransformation)
-        self.settings_save_icon.setPixmap(rotated.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.settings_save_icon.setPixmap(self._save_status_icon_canvas(pixmap, self._save_status_angle))
 
     def _make_info_button(self, text):
         btn = QPushButton("i")
@@ -2424,13 +2473,13 @@ class SettingsPage(QWidget):
 
         self.theme_combo = SegmentedControl()
         self.theme_options = [
-            ("system", "מערכת"),
             ("dark", "כהה"),
+            ("system", "מערכת"),
             ("light", "בהיר")
         ]
         self.theme_combo.addItems([label for _, label in self.theme_options])
-        self.theme_combo.setItemIconNames(0, ("theme_system", "system_theme", "monitor_icon", "settings_icon"))
-        self.theme_combo.setItemIconNames(1, ("theme_dark", "dark_theme", "moon_icon", "settings_icon"))
+        self.theme_combo.setItemIconNames(0, ("theme_dark", "dark_theme", "moon_icon", "settings_icon"))
+        self.theme_combo.setItemIconNames(1, ("theme_system", "system_theme", "monitor_icon", "settings_icon"))
         self.theme_combo.setItemIconNames(2, ("theme_light", "light_theme", "sun_icon", "settings_icon"))
         current_theme = self.core.settings.get("ui_preferences", {}).get("theme_mode", DEFAULT_THEME_MODE)
         theme_keys = [key for key, _ in self.theme_options]
@@ -2452,9 +2501,9 @@ class SettingsPage(QWidget):
         policy = self.core._normalize_policy_matrix()
         for cap, label in CAPABILITY_LABELS.items():
             combo = SegmentedControl()
-            combo.addItems(["שאל בכל פעם", "אפשר", "חסום"])
+            combo.addItems(["אפשר", "שאל בכל פעם", "חסום"])
             value = policy.get(cap, DEFAULT_POLICY_MATRIX.get(cap, "ask"))
-            combo.setCurrentIndex({"ask": 0, "allow": 1, "deny": 2}.get(value, 0))
+            combo.setCurrentIndex({"allow": 0, "ask": 1, "deny": 2}.get(value, 1))
             self.policy_combos[cap] = combo
 
         self.default_output_dir_picker = DirectoryPicker(
@@ -2669,6 +2718,8 @@ class SettingsPage(QWidget):
             self.tts_voice_combo.addItem("טקסט לדיבור לא זמין", "co.il")
         selected_voice = str(self.core.settings.get("tts_voice_id", "co.il") or "co.il")
         index = self.tts_voice_combo.findData(selected_voice)
+        if index < 0 and selected_voice in {"com", "co.uk", "com.au", "ca", "co.in"}:
+            index = self.tts_voice_combo.findData("co.il")
         self.tts_voice_combo.setCurrentIndex(index if index >= 0 else 0)
 
     def preview_tts(self):
@@ -3483,6 +3534,8 @@ class SettingsPage(QWidget):
             self.settings_search_edit.setStyleSheet(self._search_box_css())
         if hasattr(self, "settings_search_wrapper"):
             self.settings_search_wrapper.setStyleSheet(self._search_wrapper_css(False))
+        if hasattr(self, "advanced_toggle_widget"):
+            self.advanced_toggle_widget.setStyleSheet(self._advanced_toggle_css())
         for container in getattr(self, "_settings_field_containers", {}).values():
             container.setStyleSheet(self._field_container_css(False))
         if hasattr(self, "search_results_list"):
@@ -3515,9 +3568,9 @@ class SettingsPage(QWidget):
     def _apply_profile_to_widgets(self, profile_key):
         profile = AUTONOMY_PROFILES.get(profile_key, AUTONOMY_PROFILES["balanced"])
         self.permission_combo.setCurrentIndex(max(0, min(2, profile["permission_level"] - 1)))
-        action_index = {"ask": 0, "allow": 1, "deny": 2}
+        action_index = {"allow": 0, "ask": 1, "deny": 2}
         for cap, combo in self.policy_combos.items():
-            combo.setCurrentIndex(action_index.get(profile["policy_matrix"].get(cap, "ask"), 0))
+            combo.setCurrentIndex(action_index.get(profile["policy_matrix"].get(cap, "ask"), 1))
         self.raw_shell_approval_cb.setChecked(bool(profile["raw_shell_requires_approval"]))
         self.marketplace_approval_cb.setChecked(bool(profile["marketplace_install_requires_approval"]))
         self.cloud_upload_cb.setChecked(bool(profile["require_approval_for_cloud_upload"]))
@@ -3618,7 +3671,7 @@ class SettingsPage(QWidget):
         self.core.settings["raw_shell_requires_approval"] = self.raw_shell_approval_cb.isChecked()
         self.core.settings["marketplace_install_requires_approval"] = self.marketplace_approval_cb.isChecked()
         self.core.settings["permission_level"] = self.permission_combo.currentIndex() + 1
-        action_by_index = {0: "ask", 1: "allow", 2: "deny"}
+        action_by_index = {0: "allow", 1: "ask", 2: "deny"}
         self.core.settings["policy_matrix"] = {cap: action_by_index.get(combo.currentIndex(), "ask") for cap, combo in self.policy_combos.items()}
         self.core.settings["require_approval_for_cloud_upload"] = self.cloud_upload_cb.isChecked()
         self.core.settings["write_outside_allowed_dirs_requires_approval"] = self.write_outside_dirs_approval_cb.isChecked()

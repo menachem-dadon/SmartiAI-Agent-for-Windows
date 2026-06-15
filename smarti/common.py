@@ -305,34 +305,19 @@ EDGE_TTS_INSTALLED = importlib.util.find_spec("edge_tts") is not None and import
 TTS_INSTALLED = GTTS_INSTALLED or EDGE_TTS_INSTALLED
 
 GOOGLE_HEBREW_TTS_VOICES = [
-    {"id": "co.il", "name": "Google עברית - ישראל", "tld": "co.il"},
-    {"id": "com", "name": "Google עברית - כללי", "tld": "com"},
-    {"id": "co.uk", "name": "Google עברית - UK", "tld": "co.uk"},
-    {"id": "com.au", "name": "Google עברית - Australia", "tld": "com.au"},
-    {"id": "ca", "name": "Google עברית - Canada", "tld": "ca"},
-    {"id": "co.in", "name": "Google עברית - India", "tld": "co.in"},
+    {"id": "co.il", "name": "גוגל (gTTS)", "tld": "co.il"},
 ]
 
 EDGE_HEBREW_TTS_VOICES = [
-    {"id": "edge:he-IL-HilaNeural", "name": "עברית - הילה (Edge Neural)", "engine": "edge", "voice": "he-IL-HilaNeural"},
-    {"id": "edge:he-IL-AvriNeural", "name": "עברית - אברי (Edge Neural)", "engine": "edge", "voice": "he-IL-AvriNeural"},
+    {"id": "edge:he-IL-AvriNeural", "name": "אברי (edge-tts)", "engine": "edge", "voice": "he-IL-AvriNeural"},
+    {"id": "edge:he-IL-HilaNeural", "name": "הילה (edge-tts)", "engine": "edge", "voice": "he-IL-HilaNeural"},
 ]
 
 def _google_hebrew_tts_fallback_voices():
-    labels = {
-        "co.il": "עברית - Google ישראל",
-        "com": "עברית - Google כללי",
-        "co.uk": "עברית - Google שרת בריטניה",
-        "com.au": "עברית - Google שרת אוסטרליה",
-        "ca": "עברית - Google שרת קנדה",
-        "co.in": "עברית - Google שרת הודו",
-    }
     voices = []
     for voice in GOOGLE_HEBREW_TTS_VOICES:
         item = dict(voice)
         item.setdefault("engine", "gtts")
-        if item.get("id") in labels:
-            item["name"] = labels[item["id"]]
         voices.append(item)
     return voices
 
