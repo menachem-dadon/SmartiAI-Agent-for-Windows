@@ -684,18 +684,131 @@ def set_ui_theme(mode=None, settings=None):
 
 def build_qt_palette():
     palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(BG_COLOR))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT_COLOR))
-    palette.setColor(QPalette.ColorRole.Base, QColor(FIELD_COLOR))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(PANEL_ELEVATED_COLOR))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(TOOLTIP_BG_COLOR))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(TOOLTIP_TEXT_COLOR))
-    palette.setColor(QPalette.ColorRole.Text, QColor(FIELD_TEXT_COLOR))
-    palette.setColor(QPalette.ColorRole.Button, QColor(PANEL_ELEVATED_COLOR))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT_COLOR))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(ACCENT_COLOR))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(ACCENT_TEXT_COLOR))
+    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled):
+        palette.setColor(group, QPalette.ColorRole.Window, QColor(BG_COLOR))
+        palette.setColor(group, QPalette.ColorRole.WindowText, QColor(TEXT_COLOR))
+        palette.setColor(group, QPalette.ColorRole.Base, QColor(FIELD_COLOR))
+        palette.setColor(group, QPalette.ColorRole.AlternateBase, QColor(PANEL_ELEVATED_COLOR))
+        palette.setColor(group, QPalette.ColorRole.ToolTipBase, QColor(TOOLTIP_BG_COLOR))
+        palette.setColor(group, QPalette.ColorRole.ToolTipText, QColor(TOOLTIP_TEXT_COLOR))
+        palette.setColor(group, QPalette.ColorRole.Text, QColor(FIELD_TEXT_COLOR))
+        palette.setColor(group, QPalette.ColorRole.Button, QColor(PANEL_ELEVATED_COLOR))
+        palette.setColor(group, QPalette.ColorRole.ButtonText, QColor(TEXT_COLOR))
+        palette.setColor(group, QPalette.ColorRole.Highlight, QColor(ACCENT_COLOR))
+        palette.setColor(group, QPalette.ColorRole.HighlightedText, QColor(ACCENT_TEXT_COLOR))
     return palette
+
+
+def tooltip_stylesheet():
+    return (
+        f"QFrame#SmartiTooltipPopup {{ background-color: {TOOLTIP_BG_COLOR}; "
+        f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 5px; }}"
+        f"QLabel {{ color: {TOOLTIP_TEXT_COLOR}; background: transparent; "
+        f"font-family: {ui_popup_font_family_css()}; font-size: 12px; font-weight: 600; "
+        "padding: 6px 8px; }}"
+    )
+
+
+def _tooltip_html(text):
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    is_rich = bool(re.search(r"<[a-zA-Z][^>]*>", raw))
+    body = raw if is_rich else html.escape(raw)
+    direction = "rtl" if re.search(r"[\u0590-\u05ff]", raw) else "ltr"
+    align = "right" if direction == "rtl" else "left"
+    return (
+        f"<div dir='{direction}' style='color:{TOOLTIP_TEXT_COLOR}; "
+        f"background-color:{TOOLTIP_BG_COLOR}; text-align:{align}; "
+        "white-space:normal;'>"
+        f"{body}</div>"
+    )
+
+
+class SmartiTooltipController(QObject):
+    def __init__(self, app):
+        super().__init__(app)
+        self.popup = QFrame(None, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        self.popup.setObjectName("SmartiTooltipPopup")
+        self.popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.popup.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        layout = QVBoxLayout(self.popup)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.label = QLabel()
+        self.label.setTextFormat(Qt.TextFormat.RichText)
+        self.label.setWordWrap(True)
+        self.label.setMaximumWidth(360)
+        layout.addWidget(self.label)
+        self.hide_timer = QTimer(self)
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.popup.hide)
+        self.apply_theme()
+
+    def apply_theme(self):
+        self.popup.setStyleSheet(tooltip_stylesheet())
+        self.label.setStyleSheet(
+            f"color: {TOOLTIP_TEXT_COLOR}; background: transparent; "
+            f"font-family: {ui_popup_font_family_css()}; font-size: 12px; font-weight: 600; "
+            "padding: 6px 8px;"
+        )
+
+    def eventFilter(self, obj, event):
+        if obj is self.popup or obj is self.label:
+            return False
+        event_type = event.type()
+        if event_type == QEvent.Type.ToolTip:
+            text = ""
+            try:
+                text = str(obj.toolTip() or "").strip()
+            except Exception:
+                text = ""
+            if not text:
+                self.popup.hide()
+                return False
+            self.show_tooltip(text, event.globalPos() if hasattr(event, "globalPos") else QCursor.pos())
+            event.accept()
+            return True
+        if event_type in {
+            QEvent.Type.Leave,
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.KeyPress,
+            QEvent.Type.WindowDeactivate,
+            QEvent.Type.Hide,
+        }:
+            if self.popup.isVisible():
+                self.popup.hide()
+        return False
+
+    def show_tooltip(self, text, pos):
+        html_text = _tooltip_html(text)
+        if not html_text:
+            self.popup.hide()
+            return
+        self.label.setText(html_text)
+        self.label.adjustSize()
+        self.popup.adjustSize()
+        tooltip_size = self.popup.sizeHint()
+        show_pos = QPoint(pos.x() + 12, pos.y() + 18)
+        screen = QApplication.screenAt(show_pos) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            show_pos.setX(max(available.left(), min(show_pos.x(), available.right() - tooltip_size.width())))
+            show_pos.setY(max(available.top(), min(show_pos.y(), available.bottom() - tooltip_size.height())))
+        self.popup.move(show_pos)
+        self.popup.resize(tooltip_size)
+        self.popup.show()
+        self.hide_timer.start(8000)
+
+
+def install_smarti_tooltips(app):
+    if not app:
+        return
+    controller = getattr(app, "_smarti_tooltip_controller", None)
+    if controller is None:
+        controller = SmartiTooltipController(app)
+        app.installEventFilter(controller)
+        app._smarti_tooltip_controller = controller
+    controller.apply_theme()
 
 
 def apply_app_theme(app=None, mode=None, settings=None):
@@ -707,6 +820,7 @@ def apply_app_theme(app=None, mode=None, settings=None):
         QToolTip.setPalette(palette)
         QToolTip.setFont(app_font(10, QFont.Weight.Medium))
         app.setStyleSheet(application_stylesheet())
+        install_smarti_tooltips(app)
     return CURRENT_THEME
 
 
