@@ -6,6 +6,7 @@ selenium>=4.20
 PyAutoGUI>=0.9.54
 uiautomation>=2.0.20
 pyperclip>=1.8
+send2trash>=1.8
 keyboard>=0.13.5
 SpeechRecognition>=3.10
 PyAudio>=0.2.14

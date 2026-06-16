@@ -387,45 +387,47 @@ MCP_CONFIG_FILE = os.path.join(USER_DATA_DIR, "mcp_config.json")
 SKILL_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_skills.log")
 AUDIT_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_audit.log")
 SETTINGS_SCHEMA_VERSION = 2
-APP_VERSION = "V0.69.0"
+APP_VERSION = "V0.76.0"
 LEGAL_AGREEMENT_VERSION = "privacy-disclaimer-2026-06-02-v1"
 LEGAL_AGREEMENT_EFFECTIVE_DATE = "2026-06-02"
 LEGAL_AGREEMENT_TITLE = "מדיניות פרטיות, תנאי שימוש וכתב ויתור - Smarti AI"
 
 logging.basicConfig(filename=AGENT_LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8')
 
-def migrate_legacy_runtime_state():
+def migrate_legacy_runtime_state(include_files=True, include_directories=True):
     if os.path.abspath(USER_DATA_DIR) == os.path.abspath(APP_DIR):
         return
-    file_pairs = [
-        (LEGACY_SETTINGS_FILE, SETTINGS_FILE),
-        (LEGACY_USAGE_FILE, USAGE_FILE),
-        (LEGACY_MEMORY_FILE, MEMORY_FILE),
-        (LEGACY_MEMORY_EXPORT_FILE, MEMORY_EXPORT_FILE),
-        (LEGACY_CHAT_HISTORY_FILE, CHAT_HISTORY_FILE),
-        (LEGACY_MCP_CONFIG_FILE, MCP_CONFIG_FILE),
-    ]
-    for legacy_path, target_path in file_pairs:
-        try:
-            if os.path.exists(legacy_path) and not os.path.exists(target_path):
-                os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                shutil.copy2(legacy_path, target_path)
-                logging.info(f"Migrated legacy runtime file: {legacy_path} -> {target_path}")
-        except Exception as e:
-            logging.warning(f"Legacy runtime file migration skipped for {legacy_path}: {e}")
+    if include_files:
+        file_pairs = [
+            (LEGACY_SETTINGS_FILE, SETTINGS_FILE),
+            (LEGACY_USAGE_FILE, USAGE_FILE),
+            (LEGACY_MEMORY_FILE, MEMORY_FILE),
+            (LEGACY_MEMORY_EXPORT_FILE, MEMORY_EXPORT_FILE),
+            (LEGACY_CHAT_HISTORY_FILE, CHAT_HISTORY_FILE),
+            (LEGACY_MCP_CONFIG_FILE, MCP_CONFIG_FILE),
+        ]
+        for legacy_path, target_path in file_pairs:
+            try:
+                if os.path.exists(legacy_path) and not os.path.exists(target_path):
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    shutil.copy2(legacy_path, target_path)
+                    logging.info(f"Migrated legacy runtime file: {legacy_path} -> {target_path}")
+            except Exception as e:
+                logging.warning(f"Legacy runtime file migration skipped for {legacy_path}: {e}")
 
-    dir_pairs = [
-        (LEGACY_TOOLS_DIR, TOOLS_DIR),
-        (LEGACY_MCP_TOOLS_DIR, MCP_TOOLS_DIR),
-        (LEGACY_SKILLS_DIR, SKILLS_DIR),
-    ]
-    for legacy_path, target_path in dir_pairs:
-        try:
-            if os.path.isdir(legacy_path) and not os.path.exists(target_path):
-                shutil.copytree(legacy_path, target_path)
-                logging.info(f"Migrated legacy runtime directory: {legacy_path} -> {target_path}")
-        except Exception as e:
-            logging.warning(f"Legacy runtime directory migration skipped for {legacy_path}: {e}")
+    if include_directories:
+        dir_pairs = [
+            (LEGACY_TOOLS_DIR, TOOLS_DIR),
+            (LEGACY_MCP_TOOLS_DIR, MCP_TOOLS_DIR),
+            (LEGACY_SKILLS_DIR, SKILLS_DIR),
+        ]
+        for legacy_path, target_path in dir_pairs:
+            try:
+                if os.path.isdir(legacy_path) and not os.path.exists(target_path):
+                    shutil.copytree(legacy_path, target_path)
+                    logging.info(f"Migrated legacy runtime directory: {legacy_path} -> {target_path}")
+            except Exception as e:
+                logging.warning(f"Legacy runtime directory migration skipped for {legacy_path}: {e}")
 
 def ensure_ui_svg_asset(filename, svg_text):
     try:

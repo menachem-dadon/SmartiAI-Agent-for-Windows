@@ -34,6 +34,7 @@ for package in (
     "pyautogui",
     "pygame",
     "pytesseract",
+    "send2trash",
     "selenium",
     "speech_recognition",
     "uiautomation",

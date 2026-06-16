@@ -17,6 +17,7 @@ class StartupWorker(QThread):
     def run(self):
         try:
             self.status_signal.emit("טוען הגדרות, זיכרון וכלים מקומיים...")
+            migrate_legacy_runtime_state(include_files=False, include_directories=True)
             self.finished_signal.emit(SmartiCore(), "")
         except Exception as exc:
             logging.exception("Smarti startup failed.")
@@ -90,7 +91,7 @@ def main():
     app.processEvents()
 
     splash.set_status("בודק נתוני ריצה מקומיים...")
-    migrate_legacy_runtime_state()
+    migrate_legacy_runtime_state(include_directories=False)
     accepted_legal_this_run = False
     splash.set_status("בודק אישור תנאי שימוש...")
     if not raw_settings_have_current_legal_acceptance():
