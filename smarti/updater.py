@@ -7,6 +7,10 @@ import os
 import re
 import subprocess
 import sys
+try:
+    import winreg
+except Exception:
+    winreg = None
 
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -26,6 +30,8 @@ GITHUB_REPO = "SmartiAI-Agent-for-Windows"
 GITHUB_API_RELEASE_LATEST = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
 SETUP_ASSET_RE = re.compile(r"(?i)\bsetup\b.*\.exe$")
+PORTABLE_ASSET_RE = re.compile(r"(?i)(portable|win[-_ ]?x64).*\.zip$")
+INNO_UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{2F7748B6-3D46-4E9C-B187-0F5C2E9F38E1}_is1"
 
 
 @dataclass
@@ -41,6 +47,8 @@ class UpdateInfo:
     asset_url: str
     asset_size: int = 0
     asset_digest: str = ""
+    asset_kind: str = "installer"
+    installation_kind: str = "installer"
     prerelease: bool = False
 
     @classmethod
@@ -59,6 +67,8 @@ class UpdateInfo:
             asset_url=str(data.get("asset_url") or ""),
             asset_size=int(data.get("asset_size") or 0),
             asset_digest=str(data.get("asset_digest") or ""),
+            asset_kind=str(data.get("asset_kind") or "installer"),
+            installation_kind=str(data.get("installation_kind") or "installer"),
             prerelease=bool(data.get("prerelease")),
         )
 
@@ -100,12 +110,72 @@ def _request_kwargs(settings=None):
     return kwargs
 
 
-def _select_setup_asset(release):
+def _norm_dir(path):
+    try:
+        return os.path.normcase(os.path.abspath(os.path.expandvars(os.path.expanduser(str(path or ""))))).rstrip("\\/")
+    except Exception:
+        return os.path.normcase(str(path or "")).rstrip("\\/")
+
+
+def _installer_install_locations():
+    if os.name != "nt" or winreg is None:
+        return []
+    locations = []
+    roots = [winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE]
+    views = [0]
+    for flag_name in ("KEY_WOW64_64KEY", "KEY_WOW64_32KEY"):
+        flag = getattr(winreg, flag_name, 0)
+        if flag:
+            views.append(flag)
+    for root in roots:
+        for view in views:
+            try:
+                with winreg.OpenKey(root, INNO_UNINSTALL_KEY, 0, winreg.KEY_READ | view) as key:
+                    install_location = winreg.QueryValueEx(key, "InstallLocation")[0]
+                    if install_location:
+                        locations.append(str(install_location))
+            except Exception:
+                continue
+    return locations
+
+
+def detect_installation_kind():
+    """Return source, installer, or portable for update asset selection."""
+    if not getattr(SMARTI_RUNTIME, "is_frozen", False):
+        return "source"
+    install_dir = _norm_dir(SMARTI_RUNTIME.install_dir)
+    for location in _installer_install_locations():
+        if _norm_dir(location) == install_dir:
+            return "installer"
+    local_appdata = os.environ.get("LOCALAPPDATA") or ""
+    installer_like_dirs = [
+        os.path.join(local_appdata, "SmartiAI"),
+        os.path.join(local_appdata, "Programs", "SmartiAI"),
+    ] if local_appdata else []
+    if any(_norm_dir(path) == install_dir for path in installer_like_dirs):
+        return "installer"
+    if os.path.exists(os.path.join(SMARTI_RUNTIME.install_dir, "release_manifest.json")):
+        return "portable"
+    return "portable"
+
+
+def _asset_kind(asset):
+    name = str((asset or {}).get("name") or "").lower()
+    if name.endswith(".zip"):
+        return "portable"
+    if name.endswith(".exe"):
+        return "installer"
+    return ""
+
+
+def _select_update_asset(release, preferred_kind="installer"):
     assets = release.get("assets") or []
     if not isinstance(assets, list):
         return {}
     setup_assets = []
     exe_assets = []
+    portable_assets = []
+    zip_assets = []
     for asset in assets:
         if not isinstance(asset, dict):
             continue
@@ -115,6 +185,12 @@ def _select_setup_asset(release):
             exe_assets.append(asset)
             if SETUP_ASSET_RE.search(name) or "setup" in lower:
                 setup_assets.append(asset)
+        elif lower.endswith(".zip"):
+            zip_assets.append(asset)
+            if PORTABLE_ASSET_RE.search(name) or "portable" in lower:
+                portable_assets.append(asset)
+    if preferred_kind == "portable":
+        return (portable_assets or zip_assets or [{}])[0]
     return (setup_assets or exe_assets or [{}])[0]
 
 
@@ -130,7 +206,10 @@ def check_for_updates(settings=None):
     if not is_newer_version(version, APP_VERSION):
         return None
 
-    asset = _select_setup_asset(release)
+    installation_kind = detect_installation_kind()
+    preferred_asset_kind = "portable" if installation_kind == "portable" else "installer"
+    asset = _select_update_asset(release, preferred_asset_kind)
+    asset_kind = _asset_kind(asset) or preferred_asset_kind
     return UpdateInfo(
         current_version=APP_VERSION,
         version=version,
@@ -143,6 +222,8 @@ def check_for_updates(settings=None):
         asset_url=str(asset.get("browser_download_url") or ""),
         asset_size=int(asset.get("size") or 0),
         asset_digest=str(asset.get("digest") or ""),
+        asset_kind=asset_kind,
+        installation_kind=installation_kind,
         prerelease=bool(release.get("prerelease")),
     )
 
@@ -163,7 +244,8 @@ def _expected_sha256(digest):
 def download_update(update_info, settings=None, progress_callback=None):
     info = UpdateInfo.from_dict(update_info)
     if not info.asset_url:
-        raise RuntimeError("No Windows Setup EXE was attached to the GitHub release.")
+        expected = "portable ZIP" if info.asset_kind == "portable" else "Windows Setup EXE"
+        raise RuntimeError(f"No {expected} was attached to the GitHub release.")
 
     target_dir = os.path.join(USER_DATA_DIR, "updates", _safe_asset_name(info.version, info.version))
     os.makedirs(target_dir, exist_ok=True)
@@ -194,7 +276,7 @@ def download_update(update_info, settings=None, progress_callback=None):
             os.remove(temp_path)
         except Exception:
             pass
-        raise RuntimeError("Downloaded installer failed SHA-256 verification.")
+        raise RuntimeError("Downloaded update package failed SHA-256 verification.")
 
     os.replace(temp_path, target_path)
     return target_path
@@ -211,10 +293,110 @@ def _default_app_exe():
     return sys.executable
 
 
+def launch_portable_update(archive_path, app_pid=None, app_exe=None):
+    archive_path = os.path.abspath(archive_path)
+    if not os.path.exists(archive_path):
+        raise FileNotFoundError(archive_path)
+
+    app_exe = os.path.abspath(app_exe or _default_app_exe())
+    app_pid = int(app_pid or os.getpid())
+    script_dir = os.path.join(USER_DATA_DIR, "updates")
+    os.makedirs(script_dir, exist_ok=True)
+    script_path = os.path.join(script_dir, f"apply_portable_update_{app_pid}.ps1")
+    log_path = os.path.join(script_dir, "last_update.log")
+
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$archive = {_ps_quote(archive_path)}
+$appPid = {app_pid}
+$appExe = {_ps_quote(app_exe)}
+$scriptDir = {_ps_quote(script_dir)}
+$logPath = {_ps_quote(log_path)}
+$extractRoot = Join-Path $scriptDir {_ps_quote(f"portable_extract_{app_pid}")}
+function Write-UpdateLog([string]$message) {{
+    $stamp = (Get-Date).ToUniversalTime().ToString('o')
+    Add-Content -LiteralPath $logPath -Value "$stamp $message" -Encoding UTF8
+}}
+try {{
+    Write-UpdateLog "Waiting for SmartiAI to exit before portable update."
+    if ($appPid -gt 0) {{
+        $proc = Get-Process -Id $appPid -ErrorAction SilentlyContinue
+        if ($proc) {{ Wait-Process -Id $appPid -Timeout 25 -ErrorAction SilentlyContinue }}
+        $proc = Get-Process -Id $appPid -ErrorAction SilentlyContinue
+        if ($proc) {{
+            Write-UpdateLog "Forcing old SmartiAI process $appPid to stop."
+            Stop-Process -Id $appPid -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+        }}
+    }}
+    Get-Process -Name 'SmartiAI' -ErrorAction SilentlyContinue | Where-Object {{ $_.Id -ne $PID }} | ForEach-Object {{
+        Write-UpdateLog "Stopping extra SmartiAI process $($_.Id)."
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    }}
+    if (Test-Path -LiteralPath $extractRoot) {{ Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue }}
+    New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+    Write-UpdateLog "Extracting portable package: $archive"
+    Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
+
+    $sourceRoot = $null
+    if (Test-Path -LiteralPath (Join-Path $extractRoot 'SmartiAI.exe')) {{
+        $sourceRoot = $extractRoot
+    }} else {{
+        $manifest = Get-ChildItem -Path $extractRoot -Filter 'release_manifest.json' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($manifest) {{ $sourceRoot = Split-Path -Parent $manifest.FullName }}
+        if (-not $sourceRoot) {{
+            $payloadExe = Get-ChildItem -Path $extractRoot -Filter 'SmartiAI.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($payloadExe) {{ $sourceRoot = Split-Path -Parent $payloadExe.FullName }}
+        }}
+    }}
+    if (-not $sourceRoot) {{ throw "Portable update payload does not contain SmartiAI.exe." }}
+    $payloadExe = Join-Path $sourceRoot 'SmartiAI.exe'
+    if (-not (Test-Path -LiteralPath $payloadExe)) {{ throw "Portable update payload is missing SmartiAI.exe." }}
+
+    $appDir = Split-Path -Parent $appExe
+    if (-not (Test-Path -LiteralPath $appDir)) {{ New-Item -ItemType Directory -Force -Path $appDir | Out-Null }}
+    Write-UpdateLog "Copying portable update from $sourceRoot to $appDir"
+    $robocopy = Join-Path $env:SystemRoot 'System32\\robocopy.exe'
+    if (Test-Path -LiteralPath $robocopy) {{
+        & $robocopy $sourceRoot $appDir /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP
+        $copyExit = $LASTEXITCODE
+        Write-UpdateLog "Robocopy exit code: $copyExit"
+        if ($copyExit -ge 8) {{ throw "Portable file copy failed with robocopy exit code $copyExit." }}
+    }} else {{
+        Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $appDir -Recurse -Force
+    }}
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $appExe) {{
+        Write-UpdateLog "Relaunching SmartiAI portable: $appExe"
+        Start-Process -FilePath $appExe -WorkingDirectory $appDir
+    }} else {{
+        Write-UpdateLog "Portable relaunch skipped; executable was not found: $appExe"
+    }}
+}} catch {{
+    Write-UpdateLog "Portable update failed: $($_.Exception.Message)"
+    try {{
+        $appDir = Split-Path -Parent $appExe
+        if (Test-Path -LiteralPath $appExe) {{ Start-Process -FilePath $appExe -WorkingDirectory $appDir }}
+    }} catch {{}}
+}}
+"""
+    with open(script_path, "w", encoding="utf-8-sig") as f:
+        f.write(script.lstrip())
+
+    subprocess.Popen(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path],
+        cwd=script_dir,
+        creationflags=WIN_CREATE_NO_WINDOW,
+    )
+    return script_path
+
+
 def launch_update_installer(installer_path, app_pid=None, app_exe=None):
     installer_path = os.path.abspath(installer_path)
     if not os.path.exists(installer_path):
         raise FileNotFoundError(installer_path)
+    if installer_path.lower().endswith(".zip"):
+        return launch_portable_update(installer_path, app_pid=app_pid, app_exe=app_exe)
 
     app_exe = os.path.abspath(app_exe or _default_app_exe())
     app_pid = int(app_pid or os.getpid())

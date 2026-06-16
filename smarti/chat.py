@@ -3390,6 +3390,8 @@ class UpdateDialog(QDialog):
         layout.addWidget(title)
 
         meta = QLabel(f"גרסה נוכחית: {self.update_info.current_version}")
+        asset_label = "ZIP נייד" if self.update_info.asset_kind == "portable" else "מתקין Setup"
+        meta.setText(f"{meta.text()} | סוג עדכון: {asset_label}")
         if self.update_info.asset_size:
             meta.setText(f"{meta.text()} | גודל הורדה: {human_size(self.update_info.asset_size)}")
         meta.setWordWrap(True)
@@ -3462,7 +3464,8 @@ class UpdateDialog(QDialog):
 
         if not self.update_info.asset_url:
             self.install_btn.setEnabled(False)
-            self.status_lbl.setText("לא נמצא קובץ התקנה מסוג Setup.exe בפוסט השחרור בגיטהאב.")
+            expected = "ZIP נייד" if self.update_info.asset_kind == "portable" else "Setup.exe"
+            self.status_lbl.setText(f"לא נמצא קובץ עדכון מתאים מסוג {expected} בפוסט השחרור בגיטהאב.")
         _fit_dialog_to_parent(self, parent, min_size=(340, 430), max_size=(620, 640))
 
     def showEvent(self, event):
@@ -4172,7 +4175,6 @@ class ChatWindow(QMainWindow):
             self.show_update_notice("סמארטי מעודכן", "אין עדכון חדש. הגרסה הנוכחית כבר מעודכנת.")
 
     def _handle_update_check_failed(self, message, manual=False):
-        self._record_update_check(None)
         self._finish_update_source(f"שגיאה בבדיקת עדכונים: {message}")
         if manual:
             self.show_update_notice("בדיקת העדכונים נכשלה", f"לא הצלחתי לבדוק עדכונים:\n{message}", tone="warning")
@@ -5665,51 +5667,90 @@ class ChatWindow(QMainWindow):
                 self._schedule_scroll_last_user_to_view_top(delays=(50, 160))
 
     def show_confirm_dialog(self, title, text, risk="medium"):
-        decision = None
-        if self._should_notify_user() and hasattr(self, "notifications"):
-            decision = self._request_permission_from_notification(title, text, risk)
-        if decision is not None:
-            self.agent_thread.confirm_result = bool(decision)
-            self.agent_thread.confirm_event.set()
-            return
         dlg = ActionConfirmDialog(title, text, risk, self)
-        self.agent_thread.confirm_result = (dlg.exec() == QDialog.DialogCode.Accepted)
-        self.agent_thread.confirm_event.set()
-
-    def _request_permission_from_notification(self, title, text, risk="medium"):
-        decision = {"value": "pending"}
-
-        def answered(value):
-            self._clear_taskbar_attention()
-            decision["value"] = value
-
-        self._request_taskbar_attention()
-        shown = self.notifications.show_permission_request(title, text, risk, callback=answered)
-        if not shown:
-            self._clear_taskbar_attention()
-            return None
+        notify_user = self._should_notify_user() and hasattr(self, "notifications")
+        if notify_user:
+            dlg.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
 
         loop = QEventLoop(self)
+        state = {"settled": False, "result": False, "notification_value": "pending"}
+        notification_handle = {"value": None}
+        try:
+            timeout_seconds = max(0, int(self.core.settings.get("permission_notification_timeout_seconds", 0) or 0))
+        except Exception:
+            timeout_seconds = 0
+        deadline = time.monotonic() + timeout_seconds if timeout_seconds > 0 else None
+
+        def cancel_notification():
+            handle = notification_handle.get("value")
+            if handle:
+                try:
+                    handle.cancel()
+                except Exception:
+                    pass
+                notification_handle["value"] = None
+
+        def finish(approved, source):
+            if state["settled"]:
+                return
+            state["settled"] = True
+            state["result"] = bool(approved)
+            self._clear_taskbar_attention()
+            if source != "notification":
+                cancel_notification()
+            if source != "dialog":
+                try:
+                    dlg.done(QDialog.DialogCode.Accepted if approved else QDialog.DialogCode.Rejected)
+                except Exception:
+                    pass
+            loop.quit()
+
+        def dialog_accepted():
+            finish(True, "dialog")
+
+        def dialog_rejected():
+            finish(False, "dialog")
+
+        dlg.accepted.connect(dialog_accepted)
+        dlg.rejected.connect(dialog_rejected)
+
+        def answered(value):
+            state["notification_value"] = value
+
+        if notify_user:
+            self._request_taskbar_attention()
+            try:
+                notification_handle["value"] = self.notifications.show_permission_request(title, text, risk, callback=answered)
+            except Exception:
+                notification_handle["value"] = None
+
         poll = QTimer(self)
 
         def maybe_finish():
-            if decision["value"] != "pending":
-                loop.quit()
-                return
+            notification_value = state.get("notification_value", "pending")
+            if notification_value != "pending":
+                state["notification_value"] = "pending"
+                if notification_value is not None:
+                    finish(bool(notification_value), "notification")
+                    return
             try:
                 if self.core._is_cancel_requested():
-                    decision["value"] = False
-                    self._clear_taskbar_attention()
-                    loop.quit()
+                    finish(False, "cancel")
+                    return
             except Exception:
                 pass
+            if deadline is not None and notification_handle.get("value") and time.monotonic() >= deadline:
+                cancel_notification()
 
         poll.timeout.connect(maybe_finish)
         poll.start(100)
+        dlg.open()
         loop.exec()
         poll.stop()
         poll.deleteLater()
-        return decision["value"]
+        cancel_notification()
+        self.agent_thread.confirm_result = bool(state["result"])
+        self.agent_thread.confirm_event.set()
 
     def _should_notify_user(self):
         return (not self.isVisible()) or self.isMinimized() or (not self.isActiveWindow())

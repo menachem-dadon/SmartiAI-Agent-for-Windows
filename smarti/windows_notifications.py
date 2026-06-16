@@ -367,6 +367,23 @@ class SmartiGlassToast(QWidget):
         super().mouseReleaseEvent(event)
 
 
+class PermissionNotificationHandle:
+    def __init__(self, cancel_callback=None, shown=True):
+        self._cancel_callback = cancel_callback
+        self.shown = bool(shown)
+        self._cancelled = False
+
+    def cancel(self):
+        if self._cancelled:
+            return
+        self._cancelled = True
+        if self._cancel_callback:
+            try:
+                self._cancel_callback()
+            except Exception:
+                pass
+
+
 class WindowsNotificationCenter(QObject):
     reply_requested = pyqtSignal(str)
     activate_requested = pyqtSignal()
@@ -607,16 +624,53 @@ class WindowsNotificationCenter(QObject):
                         settle(None)
 
                 def dismissed(_event_args):
-                    settle(False)
+                    cancel()
+
+                def cancel():
+                    if settled["done"]:
+                        return
+                    settled["done"] = True
+                    cleanup()
+                    try:
+                        self._toaster.remove_toast(toast)
+                    except Exception:
+                        try:
+                            self._toaster.remove_toast_group("smartiai-permissions")
+                        except Exception:
+                            pass
+                    self.attention_cleared.emit()
 
                 toast.on_activated = activated
                 toast.on_dismissed = dismissed
                 self._toaster.show_toast(toast)
-                return True
+                return PermissionNotificationHandle(cancel, shown=True)
             except Exception as exc:
                 logging.warning("Native permission toast failed: %s", exc)
-        self._show_fallback(heading, body, permission=True, permission_callback=callback)
-        return True
+        settled = {"done": False}
+
+        def settle(value):
+            if settled["done"]:
+                return
+            settled["done"] = True
+            self.attention_cleared.emit()
+            if callback:
+                callback(value)
+
+        toast = self._show_fallback(heading, body, permission=True, permission_callback=settle)
+
+        def cancel():
+            if settled["done"]:
+                return
+            settled["done"] = True
+            try:
+                toast._closed_by_action = True
+                toast.hide()
+                toast.deleteLater()
+            except Exception:
+                pass
+            self.attention_cleared.emit()
+
+        return PermissionNotificationHandle(cancel, shown=True)
 
     def show_notice(self, title, body, *, kind="default", open_button=True):
         title = self._plain_text(title, 90) or SMARTI_APP_DISPLAY_NAME

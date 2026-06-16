@@ -1028,6 +1028,7 @@ DEFAULT_SETTINGS = {
     "safe_file_open_mode": "block_executables",
     "raw_shell_requires_approval": True,
     "marketplace_install_requires_approval": True,
+    "permission_notification_timeout_seconds": 0,
     "external_code_requires_trust": True,
     "allow_autonomous_mcp_install": False,
     "mcp_env_allowlist": copy.deepcopy(DEFAULT_MCP_ENV_ALLOWLIST),

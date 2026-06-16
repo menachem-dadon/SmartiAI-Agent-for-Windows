@@ -2634,6 +2634,7 @@ class SettingsPage(QWidget):
         self.mcp_timeout = QLineEdit(str(self.core.settings.get("mcp_timeout_seconds", 60)))
         self.max_chars_edit = QLineEdit(str(self.core.settings.get("max_tool_output_chars", 100000)))
         self.total_timeout = QLineEdit(str(self.core.settings.get("max_total_task_seconds", 900)))
+        self.permission_notification_timeout = QLineEdit(str(self.core.settings.get("permission_notification_timeout_seconds", 0)))
         budgets = self.core.settings.get("budgets", {})
         self.daily_token_budget = QLineEdit(str(budgets.get("daily_token_budget", 0)))
         self.daily_cost_budget = QLineEdit(str(budgets.get("daily_cost_budget_usd", 0)))
@@ -3071,6 +3072,7 @@ class SettingsPage(QWidget):
         self._add_field("זמן המתנה לכלים מותאמים אישית (שניות)", self.tool_timeout, advanced, "משך הזמן המקסימלי להרצת כלי מותאם אישית לפני שסמארטי מפסיק אותו.", keywords="custom tool timeout seconds", advanced=True)
         self._add_field("זמן המתנה לכלים חיצוניים (שניות)", self.mcp_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לתשובה מכלי חיצוני.", keywords="mcp timeout external tool seconds", advanced=True)
         self._add_field("זמן כולל מקסימלי למשימה (שניות)", self.total_timeout, advanced, "מונע מלולאת הסוכן להיתקע זמן רב מדי בבקשה אחת.", keywords="task timeout total max seconds", advanced=True)
+        self._add_field("זמן הצגת התראת הרשאה (שניות)", self.permission_notification_timeout, advanced, "0 פירושו ללא הגבלה: כאשר סמארטי ברקע, חלון ההרשאה הרגיל ייפתח בסמארטי וגם תופיע התראת Windows, והם יישארו מסונכרנים עד שתאשר או תדחה. מספר חיובי מבטל רק את התראת Windows אחרי הזמן הזה; חלון ההרשאה הרגיל נשאר פתוח.", keywords="permission approval notification timeout unlimited toast dialog", advanced=True)
         self._add_field("מגבלת תווים בתוצאת כלי", self.max_chars_edit, advanced, "מגביל את אורך פלט הכלים שנשלח חזרה למודל, כדי לשמור על יציבות ועל עלויות נמוכות.", keywords="tool output chars limit context token", advanced=True)
         self._add_field("תקציב טוקנים יומי", self.daily_token_budget, advanced, "0 פירושו ללא מגבלה קשיחה כרגע; הנתון נשמר לשימוש במדיניות תקציב.", keywords="daily token budget usage cost", advanced=True)
         self._add_field("תקציב עלות יומי בדולר", self.daily_cost_budget, advanced, "0 פירושו ללא מגבלה קשיחה כרגע; מוצג למעקב ובקרת עלויות.", keywords="daily cost budget usd money usage", advanced=True)
@@ -3349,7 +3351,7 @@ class SettingsPage(QWidget):
             self.email_from_name, self.email_imap_host, self.email_imap_port,
             self.email_smtp_host, self.email_smtp_port, self.email_max_attachment_mb,
             self.cmd_timeout, self.tool_timeout, self.mcp_timeout, self.max_chars_edit,
-            self.total_timeout, self.daily_token_budget, self.daily_cost_budget
+            self.total_timeout, self.permission_notification_timeout, self.daily_token_budget, self.daily_cost_budget
         ]:
             edit.textEdited.connect(lambda _=None: self._schedule_autosave())
             edit.editingFinished.connect(self._schedule_autosave)
@@ -3687,6 +3689,10 @@ class SettingsPage(QWidget):
         for key, widget, default in [("command_timeout_seconds", self.cmd_timeout, 60), ("tool_timeout_seconds", self.tool_timeout, 120), ("mcp_timeout_seconds", self.mcp_timeout, 60), ("max_tool_output_chars", self.max_chars_edit, 100000), ("max_total_task_seconds", self.total_timeout, 900)]:
             try: self.core.settings[key] = max(5, int(widget.text().strip()))
             except: self.core.settings[key] = default
+        try:
+            self.core.settings["permission_notification_timeout_seconds"] = max(0, int(self.permission_notification_timeout.text().strip()))
+        except Exception:
+            self.core.settings["permission_notification_timeout_seconds"] = 0
         self.core.settings.setdefault("budgets", {})
         for key, widget in [("daily_token_budget", self.daily_token_budget), ("daily_cost_budget_usd", self.daily_cost_budget)]:
             try:

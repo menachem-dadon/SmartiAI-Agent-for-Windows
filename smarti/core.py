@@ -1268,7 +1268,44 @@ class SmartiCore:
         return self._normalize_agent_report_text(report)
 
     def _fallback_agent_report_for_tools(self, calls, task_state=None, iteration=1):
-        return ""
+        calls = [call for call in (calls or []) if isinstance(call, dict)]
+        if not calls:
+            return "אני מתחיל לבדוק את זה עכשיו."
+        if len(calls) > 1:
+            return "אני אוסף כמה פרטי מידע במקביל כדי להתקדם מהר יותר."
+        call = calls[0]
+        action = str(call.get("action") or "")
+        args = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+        try:
+            effective_action, _ = self._effective_tool_action(action, args)
+        except Exception:
+            effective_action = action
+        key = str(effective_action or action or "").strip()
+        if key in {"get_weather"}:
+            return "אני בודק את מזג האוויר העדכני כדי לענות לפי נתונים טריים."
+        if key in {"internet_search", "read_website"}:
+            return "אני בודק מידע עדכני ברשת כדי לא להסתמך על זיכרון ישן."
+        if key in {"smart_file_search", "deep_content_search", "read_local_document", "analyze_local_image", "extract_image_text"}:
+            return "אני בודק את הקבצים הרלוונטיים כדי להתבסס על מה שקיים בפועל."
+        if key in {"save_text_file", "trash_file_or_folder", "save_screenshot_to_disk"}:
+            return "אני עומד לבצע שינוי בקובץ ואוודא שהתוצאה נשמרת כמו שביקשת."
+        if key in {"system_command", "run_project_check", "git_status", "list_processes"}:
+            return "אני בודק את מצב המערכת או הפרויקט כדי להתקדם על בסיס תוצאה אמיתית."
+        if key in {"open_software", "open_file_or_folder", "open_in_browser"}:
+            return "אני פותח את הפריט המתאים כדי לבצע את הבקשה בדרך שביקשת."
+        if key in {"browser_automation", "computer_automation"}:
+            return "אני מתחיל לבצע את הפעולה בממשק ואבדוק שהיא באמת הצליחה."
+        if key in {"email_manager"}:
+            return "אני בודק את פעולת האימייל בזהירות לפני שאמשיך."
+        if key in {"schedule_background_task", "notification_manager", "background_task_manager"}:
+            return "אני מגדיר את התזמון או ההתראה לפי הפרטים שביקשת."
+        if key in {"agent_planner"}:
+            return "אני מסדר תוכנית עבודה קצרה כדי לבצע את זה בצורה מסודרת."
+        if key in {"get_tool_info"}:
+            return "אני בודק את פרטי הכלי כדי להשתמש בו נכון."
+        if key in {"search_memory", "update_memory", "memory_manager"}:
+            return "אני בודק את הזיכרון המקומי רק במידה שהוא רלוונטי לבקשה."
+        return "אני מתחיל לבצע את הבדיקה הדרושה כדי להתקדם."
 
     def _task_phase_report_text(self, task_state=None, phase="progress"):
         return ""
@@ -5871,6 +5908,16 @@ class SmartiCore:
             if self.settings.get("enable_skills_beta", True)
             else "Skills כבויים ולכן אין להשתמש בפלט או בשמות Skills כהוראות ביצוע."
         )
+        try:
+            permission_level = int(self.settings.get("permission_level", 2) or 2)
+        except Exception:
+            permission_level = 2
+        permission_label = {1: "בטוח", 2: "מאוזן", 3: "אוטונומי"}.get(permission_level, "מאוזן")
+        self_awareness_note = (
+            f"מודעות עצמית קצרה: אתה אפליקציית SmartiAI המקומית שרצה על Windows, לא רק צ'אט. "
+            f"אתה יכול לשוחח, לבדוק רשת ומזג אוויר, לעבוד עם קבצים, לפתוח תוכנות ואתרים, לקרוא מסך/מסמכים, לבצע אוטומציית דפדפן ומחשב, לטפל באימייל, זיכרון, תזכורות ומשימות רקע, ולהרחיב יכולות דרך כלים מותאמים, MCP ו-Skills כאשר הם זמינים ומאושרים. "
+            f"התנהגותך מושפעת מהגדרות ספק/מודל, פרופיל הרשאות ({permission_label}), מטריצת יכולות, ארגז חול, כלים פעילים, זיכרון, קול/TTS, ועדכונים; אם פעולה חסומה או דורשת אישור, השתמש במנגנון ההרשאות של היישום."
+        )
 
         prompt = f"""
 אתה סמארטי, סייען דיגיטלי אינטליגנטי, אוטונומי ומקצועי הפועל ב-Windows, בעברית מלאה וב-RTL.
@@ -5879,6 +5926,7 @@ CWD: {current_dir}
 תיקיית ברירת מחדל ליצירת קבצים כאשר המשתמש לא ציין מיקום: {default_output_dir}
 {background_note}
 {final_answer_visibility_rule}
+{self_awareness_note}
 
 **פרוטוקול עבודה קצר:**
 הבן -> החלט אם צריך תכנון -> ענה ישירות או בחר כלי -> בדוק הרשאות -> בצע -> אמת -> סכם.
@@ -5886,7 +5934,7 @@ CWD: {current_dir}
 אם במהלך העבודה מתקבלים מידע חדש, שגיאות חוזרות, כשל אימות, שינויי סביבה, או תוצאות discovery שמראות שהתוכנית לא מתאימה, מותר לקרוא שוב ל-`agent_planner` עם `intent` של `replan` או `continue_plan`. זו החלטת המודל, לא טריגר אוטומטי של הקוד.
 תכנון טוב אינו רשימת כותרות. כאשר אתה משתמש ב-`agent_planner`, ספק או בקש workflow מפורט מספיק לביצוע, נקודות אימות קונקרטיות, ו-contingencies לשגיאות/הרשאות/סכמות/קבצים חסרים/מצב UI לא צפוי. אם חסר מידע סביבתי, בצע discovery בטוח בכלים לפני התכנון או כלול אותו כשלב הראשון. אל תאשר סיום רק כי כלי רץ; אשר לפי תוצאה נצפית.
 כאשר מצב משימה פנימי כבר קיים, פעל היררכית לפיו: שמור את המטרה, התקדם שלב-שלב, שנה אסטרטגיה אחרי כשל, ואל תדלג לאישור סופי לפני שבדקת שהתוצאה מתאימה לבקשה.
-חובת דיווח ראשון: אם התשובה אינה מיידית ואתה עומד להפעיל כלי ראשון בתהליך סוכני, כתוב לפני בלוק ה-JSON דיווח מצב קצר, טבעי ומועיל למשתמש. אל תתחיל תהליך סוכני ישר ב-JSON. הכלל של דילוג על דיווחים חוזרים אינו מבטל את הדיווח הראשון.
+חובת דיווח ראשון: כל לולאת סוכן שמפעילה כלים חייבת להתחיל בדיווח ראשוני למשתמש לפני קריאת הכלי הראשונה. אם התשובה אינה מיידית ואתה עומד להפעיל כלי ראשון בתהליך סוכני, כתוב לפני בלוק ה-JSON דיווח מצב קצר, טבעי ומועיל למשתמש. אל תתחיל תהליך סוכני ישר ב-JSON. הכלל של דילוג על דיווחים חוזרים אינו מבטל את הדיווח הראשון.
 כשצריך כלי, אל תכתוב שורת שלב טכנית לכל לולאה. במקום זאת כתוב דיווח מצב למשתמש רק כשיש ערך אמיתי: בתחילת תהליך סוכני, אחרי ממצא משמעותי, אחרי כשל/שינוי אסטרטגיה, לפני פעולה מסוכנת/משנה מצב, או כשברור שהמשתמש ירוויח מהקשר נוסף. הדיווח צריך להיות טבעי, בעברית, בגודל של משפט קצר עד שניים, מעט יותר מפורט מפקודת הכלי, ולהסביר בקצרה מה המצב ומה אתה עומד לבדוק או לבצע עכשיו. דיווח טוב מתייחס לבקשת המשתמש ולתוצאה הרצויה, לא לשם הכלי, נתיב הקובץ, פקודת shell, JSON, או פרט טכני פנימי. למשל: "אני בודק את הקובץ הקיים כדי לשנות רק את אזור התצוגה שביקשת" עדיף על "קורא C:\\Users\\...\\chat.py". אם אתה ממשיך לנסות וריאציות של אותה פעולה, מריץ כלי נוסף כחלק מאותו צעד, או מבצע בדיקת המשך טכנית צפויה, אל תוסיף דיווח חדש; החזר רק בלוק JSON. בלי ברכות, בלי "סטטוס:", בלי התנצלות, בלי רשימות ארוכות, ובלי טקסט אחרי הבלוק:
 ```json
 {{
@@ -6551,7 +6599,6 @@ CWD: {current_dir}
             schemas_seen = set()
             internal_artifact_replies = 0
             process_report_emitted = False
-            missing_process_report_feedbacks = 0
             task_started = time.time()
             total_timeout = self._timeout("max_total_task_seconds", 900)
             current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
@@ -6722,16 +6769,11 @@ CWD: {current_dir}
                         if planner_report:
                             self._emit_agent_process_event("report", text=planner_report, source="model")
                             process_report_emitted = True
-                        elif (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)) and not process_report_emitted and missing_process_report_feedbacks < 2:
-                            missing_process_report_feedbacks += 1
-                            self._append_tool_feedback(
-                                current_messages,
-                                tool_turn_text,
-                                "agent_process_report",
-                                "SYSTEM_FORMAT_REQUIRED: Before the first tool call in an agentic task, write a brief user-facing Hebrew status report before the JSON tool block. Then repeat the same tool call. The report content is your judgment; do not expose tool names, paths, shell commands, or JSON.",
-                            )
-                            checkpoint("missing_agent_process_report")
-                            continue
+                        elif (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)) and not process_report_emitted:
+                            planner_report = self._fallback_agent_report_for_tools([first_call], task_state, iteration)
+                            if planner_report:
+                                self._emit_agent_process_event("report", text=planner_report, source="fallback")
+                                process_report_emitted = True
                         self._emit_agent_process_event(
                             "tool_start",
                             tools=[self._agent_tool_event_item("agent_planner", first_call.get("arguments", {}) or {}, event_id=planner_event_id)],
@@ -6819,16 +6861,11 @@ CWD: {current_dir}
                     if report_text:
                         self._emit_agent_process_event("report", text=report_text, source="model")
                         process_report_emitted = True
-                    elif (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)) and not process_report_emitted and missing_process_report_feedbacks < 2:
-                        missing_process_report_feedbacks += 1
-                        self._append_tool_feedback(
-                            current_messages,
-                            tool_turn_text,
-                            "agent_process_report",
-                            "SYSTEM_FORMAT_REQUIRED: Before the first tool call in an agentic task, write a brief user-facing Hebrew status report before the JSON tool block. Then repeat the same tool call. The report content is your judgment; do not expose tool names, paths, shell commands, or JSON.",
-                        )
-                        checkpoint("missing_agent_process_report")
-                        continue
+                    elif (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)) and not process_report_emitted:
+                        report_text = self._fallback_agent_report_for_tools(selected_calls, task_state, iteration)
+                        if report_text:
+                            self._emit_agent_process_event("report", text=report_text, source="fallback")
+                            process_report_emitted = True
                     self._emit_agent_process_event(
                         "tool_start",
                         tools=[
