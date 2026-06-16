@@ -941,7 +941,7 @@ DEFAULT_SETTINGS = {
     "voice_hotkey": "alt+v",
     "keep_running_in_tray": True,
     "updates_auto_check": True,
-    "updates_check_interval_hours": 12,
+    "updates_check_interval_hours": 1,
     "updates_last_checked_at": "",
     "updates_last_available_version": "",
     "voice_sensitivity": 70,

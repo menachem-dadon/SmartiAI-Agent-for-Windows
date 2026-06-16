@@ -2392,26 +2392,104 @@ class SettingsPage(QWidget):
         self.api_key_help_hint.setText(instructions)
         self.api_key_help_hint.setVisible(bool(instructions and provider != "local"))
 
+    def _last_update_check_datetime(self):
+        raw = str(self.core.settings.get("updates_last_checked_at", "") or "").strip()
+        if not raw:
+            return None
+        try:
+            text = raw[:-1] if raw.endswith("Z") else raw
+            checked_at = datetime.fromisoformat(text)
+            offset = checked_at.utcoffset() if checked_at.tzinfo else None
+            if offset is not None:
+                checked_at = (checked_at - offset).replace(tzinfo=None)
+            return checked_at
+        except Exception:
+            return None
+
+    def _relative_update_check_text(self):
+        checked_at = self._last_update_check_datetime()
+        if not checked_at:
+            return ""
+        seconds = max(0, int((datetime.utcnow() - checked_at).total_seconds()))
+        if seconds < 60:
+            return "עכשיו"
+        minutes = seconds // 60
+        if minutes < 60:
+            return "לפני דקה" if minutes == 1 else f"לפני {minutes} דקות"
+        hours = minutes // 60
+        if hours < 24:
+            return "לפני שעה" if hours == 1 else f"לפני {hours} שעות"
+        days = hours // 24
+        return "אתמול" if days == 1 else f"לפני {days} ימים"
+
+    def _update_status_tooltip(self):
+        checked_at = self._last_update_check_datetime()
+        if not checked_at:
+            return ""
+        return f"בדיקה אחרונה: {checked_at.strftime('%d.%m.%Y %H:%M:%S')} UTC"
+
     def _update_status_text(self):
-        last = str(self.core.settings.get("updates_last_checked_at", "") or "").strip()
         available = str(self.core.settings.get("updates_last_available_version", "") or "").strip()
         if available:
-            return f"נמצא עדכון זמין: {available}"
-        if last:
-            return f"בדיקה אחרונה: {last}"
+            return f"עדכון זמין: גרסה {available}"
+        relative = self._relative_update_check_text()
+        if relative:
+            return f"בדיקה אחרונה: {relative}"
         return "עדיין לא בוצעה בדיקת עדכונים."
 
+    def _update_status_label_css(self):
+        return (
+            f"QLabel {{ background: {GLASS_COLOR}; color: {TEXT_COLOR}; "
+            f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 12px; "
+            "padding: 8px 12px; font-size: 12px; font-weight: 700; text-align: right; "
+            "qproperty-wordWrap: false; }}"
+        )
+
+    def _style_update_status_label(self):
+        if not hasattr(self, "update_status_lbl"):
+            return
+        self.update_status_lbl.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.update_status_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
+        self.update_status_lbl.setWordWrap(False)
+        self.update_status_lbl.setMinimumHeight(40)
+        self.update_status_lbl.setStyleSheet(self._update_status_label_css())
+
+    def refresh_update_status_label(self):
+        if getattr(self, "_update_status_temporary", False):
+            return
+        if hasattr(self, "update_status_lbl"):
+            self._style_update_status_label()
+            self.update_status_lbl.setText(self._update_status_text())
+            self.update_status_lbl.setToolTip(self._update_status_tooltip())
+
     def begin_update_check(self):
+        self._update_status_temporary = True
         if hasattr(self, "check_updates_btn"):
             self.check_updates_btn.setEnabled(False)
         if hasattr(self, "update_status_lbl"):
+            self._style_update_status_label()
             self.update_status_lbl.setText("בודק עדכונים...")
 
-    def finish_update_check(self, message):
+    def finish_update_check(self, message, reset_after_ms=0):
         if hasattr(self, "check_updates_btn"):
             self.check_updates_btn.setEnabled(True)
         if hasattr(self, "update_status_lbl"):
-            self.update_status_lbl.setText(str(message or self._update_status_text()))
+            if message:
+                self._update_status_temporary = bool(reset_after_ms)
+                self.update_status_lbl.setText(str(message))
+                self.update_status_lbl.setToolTip(self._update_status_tooltip())
+            else:
+                self._update_status_temporary = False
+                self.refresh_update_status_label()
+            if reset_after_ms:
+                expected = str(message or "")
+
+                def restore_update_status():
+                    if hasattr(self, "update_status_lbl") and self.update_status_lbl.text() == expected:
+                        self._update_status_temporary = False
+                        self.refresh_update_status_label()
+
+                QTimer.singleShot(int(reset_after_ms), restore_update_status)
 
     def check_updates_now(self):
         if hasattr(self.main_window, "check_for_updates_manual"):
@@ -2478,6 +2556,7 @@ class SettingsPage(QWidget):
             ("light", "בהיר")
         ]
         self.theme_combo.addItems([label for _, label in self.theme_options])
+        self.theme_combo.setToolTip("בחר ערכת נושא. השינוי מוחל מיד על חלונות, תפריטים ואייקונים.")
         self.theme_combo.setItemIconNames(0, ("theme_dark", "dark_theme", "moon_icon", "settings_icon"))
         self.theme_combo.setItemIconNames(1, ("theme_system", "system_theme", "monitor_icon", "settings_icon"))
         self.theme_combo.setItemIconNames(2, ("theme_light", "light_theme", "sun_icon", "settings_icon"))
@@ -2486,16 +2565,26 @@ class SettingsPage(QWidget):
         self.theme_combo.setCurrentIndex(theme_keys.index(current_theme) if current_theme in theme_keys else 0)
 
         self.update_auto_cb = SmartiCheckBox("בדוק עדכונים אוטומטית")
+        self.update_auto_cb.setToolTip("")
         self.update_auto_cb.setChecked(bool(self.core.settings.get("updates_auto_check", True)))
         self.update_auto_cb.setStyleSheet(CHECKBOX_CSS)
         self.check_updates_btn = QPushButton("בדוק עדכונים עכשיו")
+        self.check_updates_btn.setToolTip("")
         self.check_updates_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.check_updates_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
         set_themed_button_icon(self.check_updates_btn, ("check_updates_icon",), self.check_updates_btn.text(), 18, clear_text=False)
         self.check_updates_btn.clicked.connect(self.check_updates_now)
         self.update_status_lbl = QLabel(self._update_status_text())
-        self.update_status_lbl.setWordWrap(True)
-        self.update_status_lbl.setStyleSheet(muted_label_css(12))
+        self.update_status_lbl.setProperty("smartiUpdateStatusPill", True)
+        self.update_status_lbl.setWordWrap(False)
+        self.update_status_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.update_status_lbl.setToolTip(self._update_status_tooltip())
+        self._style_update_status_label()
+        self._update_status_temporary = False
+        self._update_status_refresh_timer = QTimer(self)
+        self._update_status_refresh_timer.setInterval(30000)
+        self._update_status_refresh_timer.timeout.connect(self.refresh_update_status_label)
+        self._update_status_refresh_timer.start()
 
         self.policy_combos = {}
         policy = self.core._normalize_policy_matrix()
@@ -3061,7 +3150,13 @@ class SettingsPage(QWidget):
         self._add_checkbox(self.voice_dynamic_energy_cb, app_settings, "מאפשר לספריית הזיהוי לשנות את סף הרגישות תוך כדי עבודה לפי רעש הרקע.", keywords="dynamic energy threshold noise", advanced=True)
         self._add_checkbox(self.voice_beep_cb, app_settings, "משמיע צלילי האזנה קצרים מהנכסים בתחילת האזנה, בסיום האזנה ובביטול מחוסר דיבור.", keywords="beep sound start stop listening timeout", advanced=True)
         self._add_section_header("עדכונים", app_settings)
-        self._add_checkbox(self.update_auto_cb, app_settings, "כשאפשרות זו פעילה, סמארטי יבדוק ברקע אם פורסמה גרסה חדשה ב-GitHub Releases.", keywords="updates release github version auto check")
+        self._add_checkbox(
+            self.update_auto_cb,
+            app_settings,
+            "כשאפשרות זו פעילה, סמארטי בודק עדכונים ברקע אחרי הפתיחה ולאחר מכן פעם בשעה. אם נמצאה גרסה חדשה, כפתור העדכון מופיע בראש הצ'אט.",
+            keywords="updates release github version auto check",
+            info=True,
+        )
         app_settings.addWidget(self.update_status_lbl)
         app_settings.addWidget(self.check_updates_btn)
         app_settings.addStretch()
@@ -3476,6 +3571,9 @@ class SettingsPage(QWidget):
         self.settings_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
         refresh_back_button_icon(self.back_btn)
         for label in self.findChildren(QLabel):
+            if label.property("smartiUpdateStatusPill"):
+                self._style_update_status_label()
+                continue
             if label.property("smartiHighContrastLink"):
                 apply_high_contrast_link_label(label)
                 continue
@@ -3500,7 +3598,10 @@ class SettingsPage(QWidget):
             else:
                 label.setStyleSheet(muted_label_css(size))
         for combo in self.findChildren(NoScrollComboBox):
-            combo.setStyleSheet(COMBOBOX_CSS)
+            if hasattr(combo, "apply_theme"):
+                combo.apply_theme()
+            else:
+                combo.setStyleSheet(COMBOBOX_CSS)
         for model_picker in self.findChildren(SearchableModelComboBox):
             model_picker.apply_theme()
         for segment in self.findChildren(SegmentedControl):
@@ -3530,8 +3631,6 @@ class SettingsPage(QWidget):
             if parent and parent.objectName() == "SegmentedControl":
                 continue
             button.setStyleSheet(SECONDARY_BUTTON_CSS)
-        if hasattr(self, "settings_save_status"):
-            self.settings_save_status.setStyleSheet(muted_label_css(12))
         if hasattr(self, "settings_search_edit"):
             self.settings_search_edit.setStyleSheet(self._search_box_css())
         if hasattr(self, "settings_search_wrapper"):
@@ -3557,10 +3656,15 @@ class SettingsPage(QWidget):
         for slider in self.findChildren(RtlFillSlider):
             slider.setStyleSheet(SLIDER_CSS)
         for label in self.findChildren(QLabel):
+            if label.property("smartiUpdateStatusPill"):
+                self._style_update_status_label()
+                continue
             if label.property("smartiValuePill"):
                 label.setStyleSheet(self._value_pill_css())
         if hasattr(self, "developer_log_text"):
             self.developer_log_text.setStyleSheet(LOG_TEXT_CSS)
+        if hasattr(self, "settings_save_status"):
+            self._set_save_status(getattr(self, "_save_status", "idle"))
         if hasattr(self, "api_key_help_link"):
             self._update_provider_key_help()
         if hasattr(self, "tavily_key_help_link"):
@@ -3663,6 +3767,7 @@ class SettingsPage(QWidget):
         self.core.settings["enable_mcp_clawhub"] = self.mcp_cb.isChecked()
         self.core.settings["enable_skills_beta"] = self.skills_beta_cb.isChecked()
         self.core.settings["updates_auto_check"] = self.update_auto_cb.isChecked()
+        self.core.settings["updates_check_interval_hours"] = 1
         self.core.settings["enable_browser_automation"] = self.browser_auto_cb.isChecked()
         self.core.settings["enable_computer_control"] = self.computer_control_cb.isChecked()
         self.core.settings["privacy_redact_logs"] = self.redact_logs_cb.isChecked()

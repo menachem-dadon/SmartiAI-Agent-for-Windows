@@ -1519,8 +1519,9 @@ class AgentToolGroupWidget(QWidget):
         self.status_row.installEventFilter(self)
         self.status_row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         status_layout = QHBoxLayout(self.status_row)
-        status_layout.setContentsMargins(0, 0, 0, 0)
-        status_layout.setSpacing(1)
+        status_layout.setContentsMargins(0, 0, 3, 0)
+        status_layout.setSpacing(7)
+        self.status_row.setToolTip("לחץ להצגת פרטי הכלים")
 
         self.tool_icon_label = QLabel()
         self.tool_icon_label.setFixedSize(18, 18)
@@ -1530,7 +1531,8 @@ class AgentToolGroupWidget(QWidget):
         self.status_label = StepsShimmerLabel()
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.status_label.setWordWrap(True)
-        self.status_label.setMaximumWidth(max(150, self.max_w - 46))
+        self.status_label.setMinimumWidth(1)
+        self.status_label.setMaximumWidth(max(150, self.max_w - 72))
         self.status_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.status_label.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter)
@@ -1584,7 +1586,7 @@ class AgentToolGroupWidget(QWidget):
 
     def apply_theme(self):
         self.status_row.setStyleSheet("background: transparent; border: none;")
-        self.status_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent; padding-right: 6px; padding-left: 0px;")
+        self.status_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent; padding-right: 12px; padding-left: 0px;")
         self.arrow_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
         self.tool_icon_label.setStyleSheet("background: transparent; border: none;")
         self.details_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 15px; background: transparent; padding: 0px 0px 3px 0px;")
@@ -1606,9 +1608,9 @@ class AgentToolGroupWidget(QWidget):
             widget.update_parent_width(max(220, self.max_w - self.TOOL_ROW_INDENT))
 
     def _fit_status_label_width(self):
-        available = max(120, self.max_w - 46)
+        available = max(120, self.max_w - 72)
         text = str(self.status_label.text() or "")
-        width = _fitted_plain_label_width(self.status_label, text, available, min_width=42, padding=8)
+        width = _fitted_plain_label_width(self.status_label, text, available, min_width=48, padding=22)
         self.status_label.setWordWrap(width >= available)
         self.status_label.setMinimumWidth(width)
         self.status_label.setMaximumWidth(width)
@@ -3728,7 +3730,7 @@ class VoiceListeningOverlay(QWidget):
         )
         set_themed_button_icon(
             self.cancel_btn,
-            ("voice_overlay_cancel", "cancel_listening_icon", "close_icon", "stop_agent_icon"),
+            ("voice_overlay_cancel", "cancel_listening_icon", CLOSE_SVG_PATH, "close_icon", "stop_agent_icon"),
             "×",
             18,
             clear_text=True,
@@ -3959,6 +3961,11 @@ class ChatWindow(QMainWindow):
         
         logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה (הפעלת תוכנה) ---\n{'='*50}")
         self.load_active_chat_session()
+        self._ensure_hourly_update_interval()
+        self.update_check_timer = QTimer(self)
+        self.update_check_timer.setInterval(60 * 60 * 1000)
+        self.update_check_timer.timeout.connect(self.maybe_check_for_updates)
+        self.update_check_timer.start()
         QTimer.singleShot(1200, self.core.resume_background_tasks)
         QTimer.singleShot(2600, self.maybe_check_for_updates)
         
@@ -4089,18 +4096,30 @@ class ChatWindow(QMainWindow):
     def _utc_now_iso(self):
         return datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
+    def _ensure_hourly_update_interval(self):
+        try:
+            if int(self.core.settings.get("updates_check_interval_hours", 1) or 1) != 1:
+                self.core.settings["updates_check_interval_hours"] = 1
+                self.core._save_settings()
+        except Exception:
+            self.core.settings["updates_check_interval_hours"] = 1
+
     def _auto_update_check_due(self):
         if not bool(self.core.settings.get("updates_auto_check", True)):
             return False
         try:
-            interval_hours = max(1, int(self.core.settings.get("updates_check_interval_hours", 12) or 12))
+            interval_hours = max(1, int(self.core.settings.get("updates_check_interval_hours", 1) or 1))
         except Exception:
-            interval_hours = 12
-        last_value = str(self.core.settings.get("updates_last_checked_at", "") or "").strip().replace("Z", "")
+            interval_hours = 1
+        last_value = str(self.core.settings.get("updates_last_checked_at", "") or "").strip()
         if not last_value:
             return True
         try:
-            last_dt = datetime.fromisoformat(last_value)
+            text = last_value[:-1] if last_value.endswith("Z") else last_value
+            last_dt = datetime.fromisoformat(text)
+            offset = last_dt.utcoffset() if last_dt.tzinfo else None
+            if offset is not None:
+                last_dt = (last_dt - offset).replace(tzinfo=None)
             return (datetime.utcnow() - last_dt).total_seconds() >= interval_hours * 3600
         except Exception:
             return True
@@ -4139,15 +4158,28 @@ class ChatWindow(QMainWindow):
             self.core.settings["updates_last_checked_at"] = self._utc_now_iso()
             if available_version is not None:
                 self.core.settings["updates_last_available_version"] = available_version
+            self.core.settings["updates_check_interval_hours"] = 1
             self.core._save_settings()
         except Exception:
             pass
+        self._refresh_settings_update_status()
 
-    def _finish_update_source(self, message):
+    def _refresh_settings_update_status(self):
+        page = getattr(self, "settings_page", None)
+        if page and hasattr(page, "refresh_update_status_label"):
+            try:
+                page.refresh_update_status_label()
+            except Exception:
+                pass
+
+    def _finish_update_source(self, message, reset_after_ms=0):
         source = getattr(self, "_update_check_source", None)
         self._update_check_source = None
         if source and hasattr(source, "finish_update_check"):
-            source.finish_update_check(message)
+            try:
+                source.finish_update_check(message, reset_after_ms=reset_after_ms)
+            except TypeError:
+                source.finish_update_check(message)
 
     def _cleanup_update_check_worker(self, worker):
         if getattr(self, "update_check_worker", None) is worker:
@@ -4170,9 +4202,7 @@ class ChatWindow(QMainWindow):
         self.available_update = None
         self._record_update_check("")
         self._refresh_update_button()
-        self._finish_update_source("אין עדכון חדש.")
-        if manual:
-            self.show_update_notice("סמארטי מעודכן", "אין עדכון חדש. הגרסה הנוכחית כבר מעודכנת.")
+        self._finish_update_source("אין עדכון חדש.", reset_after_ms=7000)
 
     def _handle_update_check_failed(self, message, manual=False):
         self._finish_update_source(f"שגיאה בבדיקת עדכונים: {message}")
@@ -5499,8 +5529,8 @@ class ChatWindow(QMainWindow):
             pressed_bg = ACCENT_PINK_COLOR
             self.action_btn.clicked.connect(self.cancel_agent)
         else:
-            self.action_btn.setToolTip("")
             has_text = bool(self.input_field.toPlainText().strip()) or bool(getattr(self, "pending_attachments", []))
+            self.action_btn.setToolTip("שלח הודעה" if has_text else "התחל האזנה")
             fallback_text = "שלח" if has_text else "קול"
 
             set_themed_button_icon(self.action_btn, ("send_icon",) if has_text else ("mic_icon",), fallback_text, 28, clear_text=True)
@@ -5878,23 +5908,11 @@ class ChatWindow(QMainWindow):
         self.start_new_chat()
 
 class AnimatedSplash(QWidget):
-    _LEGACY_STATUS_MESSAGES = [
-        "מסנכרן זיכרון, כלים והרשאות...",
-        "מחמם את מנוע התכנון של סמארטי...",
-        "מרענן מודלים ותצורת עבודה...",
-        "מכין אוטומציות ומשימות רקע...",
-        "פותח סביבת עבודה מוכנה לפעולה...",
-    ]
-
     STATUS_MESSAGES = [
-        "מסנכרן זיכרון, הרשאות וכלים...",
-        "מרענן מודלים ותצורת עבודה...",
-        "מכין אוטומציות ומשימות רקע...",
-        "בודק שסביבת העבודה מוכנה...",
-        "מחבר את SmartiAI לשולחן העבודה...",
+        "מכין את חלון הפתיחה...",
     ]
 
-    def __init__(self, anim_path, fallback_path, size, border_color, border_width, radius, bg_color):
+    def __init__(self, fallback_path, size, border_color, border_width, radius, bg_color):
         super().__init__()
         self.setWindowFlags(
             Qt.WindowType.SplashScreen
@@ -5917,6 +5935,7 @@ class AnimatedSplash(QWidget):
         self._window_radius = max(1, int(radius or 30))
 
         self._status_index = 0
+        self._status_timer = None
         self._finish_window = None
         self._finishing = False
         self._finish_progress_anim = None
@@ -5956,9 +5975,12 @@ class AnimatedSplash(QWidget):
         self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.subtitle_lbl = QLabel("סוכן AI חכם ל-Windows")
         self.subtitle_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.meta_lbl = QLabel(self._meta_text())
+        self.meta_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         title_col.addStretch(1)
         title_col.addWidget(self.title_lbl)
         title_col.addWidget(self.subtitle_lbl)
+        title_col.addWidget(self.meta_lbl)
         title_col.addStretch(1)
         top_row.addLayout(title_col, 1)
         card_layout.addLayout(top_row)
@@ -5979,12 +6001,24 @@ class AnimatedSplash(QWidget):
 
         self.apply_theme()
 
-        self._status_timer = QTimer(self)
-        self._status_timer.timeout.connect(self._advance_status)
-        self._status_timer.start(1250)
         self._progress_timer = QTimer(self)
         self._progress_timer.timeout.connect(self._tick_progress)
         self._progress_timer.start(90)
+
+    def _meta_text(self):
+        runtime_label = "מקור"
+        try:
+            if SMARTI_RUNTIME.is_frozen:
+                runtime_label = "נייד" if os.path.exists(os.path.join(SMARTI_RUNTIME.install_dir, "release_manifest.json")) else "מותקן"
+        except Exception:
+            runtime_label = "ארוז" if getattr(SMARTI_RUNTIME, "is_frozen", False) else "מקור"
+        return f"גרסה {APP_VERSION} • {runtime_label} • Windows"
+
+    def set_status(self, text):
+        text = str(text or "").strip()
+        if text:
+            self.status_lbl.setText(text)
+            QApplication.processEvents()
 
     def _set_splash_logo(self, fallback_path, border_color):
         if os.path.exists(fallback_path):
@@ -6015,6 +6049,10 @@ class AnimatedSplash(QWidget):
         self.subtitle_lbl.setStyleSheet(
             f"color: {MUTED_TEXT_COLOR}; background: transparent; border: none; "
             "font-size: 13px; font-weight: 700; letter-spacing: 0px;"
+        )
+        self.meta_lbl.setStyleSheet(
+            f"color: {SUBTLE_TEXT_COLOR}; background: transparent; border: none; "
+            "font-size: 11px; font-weight: 700; letter-spacing: 0px;"
         )
         self.status_lbl.setStyleSheet(
             f"color: {MUTED_TEXT_COLOR}; background: transparent; border: none; "

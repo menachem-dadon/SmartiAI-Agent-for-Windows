@@ -11,6 +11,9 @@ APP_FONT_FAMILY = "Segoe UI"
 APP_FONT_SOURCE_PATH = ""
 _APP_FONT_CACHE_PATH = None
 _APP_FONT_CACHE_FAMILY = None
+TOOLTIP_BG_COLOR = "#111318"
+TOOLTIP_TEXT_COLOR = "#F8FBFF"
+CLOSE_SVG_PATH = ""
 
 BRAND_ACCENT_COLOR = "#35D9FF"
 BRAND_SECONDARY_COLOR = "#88FFB8"
@@ -51,6 +54,8 @@ THEME_PALETTES = {
         "TOP_GRADIENT_B": "#081534",
         "TOP_GRADIENT_C": "#18082A",
         "MENU_BG_COLOR": "#091833",
+        "TOOLTIP_BG_COLOR": "#111318",
+        "TOOLTIP_TEXT_COLOR": "#F8FBFF",
         "BUBBLE_AGENT_END": "#0E1E3F",
         "BUBBLE_USER_TEXT": "#03101A",
         "CODE_BG_COLOR": "rgba(1,5,17,0.72)",
@@ -90,6 +95,8 @@ THEME_PALETTES = {
         "TOP_GRADIENT_B": "#EEF6FF",
         "TOP_GRADIENT_C": "#F8EEFF",
         "MENU_BG_COLOR": "#FFFFFF",
+        "TOOLTIP_BG_COLOR": "#FFFFFF",
+        "TOOLTIP_TEXT_COLOR": "#06162C",
         "BUBBLE_AGENT_END": "#F8FBFF",
         "BUBBLE_USER_TEXT": "#FFFFFF",
         "CODE_BG_COLOR": "rgba(6,22,44,0.08)",
@@ -107,7 +114,7 @@ THEME_EXPORT_NAMES = (
     "SUBTLE_TEXT_COLOR", "ACCENT_COLOR", "ACCENT_SECONDARY_COLOR",
     "ACCENT_PINK_COLOR", "ACCENT_WARM_COLOR", "ACCENT_TEXT_COLOR", "LINE_COLOR", "SOFT_LINE_COLOR",
     "INPUT_GRADIENT_END", "CARD_GRADIENT_END", "TOP_GRADIENT_A",
-    "TOP_GRADIENT_B", "TOP_GRADIENT_C", "MENU_BG_COLOR", "BUBBLE_AGENT_END",
+    "TOP_GRADIENT_B", "TOP_GRADIENT_C", "MENU_BG_COLOR", "TOOLTIP_BG_COLOR", "TOOLTIP_TEXT_COLOR", "BUBBLE_AGENT_END",
     "GLASS_COLOR", "GLASS_STRONG_COLOR", "MESH_A", "MESH_B", "MESH_C",
     "MESH_D", "USER_BUBBLE_COLOR", "USER_BUBBLE_BORDER",
     "BUBBLE_USER_TEXT", "CODE_BG_COLOR", "HOVER_TINT", "ACCENT_TINT",
@@ -115,7 +122,7 @@ THEME_EXPORT_NAMES = (
     "DROPDOWN_SVG_PATH", "RESET_SVG_PATH", "CHECKBOX_CSS", "COMBOBOX_CSS",
     "LINE_EDIT_CSS", "TEXT_EDIT_CSS", "PRIMARY_BUTTON_CSS",
     "SECONDARY_BUTTON_CSS", "DANGER_BUTTON_CSS", "NAV_CARD_CSS",
-    "INPUT_FRAME_CSS", "SCROLLBAR_CSS", "SLIDER_CSS", "LOG_TEXT_CSS",
+    "INPUT_FRAME_CSS", "SCROLLBAR_CSS", "SLIDER_CSS", "LOG_TEXT_CSS", "CLOSE_SVG_PATH",
 )
 
 
@@ -261,6 +268,10 @@ def ui_font_family_css():
     return f"'{safe_family}', 'Segoe UI', Arial"
 
 
+def ui_popup_font_family_css():
+    return ui_font_family_css()
+
+
 def app_font(point_size=10, weight=None):
     font = QFont(resolve_app_font_family(), int(point_size))
     if weight is not None:
@@ -391,12 +402,12 @@ def _refresh_theme_exports(mode=None, settings=None):
     global SUBTLE_TEXT_COLOR, ACCENT_COLOR, ACCENT_SECONDARY_COLOR
     global ACCENT_PINK_COLOR, ACCENT_WARM_COLOR, ACCENT_TEXT_COLOR, LINE_COLOR, SOFT_LINE_COLOR
     global INPUT_GRADIENT_END, CARD_GRADIENT_END, TOP_GRADIENT_A
-    global TOP_GRADIENT_B, TOP_GRADIENT_C, MENU_BG_COLOR, BUBBLE_AGENT_END
+    global TOP_GRADIENT_B, TOP_GRADIENT_C, MENU_BG_COLOR, TOOLTIP_BG_COLOR, TOOLTIP_TEXT_COLOR, BUBBLE_AGENT_END
     global GLASS_COLOR, GLASS_STRONG_COLOR, MESH_A, MESH_B, MESH_C, MESH_D
     global USER_BUBBLE_COLOR, USER_BUBBLE_BORDER
     global BUBBLE_USER_TEXT, CODE_BG_COLOR, HOVER_TINT, ACCENT_TINT
     global ACCENT_TINT_STRONG, FIELD_TEXT_COLOR
-    global CHECKMARK_SVG_PATH, DROPDOWN_SVG_PATH, RESET_SVG_PATH
+    global CHECKMARK_SVG_PATH, DROPDOWN_SVG_PATH, RESET_SVG_PATH, CLOSE_SVG_PATH
     global CHECKBOX_CSS, COMBOBOX_CSS, LINE_EDIT_CSS, TEXT_EDIT_CSS
     global PRIMARY_BUTTON_CSS, SECONDARY_BUTTON_CSS, DANGER_BUTTON_CSS
     global NAV_CARD_CSS, INPUT_FRAME_CSS, SCROLLBAR_CSS, SLIDER_CSS, LOG_TEXT_CSS
@@ -424,6 +435,10 @@ def _refresh_theme_exports(mode=None, settings=None):
     RESET_SVG_PATH = _svg_asset(
         f"reset_{CURRENT_THEME}.svg",
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{ACCENT_COLOR}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/></svg>'
+    )
+    CLOSE_SVG_PATH = _svg_asset(
+        f"close_{CURRENT_THEME}.svg",
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{TEXT_COLOR}" stroke-width="2.9" stroke-linecap="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>'
     )
 
     CHECKBOX_CSS = f"""
@@ -454,6 +469,8 @@ def _refresh_theme_exports(mode=None, settings=None):
         QComboBox {{
             background: {GLASS_COLOR}; color: {FIELD_TEXT_COLOR};
             border-radius: 20px; padding: 13px 16px 13px 46px; font-size: 14px;
+            font-family: {ui_popup_font_family_css()};
+            font-weight: 600;
             border: 1px solid {SOFT_LINE_COLOR};
             min-height: 26px;
             selection-background-color: {ACCENT_TINT_STRONG};
@@ -481,6 +498,9 @@ def _refresh_theme_exports(mode=None, settings=None):
             selection-background-color: {ACCENT_TINT_STRONG}; selection-color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR}; border-radius: 0px; outline: 0px;
             padding: 8px;
+            font-family: {ui_popup_font_family_css()};
+            font-size: 14px;
+            font-weight: 500;
         }}
         QComboBox QAbstractItemView::item {{
             min-height: 28px; padding: 7px 10px; border-radius: 0px;
@@ -668,8 +688,8 @@ def build_qt_palette():
     palette.setColor(QPalette.ColorRole.WindowText, QColor(TEXT_COLOR))
     palette.setColor(QPalette.ColorRole.Base, QColor(FIELD_COLOR))
     palette.setColor(QPalette.ColorRole.AlternateBase, QColor(PANEL_ELEVATED_COLOR))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(PANEL_COLOR))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(TEXT_COLOR))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(TOOLTIP_BG_COLOR))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(TOOLTIP_TEXT_COLOR))
     palette.setColor(QPalette.ColorRole.Text, QColor(FIELD_TEXT_COLOR))
     palette.setColor(QPalette.ColorRole.Button, QColor(PANEL_ELEVATED_COLOR))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(TEXT_COLOR))
@@ -682,7 +702,10 @@ def apply_app_theme(app=None, mode=None, settings=None):
     set_ui_theme(mode, settings)
     app = app or QApplication.instance()
     if app:
-        app.setPalette(build_qt_palette())
+        palette = build_qt_palette()
+        app.setPalette(palette)
+        QToolTip.setPalette(palette)
+        QToolTip.setFont(app_font(10, QFont.Weight.Medium))
         app.setStyleSheet(application_stylesheet())
     return CURRENT_THEME
 
@@ -711,21 +734,25 @@ def application_stylesheet():
         QPlainTextEdit, QListWidget, QTreeWidget, QMenu, QAbstractItemView {{
             outline: none;
         }}
-        QToolTip {{
-            background: {MENU_BG_COLOR};
-            color: {TEXT_COLOR};
-            border: 0px solid transparent;
-            border-radius: 0px;
+        QToolTip, QTipLabel {{
+            background: {TOOLTIP_BG_COLOR};
+            background-color: {TOOLTIP_BG_COLOR};
+            color: {TOOLTIP_TEXT_COLOR};
+            border: 1px solid {SOFT_LINE_COLOR};
+            border-radius: 5px;
             padding: 6px 8px;
+            font-family: {ui_popup_font_family_css()};
             font-size: 12px;
+            font-weight: 600;
         }}
         QMenu {{
             background-color: {MENU_BG_COLOR};
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 0px;
-            font-family: {ui_font_family_css()};
+            font-family: {ui_popup_font_family_css()};
             font-size: 14px;
+            font-weight: 500;
             padding: 7px;
         }}
         QMenu::item {{
@@ -778,8 +805,9 @@ def menu_stylesheet():
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
             border-radius: 0px;
-            font-family: {ui_font_family_css()};
+            font-family: {ui_popup_font_family_css()};
             font-size: 14px;
+            font-weight: 500;
             padding: 7px;
         }}
         QMenu::item {{ padding: 9px 30px 9px 10px; border-radius: 0px; min-width: 118px; }}

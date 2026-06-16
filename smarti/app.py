@@ -11,10 +11,12 @@ INSTANCE_SERVER_NAME = "SmartiAI-Agent-for-Windows"
 _UPDATE_MUTEX_HANDLE = None
 
 class StartupWorker(QThread):
+    status_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(object, str)
 
     def run(self):
         try:
+            self.status_signal.emit("טוען הגדרות, זיכרון וכלים מקומיים...")
             self.finished_signal.emit(SmartiCore(), "")
         except Exception as exc:
             logging.exception("Smarti startup failed.")
@@ -82,18 +84,15 @@ def main():
     app._smarti_update_mutex_handle = _create_update_mutex()
 
     splash_size, border_width, radius = QSize(500, 310), 1, 30
-    gif_path = os.path.join(ASSETS_DIR, "logo.gif")
-    if not os.path.exists(gif_path):
-        gif_candidates = [p for p in glob.glob(os.path.join(ASSETS_DIR, "logo*.gif")) if os.path.getsize(p) < 5_000_000]
-        if gif_candidates: gif_path = gif_candidates[0]
-
-    splash = AnimatedSplash(gif_path, os.path.join(ASSETS_DIR, "logo.png"), splash_size, ACCENT_COLOR, border_width, radius, BG_COLOR)
+    splash = AnimatedSplash(os.path.join(ASSETS_DIR, "logo.png"), splash_size, ACCENT_COLOR, border_width, radius, BG_COLOR)
     splash.center_on_screen()
     splash.show()
     app.processEvents()
 
+    splash.set_status("בודק נתוני ריצה מקומיים...")
     migrate_legacy_runtime_state()
     accepted_legal_this_run = False
+    splash.set_status("בודק אישור תנאי שימוש...")
     if not raw_settings_have_current_legal_acceptance():
         splash.hide()
         legal_dialog = LegalAgreementDialog()
@@ -116,15 +115,21 @@ def main():
             app.quit()
             return
         if accepted_legal_this_run:
+            splash.set_status("שומר אישור תנאי שימוש...")
             record_legal_acceptance(core)
+        splash.set_status("מחיל ערכת תצוגה והגדרות...")
         apply_app_theme(app, settings=core.settings)
+        splash.set_status("מכין את חלון השיחה...")
         window = ChatWindow(core)
         app._smarti_main_window = window
         if instance_server:
+            splash.set_status("מחבר הפעלה יחידה של סמארטי...")
             window.attach_instance_server(instance_server)
+        splash.set_status("מסיים פתיחה...")
         window.show()
         splash.finish(window)
 
+    startup_worker.status_signal.connect(splash.set_status)
     startup_worker.finished_signal.connect(finish_startup)
     startup_worker.finished.connect(lambda: setattr(app, "_smarti_startup_worker", None))
     startup_worker.start()

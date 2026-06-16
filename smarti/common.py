@@ -290,6 +290,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QG
                              QHBoxLayout, QTextEdit, QPlainTextEdit, QPushButton, QLabel,
                              QScrollArea, QFrame, QMenu, QLineEdit, QTextBrowser, QProgressBar,
                              QCheckBox, QFormLayout, QSizePolicy, QMessageBox, QComboBox, QSystemTrayIcon, QSlider, QStackedWidget, QStyleOptionButton, QStyle, QGraphicsOpacityEffect, QGraphicsEffect, QGraphicsDropShadowEffect, QFileDialog, QDialog, QDialogButtonBox, QInputDialog, QListWidget, QListWidgetItem, QAbstractItemView)
+from PyQt6.QtWidgets import QToolTip
 from PyQt6.QtCore import Qt, QEvent, QThread, pyqtSignal, QSize, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QElapsedTimer, QRectF, QUrl
 from PyQt6.QtGui import QIcon, QFont, QFontDatabase, QFontMetrics, QPixmap, QCursor, QColor, QPainter, QPainterPath, QPen, QMovie, QTextOption, QPalette, QTextCursor, QLinearGradient, QBrush, QImage, QDesktopServices
 

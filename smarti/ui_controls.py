@@ -87,7 +87,8 @@ class NoScrollComboBox(QComboBox):
         view.setStyleSheet(
             f"QAbstractItemView {{ background-color: {MENU_BG_COLOR}; color: {TEXT_COLOR}; "
             f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 0px; padding: 8px; outline: 0px; "
-            f"selection-background-color: {ACCENT_TINT_STRONG}; selection-color: {TEXT_COLOR}; }}"
+            f"selection-background-color: {ACCENT_TINT_STRONG}; selection-color: {TEXT_COLOR}; "
+            f"font-family: {ui_popup_font_family_css()}; font-size: 14px; font-weight: 500; }}"
             f"QAbstractItemView::item {{ min-height: 28px; padding: 7px 10px; border-radius: 0px; }}"
             f"QAbstractItemView::item:hover {{ background-color: {HOVER_TINT}; }}"
             f"QAbstractItemView::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}"
@@ -158,7 +159,8 @@ class SearchableModelComboBox(NoScrollComboBox):
         if self.results_list:
             self.results_list.setStyleSheet(
                 f"QListWidget {{ background-color: {MENU_BG_COLOR}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-                f"border-radius: 0px; padding: 4px; outline: none; }}"
+                f"border-radius: 0px; padding: 4px; outline: none; "
+                f"font-family: {ui_popup_font_family_css()}; font-size: 14px; font-weight: 500; }}"
                 f"QListWidget viewport {{ background-color: {MENU_BG_COLOR}; }}"
                 f"QListWidget::item {{ padding: 4px 6px; border-radius: 0px; }}"
                 f"QListWidget::item:hover {{ background-color: {HOVER_TINT}; }}"
