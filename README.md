@@ -104,6 +104,7 @@ pythonw smarti_core.pyw
 - Voice input requires a working microphone, `SpeechRecognition`, `keyboard`, and `PyAudio`.
 - OCR requires `pytesseract`, `Pillow`, and a system Tesseract OCR installation available in `PATH`.
 - Usage-cost estimates are richer when `litellm` is installed.
+- Live Visual Canvas is experimental and off by default. For source runs install `pip install -r requirements-web-canvas.txt`, then enable **קנבס חזותי מתקדם** under Settings → Tools & Communication → Advanced. It uses an isolated local WebEngine profile; network, external files, downloads, popups, and media permissions are blocked by default. The separate **אפשר תמונות HTTPS מהרשת בתוך קנבס** setting permits HTTPS image resources only; navigation and every other external request remain blocked.
 - Packaged releases include a private Python runtime used for custom Python tools, MCP support, and Skill dependency installs.
 
 ## Building a Windows Release

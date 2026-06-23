@@ -5,6 +5,7 @@ from .core import SmartiCore
 from .chat import ChatWindow, AnimatedSplash
 from .legal import LegalAgreementDialog, raw_settings_have_current_legal_acceptance, record_legal_acceptance
 from .windows_notifications import ensure_windows_notification_identity
+from .visual_canvas import prepare_webengine_runtime, register_canvas_scheme
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
 INSTANCE_SERVER_NAME = "SmartiAI-Agent-for-Windows"
@@ -68,6 +69,8 @@ def main():
     except Exception:
         pass
 
+    prepare_webengine_runtime()
+    register_canvas_scheme()
     app = QApplication(sys.argv)
     app.setApplicationName(SMARTI_APP_DISPLAY_NAME)
     app.setApplicationDisplayName(SMARTI_APP_DISPLAY_NAME)

@@ -3,6 +3,7 @@ from .common import *
 from .config import *
 from .ui_styles import *
 from .ui_controls import *
+from .visual_canvas import web_canvas_available
 from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker, EmailConnectionTestWorker
 from PyQt6.QtGui import QKeySequence, QShortcut
 
@@ -2647,6 +2648,26 @@ class SettingsPage(QWidget):
         self.skills_beta_cb = SmartiCheckBox("Skills בטא")
         self.skills_beta_cb.setChecked(self.core.settings.get("enable_skills_beta", True))
         self.skills_beta_cb.setStyleSheet(CHECKBOX_CSS)
+        self.web_canvas_cb = SmartiCheckBox("קנבס חזותי מתקדם (ניסיוני)")
+        self.web_canvas_cb.setChecked(
+            bool(self.core.settings.get("enable_visual_surfaces", False) and self.core.settings.get("enable_web_canvas", False))
+        )
+        self.web_canvas_cb.setStyleSheet(CHECKBOX_CSS)
+        self.web_canvas_cb.setEnabled(web_canvas_available())
+        if not web_canvas_available():
+            self.web_canvas_cb.setToolTip("נדרש PyQt6-WebEngine. התקן/י את requirements-web-canvas.txt כדי להפעיל קנבס.")
+        self.web_canvas_remote_images_cb = SmartiCheckBox("אפשר תמונות HTTPS מהרשת בתוך קנבס")
+        self.web_canvas_remote_images_cb.setChecked(bool(self.core.settings.get("enable_canvas_remote_images", False)))
+        self.web_canvas_remote_images_cb.setStyleSheet(CHECKBOX_CSS)
+        self.web_canvas_remote_images_cb.setToolTip(
+            "מתיר לקנבס לטעון תמונות HTTPS שהמודל בחר. הקנבס עדיין חוסם ניווט, הורדות, קבצים, חלונות קופצים וקריאות רשת אחרות."
+        )
+
+        def refresh_remote_canvas_images_enabled(_checked=None):
+            self.web_canvas_remote_images_cb.setEnabled(web_canvas_available() and self.web_canvas_cb.isChecked())
+
+        self.web_canvas_cb.toggled.connect(refresh_remote_canvas_images_enabled)
+        refresh_remote_canvas_images_enabled()
 
         self.email = QLineEdit(self.core.settings.get("email_address", ""))
         self.pwd = QLineEdit(self.core.settings.get("email_password", ""))
@@ -3117,6 +3138,8 @@ class SettingsPage(QWidget):
         self._add_checkbox(self.computer_control_cb, tools, "קריאת עץ הנגישות של Windows ופעולה על רכיבים מזוהים.", keywords="computer control windows accessibility ui automation mouse keyboard")
         self._add_checkbox(self.mcp_cb, tools, "שימוש בכלים חיצוניים שמרחיבים את סמארטי, בכפוף להרשאות.", keywords="mcp external tools extensions")
         self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows beta instructions", advanced=True)
+        self._add_checkbox(self.web_canvas_cb, tools, "מוסיף קנבס HTML מקומי ומבודד לצד הצ'אט עבור בקשות חזותיות מפורשות בלבד. רכיב WebEngine נדרש; הקנבס חוסם רשת, קבצים חיצוניים, הורדות וחלונות קופצים.", keywords="canvas visual dashboard graph form chart mermaid webengine html interactive", advanced=True)
+        self._add_checkbox(self.web_canvas_remote_images_cb, tools, "מאפשר רק טעינת תמונות HTTPS שנבחרו לקנבס. ניווט, הורדות, קבצים, חלונות קופצים ושאר בקשות הרשת נותרים חסומים.", keywords="canvas remote image https web image visual", advanced=True)
         # Google Drive settings section is intentionally hidden for now.
         self._add_section_header("אימייל", tools)
         self._add_field("כתובת אימייל", self.email, tools, "כתובת האימייל שממנה סמארטי יקרא או ישלח הודעות, אם אישרת שימוש באימייל.", keywords="email address account username login")
@@ -3428,7 +3451,7 @@ class SettingsPage(QWidget):
         for cb in [
             self.sandbox_cb, self.sandbox_read_outside_cb, self.redact_logs_cb, self.audit_log_cb,
             self.developer_trace_cb, self.raw_shell_approval_cb, self.marketplace_approval_cb,
-            self.browser_auto_cb, self.computer_control_cb, self.mcp_cb, self.skills_beta_cb,
+            self.browser_auto_cb, self.computer_control_cb, self.mcp_cb, self.skills_beta_cb, self.web_canvas_cb, self.web_canvas_remote_images_cb,
             self.update_auto_cb,
             self.tts_cb, self.tts_voice_cb, self.insecure_ssl_cb, self.cloud_upload_cb,
             self.write_outside_dirs_approval_cb, self.mcp_pin_cb,
@@ -3766,6 +3789,11 @@ class SettingsPage(QWidget):
         self.core.settings["voice_beep_enabled"] = self.voice_beep_cb.isChecked()
         self.core.settings["enable_mcp_clawhub"] = self.mcp_cb.isChecked()
         self.core.settings["enable_skills_beta"] = self.skills_beta_cb.isChecked()
+        self.core.settings["enable_visual_surfaces"] = self.web_canvas_cb.isChecked()
+        self.core.settings["enable_web_canvas"] = self.web_canvas_cb.isChecked()
+        self.core.settings["enable_canvas_remote_images"] = bool(
+            self.web_canvas_cb.isChecked() and self.web_canvas_remote_images_cb.isChecked()
+        )
         self.core.settings["updates_auto_check"] = self.update_auto_cb.isChecked()
         self.core.settings["updates_check_interval_hours"] = 1
         self.core.settings["enable_browser_automation"] = self.browser_auto_cb.isChecked()
@@ -3818,6 +3846,10 @@ class SettingsPage(QWidget):
         self.core._save_settings()
         model_reload_keys = {"api_mode", "local_server_url"} | model_provider_secret_keys()
         needs_model_reload = any(key in model_reload_keys or key.startswith("selected_") for key in changed)
+        needs_canvas_prompt_refresh = any(
+            key in {"enable_visual_surfaces", "enable_web_canvas", "enable_canvas_remote_images"}
+            for key in changed
+        )
         needs_mcp_refresh = any(key in {
             "enable_mcp_clawhub", "enable_skills_beta", "mcp_require_pinned_versions",
             "mcp_allowed_directories", "allow_insecure_ssl_compat",
@@ -3825,8 +3857,9 @@ class SettingsPage(QWidget):
         if needs_mcp_refresh:
             self.core._sync_trusted_mcp_packages()
             self.core._ensure_mcp_config()
-        if needs_model_reload:
+        if needs_model_reload or needs_canvas_prompt_refresh:
             self.core.system_prompt = self.core._load_system_prompt()
+        if needs_model_reload:
             self.core.setup_model()
         logging.info(f"SETTINGS | auto_saved | changed={', '.join(changed[:16])}{'...' if len(changed) > 16 else ''}")
         if getattr(self.core, "audit_logger", None):

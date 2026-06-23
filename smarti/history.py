@@ -329,6 +329,29 @@ class ChatSessionStore:
             self._save()
             return True
 
+    def update_canvas_layout(self, canvas_id, button_positions, session_id=None):
+        """Persist live DOM button positions inside the owning assistant message."""
+        canvas_id = str(canvas_id or "").strip()
+        if not canvas_id or not isinstance(button_positions, list):
+            return False
+        with self._lock:
+            session = self._session_by_id(session_id or self.data.get("active_session_id"))
+            if not session:
+                return False
+            for message in reversed(session.get("messages", [])):
+                metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
+                canvases = metadata.get("canvases") if isinstance(metadata, dict) else None
+                if not isinstance(canvases, list):
+                    continue
+                for canvas in canvases:
+                    if isinstance(canvas, dict) and str(canvas.get("id") or "") == canvas_id:
+                        canvas["button_positions"] = copy.deepcopy(button_positions)
+                        canvas["layout_updated_at"] = _now_iso()
+                        session["updated_at"] = _now_iso()
+                        self._save()
+                        return True
+        return False
+
     def rename_session(self, session_id, title):
         with self._lock:
             session = self._session_by_id(session_id)

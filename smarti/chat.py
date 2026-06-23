@@ -12,9 +12,10 @@ from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage,
 from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
+from .visual_canvas import VisualCanvasPanel, normalize_canvas_artifact, web_canvas_available
 from PyQt6.QtCore import QEvent, QEventLoop
 from PyQt6.QtGui import QTextDocument, QTransform
-from PyQt6.QtWidgets import QBoxLayout
+from PyQt6.QtWidgets import QBoxLayout, QSplitter
 
 _LEGACY_WELCOME_PROMPTS = [
     "היי {name}, איך אוכל לעזור לך היום? אפשר לסכם קובץ, לחפש מידע או לארגן משימה.",
@@ -1754,14 +1755,78 @@ class AgentToolGroupWidget(QWidget):
         self.show_thinking()
         self.show()
 
+class CanvasOpenButton(QPushButton):
+    """A themed canvas trigger that wraps naturally, with a strict two-line cap."""
+
+    MAX_LINES = 2
+
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setAccessibleName(str(text or "פתח קנבס"))
+
+    def _display_lines(self, width):
+        available = max(80, int(width) - 32)
+        words = str(self.text() or "").split()
+        if not words:
+            return [""]
+        metrics = QFontMetrics(self.font())
+        lines = []
+        current = ""
+        for index, word in enumerate(words):
+            candidate = f"{current} {word}".strip()
+            if not current or metrics.horizontalAdvance(candidate) <= available:
+                current = candidate
+                continue
+            lines.append(current)
+            current = word
+            if len(lines) == self.MAX_LINES - 1:
+                remainder = " ".join([current, *words[index + 1:]])
+                lines.append(metrics.elidedText(remainder, Qt.TextElideMode.ElideRight, available))
+                return lines
+        if current:
+            lines.append(current)
+        return lines[:self.MAX_LINES]
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        line_count = max(1, len(self._display_lines(width)))
+        return max(44, line_count * QFontMetrics(self.font()).lineSpacing() + 20)
+
+    def sizeHint(self):
+        width = min(420, max(260, super().sizeHint().width()))
+        return QSize(width, self.heightForWidth(width))
+
+    def minimumSizeHint(self):
+        return QSize(200, self.heightForWidth(240))
+
+    def paintEvent(self, event):
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = ""
+        painter = QPainter(self)
+        self.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self)
+        painter.setPen(option.palette.buttonText().color())
+        text_rect = self.contentsRect().adjusted(16, 8, -16, -8)
+        painter.drawText(
+            text_rect,
+            int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+            "\n".join(self._display_lines(text_rect.width())),
+        )
+        painter.end()
+
+
 class MessageBubble(QFrame):
     user_collapse_changed = pyqtSignal(bool, bool)
+    canvas_open_requested = pyqtSignal(object)
 
     USER_COLLAPSED_LINES = 6
     WIDGET_MAX_HEIGHT = 16777215
     PROCESS_CHEVRON_ICON_NAMES = ("agent_process_chevron", "message_collapse_arrow")
 
-    def __init__(self, text, is_user=False, parent_width=450, attachments=None, is_background_task=False):
+    def __init__(self, text, is_user=False, parent_width=450, attachments=None, canvases=None, is_background_task=False):
         super().__init__()
         self.is_background_task = is_background_task
         self.is_user = is_user
@@ -1778,6 +1843,8 @@ class MessageBubble(QFrame):
             self.max_w = max(240, int(parent_width or 450) - 52)
         self.copy_text = str(text or "")
         self.attachments = normalize_attachments(attachments or [])
+        self.canvas_artifacts = [artifact for item in (canvases or []) if (artifact := normalize_canvas_artifact(item))]
+        self._canvas_buttons = []
         self.code_blocks = []
         self._user_message_collapsible = False
         self._user_message_collapsed = True
@@ -1787,6 +1854,17 @@ class MessageBubble(QFrame):
         self.steps_layout = QVBoxLayout(self.steps_container)
         self.steps_layout.setContentsMargins(0, 0, 0, 8)
         self.steps_layout.setSpacing(8)
+
+        # Kept separate from the agent-process groups so a direct model answer
+        # can show the familiar shimmer before there are tools or reports.
+        self.initial_thinking_label = StepsShimmerLabel()
+        self.initial_thinking_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.initial_thinking_label.setWordWrap(True)
+        self.initial_thinking_label.setMaximumWidth(self.max_w)
+        self.initial_thinking_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.initial_thinking_label.hide()
 
         self.process_header = QFrame()
         self.process_header.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1820,8 +1898,11 @@ class MessageBubble(QFrame):
 
         self.steps_label = QLabel()
         self.steps_label.hide()
+        self.steps_layout.addWidget(self.initial_thinking_label)
         self.steps_layout.addWidget(self.process_header)
         self.steps_layout.addWidget(self.process_details)
+        self.process_header.hide()
+        self.process_details.hide()
         self.steps_container.hide()
         
         self.final_label = QLabel(self)
@@ -1929,6 +2010,7 @@ class MessageBubble(QFrame):
         self.process_arrow_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; background: transparent;")
         self.toggle_btn.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent; padding: 0px;")
         self.steps_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
+        self.initial_thinking_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 15px; background: transparent;")
         for group in getattr(self, "agent_process_groups", []):
             group.apply_theme()
         for label in self.findChildren(QLabel):
@@ -1946,6 +2028,10 @@ class MessageBubble(QFrame):
             block.apply_theme()
         for tile in self.findChildren(AttachmentTile):
             tile.apply_theme()
+        for button in getattr(self, "_canvas_buttons", []):
+            button.setStyleSheet(self._canvas_button_stylesheet())
+            button.ensurePolished()
+            button.setFixedHeight(button.heightForWidth(button.width() or self.max_w))
         self._apply_user_message_collapse_state()
         if self.is_user:
             apply_soft_shadow(self, blur=22, y=7, alpha=30)
@@ -1960,6 +2046,7 @@ class MessageBubble(QFrame):
         self.process_header.setMaximumWidth(self.max_w)
         self._fit_process_header_label_width()
         self.steps_label.setMaximumWidth(self.max_w)
+        self.initial_thinking_label.setMaximumWidth(self.max_w)
         self.final_label.setMaximumWidth(self.max_w)
         for label in getattr(self, "agent_report_labels", []):
             label.setMaximumWidth(self.max_w)
@@ -1970,6 +2057,10 @@ class MessageBubble(QFrame):
             block.update_parent_width(self.max_w)
         for tile in self.findChildren(AttachmentTile):
             tile.setMaximumWidth(self.max_w)
+        for button in getattr(self, "_canvas_buttons", []):
+            button.setFixedWidth(self.max_w)
+            button.ensurePolished()
+            button.setFixedHeight(button.heightForWidth(self.max_w))
         self._apply_agent_process_width_lock()
         self._refresh_layout()
 
@@ -2135,6 +2226,47 @@ class MessageBubble(QFrame):
             tile.setMaximumWidth(self.max_w)
             self.final_layout.addWidget(tile)
 
+    def _canvas_button_stylesheet(self):
+        border = ACCENT_PINK_COLOR if CURRENT_THEME == "dark" else ACCENT_COLOR
+        return (
+            f"QPushButton {{ background: {ACCENT_TINT}; color: {TEXT_COLOR}; border: 1px solid {border}; "
+            f"border-radius: 17px; padding: 9px 16px; font-size: 14px; font-weight: 800; text-align: center; }}"
+            f"QPushButton:hover {{ background: {ACCENT_TINT_STRONG}; border-color: {ACCENT_COLOR}; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_COLOR}; color: {ACCENT_TEXT_COLOR}; }}"
+        )
+
+    def _add_canvas_buttons(self):
+        for button in self._canvas_buttons:
+            try:
+                self.final_layout.removeWidget(button)
+                button.setParent(None)
+                button.deleteLater()
+            except RuntimeError:
+                pass
+        self._canvas_buttons = []
+        if self.is_user:
+            return
+        for artifact in self.canvas_artifacts:
+            if artifact.get("closed"):
+                continue
+            button = CanvasOpenButton(f"פתח קנבס  •  {artifact.get('title', 'קנבס של סמארטי')}")
+            button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            button.setStyleSheet(self._canvas_button_stylesheet())
+            button.ensurePolished()
+            button.setFixedWidth(self.max_w)
+            button.setFixedHeight(button.heightForWidth(self.max_w))
+            button.setToolTip("פתיחת הקנבס לצד השיחה")
+            button.clicked.connect(lambda checked=False, item=copy.deepcopy(artifact): self.canvas_open_requested.emit(item))
+            self.final_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignRight)
+            self._canvas_buttons.append(button)
+
+    def set_canvas_artifacts(self, canvases):
+        self.canvas_artifacts = [artifact for item in (canvases or []) if (artifact := normalize_canvas_artifact(item))]
+        if self.final_content.isVisible():
+            self._add_canvas_buttons()
+            self._refresh_layout()
+
     def _render_markdown_segment(self, segment):
         text = str(segment or "").strip("\n")
         return _render_markdown_html(text, self._link_color(), self.is_user, style_blocks=True)
@@ -2210,11 +2342,13 @@ class MessageBubble(QFrame):
     def _ensure_agent_process_started(self):
         if self.agent_process_started:
             return
+        self.hide_initial_thinking()
         self.agent_process_started = True
         self.agent_process_finalized = False
         self.agent_process_start_time = time.time()
         self.agent_process_elapsed_seconds = 0
         self.is_expanded = True
+        self.process_header.show()
         self.process_details.show()
         self.steps_container.show()
         self.agent_process_timer.start()
@@ -2238,6 +2372,23 @@ class MessageBubble(QFrame):
         if self.current_process_group is None:
             return self._new_agent_process_group()
         return self.current_process_group
+
+    def show_initial_thinking(self):
+        """Show the delayed waiting state before a direct model response arrives."""
+        if self.is_user or self.agent_process_started or self.copy_text or self.final_layout.count():
+            return False
+        self.initial_thinking_label.setText("חושב...")
+        self.initial_thinking_label.show()
+        self.initial_thinking_label.start_shimmer()
+        self.steps_container.show()
+        self._refresh_layout()
+        return True
+
+    def hide_initial_thinking(self):
+        self.initial_thinking_label.stop_shimmer()
+        self.initial_thinking_label.hide()
+        if not self.agent_process_started:
+            self.steps_container.hide()
 
     def add_agent_report(self, text):
         display_text = _repair_markdown_links(html.unescape(str(text or ""))).strip()
@@ -2318,6 +2469,7 @@ class MessageBubble(QFrame):
         self.add_agent_report(_clean_step_for_display(str(step_text or "").replace('\n', ' ')))
             
     def set_final_text(self, final_text):
+        self.hide_initial_thinking()
         if not final_text: return
         display_text = _repair_markdown_links(html.unescape(str(final_text)))
         render_text, technical_details = _split_technical_details(display_text)
@@ -2358,6 +2510,7 @@ class MessageBubble(QFrame):
                         self.final_layout.addWidget(self._new_text_label(rendered_html))
             if technical_details:
                 self.final_layout.addWidget(self._new_text_label(self._technical_details_html(technical_details)))
+        self._add_canvas_buttons()
         if self.steps_text_html: self.collapse_steps()
         self._refresh_layout()
 
@@ -2402,18 +2555,19 @@ class MessageBubble(QFrame):
 
 class ChatMessageContainer(QWidget):
     tts_button_clicked = pyqtSignal(object)
+    canvas_open_requested = pyqtSignal(object)
 
     ACTION_BUTTON_SIZE = 36
     ACTION_ICON_SIZE = 22
     ACTION_ROW_HEIGHT = 40
 
-    def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None, is_background_task=False, parent=None):
+    def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None, canvases=None, is_background_task=False, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setStyleSheet("background: transparent;")
-        self.bubble = MessageBubble(text, is_user, parent_width, attachments=attachments, is_background_task=is_background_task)
+        self.bubble = MessageBubble(text, is_user, parent_width, attachments=attachments, canvases=canvases, is_background_task=is_background_task)
         self.is_user = is_user
         self.show_actions = bool(show_actions)
         self._tts_active = False
@@ -2504,6 +2658,7 @@ class ChatMessageContainer(QWidget):
         self._enter_anim = None
         self._enter_slide_anim = None
         self.bubble.user_collapse_changed.connect(self.update_user_collapse_button_state)
+        self.bubble.canvas_open_requested.connect(lambda artifact: self.canvas_open_requested.emit(artifact))
         self.apply_theme()
         self.update_user_collapse_button_state(*self.bubble.user_collapse_state())
 
@@ -3826,6 +3981,7 @@ class ChatWindow(QMainWindow):
     gui_message_signal = pyqtSignal(str, bool)
     tts_status_signal = pyqtSignal(bool)
     core_notification_signal = pyqtSignal(str, object)
+    INITIAL_THINKING_DELAY_MS = 1200
     voice_hotkey_signal = pyqtSignal()
     background_task_start_signal = pyqtSignal(str, str, str)
     background_task_step_signal = pyqtSignal(str, object)
@@ -3877,6 +4033,11 @@ class ChatWindow(QMainWindow):
         self._update_dialog = None
         self._update_check_source = None
         self.pending_attachments = []
+        self._canvas_expanded = False
+        self._compact_window_size = None
+        self._pending_canvas_layout = None
+        self._canvas_layout_save_scheduled = False
+        self._canvas_taskbar_alignment_scheduled = False
         self._background_task_containers = {}
         self.taskbar_attention = TaskbarAttentionController(self)
         self.notifications = WindowsNotificationCenter(self)
@@ -3933,8 +4094,9 @@ class ChatWindow(QMainWindow):
             self.resize(target_w, target_h)
             self.move(
                 available.x() + max(0, (available.width() - target_w) // 2),
-                available.y() + max(0, (available.height() - target_h) // 2)
+                available.bottom() - target_h + 1
             )
+            self._schedule_canvas_taskbar_alignment()
         else:
             self.resize(450, 760) 
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -4748,6 +4910,16 @@ class ChatWindow(QMainWindow):
         )
         if hasattr(self, "chat_page"):
             self.chat_page.setStyleSheet(self._chat_page_stylesheet())
+        if hasattr(self, "chat_splitter"):
+            self.chat_splitter.setStyleSheet(f"QSplitter::handle {{ background: {SOFT_LINE_COLOR}; margin: 18px 0; border-radius: 3px; }}")
+        if hasattr(self, "canvas_panel"):
+            self.canvas_panel.apply_theme({
+                "text": TEXT_COLOR,
+                "muted": MUTED_TEXT_COLOR,
+                "accent": ACCENT_COLOR,
+                "line": SOFT_LINE_COLOR,
+                "glass": GLASS_STRONG_COLOR,
+            })
         if hasattr(self, "top_bar"):
             self.top_bar.setStyleSheet(self._top_bar_stylesheet())
         if hasattr(self, "menu_btn"):
@@ -4939,6 +5111,8 @@ class ChatWindow(QMainWindow):
         main_layout.addWidget(self.header_line)
 
         self.chat_body = QWidget()
+        self.chat_body.setMinimumWidth(0)
+        self.chat_body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.chat_body.setStyleSheet("background: transparent;")
         body_layout = QGridLayout(self.chat_body)
         body_layout.setContentsMargins(0, 0, 0, 0)
@@ -4946,9 +5120,12 @@ class ChatWindow(QMainWindow):
         
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setMinimumWidth(0)
+        self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS) 
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.chat_widget = QWidget()
+        self.chat_widget.setMinimumWidth(0)
         self.chat_widget.setStyleSheet("background: transparent;")
         self.chat_layout = QVBoxLayout(self.chat_widget)
         self.chat_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -5062,7 +5239,20 @@ class ChatWindow(QMainWindow):
         overlay_layout.addLayout(bottom_layout)
         body_layout.addWidget(self.input_overlay, 0, 0, Qt.AlignmentFlag.AlignBottom)
         self.input_overlay.raise_()
-        main_layout.addWidget(self.chat_body, 1)
+        self.chat_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.chat_splitter.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.chat_splitter.setChildrenCollapsible(False)
+        self.chat_splitter.setHandleWidth(7)
+        self.canvas_panel = VisualCanvasPanel(self.chat_splitter)
+        self.canvas_panel.close_requested.connect(self.close_canvas)
+        self.canvas_panel.canvas_action_requested.connect(self.handle_canvas_action)
+        self.canvas_panel.canvas_layout_captured.connect(self.handle_canvas_layout)
+        self.chat_splitter.addWidget(self.canvas_panel)
+        self.chat_splitter.addWidget(self.chat_body)
+        self.chat_splitter.splitterMoved.connect(lambda _position, _index: self._schedule_chat_width_refresh())
+        self.canvas_panel.hide()
+        self.chat_splitter.setSizes([0, max(1, self.width())])
+        main_layout.addWidget(self.chat_splitter, 1)
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
     def _reset_page_scrolls(self, page):
@@ -5079,6 +5269,7 @@ class ChatWindow(QMainWindow):
         QTimer.singleShot(0, reset)
 
     def show_usage_page(self):
+        self._close_canvas_for_secondary_page()
         if self.usage_page is None:
             self.usage_page = UsageStatsPage(self.core, self)
             self.stacked_widget.addWidget(self.usage_page)
@@ -5087,6 +5278,7 @@ class ChatWindow(QMainWindow):
         self._reset_page_scrolls(self.usage_page)
 
     def show_settings_page(self):
+        self._close_canvas_for_secondary_page()
         if self.settings_page is None:
             self.settings_page = SettingsPage(self.core, self)
             self.stacked_widget.addWidget(self.settings_page)
@@ -5103,6 +5295,7 @@ class ChatWindow(QMainWindow):
         self.show_settings_page()
 
     def show_tools_page(self):
+        self._close_canvas_for_secondary_page()
         if self.tools_page is not None:
             self.stacked_widget.removeWidget(self.tools_page)
             self.tools_page.deleteLater()
@@ -5112,6 +5305,7 @@ class ChatWindow(QMainWindow):
         self._reset_page_scrolls(self.tools_page)
 
     def show_task_center_page(self):
+        self._close_canvas_for_secondary_page()
         if self.task_center_page is None:
             self.task_center_page = TaskCenterPage(self.core, self)
             self.stacked_widget.addWidget(self.task_center_page)
@@ -5120,6 +5314,7 @@ class ChatWindow(QMainWindow):
         self._reset_page_scrolls(self.task_center_page)
 
     def show_trace_page(self):
+        self._close_canvas_for_secondary_page()
         if self.trace_page is None:
             self.trace_page = DeveloperTracePage(self.core, self)
             self.stacked_widget.addWidget(self.trace_page)
@@ -5128,6 +5323,7 @@ class ChatWindow(QMainWindow):
         self._reset_page_scrolls(self.trace_page)
 
     def show_history_page(self):
+        self._close_canvas_for_secondary_page()
         if self.history_page is None:
             self.history_page = ChatHistoryPage(self.core, self)
             self.stacked_widget.addWidget(self.history_page)
@@ -5136,11 +5332,204 @@ class ChatWindow(QMainWindow):
         self._reset_page_scrolls(self.history_page)
 
     def show_about_page(self):
+        self._close_canvas_for_secondary_page()
         if self.about_page is None:
             self.about_page = AboutPage(self)
             self.stacked_widget.addWidget(self.about_page)
         self.stacked_widget.setCurrentWidget(self.about_page)
         self._reset_page_scrolls(self.about_page)
+
+    def _canvas_screen_geometry(self):
+        screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
+        # The available work area ends exactly at the Windows taskbar line.
+        return screen.availableGeometry() if screen else None
+
+    def _canvas_window_target_geometry(self, size=None):
+        available = self._canvas_screen_geometry()
+        if not available:
+            return None
+        target = size or self.size()
+        width = min(max(380, target.width()), available.width())
+        height = min(max(420, target.height()), available.height())
+        geometry = self.geometry()
+        frame = self.frameGeometry()
+        frame_left_offset = frame.x() - geometry.x()
+        frame_top_offset = frame.y() - geometry.y()
+        frame_width = width + max(0, frame.width() - geometry.width())
+        frame_height = height + max(0, frame.height() - geometry.height())
+        desired_frame_x = available.x() + max(0, (available.width() - frame_width) // 2)
+        desired_frame_y = available.bottom() - frame_height + 1
+        geometry.setWidth(width)
+        geometry.setHeight(height)
+        geometry.moveTo(desired_frame_x - frame_left_offset, desired_frame_y - frame_top_offset)
+        return geometry
+
+    def _schedule_canvas_taskbar_alignment(self):
+        if self._canvas_taskbar_alignment_scheduled:
+            return
+        self._canvas_taskbar_alignment_scheduled = True
+
+        def align():
+            self._canvas_taskbar_alignment_scheduled = False
+            self._align_canvas_frame_to_taskbar()
+
+        # On Windows frame margins are finalized just after a top-level window
+        # becomes visible or changes size. A delayed correction makes the outer
+        # frame, not merely the client area, sit on the work-area edge.
+        QTimer.singleShot(0, align)
+        QTimer.singleShot(120, align)
+
+    def _align_canvas_frame_to_taskbar(self):
+        if self.isMaximized() or self.isFullScreen():
+            return
+        available = self._canvas_screen_geometry()
+        if not available:
+            return
+        frame = self.frameGeometry()
+        desired_x = available.x() + max(0, (available.width() - frame.width()) // 2)
+        desired_y = available.bottom() - frame.height() + 1
+        dx = desired_x - frame.x()
+        dy = desired_y - frame.y()
+        if dx or dy:
+            self.move(self.x() + dx, self.y() + dy)
+
+    def _pin_window_bottom_center(self, size=None):
+        target = self._canvas_window_target_geometry(size)
+        if target is None:
+            return
+        self.setGeometry(target)
+        self._align_canvas_frame_to_taskbar()
+
+    def open_canvas(self, artifact):
+        artifact = normalize_canvas_artifact(artifact)
+        if not artifact:
+            QMessageBox.warning(self, "קנבס מתקדם", "נתוני הקנבס שנשמרו בשיחה אינם תקינים.")
+            return
+        if not web_canvas_available():
+            QMessageBox.information(self, "קנבס מתקדם", "כדי לפתוח את הקנבס יש להתקין את PyQt6-WebEngine. השיחה נשארת זמינה.")
+            return
+        if not self._canvas_expanded:
+            self._compact_window_size = QSize(self.width(), self.height())
+            self.setUpdatesEnabled(False)
+            try:
+                self._canvas_expanded = True
+                self.canvas_panel.show()
+                available = self._canvas_screen_geometry()
+                if available:
+                    width = min(1220, max(820, available.width() - 32))
+                    height = min(760, max(620, available.height() - 32))
+                    self._pin_window_bottom_center(QSize(width, height))
+                self._set_expanded_canvas_sizes()
+            finally:
+                self.setUpdatesEnabled(True)
+                self.update()
+        allow_remote_images = bool(
+            self.core.settings.get("enable_visual_surfaces", False)
+            and self.core.settings.get("enable_web_canvas", False)
+            and self.core.settings.get("enable_canvas_remote_images", False)
+        )
+        self.canvas_panel.show_canvas(artifact, allow_remote_images=allow_remote_images)
+        self.canvas_panel.show()
+        self._schedule_chat_width_refresh()
+        self._schedule_scroll_last_user_to_view_top(delays=(0, 100))
+
+    def close_canvas(self):
+        if not getattr(self, "_canvas_expanded", False):
+            return
+        self.setUpdatesEnabled(False)
+        try:
+            self.canvas_panel.hide()
+            self._canvas_expanded = False
+            compact = self._compact_window_size or QSize(450, 760)
+            self._pin_window_bottom_center(compact)
+            self._set_compact_chat_sizes()
+        finally:
+            self.setUpdatesEnabled(True)
+            self.update()
+        self._schedule_chat_width_refresh()
+
+    def _close_canvas_for_secondary_page(self):
+        if self._canvas_expanded:
+            self.close_canvas()
+
+    def _set_expanded_canvas_sizes(self):
+        if not hasattr(self, "chat_splitter"):
+            return
+        self.chat_splitter.setSizes([int(self.width() * 0.62), int(self.width() * 0.38)])
+        self._schedule_chat_width_refresh()
+
+    def _set_compact_chat_sizes(self):
+        if not hasattr(self, "chat_splitter"):
+            return
+        self.chat_splitter.setSizes([0, max(1, self.width())])
+        self._schedule_chat_width_refresh()
+
+    def handle_canvas_action(self, payload):
+        if not isinstance(payload, dict):
+            return
+        try:
+            encoded = json.dumps(payload, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return
+        if len(encoded) > 20_000:
+            QMessageBox.warning(self, "קנבס מתקדם", "הפעולה מהקנבס גדולה מדי לשליחה לסוכן.")
+            return
+        canvas_id = self.canvas_panel.canvas_id() if hasattr(self, "canvas_panel") else ""
+        message = f"[נתוני משתמש מהקנבס {canvas_id}]\n{encoded}"
+        if self.agent_running:
+            self.input_field.setPlainText(message)
+            self.input_field.setFocus()
+            return
+        self.add_message(message, is_user=True, anchor_user=True)
+        self.process_request(message)
+
+    def handle_canvas_layout(self, payload):
+        if not isinstance(payload, dict) or not hasattr(self, "canvas_panel"):
+            return
+        buttons = payload.get("buttons")
+        canvas_id = self.canvas_panel.canvas_id()
+        if not canvas_id or not isinstance(buttons, list):
+            return
+        cleaned_buttons = []
+        for index, button in enumerate(buttons[:80]):
+            if not isinstance(button, dict):
+                continue
+            item = {
+                "id": str(button.get("id") or f"dom-button-{index + 1}")[:80],
+                "label": str(button.get("label") or "")[:160],
+            }
+            for key in ("x", "y", "width", "height"):
+                try:
+                    item[key] = round(float(button.get(key, 0)), 2)
+                except (TypeError, ValueError):
+                    item[key] = 0.0
+            cleaned_buttons.append(item)
+        self._pending_canvas_layout = (canvas_id, cleaned_buttons)
+        if self._canvas_layout_save_scheduled:
+            return
+        self._canvas_layout_save_scheduled = True
+        QTimer.singleShot(450, self._save_canvas_layout)
+
+    def _save_canvas_layout(self):
+        self._canvas_layout_save_scheduled = False
+        item = self._pending_canvas_layout
+        self._pending_canvas_layout = None
+        if not item:
+            return
+        canvas_id, buttons = item
+        try:
+            self.core.update_canvas_layout(canvas_id, buttons)
+        except Exception as exc:
+            logging.warning("Canvas layout persistence failed: %s", exc)
+
+    def _latest_assistant_canvases(self):
+        for message in reversed(self.core.active_chat_messages()):
+            if message.get("role") != "assistant":
+                continue
+            metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
+            canvases = metadata.get("canvases", []) if isinstance(metadata, dict) else []
+            return canvases if isinstance(canvases, list) else []
+        return []
 
     def bring_to_front(self):
         self._clear_taskbar_attention()
@@ -5304,15 +5693,35 @@ class ChatWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         try:
-            available_width = self.scroll.viewport().width() or self.width()
-            for bubble in self.findChildren(MessageBubble):
-                bubble.update_parent_width(available_width)
+            self._schedule_chat_width_refresh()
             self._resize_quick_input_controls()
             self._update_chat_bottom_padding()
             if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
                 self.voice_overlay.position_near_owner()
         except Exception:
             pass
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # The native frame margins only become final after the first show on
+        # Windows. Align once more then so no edge can slip under the taskbar.
+        self._schedule_canvas_taskbar_alignment()
+
+    def _schedule_chat_width_refresh(self):
+        QTimer.singleShot(0, self._refresh_chat_message_widths)
+        QTimer.singleShot(100, self._refresh_chat_message_widths)
+
+    def _refresh_chat_message_widths(self):
+        if not hasattr(self, "scroll"):
+            return
+        available_width = self.scroll.viewport().width() or getattr(self, "chat_body", self).width() or self.width()
+        if available_width <= 0:
+            return
+        for bubble in self.findChildren(MessageBubble):
+            bubble.update_parent_width(available_width)
+        if hasattr(self, "chat_widget"):
+            self.chat_widget.updateGeometry()
+            self.chat_widget.adjustSize()
 
     def moveEvent(self, event):
         super().moveEvent(event)
@@ -5369,6 +5778,7 @@ class ChatWindow(QMainWindow):
 
     def _wire_message_container(self, container):
         container.tts_button_clicked.connect(self.handle_message_tts_button)
+        container.canvas_open_requested.connect(self.open_canvas)
         container.update_tts_button_state(False, self.tts_active)
 
     def _refresh_message_tts_buttons(self):
@@ -5568,7 +5978,7 @@ class ChatWindow(QMainWindow):
         self.update_action_btn_visuals()
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
-    def add_message(self, text, is_user, show_actions=True, attachments=None, anchor_user=False, is_background_task=False):
+    def add_message(self, text, is_user, show_actions=True, attachments=None, canvases=None, anchor_user=False, is_background_task=False):
         attachments = normalize_attachments(attachments or [])
         if not text and is_user and not attachments: return
         self._set_welcome_visible(False)
@@ -5579,6 +5989,7 @@ class ChatWindow(QMainWindow):
             available_width,
             show_actions=show_actions,
             attachments=attachments,
+            canvases=canvases,
             is_background_task=is_background_task,
             parent=self.chat_widget,
         )
@@ -5679,6 +6090,11 @@ class ChatWindow(QMainWindow):
         self.chat_layout.addWidget(self.current_agent_container)
         self.current_agent_container.hide() 
         self._schedule_scroll_last_user_to_view_top()
+        pending_bubble = self.current_agent_bubble
+        QTimer.singleShot(
+            self.INITIAL_THINKING_DELAY_MS,
+            lambda bubble=pending_bubble: self._show_delayed_initial_thinking(bubble),
+        )
         
         self.agent_thread = AgentWorker(self.core, text, attachments=attachments)
         self.agent_thread.status_signal.connect(lambda s: self.status_lbl.setText(s))
@@ -5687,6 +6103,20 @@ class ChatWindow(QMainWindow):
         self.agent_thread.step_signal.connect(self.on_agent_step)
         self.agent_thread.finished_signal.connect(self.on_agent_finished)
         self.agent_thread.start()
+
+    def _show_delayed_initial_thinking(self, bubble):
+        """Reveal a non-blocking response indicator only for a still-running request."""
+        if (
+            not self.agent_running
+            or bubble is None
+            or bubble is not self.current_agent_bubble
+            or not self.current_agent_container
+        ):
+            return
+        if bubble.show_initial_thinking():
+            bubble.show()
+            self.current_agent_container.reveal_with_entry_animation()
+            self._schedule_scroll_last_user_to_view_top(delays=(50, 160))
 
     def on_agent_step(self, step_text):
         if self.current_agent_bubble:
@@ -5806,6 +6236,7 @@ class ChatWindow(QMainWindow):
         self.input_field.setEnabled(True)
         self.input_field.setFocus()
         response_container = None
+        response_canvases = self._latest_assistant_canvases() if not response.startswith("ERROR_USER:") else []
         
         if response.startswith("ERROR_USER:"):
             msg = f"שגיאה: {response.replace('ERROR_USER:', '').strip()}"
@@ -5819,11 +6250,12 @@ class ChatWindow(QMainWindow):
             if self.current_agent_bubble:
                 self.current_agent_bubble.show()
                 self.current_agent_bubble.set_final_text(response)
+                self.current_agent_bubble.set_canvas_artifacts(response_canvases)
                 if self.current_agent_container:
                     self.current_agent_container.reveal_with_entry_animation()
                 response_container = self.current_agent_container
             else:
-                response_container = self.add_message(response, is_user=False)
+                response_container = self.add_message(response, is_user=False, canvases=response_canvases)
                 
             if should_notify:
                 self.show_response_notification(response)
@@ -5886,7 +6318,13 @@ class ChatWindow(QMainWindow):
         self._set_welcome_visible(False)
         for role, content, metadata, attachments in visible_messages:
             is_bg = bool(metadata.get("triggered_by_background"))
-            container = self.add_message(content, is_user=(role == "user"), attachments=attachments, is_background_task=is_bg)
+            container = self.add_message(
+                content,
+                is_user=(role == "user"),
+                attachments=attachments,
+                canvases=metadata.get("canvases", []) if role == "assistant" else None,
+                is_background_task=is_bg,
+            )
             if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
                 container.bubble.restore_agent_process(metadata.get("agent_process"))
         self.refresh_chat_title()

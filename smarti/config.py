@@ -769,6 +769,62 @@ BUILTIN_TOOL_SCHEMAS["extension_manager"] = {
     }
 }
 
+CANVAS_MANAGER_MODEL_GUIDANCE = """
+חוזה שימוש לקנבס חזותי חי:
+1. ברירת המחדל היא תשובת צ'אט רגילה. השתמש בקנבס רק לבקשה מפורשת לקנבס/לוח/דשבורד/טופס/תרשים/מצגת/ממשק אינטראקטיבי, או כאשר אינטראקציה אמיתית אינה מתאימה לבועת צ'אט. אל תיצור קנבס לברכה, תשובה רגילה, סיכום קצר, רשימה, טבלת Markdown או עדכון סטטוס.
+2. כאשר קנבס מתאים, אסוף את המידע ובנה אותו אוטומטית לפני התשובה הסופית: לחיצה של המשתמש על הכפתור אחר כך רק פותחת את הקנבס שכבר נשמר, ואינה פותחת סבב מודל או צורכת טוקנים.
+3. ממשק הכלי קצר ומדויק: `canvas_manager` מקבל שדות עליונים בלבד — `action` (`create`/`update`/`close`), `canvas_id` לעדכון או סגירה, `title`, `html`, ואופציונלית `css`, `javascript`, `buttons`, `images`. ב-`create` חובה `action:"create"`, `title` ו-`html`; אין לעטוף אותם ב-`data`, `content` או אובייקט אחר. ב-`update` השתמש ב-`canvas_id` הפעיל ובתוכן המלא המעודכן. אין צורך לבקש `get_tool_info` בשביל פעולה רגילה זו. כל טקסט שמוצג למשתמש — דיווחי התקדמות, כותרות הקנבס והתשובה — יישאר בשפת המשתמש; בשיחה עברית כתוב עברית. שאילתות חיפוש וקוד יכולים להיות באנגלית כשנחוץ.
+4. הממשק מוסיף בעצמו כפתור מעוצב מתחת להודעה אחרי יצירה מוצלחת. אל תנסה ליצור פקד Markdown או קישור `canvas://`; מותר בהחלט לכתוב משפט טבעי המזמין את המשתמש לפתוח את הקנבס. אם יש כבר קנבס מתאים, עדכן אותו במקום ליצור עותק; צור קנבס נוסף רק כאשר המשתמש ביקש תוצר נפרד.
+5. איכות חזותית היא חלק מהתוצר, לא קישוט: אל תסתפק בטבלה שטוחה. בנה חוויית editorial / product עדכנית עם היררכיה ברורה, פתיח בעל מסר, כרטיסי תוכן, צבעים וטיפוגרפיה עקביים, רווח לבן, מצבי hover/focus ומבנה רספונסיבי. צור סיפור חזותי המתאים לנושא עם מבט־על, ניווט, פרטים והרחבה.
+6. השתמש בגילוי הדרגתי ובפקדים רק כשהם משרתים את התוכן: טאבים, מסננים, אקורדיונים, תפריטי בחירה, מתגים, סליידרים, timeline או תצוגת־פרטים. כל פקד חייב לשנות מצב או תוכן בפועל; אל תייצר פקדי־דמה. שמור על נגישות, RTL כשהתוכן עברי, וניווט מקלדת בסיסי.
+7. אם המשתמש לא ביקש קנבס אך למשימה יש ערך חזותי או אינטראקטיבי גבוה וברור, מותר להציע פעם אחת ובמשפט קצר הדגמה חזותית. הצע רק כשיש תועלת קונקרטית מעבר לצ'אט, יש מספיק תוכן להדגמה, וההצעה טבעית להמשך השיחה. אל תציע עבור הודעות שגרתיות, תשובות קצרות, או אחרי שהמשתמש כבר סירב; אל תחזור על אותה הצעה באותה משימה. צור קנבס במקרה זה רק אחרי הסכמה מפורשת של המשתמש.
+8. HTML/CSS/JavaScript מקומיים ועצמאיים בלבד: אין CDN, הורדות, חלונות חדשים או גישה למערכת. לתמונות השתמש ב-SVG מקומי בתוך HTML או ב-`images` עם `data_url` מסוג `data:image/...`, שאליו מפנים כ-`smarti-image://<id>`. URL של תמונת רשת מותר רק אם ההנחיה הפעילה מאשרת זאת במפורש. פעולת משתמש בתוך הקנבס נשלחת רק מ-event אמיתי באמצעות `window.SmartiCanvas.send(action, data)`.
+9. בתשובה הסופית תאר בקצרה מה נבנה, בלי להדפיס HTML או JavaScript.
+""".strip()
+
+BUILTIN_TOOL_SCHEMAS["canvas_manager"] = {
+    "description": (
+        "Creates or updates the optional local Live Visual Canvas shown beside chat. Default to normal chat; use only for an explicit visual/interactive request or when chat cannot express the interaction. "
+        "The HTML/CSS/JavaScript runs in an isolated local canvas with network, files, downloads, popups, and media permissions blocked. "
+        "A successful create adds an Open Canvas button that only opens the already-created artifact and never calls the model. "
+        "For a user form/button, JavaScript may call window.SmartiCanvas.send(action, data); this submits plain user data back through the normal agent run."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["create", "update", "close"], "description": "Canvas operation."},
+            "canvas_id": {"type": "string", "description": "Required for update or close; returned by create."},
+            "title": {"type": "string", "description": "Short Hebrew title displayed above the canvas."},
+            "html": {"type": "string", "description": "Complete local HTML, or body markup when css/javascript are supplied separately."},
+            "css": {"type": "string", "description": "Optional local CSS when html is body markup."},
+            "javascript": {"type": "string", "description": "Optional local JavaScript. Do not fetch URLs, open windows, or use system APIs. For user input use window.SmartiCanvas.send(action, data)."},
+            "images": {
+                "type": "array",
+                "description": "Optional declared images. Use data_url for embedded data:image content; use url only when remote canvas images are explicitly enabled. Reference it in html as smarti-image://<id>.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"}, "data_url": {"type": "string"}, "url": {"type": "string"}, "alt": {"type": "string"}, "caption": {"type": "string"}
+                    },
+                    "required": ["id"]
+                }
+            },
+            "buttons": {
+                "type": "array",
+                "description": "Optional declared interactive buttons and their intended positions; actual rendered positions are saved automatically.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"}, "label": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"},
+                        "width": {"type": "number"}, "height": {"type": "number"}, "action": {"type": "string"}, "target": {"type": "string"}
+                    }
+                }
+            }
+        },
+        "required": ["action"]
+    }
+}
+
 # Google Drive is parked until the OAuth flow is reliable enough for end users.
 # Keep the implementation in smarti/google_drive.py and SmartiCore.google_drive_manager
 # for a future re-enable, but do not register it as a visible/built-in tool now.
@@ -813,6 +869,7 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "notification_manager": "Unified Windows toasts, reminders, calendar events, Calendar/Clock/settings opening.",
     "memory_manager": "Unified memory: search and update.",
     "extension_manager": "Unified MCP and Skills operations.",
+    "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
     "automation_manager": "Unified browser/computer automation."
 })
 
@@ -838,6 +895,7 @@ PUBLIC_BUILTIN_TOOLS = [
     "background_task_manager",
     "notification_manager",
     "memory_manager",
+    "canvas_manager",
     "email_manager",
     "automation_manager",
     "extension_manager",
@@ -853,6 +911,7 @@ TOOL_CATEGORY_LABELS = {
     "screen": "Screen",
     "tasks": "Background tasks",
     "memory": "Memory",
+    "visual": "Visual canvas",
     "email": "Email",
     "automation": "Automation",
     "extensions": "Extensions",
@@ -870,6 +929,7 @@ TOOL_CATEGORIES = {
     "background_task_manager": "tasks",
     "notification_manager": "tasks",
     "memory_manager": "memory",
+    "canvas_manager": "visual",
     "email_manager": "email",
     "automation_manager": "automation",
     "extension_manager": "extensions",
@@ -955,6 +1015,9 @@ DEFAULT_SETTINGS = {
     "skills_config": {},
     "enable_browser_automation": False,
     "enable_computer_control": False,
+    "enable_visual_surfaces": False,
+    "enable_web_canvas": False,
+    "enable_canvas_remote_images": False,
     "max_agent_loops": 15,
     "enable_hierarchical_agent": True,
     "max_agent_evaluations_per_task": 4,
