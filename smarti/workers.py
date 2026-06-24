@@ -271,6 +271,91 @@ class ApiKeyValidationWorker(QThread):
         )
         self.finished_signal.emit(self.provider, self.api_key, bool(ok), str(message or ""), models)
 
+
+class CodexSignInWorker(QThread):
+    """Keep the official Codex browser login and status checks off the GUI thread."""
+
+    finished_signal = pyqtSignal(str, str, str)
+
+    def __init__(self, action):
+        super().__init__()
+        self.action = str(action or "status")
+
+    def run(self):
+        from .codex_signin import CodexSignInProvider
+
+        provider = CodexSignInProvider(USER_DATA_DIR)
+        try:
+            if self.action == "login":
+                result = provider.login()
+            elif self.action == "check":
+                result = provider.check_connection()
+            elif self.action == "logout":
+                result = provider.logout()
+            else:
+                result = provider.connection_status()
+            self.finished_signal.emit(self.action, result.state, result.message)
+        except Exception as exc:
+            logging.exception("Codex sign-in worker failed.")
+            self.finished_signal.emit(self.action, "unavailable", str(exc))
+
+def test_email_connection(config, allow_insecure_ssl=False):
+    """Test IMAP and SMTP without sending, changing, or reading a message."""
+    mail = None
+    smtp = None
+    try:
+        cfg = copy.deepcopy(config or {})
+        if not cfg.get("user") or not cfg.get("password"):
+            raise ValueError("חסרים כתובת אימייל או סיסמת אפליקציה.")
+        context = ssl._create_unverified_context() if allow_insecure_ssl else None
+        if cfg.get("imap_ssl", True):
+            if context:
+                mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30, ssl_context=context)
+            else:
+                mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30)
+        else:
+            mail = imaplib.IMAP4(cfg["imap_host"], cfg["imap_port"], timeout=30)
+        mail.login(cfg["user"], cfg["password"])
+        status, data = mail.list()
+        if status != "OK":
+            raise RuntimeError(f"IMAP list failed: {data}")
+        try:
+            mail.logout()
+        except Exception:
+            pass
+        mail = None
+
+        if cfg["smtp_ssl"]:
+            if context is not None:
+                smtp = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30, context=context)
+            else:
+                smtp = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
+        else:
+            smtp = smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
+            smtp.ehlo()
+            if cfg["smtp_starttls"]:
+                if context is not None:
+                    smtp.starttls(context=context)
+                else:
+                    smtp.starttls()
+                smtp.ehlo()
+        smtp.login(cfg["user"], cfg["password"])
+        return True, "חיבור האימייל תקין: IMAP ו-SMTP זמינים."
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        try:
+            if mail is not None:
+                mail.logout()
+        except Exception:
+            pass
+        try:
+            if smtp is not None:
+                smtp.quit()
+        except Exception:
+            pass
+
+
 class EmailConnectionTestWorker(QThread):
     finished_signal = pyqtSignal(bool, str)
 
@@ -280,59 +365,71 @@ class EmailConnectionTestWorker(QThread):
         self.allow_insecure_ssl = bool(allow_insecure_ssl)
 
     def run(self):
-        mail = None
-        smtp = None
-        try:
-            cfg = self.config
-            if not cfg.get("user") or not cfg.get("password"):
-                raise ValueError("חסרים כתובת אימייל או סיסמת אפליקציה.")
-            context = ssl._create_unverified_context() if self.allow_insecure_ssl else None
-            if cfg.get("imap_ssl", True):
-                if context:
-                    mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30, ssl_context=context)
-                else:
-                    mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30)
-            else:
-                mail = imaplib.IMAP4(cfg["imap_host"], cfg["imap_port"], timeout=30)
-            mail.login(cfg["user"], cfg["password"])
-            status, data = mail.list()
-            if status != "OK":
-                raise RuntimeError(f"IMAP list failed: {data}")
-            try:
-                mail.logout()
-            except Exception:
-                pass
-            mail = None
+        ok, message = test_email_connection(self.config, self.allow_insecure_ssl)
+        self.finished_signal.emit(ok, message)
 
-            if cfg["smtp_ssl"]:
-                if context is not None:
-                    smtp = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30, context=context)
-                else:
-                    smtp = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
-            else:
-                smtp = smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
-                smtp.ehlo()
-                if cfg["smtp_starttls"]:
-                    if context is not None:
-                        smtp.starttls(context=context)
-                    else:
-                        smtp.starttls()
-                    smtp.ehlo()
-            smtp.login(cfg["user"], cfg["password"])
-            self.finished_signal.emit(True, "חיבור האימייל תקין: IMAP ו-SMTP זמינים.")
-        except Exception as e:
-            self.finished_signal.emit(False, str(e))
+
+class DoctorCheckWorker(QThread):
+    """Run Doctor diagnostics outside the GUI event loop."""
+
+    progress_signal = pyqtSignal(int, int, str)
+    result_signal = pyqtSignal(dict)
+    finished_signal = pyqtSignal(list, str, bool)
+    failed_signal = pyqtSignal(str)
+
+    def __init__(self, core, include_network=False):
+        super().__init__()
+        self.core = core
+        self.include_network = bool(include_network)
+        self._doctor = None
+
+    def request_stop(self):
+        if self._doctor is not None:
+            self._doctor.request_stop()
+
+    def run(self):
+        try:
+            # Local import avoids a workers <-> doctor module import cycle.
+            from .doctor import SmartiDoctor
+
+            self._doctor = SmartiDoctor(self.core)
+            results = self._doctor.run(
+                include_network=self.include_network,
+                progress_callback=lambda current, total, label: self.progress_signal.emit(current, total, label),
+                result_callback=lambda result: self.result_signal.emit(result.to_dict()),
+            )
+            self.finished_signal.emit(
+                [result.to_dict() for result in results],
+                self._doctor.log_path,
+                self._doctor._cancelled(),
+            )
+        except Exception as exc:
+            logging.exception("Doctor worker failed.")
+            self.failed_signal.emit(str(exc))
         finally:
-            try:
-                if mail is not None:
-                    mail.logout()
-            except Exception:
-                pass
-            try:
-                if smtp is not None:
-                    smtp.quit()
-            except Exception:
-                pass
+            self._doctor = None
+
+
+class DoctorRepairWorker(QThread):
+    """Perform an already-approved Doctor repair away from the GUI thread."""
+
+    finished_signal = pyqtSignal(str)
+    failed_signal = pyqtSignal(str)
+
+    def __init__(self, core, action_id):
+        super().__init__()
+        self.core = core
+        self.action_id = str(action_id or "")
+
+    def run(self):
+        try:
+            from .doctor import SmartiDoctor
+
+            message = SmartiDoctor(self.core).perform_repair(self.action_id)
+            self.finished_signal.emit(str(message or "התיקון הסתיים."))
+        except Exception as exc:
+            logging.exception("Doctor repair failed.")
+            self.failed_signal.emit(str(exc))
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

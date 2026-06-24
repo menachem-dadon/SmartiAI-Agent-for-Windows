@@ -4,8 +4,107 @@ from .config import *
 from .ui_styles import *
 from .ui_controls import *
 from .visual_canvas import web_canvas_available
-from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker, EmailConnectionTestWorker
-from PyQt6.QtGui import QKeySequence, QShortcut
+from .doctor import CheckResult, RepairAction
+from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker, EmailConnectionTestWorker, DoctorCheckWorker, DoctorRepairWorker
+from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
+
+
+def doctor_action_button_css(primary=False):
+    """A single 48px visual rhythm for Doctor's scan controls in every theme."""
+    background = (
+        f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_COLOR}, "
+        f"stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR})"
+        if primary else GLASS_STRONG_COLOR
+    )
+    hover = (
+        f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BRAND_ACCENT_COLOR}, "
+        f"stop:0.52 {BRAND_PINK_COLOR}, stop:1 {BRAND_SECONDARY_COLOR})"
+        if primary else HOVER_TINT
+    )
+    text_color = ACCENT_TEXT_COLOR if primary else TEXT_COLOR
+    border = "rgba(255,255,255,0.18)" if primary else LINE_COLOR
+    return f"""
+        QPushButton {{
+            min-height: 48px; max-height: 48px;
+            background: {background}; color: {text_color};
+            border: 1px solid {border}; border-radius: 24px;
+            padding: 0 20px; font-size: 14px; font-weight: 800; outline: none;
+        }}
+        QPushButton:hover {{ background: {hover}; border-color: {LINE_COLOR}; }}
+        QPushButton:pressed {{ background: {ACCENT_COLOR if primary else ACCENT_TINT_STRONG}; }}
+        QPushButton:disabled {{ background: {PANEL_ELEVATED_COLOR}; color: {SUBTLE_TEXT_COLOR}; border-color: {SOFT_LINE_COLOR}; }}
+    """
+
+
+def doctor_stop_button_css():
+    return f"""
+        QPushButton {{
+            min-height: 48px; max-height: 48px;
+            background: rgba(240,90,110,0.13); color: {DANGER_COLOR};
+            border: 1px solid rgba(255,95,126,0.34); border-radius: 24px;
+            padding: 0 16px; font-size: 14px; font-weight: 800; outline: none;
+        }}
+        QPushButton:hover {{ background: rgba(255,95,126,0.21); border-color: rgba(255,95,126,0.50); }}
+        QPushButton:pressed {{ background: rgba(255,95,126,0.29); }}
+        QPushButton:disabled {{ background: {PANEL_ELEVATED_COLOR}; color: {SUBTLE_TEXT_COLOR}; border-color: {SOFT_LINE_COLOR}; }}
+    """
+
+
+class DoctorScanActionRow(QFrame):
+    """A truly equal-width RTL action row, independent of button text hints."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("DoctorScanActionRow")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setFixedHeight(50)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._buttons = []
+        self._spacing = 8
+
+    def add_button(self, button):
+        button.setParent(self)
+        self._buttons.append(button)
+        self.arrange_buttons()
+
+    def arrange_buttons(self):
+        visible = [button for button in self._buttons if not button.isHidden()]
+        if not visible:
+            return
+        available = max(0, self.width() - self._spacing * (len(visible) - 1))
+        base_width, remainder = divmod(available, len(visible))
+        x = self.width()
+        for index, button in enumerate(visible):
+            width = base_width + (1 if index < remainder else 0)
+            x -= width
+            button.setGeometry(x, 1, width, 48)
+            x -= self._spacing
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.arrange_buttons()
+
+
+def doctor_filter_css():
+    return f"""
+        QFrame#DoctorFilterControl {{
+            min-height: 48px; max-height: 48px;
+            background: {GLASS_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 24px;
+        }}
+        QFrame#DoctorFilterControl QPushButton {{
+            min-height: 40px; max-height: 40px;
+            background: transparent; border: none; border-radius: 20px;
+            color: {MUTED_TEXT_COLOR}; margin: 0; padding: 0 14px;
+            font-size: 13px; font-weight: 800; outline: none;
+        }}
+        QFrame#DoctorFilterControl QPushButton:hover {{ background: {HOVER_TINT}; color: {TEXT_COLOR}; }}
+        QFrame#DoctorFilterControl QPushButton:checked {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                stop:0 {ACCENT_COLOR}, stop:0.58 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
+            color: {ACCENT_TEXT_COLOR};
+        }}
+    """
 
 def refresh_back_button_icon(btn):
     btn.setProperty("smartiBackButton", True)
@@ -700,6 +799,524 @@ class ApiKeyRequiredDialog(QDialog):
 
     def api_key(self):
         return sanitize_secret_value(self.api_key_edit.secret())
+
+class SmartiDoctorPage(QWidget):
+    """RTL health centre for diagnostics, explanations, and approved repairs."""
+
+    STATUS_META = {
+        "pass": ("תקין", "✓", ACCENT_SECONDARY_COLOR),
+        "warning": ("דורש תשומת לב", "!", ACCENT_PINK_COLOR),
+        "error": ("דורש טיפול", "×", DANGER_COLOR),
+        "skipped": ("לא נבדק", "–", SUBTLE_TEXT_COLOR),
+    }
+    CATEGORY_ICONS = {
+        "data": ("doctor_data_icon", "doctor_icon"),
+        "providers": ("doctor_provider_icon", "doctor_icon"),
+        "browser": ("doctor_browser_icon", "doctor_icon"),
+        "email": ("doctor_email_icon", "doctor_icon"),
+        "canvas": ("doctor_canvas_icon", "doctor_icon"),
+        "voice": ("doctor_voice_icon", "doctor_icon"),
+        "search": ("doctor_search_icon", "doctor_icon", "search_icon"),
+        "storage": ("doctor_storage_icon", "doctor_icon", "folder_icon"),
+        "automation": ("doctor_automation_icon", "doctor_icon", "agent_tool_screen_manager"),
+        "tasks": ("doctor_tasks_icon", "doctor_icon", "task_center_icon"),
+        "extensions": ("doctor_extensions_icon", "doctor_icon"),
+        "security": ("doctor_security_icon", "doctor_icon", "policy_icon"),
+        "system": ("doctor_system_icon", "doctor_icon"),
+    }
+
+    def __init__(self, core, main_window):
+        super().__init__(getattr(main_window, "stacked_widget", None))
+        self.core = core
+        self.main_window = main_window
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.results = []
+        self.current_filter = "all"
+        self.log_path = ""
+        self.doctor_worker = None
+        self.repair_worker = None
+        self._build_ui()
+        self.apply_theme()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        top_bar = QHBoxLayout()
+        back = create_back_button(lambda: self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page))
+        back.setToolTip("חזרה לצ'אט")
+        top_bar.addWidget(back)
+
+        self.page_icon = QLabel()
+        self.page_icon.setFixedSize(38, 38)
+        self.page_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        set_themed_label_icon(self.page_icon, ("doctor_icon", "policy_icon", "connection_test_icon"), "✦", 30)
+        top_bar.addWidget(self.page_icon)
+
+        heading_box = QVBoxLayout()
+        heading_box.setSpacing(1)
+        self.title_label = QLabel("Smarti Doctor")
+        self.title_label.setObjectName("DoctorPageTitle")
+        heading_box.addWidget(self.title_label)
+        self.subtitle_label = QLabel("אבחון מונחה, הסבר אנושי ותיקון רק באישור שלך")
+        self.subtitle_label.setWordWrap(True)
+        heading_box.addWidget(self.subtitle_label)
+        top_bar.addLayout(heading_box, 1)
+
+        self.log_btn = QPushButton("יומן")
+        self.log_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.log_btn.setToolTip("פתיחת יומן טכני מסונן של Smarti Doctor")
+        self.log_btn.clicked.connect(self.open_log)
+        top_bar.addWidget(self.log_btn)
+        layout.addLayout(top_bar)
+
+        self.hero = QFrame()
+        self.hero.setObjectName("DoctorHero")
+        hero_layout = QHBoxLayout(self.hero)
+        hero_layout.setContentsMargins(18, 16, 18, 16)
+        hero_layout.setSpacing(14)
+
+        score_box = QVBoxLayout()
+        score_box.setSpacing(0)
+        self.score_label = QLabel("—")
+        self.score_label.setObjectName("DoctorScore")
+        self.score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        score_box.addWidget(self.score_label)
+        self.score_caption = QLabel("ציון מצב")
+        self.score_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        score_box.addWidget(self.score_caption)
+        hero_layout.addLayout(score_box, 0)
+
+        hero_text = QVBoxLayout()
+        hero_text.setSpacing(5)
+        self.summary_label = QLabel("עוד לא בוצעה בדיקה. אפשר להתחיל בבדיקה מהירה או מלאה.")
+        self.summary_label.setObjectName("DoctorSummary")
+        self.summary_label.setWordWrap(True)
+        hero_text.addWidget(self.summary_label)
+        self.completion_label = QLabel("● מוכן לבדיקה")
+        self.completion_label.setObjectName("DoctorCompletion")
+        hero_text.addWidget(self.completion_label)
+        self.progress_label = QLabel("בדיקה מהירה נשארת מקומית; בדיקה מלאה מאמתת חיבורי ספק ודוא\"ל. אם היא פותחת את Chrome הייעודי לצורך בדיקה, הוא נסגר מיד בסיום.")
+        self.progress_label.setWordWrap(True)
+        hero_text.addWidget(self.progress_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        hero_text.addWidget(self.progress_bar)
+        hero_layout.addLayout(hero_text, 1)
+        layout.addWidget(self.hero)
+
+        self.scan_action_row = DoctorScanActionRow()
+        self.quick_scan_btn = QPushButton("בדיקה מהירה")
+        self.quick_scan_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.quick_scan_btn.setFixedHeight(48)
+        self.quick_scan_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.quick_scan_btn.setToolTip("בדיקה מקומית של הגדרות, קבצים ורכיבים ללא התחברות לחשבונות")
+        self.quick_scan_btn.clicked.connect(lambda: self.start_scan(False))
+        self.scan_action_row.add_button(self.quick_scan_btn)
+        self.full_scan_btn = QPushButton("בדיקה מלאה")
+        self.full_scan_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.full_scan_btn.setFixedHeight(48)
+        self.full_scan_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.full_scan_btn.setToolTip("מאמתת חיבור לספק ולדוא\"ל; עשויה לפתוח זמנית את Chrome הייעודי של Smarti בלי לפתוח אתר, ואז לסגור אותו")
+        self.full_scan_btn.clicked.connect(lambda: self.start_scan(True))
+        self.scan_action_row.add_button(self.full_scan_btn)
+        self.stop_scan_btn = QPushButton("הפסק")
+        self.stop_scan_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.stop_scan_btn.setFixedHeight(48)
+        self.stop_scan_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.stop_scan_btn.clicked.connect(self.stop_scan)
+        self.stop_scan_btn.hide()
+        self.scan_action_row.add_button(self.stop_scan_btn)
+        layout.addWidget(self.scan_action_row)
+
+        filter_row = QHBoxLayout()
+        filter_hint = QLabel("הצגה:")
+        filter_row.addWidget(filter_hint)
+        self.filter_keys = ["all", "attention", "pass", "skipped"]
+        self.filter_segment = QFrame()
+        self.filter_segment.setObjectName("DoctorFilterControl")
+        self.filter_segment.setFixedHeight(48)
+        filter_buttons_layout = QHBoxLayout(self.filter_segment)
+        filter_buttons_layout.setContentsMargins(4, 4, 4, 4)
+        filter_buttons_layout.setSpacing(2)
+        self.filter_buttons = []
+        for index, text in enumerate(["הכול", "דורש טיפול", "תקין", "לא רלוונטי"]):
+            button = QPushButton(text)
+            button.setCheckable(True)
+            button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            button.setFixedHeight(40)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.clicked.connect(lambda checked=False, i=index: self._on_filter_changed(i))
+            self.filter_buttons.append(button)
+            filter_buttons_layout.addWidget(button, 1)
+        self.filter_buttons[0].setChecked(True)
+        filter_row.addWidget(self.filter_segment, 1)
+        layout.addLayout(filter_row)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
+        self.content = QWidget()
+        self.content.setObjectName("DoctorResults")
+        self.content.setStyleSheet("background: transparent;")
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(2, 2, 2, 6)
+        self.content_layout.setSpacing(10)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.scroll.setWidget(self.content)
+        layout.addWidget(self.scroll, 1)
+        self.render_results()
+
+    def _on_filter_changed(self, index):
+        if 0 <= index < len(self.filter_keys):
+            for button_index, button in enumerate(getattr(self, "filter_buttons", [])):
+                button.setChecked(button_index == index)
+            self.current_filter = self.filter_keys[index]
+            self.render_results()
+
+    def apply_theme(self):
+        self.STATUS_META = {
+            "pass": ("תקין", "✓", ACCENT_SECONDARY_COLOR),
+            "warning": ("דורש תשומת לב", "!", ACCENT_PINK_COLOR),
+            "error": ("דורש טיפול", "×", DANGER_COLOR),
+            "skipped": ("לא נבדק", "–", SUBTLE_TEXT_COLOR),
+        }
+        self.setStyleSheet("background: transparent;")
+        self.title_label.setStyleSheet(page_title_css(20))
+        self.subtitle_label.setStyleSheet(muted_label_css(12))
+        self.score_caption.setStyleSheet(muted_label_css(11))
+        self.summary_label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 15px; font-weight: 800; background: transparent;")
+        self._set_scan_state(getattr(self, "scan_state", "idle"), refresh_only=True)
+        self.progress_label.setStyleSheet(muted_label_css(11))
+        self.log_btn.setStyleSheet(ghost_button_css())
+        self.quick_scan_btn.setStyleSheet(doctor_action_button_css(primary=False))
+        self.full_scan_btn.setStyleSheet(doctor_action_button_css(primary=True))
+        # The row distributes available width evenly.  A hidden stop button
+        # leaves two equal columns; while scanning all three are equal.
+        for button in (self.quick_scan_btn, self.full_scan_btn):
+            button.setMinimumWidth(0)
+            button.setMaximumWidth(16_777_215)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.setFixedHeight(48)
+        self.stop_scan_btn.setMinimumWidth(0)
+        self.stop_scan_btn.setMaximumWidth(16_777_215)
+        self.stop_scan_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.stop_scan_btn.setFixedHeight(48)
+        self.stop_scan_btn.setStyleSheet(doctor_stop_button_css())
+        self.scan_action_row.arrange_buttons()
+        self.filter_segment.setStyleSheet(doctor_filter_css())
+        self.hero.setStyleSheet(
+            f"QFrame#DoctorHero {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:0.55 {PANEL_ELEVATED_COLOR}, stop:1 {CARD_GRADIENT_END}); "
+            f"border: 1px solid {LINE_COLOR}; border-radius: 22px; }}"
+            f"QProgressBar {{ background: {FIELD_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 5px; min-height: 8px; max-height: 8px; }}"
+            f"QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR}); border-radius: 4px; }}"
+        )
+        self.score_label.setStyleSheet(
+            f"color: {ACCENT_TEXT_COLOR}; background: {ACCENT_COLOR}; border: 2px solid {ACCENT_SECONDARY_COLOR}; "
+            "border-radius: 26px; min-width: 52px; min-height: 52px; font-size: 19px; font-weight: 900;"
+        )
+        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
+        refresh_themed_widget_icons(self)
+        self.render_results()
+
+    def _set_scan_state(self, state, refresh_only=False):
+        self.scan_state = state
+        labels = {
+            "idle": ("● מוכן לבדיקה", SUBTLE_TEXT_COLOR),
+            "running": ("● הבדיקה פועלת", ACCENT_COLOR),
+            "complete": ("✓ הבדיקה הושלמה", ACCENT_SECONDARY_COLOR),
+            "cancelled": ("■ הבדיקה הופסקה", ACCENT_PINK_COLOR),
+            "failed": ("× הבדיקה לא הושלמה", DANGER_COLOR),
+        }
+        text, color = labels.get(state, labels["idle"])
+        if hasattr(self, "completion_label"):
+            self.completion_label.setText(text)
+            self.completion_label.setStyleSheet(
+                f"color: {color}; background: {ACCENT_TINT if state in {'running', 'complete'} else 'transparent'}; "
+                f"border: 1px solid {color}; border-radius: 10px; padding: 3px 8px; font-size: 11px; font-weight: 900;"
+            )
+
+    def _clear_results_layout(self):
+        while self.content_layout.count():
+            item = self.content_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _visible_results(self):
+        if self.current_filter == "attention":
+            return [item for item in self.results if item.status in {"error", "warning"}]
+        if self.current_filter in {"pass", "skipped"}:
+            return [item for item in self.results if item.status == self.current_filter]
+        return list(self.results)
+
+    def render_results(self):
+        if not hasattr(self, "content_layout"):
+            return
+        self._clear_results_layout()
+        visible = self._visible_results()
+        if not visible:
+            empty = QFrame()
+            empty.setStyleSheet(card_css(18, 22))
+            empty_layout = QVBoxLayout(empty)
+            empty_layout.setSpacing(6)
+            label = QLabel("Smarti Doctor מוכן לבדיקה")
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet(section_title_css(16))
+            empty_layout.addWidget(label)
+            note = QLabel("התוצאות יוצגו כאן עם הסבר פשוט, פרטים טכניים מסוננים ותיקון מוצע כשיש כזה.")
+            note.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            note.setWordWrap(True)
+            note.setStyleSheet(muted_label_css(12))
+            empty_layout.addWidget(note)
+            self.content_layout.addWidget(empty)
+            return
+        for result in visible:
+            self.content_layout.addWidget(self._result_card(result))
+        self.content_layout.addStretch(1)
+
+    def _result_card(self, result):
+        status_text, glyph, color = self.STATUS_META.get(result.status, self.STATUS_META["skipped"])
+        card = QFrame()
+        card.setObjectName("DoctorResultCard")
+        card.setStyleSheet(
+            f"QFrame#DoctorResultCard {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:1 {CARD_GRADIENT_END}); "
+            f"border: 1px solid {color}; border-radius: 18px; }}"
+            "QLabel { background: transparent; border: none; }"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 13)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        category_icon = QLabel()
+        category_icon.setFixedSize(26, 26)
+        category_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_names = self.CATEGORY_ICONS.get(result.category, ("doctor_icon",))
+        set_themed_label_icon(category_icon, icon_names, glyph, 22)
+        category_icon.setStyleSheet(f"color: {color}; font-size: 18px; font-weight: 900; border: none; background: transparent;")
+        header.addWidget(category_icon)
+        title = QLabel(result.title_he)
+        title.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        title.setWordWrap(True)
+        title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 800; border: none; background: transparent;")
+        header.addWidget(title, 1)
+        pill = QLabel(f" {glyph} {status_text} ")
+        pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pill.setStyleSheet(f"color: {color}; background: {ACCENT_TINT if result.status == 'pass' else ACCENT_TINT_STRONG}; border: 1px solid {color}; border-radius: 11px; padding: 3px 7px; font-size: 11px; font-weight: 800;")
+        header.addWidget(pill)
+        layout.addLayout(header)
+
+        explanation = QLabel(result.explanation_he)
+        explanation.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        explanation.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        explanation.setWordWrap(True)
+        explanation.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        explanation.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; line-height: 1.45; border: none; background: transparent;")
+        layout.addWidget(explanation)
+
+        details = QLabel(f"נתונים טכניים: {result.technical_detail}")
+        details.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        details.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        details.setWordWrap(True)
+        details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        details.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; background: {FIELD_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 10px; padding: 8px; font-size: 11px; font-family: Consolas, monospace;")
+        details.setVisible(False)
+        layout.addWidget(details)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(8)
+        details_btn = QPushButton("פרטים טכניים")
+        details_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        details_btn.setStyleSheet(ghost_button_css())
+        details_btn.clicked.connect(lambda _=False, label=details, btn=details_btn: self._toggle_details(label, btn))
+        footer.addWidget(details_btn)
+        footer.addStretch(1)
+        if result.repair_action is not None:
+            repair = result.repair_action
+            repair_btn = QPushButton(repair.title_he)
+            repair_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            repair_btn.setToolTip(repair.description_he)
+            repair_btn.setStyleSheet(PRIMARY_BUTTON_CSS if repair.risk in {"medium", "high"} else SECONDARY_BUTTON_CSS)
+            repair_btn.clicked.connect(lambda _=False, action=repair: self.request_repair(action))
+            footer.addWidget(repair_btn)
+        layout.addLayout(footer)
+        return card
+
+    def _toggle_details(self, details, button):
+        visible = not details.isVisible()
+        details.setVisible(visible)
+        button.setText("הסתר פרטים" if visible else "פרטים טכניים")
+
+    def _coerce_result(self, raw):
+        if isinstance(raw, CheckResult):
+            return raw
+        data = dict(raw or {})
+        repair = data.get("repair_action")
+        if isinstance(repair, dict):
+            data["repair_action"] = RepairAction(**repair)
+        elif not isinstance(repair, RepairAction):
+            data["repair_action"] = None
+        fields = {"id", "status", "explanation_he", "technical_detail", "repair_action", "category", "title_he"}
+        return CheckResult(**{key: data.get(key) for key in fields})
+
+    def start_scan(self, include_network):
+        if self.doctor_worker is not None and self.doctor_worker.isRunning():
+            return
+        if self.repair_worker is not None and self.repair_worker.isRunning():
+            return
+        if bool(getattr(self.main_window, "agent_running", False)):
+            QMessageBox.information(self, "Smarti Doctor", "כדי למנוע התנגשות עם משימת סוכן פעילה, יש להמתין לסיום המשימה לפני הבדיקה.")
+            return
+        self.results = []
+        self.log_path = ""
+        self.progress_bar.setValue(0)
+        self.summary_label.setText("Smarti Doctor בודק את המערכת…")
+        self.progress_label.setText("מתחיל בדיקה מלאה…" if include_network else "מתחיל בדיקה מהירה ומקומית…")
+        self._set_scan_state("running")
+        self._set_busy(True)
+        self.render_results()
+        self.doctor_worker = DoctorCheckWorker(self.core, include_network=include_network)
+        self.doctor_worker.progress_signal.connect(self._on_scan_progress)
+        self.doctor_worker.result_signal.connect(self._on_scan_result)
+        self.doctor_worker.finished_signal.connect(self._on_scan_finished)
+        self.doctor_worker.failed_signal.connect(self._on_scan_failed)
+        self.doctor_worker.start()
+
+    def stop_scan(self):
+        if self.doctor_worker is not None and self.doctor_worker.isRunning():
+            self.doctor_worker.request_stop()
+            self.stop_scan_btn.setEnabled(False)
+            self.progress_label.setText("מבקש לעצור לאחר סיום הפעולה הפעילה…")
+
+    def _on_scan_progress(self, current, total, label):
+        percent = max(0, min(99, int(((current - 1) / max(1, total)) * 100)))
+        self.progress_bar.setValue(percent)
+        self.progress_label.setText(f"שלב {current} מתוך {total}: {label}")
+
+    def _on_scan_result(self, raw):
+        self.results.append(self._coerce_result(raw))
+        self.render_results()
+
+    def _on_scan_finished(self, raw_results, log_path, cancelled=False):
+        self.results = [self._coerce_result(item) for item in (raw_results or [])]
+        self.log_path = str(log_path or "")
+        self.progress_bar.setValue(self.progress_bar.value() if cancelled else 100)
+        self._set_busy(False)
+        self._refresh_summary()
+        if cancelled:
+            self.summary_label.setText("הבדיקה הופסקה לפי בקשתך. התוצאות שכבר נאספו נשארו זמינות לעיון.")
+            self.progress_label.setText("לא בוצעו השלבים שנותרו. אפשר להפעיל בדיקה חדשה בכל רגע.")
+            self._set_scan_state("cancelled")
+        else:
+            self._set_scan_state("complete")
+        self.render_results()
+        self.doctor_worker = None
+
+    def _on_scan_failed(self, message):
+        self._set_busy(False)
+        self._set_scan_state("failed")
+        self.progress_label.setText("הבדיקה נעצרה בגלל תקלה פנימית.")
+        self.summary_label.setText("לא ניתן להשלים את הבדיקה. אפשר לנסות שוב או לפתוח את יומן Doctor.")
+        self.doctor_worker = None
+        QMessageBox.warning(self, "Smarti Doctor", f"לא ניתן להשלים את הבדיקה:\n{message}")
+
+    def _refresh_summary(self):
+        counts = {status: sum(1 for item in self.results if item.status == status) for status in self.STATUS_META}
+        checked = counts["pass"] + counts["warning"] + counts["error"]
+        score = 100 if not checked else max(0, 100 - counts["error"] * 24 - counts["warning"] * 9)
+        self.score_label.setText(str(score))
+        if counts["error"]:
+            summary = f"נמצאו {counts['error']} בעיות שדורשות טיפול ו‑{counts['warning']} ממצאים שדורשים תשומת לב."
+        elif counts["warning"]:
+            summary = f"לא נמצאו כשלים קריטיים. יש {counts['warning']} ממצאים שמומלץ לעבור עליהם."
+        elif checked:
+            summary = "הבדיקות שהושלמו תקינות. רכיבים שלא הופעלו מסומנים כלא רלוונטיים."
+        else:
+            summary = "הבדיקה הופסקה לפני שבוצעו בדיקות פעילות."
+        self.summary_label.setText(summary)
+        self.progress_label.setText(f"הבדיקה הסתיימה: {counts['pass']} תקינות, {counts['warning']} לתשומת לב, {counts['error']} לטיפול, {counts['skipped']} לא רלוונטיות.")
+
+    def _set_busy(self, busy):
+        self.quick_scan_btn.setEnabled(not busy)
+        self.full_scan_btn.setEnabled(not busy)
+        self.stop_scan_btn.setVisible(busy)
+        self.stop_scan_btn.setEnabled(busy)
+        self.scan_action_row.arrange_buttons()
+        self.log_btn.setEnabled(not busy or bool(self.log_path))
+
+    def request_repair(self, action):
+        if self.doctor_worker is not None and self.doctor_worker.isRunning():
+            QMessageBox.information(self, "Smarti Doctor", "המתיני לסיום הבדיקה לפני הפעלת תיקון.")
+            return
+        if bool(getattr(self.main_window, "agent_running", False)):
+            QMessageBox.information(self, "Smarti Doctor", "כדי למנוע התנגשות עם משימת סוכן פעילה, יש להמתין לסיום המשימה לפני תיקון.")
+            return
+        if action.id in {"open_settings", "open_tools", "open_data_folder", "open_task_center", "open_doctor_log"}:
+            self._open_navigation_action(action.id)
+            return
+        title = f"אישור תיקון: {action.title_he}"
+        details = (
+            f"מה יקרה:\n{action.description_he}\n\n"
+            "הפעולה לא בוצעה אוטומטית. לחיצה על אישור תבצע רק את התיקון המתואר כאן."
+        )
+        dialog = ActionConfirmDialog(title, details, risk=action.risk, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._set_repair_busy(True, action.title_he)
+        self.repair_worker = DoctorRepairWorker(self.core, action.id)
+        self.repair_worker.finished_signal.connect(self._on_repair_finished)
+        self.repair_worker.failed_signal.connect(self._on_repair_failed)
+        self.repair_worker.start()
+
+    def _set_repair_busy(self, busy, title=""):
+        self.quick_scan_btn.setEnabled(not busy)
+        self.full_scan_btn.setEnabled(not busy)
+        self.stop_scan_btn.setVisible(False)
+        self.scan_action_row.arrange_buttons()
+        if busy:
+            self.progress_label.setText(f"מבצע תיקון מאושר: {title}…")
+            self.progress_bar.setRange(0, 0)
+        else:
+            self.progress_bar.setRange(0, 100)
+
+    def _on_repair_finished(self, message):
+        self._set_repair_busy(False)
+        self.repair_worker = None
+        QMessageBox.information(self, "Smarti Doctor", str(message))
+        self.start_scan(False)
+
+    def _on_repair_failed(self, message):
+        self._set_repair_busy(False)
+        self.repair_worker = None
+        self.progress_label.setText("התיקון לא הושלם. לא בוצע ניסיון נוסף באופן אוטומטי.")
+        QMessageBox.warning(self, "Smarti Doctor", f"התיקון לא הושלם:\n{message}")
+
+    def _open_navigation_action(self, action_id):
+        if action_id == "open_settings":
+            self.main_window.show_settings_page()
+        elif action_id == "open_tools":
+            self.main_window.show_tools_page()
+        elif action_id == "open_data_folder":
+            QDesktopServices.openUrl(QUrl.fromLocalFile(USER_DATA_DIR))
+        elif action_id == "open_task_center":
+            self.main_window.show_task_center_page()
+        elif action_id == "open_doctor_log":
+            self.open_log()
+
+    def open_log(self):
+        path = self.log_path or os.path.join(USER_DATA_DIR, "smarti_doctor.log")
+        if not os.path.exists(path):
+            QMessageBox.information(self, "Smarti Doctor", "אין עדיין יומן Doctor. הריצי בדיקה כדי ליצור יומן טכני מסונן.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
 
 class UsageStatsPage(QWidget):
     def __init__(self, core, main_window):
@@ -1448,7 +2065,8 @@ class SettingsPage(QWidget):
         
         self.fetch_worker = None
         self.models_loaded = False
-        self.populate_models([self.core.settings.get(f"selected_{self.provider_combo.currentText()}_model", "")], self.provider_combo.currentText())
+        current_provider = normalize_provider_name(self.provider_combo.currentText())
+        self.populate_models([self.core.settings.get(f"selected_{current_provider}_model", "")], current_provider)
         self._register_autosave_handlers()
         self._suppress_autosave = False
         QTimer.singleShot(0, self._mark_settings_ready)
@@ -2309,6 +2927,97 @@ class SettingsPage(QWidget):
         layout.addWidget(self.model_combo, 1)
         return row
 
+    def _make_codex_signin_row(self):
+        row = QWidget(self)
+        row.setStyleSheet("background: transparent;")
+        row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        self.codex_signin_status = QLabel("בחרי OpenAI Codex Sign-in כדי להתחבר.")
+        self.codex_signin_status.setWordWrap(True)
+        self.codex_signin_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.codex_signin_status.setStyleSheet(muted_label_css(12))
+        self.codex_login_btn = QPushButton("התחבר עם\nChatGPT / Codex")
+        self.codex_check_btn = QPushButton("בדוק\nחיבור")
+        self.codex_logout_btn = QPushButton("התנתק")
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(10)
+        for button in (self.codex_login_btn, self.codex_check_btn, self.codex_logout_btn):
+            button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setStyleSheet(SECONDARY_BUTTON_CSS)
+            button.setFixedHeight(56)
+            button.setMinimumWidth(0)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.codex_login_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
+        self.codex_login_btn.clicked.connect(lambda: self._start_codex_signin_action("login"))
+        self.codex_check_btn.clicked.connect(lambda: self._start_codex_signin_action("check"))
+        self.codex_logout_btn.clicked.connect(lambda: self._start_codex_signin_action("logout"))
+        buttons.addWidget(self.codex_login_btn, 1)
+        buttons.addWidget(self.codex_check_btn, 1)
+        buttons.addWidget(self.codex_logout_btn, 1)
+        layout.addWidget(self.codex_signin_status)
+        layout.addLayout(buttons)
+        return row
+
+    def _codex_provider_is_selected(self):
+        return normalize_provider_name(self.provider_combo.currentText()) == "openai_codex_signin"
+
+    def _set_codex_signin_buttons(self, busy=False):
+        selected = self._codex_provider_is_selected()
+        for button in (self.codex_login_btn, self.codex_check_btn, self.codex_logout_btn):
+            button.setEnabled(selected and not busy)
+
+    def _set_codex_signin_status(self, state, message):
+        colors = {
+            "connected": ACCENT_SECONDARY_COLOR,
+            "not_connected": MUTED_TEXT_COLOR,
+            "reauth_required": DANGER_COLOR,
+            "unavailable": DANGER_COLOR,
+        }
+        self.codex_signin_status.setText(str(message or "לא ידוע מצב החיבור."))
+        self.codex_signin_status.setStyleSheet(
+            f"color: {colors.get(state, MUTED_TEXT_COLOR)}; font-size: 12px; background: transparent;"
+        )
+
+    def _start_codex_signin_action(self, action):
+        if not self._codex_provider_is_selected():
+            return
+        worker = getattr(self, "codex_signin_worker", None)
+        if worker and worker.isRunning():
+            return
+        from .workers import CodexSignInWorker
+
+        labels = {
+            "login": "פותח את ההתחברות הרשמית של Codex בדפדפן…",
+            "check": "בודק חיבור מול Codex…",
+            "logout": "מתנתק מ-Codex…",
+            "status": "בודק את מצב החיבור…",
+        }
+        self._set_codex_signin_status("not_connected", labels.get(action, "בודק חיבור…"))
+        self._set_codex_signin_buttons(busy=True)
+        worker = CodexSignInWorker(action)
+        self.codex_signin_worker = worker
+        worker.finished_signal.connect(self._on_codex_signin_finished, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_codex_signin_finished(self, action, state, message):
+        worker = self.sender()
+        if worker is not getattr(self, "codex_signin_worker", None):
+            return
+        self.codex_signin_worker = None
+        self._set_codex_signin_status(state, message)
+        self._set_codex_signin_buttons(busy=False)
+        if action == "login" and state == "connected" and self._codex_provider_is_selected():
+            self.core.settings["api_mode"] = "openai_codex_signin"
+            self.core._save_settings()
+            self.core.system_prompt = self.core._load_system_prompt()
+            self.core.setup_model()
+            self._schedule_autosave()
+
     def _favorite_model_key(self, provider, model):
         return (normalize_provider_name(provider), str(model or "").strip())
 
@@ -2367,7 +3076,7 @@ class SettingsPage(QWidget):
             self.main_window.refresh_favorite_model_controls()
 
     def _toggle_model_favorite_from_picker(self, model):
-        provider = self.provider_combo.currentText()
+        provider = normalize_provider_name(self.provider_combo.currentText())
         model = str(model or "").strip()
         if not model:
             return
@@ -2502,8 +3211,17 @@ class SettingsPage(QWidget):
             self.core._ensure_secret_loaded(secret_key)
 
         self.provider_combo = NoScrollComboBox()
-        self.provider_combo.addItems(MODEL_PROVIDER_ORDER)
-        self.provider_combo.setCurrentText(self.core.settings.get("api_mode", "gemini"))
+        for provider in MODEL_PROVIDER_ORDER:
+            if provider == "openai_codex_signin":
+                self.provider_combo.addItem(provider_display_name(provider), provider)
+            else:
+                self.provider_combo.addItem(provider)
+        selected_provider = normalize_provider_name(self.core.settings.get("api_mode", "gemini"))
+        selected_index = self.provider_combo.findData(selected_provider)
+        if selected_index >= 0:
+            self.provider_combo.setCurrentIndex(selected_index)
+        else:
+            self.provider_combo.setCurrentText(selected_provider)
         self.provider_combo.setStyleSheet(COMBOBOX_CSS)
         self.provider_combo.currentTextChanged.connect(self.on_provider_change)
         
@@ -2521,6 +3239,14 @@ class SettingsPage(QWidget):
         self.api_key_help_hint = QLabel("", self)
         self.api_key_help_hint.setWordWrap(True)
         self.api_key_help_hint.setStyleSheet(muted_label_css(12))
+        self.codex_signin_worker = None
+        self.codex_signin_row = self._make_codex_signin_row()
+        self.codex_signin_warning = QLabel(
+            "חיבור זה משתמש ב-Codex sign-in הרשמי של OpenAI, כפוף למגבלות החשבון והתוכנית שלך, ועלול להשתנות לפי מדיניות OpenAI.",
+            self,
+        )
+        self.codex_signin_warning.setWordWrap(True)
+        self.codex_signin_warning.setStyleSheet(muted_label_css(12))
         self.tavily_key = MaskedSecretLineEdit(self.core.settings.get("tavily_api_key", ""))
         self.tavily_key_help_link = QLabel(self)
         self.tavily_key_row = self._make_secret_link_row(self.tavily_key, self.tavily_key_help_link)
@@ -2993,6 +3719,7 @@ class SettingsPage(QWidget):
         layout.addWidget(container)
         self._register_setting_entry(label_text, widget, container, hint or "", keywords, advanced, setting_id)
         layout.addSpacing(10)
+        return container
 
     def _make_scroll_page(self):
         page = QWidget()
@@ -3090,7 +3817,7 @@ class SettingsPage(QWidget):
 
         self._add_internal_back(ai, "מודלי AI וספקים")
         self._add_field("ספק המודל", self.provider_combo, ai, "בחר את שירות ה-AI שסמארטי ישתמש בו לתשובות ולתכנון פעולות.", keywords="provider vendor engine gemini openai anthropic local openrouter groq nvidia cerebras huggingface deepseek qwen zhipu moonshot mistral together perplexity xai")
-        self._add_field(
+        self.api_key_field_container = self._add_field(
             "מפתח גישה לספק המודל",
             self.api_key_row,
             ai,
@@ -3100,6 +3827,15 @@ class SettingsPage(QWidget):
         )
         ai.addWidget(self.api_key_status)
         ai.addWidget(self.api_key_help_hint)
+        self._add_field(
+            "חיבור ChatGPT / Codex",
+            self.codex_signin_row,
+            ai,
+            "התחברות רשמית עם חשבון ChatGPT או Codex. לא נשמרים סיסמה, API key או token בהגדרות של סמארטי.",
+            keywords="openai codex chatgpt sign in oauth login connect disconnect token credential manager",
+            info=True,
+        )
+        ai.addWidget(self.codex_signin_warning)
         self._add_field("מודל", self.model_picker_row, ai, "בחירת המודל הפעיל לשיחה. בחירה נשמרת גם כמועדף כדי שאפשר יהיה להחליף אליו במהירות מהצ'אט.", keywords="favorite favourite star quick switch chat model picker spinner llm")
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.", keywords="local server url lm studio ollama localhost endpoint base url")
         self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key_row, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.", keywords="web search internet tavily live current latest")
@@ -3273,7 +4009,26 @@ class SettingsPage(QWidget):
 
     def on_provider_change(self, text):
         text = normalize_provider_name(text)
+        is_codex_signin = text == "openai_codex_signin"
+        codex_worker = getattr(self, "codex_signin_worker", None)
+        self._set_codex_signin_buttons(busy=bool(codex_worker and codex_worker.isRunning()))
         self._update_provider_key_help()
+        if is_codex_signin:
+            self.api_key_edit.set_secret("")
+            self.api_key_edit.setPlaceholderText("לא נדרש מפתח עבור Codex sign-in")
+            self.api_key_edit.setEnabled(False)
+            self.api_key_field_container.setVisible(False)
+            self.api_key_row.setVisible(False)
+            self.api_key_help_link.setVisible(False)
+            self.api_key_help_hint.setVisible(False)
+            self.api_key_status.setVisible(False)
+            self.populate_models(provider_fallback_models(text), text)
+            self._schedule_autosave()
+            self._start_codex_signin_action("status")
+            return
+        self.api_key_field_container.setVisible(True)
+        self.api_key_row.setVisible(True)
+        self.api_key_status.setVisible(True)
         if text == "local":
             self.api_key_edit.set_secret("")
             self.api_key_edit.setPlaceholderText("לא נדרש מפתח למודל מקומי")
@@ -3495,7 +4250,7 @@ class SettingsPage(QWidget):
         if getattr(self, "_suppress_autosave", False):
             return
         provider = normalize_provider_name(self.provider_combo.currentText())
-        if provider == "local":
+        if provider in {"local", "openai_codex_signin"}:
             return
         key = sanitize_secret_value(self.api_key_edit.secret())
         if key:
@@ -3515,7 +4270,7 @@ class SettingsPage(QWidget):
         if getattr(self, "_suppress_autosave", False):
             return
         provider = normalize_provider_name(self.provider_combo.currentText())
-        if provider == "local":
+        if provider in {"local", "openai_codex_signin"}:
             return
         key = sanitize_secret_value(self.api_key_edit.secret())
         secret_key = provider_secret_key(provider)
@@ -3734,7 +4489,7 @@ class SettingsPage(QWidget):
         if getattr(self, "_suppress_autosave", False) or not getattr(self, "_settings_ready", False):
             return
         before = copy.deepcopy(self.core.settings)
-        provider = self.provider_combo.currentText()
+        provider = normalize_provider_name(self.provider_combo.currentText())
         selected_model = self.model_combo.selected_model() if hasattr(self.model_combo, "selected_model") else self.model_combo.currentText()
         previous_provider = normalize_provider_name(before.get("api_mode", provider))
         previous_selected_model = str(before.get(f"selected_{provider}_model", "") or "")

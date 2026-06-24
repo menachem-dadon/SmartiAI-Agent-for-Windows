@@ -976,6 +976,7 @@ DEFAULT_SETTINGS = {
     "email_max_attachment_mb": 20,
     "selected_gemini_model": "gemini-3.1-flash-lite",
     "selected_openai_model": "gpt-5.4",
+    "selected_openai_codex_signin_model": "Codex default",
     "selected_anthropic_model": "claude-opus-4-7",
     "selected_local_model": "",
     "selected_openrouter_model": "openai/gpt-5.4",

@@ -94,7 +94,7 @@ URL_HUGGINGFACE = "aHR0cHM6Ly9yb3V0ZXIuaHVnZ2luZ2ZhY2UuY28vdjE="
 URL_CLAWHUB_API = "aHR0cHM6Ly9jbGF3aHViLmFpL2FwaS92MQ=="
 
 MODEL_PROVIDER_ORDER = [
-    "gemini", "openai", "anthropic", "openrouter", "groq", "nvidia", "cerebras", "huggingface",
+    "gemini", "openai", "openai_codex_signin", "anthropic", "openrouter", "groq", "nvidia", "cerebras", "huggingface",
     "deepseek", "qwen", "zhipu", "moonshot", "mistral",
     "together", "perplexity", "xai", "local"
 ]
@@ -116,6 +116,14 @@ MODEL_PROVIDER_CONFIGS = {
         "key_instructions": "התחבר ל-OpenAI Platform, לחץ Create new secret key והעתק את המפתח שנוצר.",
         "default_model": "gpt-5.4",
         "base_url": None,
+    },
+    "openai_codex_signin": {
+        "label": "OpenAI Codex Sign-in",
+        "kind": "codex_signin",
+        "secret_key": None,
+        "key_instructions": "החיבור נפתח בדפדפן באמצעות Codex sign-in הרשמי של OpenAI. לא נדרש מפתח API.",
+        "default_model": "Codex default",
+        "fallback_models": ["Codex default"],
     },
     "anthropic": {
         "label": "Anthropic",
@@ -603,7 +611,12 @@ SELF_PROTECTED_NAMES = {
 _CURRENT_SETTINGS_REF = {"settings": None}
 
 def normalize_provider_name(provider):
-    return str(provider or "").strip().lower()
+    value = str(provider or "").strip().lower()
+    aliases = {
+        "openai codex sign-in": "openai_codex_signin",
+        "openai codex signin": "openai_codex_signin",
+    }
+    return aliases.get(value, value)
 
 def provider_config(provider):
     return MODEL_PROVIDER_CONFIGS.get(normalize_provider_name(provider), {})
@@ -799,6 +812,8 @@ def fetch_text_models_for_provider(provider, api_key="", local_url="", allow_ins
     kwargs = ssl_request_kwargs(allow_insecure_ssl)
     headers = {}
     try:
+        if provider == "openai_codex_signin":
+            return provider_fallback_models(provider), False, "נדרשת התחברות עם ChatGPT / Codex."
         if provider == "local":
             url = _models_url_for_provider(provider, local_url)
             response = requests.get(url, timeout=5, **kwargs)

@@ -19,6 +19,7 @@ from .api_errors import (
     api_retry_exhausted_analysis,
     api_retry_status_message,
 )
+from .codex_signin import CODEX_SIGNIN_PROVIDER, CodexSignInError, CodexSignInProvider
 
 # ==========================================
 # ליבת המערכת - SmartiCore
@@ -4917,6 +4918,9 @@ class SmartiCore:
         self.mode = normalize_provider_name(self.settings.get("api_mode", "gemini"))
         if self.mode == "gemini":
             self.gemini_history = []
+        elif self.mode == CODEX_SIGNIN_PROVIDER:
+            self.codex_signin_provider = CodexSignInProvider(USER_DATA_DIR)
+            self.universal_history = [{"role": "system", "content": self.system_prompt}]
         elif self.mode == "local" or is_openai_compatible_provider(self.mode):
             try:
                 from openai import OpenAI
@@ -5615,6 +5619,18 @@ class SmartiCore:
 
     def _ensure_active_provider_api_key(self):
         provider = normalize_provider_name(self.settings.get("api_mode", getattr(self, "mode", "gemini")) or "gemini")
+        if provider == CODEX_SIGNIN_PROVIDER:
+            codex_provider = getattr(self, "codex_signin_provider", None)
+            if codex_provider is None:
+                self.setup_model()
+                codex_provider = getattr(self, "codex_signin_provider", None)
+            status = codex_provider.connection_status() if codex_provider else None
+            self._codex_connection_message = str(getattr(status, "message", "") or "")
+            if status and status.state == "connected":
+                if provider != getattr(self, "mode", ""):
+                    self.setup_model()
+                return True
+            return False
         if provider == "local":
             if provider != getattr(self, "mode", ""):
                 self.setup_model()
@@ -6167,6 +6183,14 @@ CWD: {current_dir}
                 self._raise_if_cancelled()
                 usage_dict = {}
                 request_messages = self._prepare_messages_for_budget(current_model, current_messages)
+                if self.mode == CODEX_SIGNIN_PROVIDER:
+                    codex_provider = getattr(self, "codex_signin_provider", None)
+                    if codex_provider is None:
+                        self.setup_model()
+                        codex_provider = getattr(self, "codex_signin_provider", None)
+                    if codex_provider is None:
+                        raise CodexSignInError("ספק Codex לא הופעל. נסי להתחבר מחדש.")
+                    return codex_provider.complete(request_messages, current_model)
                 if self.mode == "gemini":
                     api_key = self._ensure_secret_loaded("gemini_api_key")
                     base_url = get_url(URL_GEMINI_GEN)
@@ -6230,6 +6254,13 @@ CWD: {current_dir}
                     raise
                 if isinstance(e, ApiRequestError):
                     analysis = e.analysis
+                elif isinstance(e, CodexSignInError):
+                    analysis = analyze_api_error(
+                        self.mode,
+                        current_model,
+                        error=e,
+                        user_message_override=str(e),
+                    )
                 else:
                     analysis = analyze_api_error(self.mode, current_model, error=e)
                     if isinstance(e, requests.exceptions.SSLError):
@@ -6710,7 +6741,11 @@ CWD: {current_dir}
                 self.cancel_event = run_cancel_event
             if not self._ensure_active_provider_api_key():
                 provider_label = self._provider_display_name(self.settings.get("api_mode", getattr(self, "mode", "")))
-                final_response = f"ERROR_USER: חסר מפתח API של {provider_label}. הזן מפתח בהגדרות או בחלון שנפתח כדי להמשיך."
+                if normalize_provider_name(self.settings.get("api_mode", "")) == CODEX_SIGNIN_PROVIDER:
+                    detail = str(getattr(self, "_codex_connection_message", "") or "לא מחובר עם ChatGPT / Codex.")
+                    final_response = f"ERROR_USER: {detail} פתחי את ההגדרות ולחצי על 'התחבר עם ChatGPT / Codex'."
+                else:
+                    final_response = f"ERROR_USER: חסר מפתח API של {provider_label}. הזן מפתח בהגדרות או בחלון שנפתח כדי להמשיך."
                 return final_response
             try:
                 if getattr(self, "memory_manager", None):

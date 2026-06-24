@@ -11,6 +11,8 @@ tests/
 !tests/
 tests/*
 !tests/test_visual_canvas.py
+!tests/test_doctor.py
+!tests/test_codex_signin.py
 
 
 # Virtual environments and build artifacts

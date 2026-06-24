@@ -8,7 +8,7 @@ from .ui_styles import *
 from .ui_controls import *
 from .config import BUILT_IN_TOOLS, LEGACY_BUILTIN_TOOLS, PUBLIC_BUILTIN_TOOLS
 from .workers import AgentWorker, VoiceWorker, TTSWorker
-from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
+from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, SmartiDoctorPage, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
 from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
@@ -4119,6 +4119,7 @@ class ChatWindow(QMainWindow):
         self.task_center_page = None
         self.trace_page = None
         self.history_page = None
+        self.doctor_page = None
         self.about_page = None
         
         logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה (הפעלת תוכנה) ---\n{'='*50}")
@@ -4981,6 +4982,8 @@ class ChatWindow(QMainWindow):
                 self.voice_overlay.position_near_owner()
         if getattr(self, "history_page", None) is not None:
             self.history_page.apply_theme()
+        if getattr(self, "doctor_page", None) is not None:
+            self.doctor_page.apply_theme()
         if refresh_messages:
             for container in self.findChildren(ChatMessageContainer):
                 container.apply_theme()
@@ -5043,6 +5046,7 @@ class ChatWindow(QMainWindow):
         self._menu_actions = []
         self._add_menu_action("שיחה חדשה", self.start_new_chat, "new_chat_icon", "plus_icon")
         self._add_menu_action("היסטוריית שיחות", self.show_history_page, "chat_history_icon", "history_icon")
+        self._add_menu_action("Smarti Doctor", self.show_doctor_page, "doctor_icon", "policy_icon", "connection_test_icon")
         self._add_menu_action("כלים", self.show_tools_page, "tools_icon", "toolbox_icon")
         self._add_menu_action("הגדרות", self.show_settings_page, "settings_icon")
         self._add_menu_action("מרכז משימות", self.show_task_center_page, "task_center_icon", "tasks_icon")
@@ -5330,6 +5334,14 @@ class ChatWindow(QMainWindow):
         self.history_page.load_sessions()
         self.stacked_widget.setCurrentWidget(self.history_page)
         self._reset_page_scrolls(self.history_page)
+
+    def show_doctor_page(self):
+        self._close_canvas_for_secondary_page()
+        if self.doctor_page is None:
+            self.doctor_page = SmartiDoctorPage(self.core, self)
+            self.stacked_widget.addWidget(self.doctor_page)
+        self.stacked_widget.setCurrentWidget(self.doctor_page)
+        self._reset_page_scrolls(self.doctor_page)
 
     def show_about_page(self):
         self._close_canvas_for_secondary_page()
