@@ -1273,7 +1273,31 @@ class SmartiCore:
         return report
 
     def _should_emit_agent_report(self, report, last_report="", force=False):
-        return self._normalize_agent_report_text(report)
+        normalized = self._normalize_agent_report_text(report)
+        if not normalized:
+            return ""
+        if force:
+            return normalized
+        last_normalized = self._normalize_agent_report_text(last_report)
+        if not last_normalized:
+            return normalized
+
+        def canonical(value):
+            value = str(value or "").casefold()
+            value = re.sub(r'[\s\u200f\u200e]+', ' ', value)
+            value = re.sub(r'["\'`.,;:!?()\[\]{}\-–—]+', '', value)
+            return value.strip()
+
+        current_key = canonical(normalized)
+        last_key = canonical(last_normalized)
+        if not current_key or current_key == last_key:
+            return ""
+        try:
+            if difflib.SequenceMatcher(None, current_key, last_key).ratio() >= 0.9:
+                return ""
+        except Exception:
+            pass
+        return normalized
 
     def _fallback_agent_report_for_tools(self, calls, task_state=None, iteration=1):
         calls = [call for call in (calls or []) if isinstance(call, dict)]
@@ -6771,7 +6795,8 @@ CWD: {current_dir}
             tool_observation_start = len(getattr(self, "tool_observations", []) or [])
             schemas_seen = set()
             internal_artifact_replies = 0
-            process_report_emitted = False
+            process_report_count = 0
+            last_process_report = ""
             task_started = time.time()
             total_timeout = self._timeout("max_total_task_seconds", 900)
             current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
@@ -6836,6 +6861,38 @@ CWD: {current_dir}
                     is_background_task=is_background_task,
                 )
 
+            def process_reports_enabled():
+                return bool(
+                    (self.step_callback or getattr(self, "background_task_step_callback", None))
+                    and (not self._is_background_context() or getattr(self, "background_task_step_callback", None))
+                )
+
+            def emit_process_report(report, source="model", force=False):
+                nonlocal process_report_count, last_process_report
+                if not process_reports_enabled():
+                    return False
+                normalized_report = self._should_emit_agent_report(
+                    report,
+                    last_process_report,
+                    force=force,
+                )
+                if not normalized_report:
+                    return False
+                self._emit_agent_process_event("report", text=normalized_report, source=source)
+                last_process_report = normalized_report
+                process_report_count += 1
+                return True
+
+            def emit_tool_process_report(model_report, calls, source="model"):
+                # The first tool turn should always give the user a natural
+                # orientation cue. Later turns are shown only when the report
+                # differs enough from the previous one to add signal.
+                first_tool_report = process_report_count == 0
+                if emit_process_report(model_report, source=source, force=first_tool_report and bool(model_report)):
+                    return True
+                fallback_report = self._fallback_agent_report_for_tools(calls, task_state, iteration)
+                return emit_process_report(fallback_report, source="fallback", force=first_tool_report)
+
             checkpoint("resume_ready" if resume_checkpoint else "ready")
 
             while MAX_ITERATIONS is None or iteration < MAX_ITERATIONS:
@@ -6896,16 +6953,12 @@ CWD: {current_dir}
                     first_call, feedback_for_ai = self._decode_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
                     if feedback_for_ai or not first_call:
                         preview_step = self._preview_step_for_tool_call_entry(raw_tool_calls[0], pre_text, schemas_seen, call_index=0)
-                        if preview_step and (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)):
-                            try:
-                                report = self._should_emit_agent_report(pre_text)
-                                if report:
-                                    self._emit_agent_process_event("report", text=report, source="tool_parser")
-                                    process_report_emitted = True
-                            except Exception:
-                                pass
                         logging.warning(feedback_for_ai)
                         failed_action, failed_args = self._tool_call_attempt_for_event(raw_tool_calls[0])
+                        try:
+                            emit_tool_process_report(pre_text or preview_step, [{"action": failed_action, "arguments": failed_args}], source="tool_parser")
+                        except Exception:
+                            pass
                         failed_output = feedback_for_ai or "ERROR: Invalid tool call."
                         failed_result = {
                             "action": failed_action,
@@ -6938,15 +6991,7 @@ CWD: {current_dir}
 
                     if first_call.get("action") == "agent_planner":
                         planner_event_id = uuid.uuid4().hex
-                        planner_report = self._should_emit_agent_report(pre_text)
-                        if planner_report:
-                            self._emit_agent_process_event("report", text=planner_report, source="model")
-                            process_report_emitted = True
-                        elif (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)) and not process_report_emitted:
-                            planner_report = self._fallback_agent_report_for_tools([first_call], task_state, iteration)
-                            if planner_report:
-                                self._emit_agent_process_event("report", text=planner_report, source="fallback")
-                                process_report_emitted = True
+                        emit_tool_process_report(pre_text, [first_call], source="model")
                         self._emit_agent_process_event(
                             "tool_start",
                             tools=[self._agent_tool_event_item("agent_planner", first_call.get("arguments", {}) or {}, event_id=planner_event_id)],
@@ -7030,15 +7075,7 @@ CWD: {current_dir}
                     for call in selected_calls:
                         call["_agent_process_event_id"] = str(call.get("_agent_process_event_id") or uuid.uuid4().hex)
 
-                    report_text = self._should_emit_agent_report(pre_text)
-                    if report_text:
-                        self._emit_agent_process_event("report", text=report_text, source="model")
-                        process_report_emitted = True
-                    elif (self.step_callback or getattr(self, "background_task_step_callback", None)) and (not self._is_background_context() or getattr(self, "background_task_step_callback", None)) and not process_report_emitted:
-                        report_text = self._fallback_agent_report_for_tools(selected_calls, task_state, iteration)
-                        if report_text:
-                            self._emit_agent_process_event("report", text=report_text, source="fallback")
-                            process_report_emitted = True
+                    emit_tool_process_report(pre_text, selected_calls, source="model")
                     self._emit_agent_process_event(
                         "tool_start",
                         tools=[

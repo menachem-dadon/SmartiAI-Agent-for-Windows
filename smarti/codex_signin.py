@@ -21,6 +21,32 @@ from typing import Iterable
 CODEX_SIGNIN_PROVIDER = "openai_codex_signin"
 CODEX_SIGNIN_DEFAULT_MODEL = "codex default"
 CODEX_REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
+SMARTI_TURN_OUTPUT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "kind": {"type": "string", "enum": ["tool_calls", "final"]},
+        "tool_calls": {
+            "type": ["array", "null"],
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string"},
+                    # Codex's strict JSON-schema mode requires every object
+                    # to set additionalProperties to false.  Tool arguments
+                    # are intentionally dynamic, so carry them as JSON text
+                    # and validate/parse them locally instead.
+                    "arguments_json": {"type": "string"},
+                },
+                "required": ["name", "arguments_json"],
+            },
+        },
+        "final_answer": {"type": ["string", "null"]},
+        "progress_report": {"type": ["string", "null"]},
+    },
+    "required": ["kind", "tool_calls", "final_answer", "progress_report"],
+}
 
 
 @dataclass(frozen=True)
@@ -347,8 +373,16 @@ class CodexSignInProvider:
             "SMARTIAI AGENT CONTRACT:\n"
             "- SmartiAI exclusively owns all tool execution and the agent loop.\n"
             "- Do not inspect files, run shell commands, browse the web, or invoke native Codex tools.\n"
-            "- When the SmartiAI system instructions require a tool, emit exactly the SmartiAI tool-call syntax "
-            "specified there, with no natural-language status or final answer in that turn.\n"
+            "- Your entire response is constrained by the supplied JSON Schema. Return one object only.\n"
+            "- For SmartiAI tool calls, use kind=tool_calls and put one or more name/arguments_json objects in tool_calls; "
+            "arguments_json must be a JSON object encoded as a string, and final_answer must be null.\n"
+            "- For a tool call, progress_report may contain one short, natural, user-facing update which is shown before "
+            "SmartiAI runs the tool. State only the next intended action; do not claim it succeeded. Set it to null when "
+            "no useful update is needed.\n"
+            "- For a final user answer, use kind=final, put only the user-facing answer in final_answer; tool_calls "
+            "and progress_report must be null.\n"
+            "- This schema contract overrides any legacy instruction below that asks for a natural-language preamble or "
+            "shows the older tools/call wire format. SmartiAI translates schema tool_call objects itself.\n"
             "- A SmartiAI tool call is not a final answer; wait for SmartiAI to return its result in a later turn.\n"
             "- Never claim that a tool, canvas, file, browser action, search, or other external action succeeded unless "
             "its result appears in the conversation.\n"
@@ -390,6 +424,20 @@ class CodexSignInProvider:
             return Path(handle.name)
 
     @staticmethod
+    def _write_temporary_output_schema() -> Path:
+        """Write the per-turn Codex output schema and return a path to delete."""
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix="smarti-codex-turn-schema-",
+            suffix=".json",
+            delete=False,
+        ) as handle:
+            json.dump(SMARTI_TURN_OUTPUT_SCHEMA, handle, ensure_ascii=False)
+            return Path(handle.name)
+
+    @staticmethod
     def _parse_jsonl_execution(stdout: str) -> tuple[str, dict]:
         """Extract the final agent message and token usage from ``codex exec --json``."""
         messages = []
@@ -421,6 +469,54 @@ class CodexSignInProvider:
                     }
         return (messages[-1] if messages else ""), usage
 
+    @staticmethod
+    def _decode_structured_turn(value: str) -> str:
+        """Validate Codex's schema-constrained turn and map tool intent to Smarti's wire format."""
+        try:
+            payload = json.loads(str(value or ""))
+        except (TypeError, ValueError) as exc:
+            raise CodexSignInError("Codex החזיר תשובה שאינה תואמת לפרוטוקול המובנה של סמארטי.") from exc
+        if not isinstance(payload, dict):
+            raise CodexSignInError("Codex החזיר תשובה שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+        kind = str(payload.get("kind") or "").strip().lower()
+        progress_report = payload.get("progress_report")
+        if progress_report is not None and not isinstance(progress_report, str):
+            raise CodexSignInError("Codex החזיר דיווח ביניים שאינו תואם לפרוטוקול המובנה של סמארטי.")
+        progress_report = str(progress_report or "").strip()
+        if kind == "tool_calls":
+            raw_calls = payload.get("tool_calls")
+            if not isinstance(raw_calls, list) or not raw_calls or payload.get("final_answer") is not None:
+                raise CodexSignInError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+            calls = []
+            for raw_call in raw_calls[:8]:
+                if not isinstance(raw_call, dict):
+                    raise CodexSignInError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+                tool_name = str(raw_call.get("name") or "").strip()
+                raw_arguments = raw_call.get("arguments_json")
+                try:
+                    tool_arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else None
+                except (TypeError, ValueError) as exc:
+                    raise CodexSignInError("Codex החזיר ארגומנטים של כלי שאינם JSON תקין.") from exc
+                if not tool_name or not isinstance(tool_arguments, dict):
+                    raise CodexSignInError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+                calls.append({"name": tool_name, "arguments": tool_arguments})
+            tool_turn = json.dumps(
+                {"tool_calls": calls},
+                ensure_ascii=False,
+            )
+            return f"{progress_report}\n{tool_turn}" if progress_report else tool_turn
+        if kind == "final":
+            final_answer = payload.get("final_answer")
+            if (
+                not isinstance(final_answer, str)
+                or not final_answer.strip()
+                or payload.get("tool_calls") is not None
+                or progress_report
+            ):
+                raise CodexSignInError("Codex החזיר תשובה סופית שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+            return final_answer.strip()
+        raise CodexSignInError("Codex החזיר סוג תגובה לא מוכר בפרוטוקול המובנה של סמארטי.")
+
     def complete(
         self,
         messages,
@@ -437,13 +533,18 @@ class CodexSignInProvider:
         if selected_reasoning_effort not in CODEX_REASONING_EFFORTS:
             selected_reasoning_effort = "medium"
         instructions_path = self._write_temporary_model_instructions(self._build_model_instructions(messages))
+        output_schema_path = None
         try:
+            output_schema_path = self._write_temporary_output_schema()
             args = [
-                "exec", "--json", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
+                # Keep ChatGPT sign-in from CODEX_HOME, but never inherit the
+                # user's Desktop/CLI tools, MCP servers, hooks, or instructions.
+                "exec", "--json", "--ignore-user-config", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
                 "--disable", "shell_tool",
                 "--config", 'web_search="disabled"',
                 "--config", f'model_reasoning_effort="{selected_reasoning_effort}"',
                 "--config", f"model_instructions_file={self._toml_string(instructions_path)}",
+                "--output-schema", str(output_schema_path),
             ]
             if selected_model and selected_model.lower() not in {"codex default", "default"}:
                 args.extend(("--model", selected_model))
@@ -452,10 +553,13 @@ class CodexSignInProvider:
             args.append("-")
             code, stdout, stderr = self._run(args, timeout=timeout, input_text=self._build_prompt(messages))
         finally:
-            try:
-                instructions_path.unlink(missing_ok=True)
-            except OSError:
-                logging.warning("Could not remove temporary Codex instruction file.")
+            for path, label in ((instructions_path, "instruction"), (output_schema_path, "output-schema")):
+                if path is None:
+                    continue
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logging.warning(f"Could not remove temporary Codex {label} file.")
         if code != 0:
             detail = "\n".join(part for part in (stdout, stderr) if part)
             if self._looks_like_auth_error(detail):
@@ -464,4 +568,4 @@ class CodexSignInProvider:
         response, usage = self._parse_jsonl_execution(stdout)
         if not response:
             raise CodexSignInError("Codex החזיר פלט מובנה בלי תשובה סופית. יש לנסות שוב או לעדכן את Codex CLI.")
-        return response, usage
+        return self._decode_structured_turn(response), usage

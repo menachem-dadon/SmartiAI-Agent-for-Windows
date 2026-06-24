@@ -6,8 +6,10 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from smarti.codex_signin import CodexConnectionStatus, CodexSignInProvider
+from smarti.codex_signin import CodexConnectionStatus, CodexSignInError, CodexSignInProvider
 from smarti.common import provider_fallback_models
+from smarti.core import SmartiCore
+from smarti.managers import AgentRuntime
 
 
 class CodexSignInProviderTests(unittest.TestCase):
@@ -19,7 +21,35 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.temp.cleanup()
 
     @staticmethod
-    def _codex_jsonl_response(text="תשובה", input_tokens=10, output_tokens=4, reasoning_tokens=0):
+    def _codex_jsonl_response(
+        text="תשובה",
+        input_tokens=10,
+        output_tokens=4,
+        reasoning_tokens=0,
+        tool_name=None,
+        tool_arguments=None,
+        progress_report=None,
+    ):
+        if tool_name:
+            text = json.dumps(
+                {
+                    "kind": "tool_calls",
+                    "tool_calls": [{"name": tool_name, "arguments_json": json.dumps(tool_arguments or {}, ensure_ascii=False)}],
+                    "final_answer": None,
+                    "progress_report": progress_report,
+                },
+                ensure_ascii=False,
+            )
+        else:
+            text = json.dumps(
+                {
+                    "kind": "final",
+                    "tool_calls": None,
+                    "final_answer": text,
+                    "progress_report": None,
+                },
+                ensure_ascii=False,
+            )
         return "\n".join(
             (
                 json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
@@ -122,6 +152,7 @@ class CodexSignInProviderTests(unittest.TestCase):
         args = self.provider._run.call_args.args[0]
         self.assertEqual(args[:2], ["exec", "--json"])
         self.assertIn("--json", args)
+        self.assertIn("--ignore-user-config", args)
         self.assertIn("read-only", args)
         self.assertIn("--skip-git-repo-check", args)
         self.assertIn("--model", args)
@@ -167,7 +198,8 @@ class CodexSignInProviderTests(unittest.TestCase):
 
         self.assertIn("[SMARTIAI SYSTEM INSTRUCTIONS]", instructions)
         self.assertIn("Use TOOL_CALL syntax", instructions)
-        self.assertIn("emit exactly the SmartiAI tool-call syntax", instructions)
+        self.assertIn("supplied JSON Schema", instructions)
+        self.assertIn("legacy instruction", instructions)
         self.assertIn("Never claim that a tool, canvas", instructions)
         self.assertNotIn("Use TOOL_CALL syntax", prompt)
         self.assertIn("[USER]", prompt)
@@ -185,6 +217,9 @@ class CodexSignInProviderTests(unittest.TestCase):
             instructions_path = Path(json.loads(instructions_config.split("=", 1)[1]))
             captured["path"] = instructions_path
             captured["instructions"] = instructions_path.read_text(encoding="utf-8")
+            schema_path = Path(args[args.index("--output-schema") + 1])
+            captured["schema_path"] = schema_path
+            captured["schema"] = json.loads(schema_path.read_text(encoding="utf-8"))
             captured["args"] = args
             captured["prompt"] = kwargs["input_text"]
             return 0, self._codex_jsonl_response(), ""
@@ -202,8 +237,48 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.assertNotIn("Smarti system rule.", captured["prompt"])
         self.assertIn("--disable", captured["args"])
         self.assertIn("shell_tool", captured["args"])
+        self.assertIn("--ignore-user-config", captured["args"])
+        self.assertIn("--output-schema", captured["args"])
         self.assertIn('web_search="disabled"', captured["args"])
         self.assertFalse(captured["path"].exists())
+        self.assertFalse(captured["schema_path"].exists())
+        self.assertEqual(captured["schema"]["properties"]["kind"]["enum"], ["tool_calls", "final"])
+        self.assertFalse(captured["schema"]["properties"]["tool_calls"]["items"]["additionalProperties"])
+        self.assertEqual(
+            captured["schema"]["properties"]["tool_calls"]["items"]["properties"]["arguments_json"]["type"],
+            "string",
+        )
+
+    def test_schema_tool_turn_is_mapped_to_the_existing_smarti_tool_wire_format(self):
+        response = self.provider._decode_structured_turn(json.dumps({
+            "kind": "tool_calls",
+            "tool_calls": [{"name": "web_manager", "arguments_json": '{"action":"search","query":"test"}'}],
+            "final_answer": None,
+            "progress_report": "אני בודק מידע עדכני ברשת.",
+        }))
+
+        report, wire_format = response.split("\n", 1)
+        self.assertEqual(report, "אני בודק מידע עדכני ברשת.")
+        self.assertEqual(json.loads(wire_format), {
+            "tool_calls": [{"name": "web_manager", "arguments": {"action": "search", "query": "test"}}],
+        })
+
+        parsed = AgentRuntime(mock.Mock()).extract_tool_calls(response)
+        self.assertEqual(parsed["pre_text"], "אני בודק מידע עדכני ברשת.")
+        self.assertEqual(len(parsed["tool_calls"]), 1)
+
+    def test_schema_rejects_non_object_tool_arguments(self):
+        with self.assertRaises(CodexSignInError):
+            self.provider._decode_structured_turn(json.dumps({
+                "kind": "tool_calls",
+                "tool_calls": [{"name": "web_manager", "arguments_json": "[]"}],
+                "final_answer": None,
+                "progress_report": None,
+            }))
+
+    def test_invalid_schema_turn_is_rejected_without_text_heuristics(self):
+        with self.assertRaises(CodexSignInError):
+            self.provider._decode_structured_turn('{"kind":"final","tool_calls":null,"final_answer":null,"progress_report":null}')
 
     def test_login_skips_interactive_command_when_already_connected(self):
         connected = CodexConnectionStatus("connected", "מחובר", "chatgpt")
@@ -227,6 +302,32 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.provider._run.assert_called_once_with(
             ("login",), timeout=600, interactive_console=(os.name == "nt")
         )
+
+
+class AgentReportTests(unittest.TestCase):
+    def setUp(self):
+        self.core = SmartiCore.__new__(SmartiCore)
+
+    def test_first_agent_report_is_allowed(self):
+        report = self.core._should_emit_agent_report("סטטוס: אני בודק את הקבצים הרלוונטיים.")
+
+        self.assertEqual(report, "אני בודק את הקבצים הרלוונטיים.")
+
+    def test_duplicate_agent_report_is_suppressed(self):
+        report = self.core._should_emit_agent_report(
+            "אני בודק את הקבצים הרלוונטיים עכשיו.",
+            last_report="אני בודק את הקבצים הרלוונטיים עכשיו",
+        )
+
+        self.assertEqual(report, "")
+
+    def test_distinct_agent_report_is_allowed_after_a_previous_report(self):
+        report = self.core._should_emit_agent_report(
+            "מצאתי את אזור הקוד הרלוונטי, ועכשיו אני בודק את הלוגים מולו.",
+            last_report="אני בודק את הקבצים הרלוונטיים.",
+        )
+
+        self.assertEqual(report, "מצאתי את אזור הקוד הרלוונטי, ועכשיו אני בודק את הלוגים מולו.")
 
 
 if __name__ == "__main__":
