@@ -15,16 +15,32 @@ class CodexSignInProviderTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_secure_config_uses_keyring_and_rejects_plaintext_auth(self):
-        self.provider._ensure_secure_store_config()
+    def test_environment_preserves_official_cli_home_without_api_credentials(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CODEX_HOME": r"C:\Users\test user\Codex Home",
+                "OPENAI_API_KEY": "must-not-reach-codex",
+                "CODEX_API_KEY": "must-not-reach-codex",
+                "CODEX_ACCESS_TOKEN": "must-not-reach-codex",
+            },
+            clear=False,
+        ):
+            environment = self.provider._environment()
 
-        config = self.provider.config_path.read_text(encoding="utf-8")
-        self.assertIn('cli_auth_credentials_store = "keyring"', config)
-        self.assertFalse(self.provider.insecure_auth_path.exists())
+        self.assertEqual(environment["CODEX_HOME"], r"C:\Users\test user\Codex Home")
+        self.assertNotIn("OPENAI_API_KEY", environment)
+        self.assertNotIn("CODEX_API_KEY", environment)
+        self.assertNotIn("CODEX_ACCESS_TOKEN", environment)
 
-        self.provider.insecure_auth_path.write_text('{"tokens":"never allowed"}', encoding="utf-8")
-        status = self.provider.connection_status()
-        self.assertEqual(status.state, "reauth_required")
+    def test_smarti_codex_cli_override_is_used_verbatim(self):
+        path = r"C:\Users\יהודית סיידון\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe"
+        with mock.patch.dict(os.environ, {"SMARTI_CODEX_CLI": path}):
+            self.assertEqual(self.provider._find_executable(), path)
+
+    def test_windows_apps_desktop_path_is_not_treated_as_the_cli(self):
+        desktop_path = r"C:\Program Files\WindowsApps\OpenAI.Codex\app\resources\codex.exe"
+        self.assertTrue(self.provider._is_windows_apps_path(desktop_path))
 
     @mock.patch("smarti.codex_signin.subprocess.run")
     @mock.patch("smarti.codex_signin.shutil.which", return_value="codex-test")
@@ -37,10 +53,10 @@ class CodexSignInProviderTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[1:], ["login", "status"])
         env = run.call_args.kwargs["env"]
-        self.assertEqual(env["CODEX_HOME"], str(self.provider.home_dir))
         self.assertNotIn("OPENAI_API_KEY", env)
         self.assertNotIn("CODEX_API_KEY", env)
         self.assertNotIn("CODEX_ACCESS_TOKEN", env)
+        self.assertFalse(run.call_args.kwargs["shell"])
 
     def test_connection_status_distinguishes_missing_and_expired_credentials(self):
         self.provider._run = mock.Mock(return_value=(1, "Not logged in", ""))
@@ -93,6 +109,29 @@ class CodexSignInProviderTests(unittest.TestCase):
 
         args = self.provider._run.call_args.args[0]
         self.assertNotIn("--model", args)
+
+    def test_login_skips_interactive_command_when_already_connected(self):
+        connected = CodexConnectionStatus("connected", "מחובר", "chatgpt")
+        self.provider.connection_status = mock.Mock(return_value=connected)
+        self.provider._run = mock.Mock()
+
+        status = self.provider.login()
+
+        self.assertIs(status, connected)
+        self.provider._run.assert_not_called()
+
+    def test_login_uses_a_new_console_after_a_not_connected_status(self):
+        self.provider.connection_status = mock.Mock(
+            side_effect=[CodexConnectionStatus("not_connected", "לא מחובר"), CodexConnectionStatus("connected", "מחובר")]
+        )
+        self.provider._run = mock.Mock(return_value=(0, "", ""))
+
+        status = self.provider.login()
+
+        self.assertEqual(status.state, "connected")
+        self.provider._run.assert_called_once_with(
+            ("login",), timeout=600, interactive_console=(os.name == "nt")
+        )
 
 
 if __name__ == "__main__":

@@ -1,12 +1,13 @@
 """Official OpenAI Codex CLI provider with ChatGPT sign-in only.
 
-Smarti never receives, writes, or parses a ChatGPT password, access token, or
-refresh token.  The official Codex CLI owns the OAuth browser flow and is
-configured to use the operating-system credential store.
+Smarti never receives, writes, copies, or parses a ChatGPT password, access
+token, refresh token, or Codex session.  The official Codex CLI owns both its
+OAuth browser flow and its existing credential store.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 from pathlib import Path
 import re
@@ -42,42 +43,57 @@ class CodexSignInProvider:
 
     def __init__(self, data_dir: str | os.PathLike[str], executable: str | None = None):
         self.data_dir = Path(data_dir)
-        self.home_dir = self.data_dir / "codex_signin"
-        self.workspace_dir = self.home_dir / "workspace"
+        # This directory is only a harmless working directory for ``codex
+        # exec``.  It must not become CODEX_HOME: doing so would make the CLI
+        # look for a different login session than the one the user has already
+        # established through the official CLI.
+        self.workspace_dir = self.data_dir / "codex_signin" / "workspace"
         self.executable = executable or "codex"
 
-    @property
-    def config_path(self) -> Path:
-        return self.home_dir / "config.toml"
-
-    @property
-    def insecure_auth_path(self) -> Path:
-        return self.home_dir / "auth.json"
-
     def _find_executable(self) -> str:
-        override = str(os.environ.get("SMARTI_CODEX_CLI") or "").strip()
+        override = os.environ.get("SMARTI_CODEX_CLI")
         if override:
             return override
-        found = shutil.which(self.executable)
-        if found:
-            return found
+
+        # An explicitly supplied executable (used by tests and integrations)
+        # takes precedence over automatic discovery, but never over the user's
+        # SMARTI_CODEX_CLI setting above.
+        if self.executable != "codex":
+            explicit = shutil.which(self.executable)
+            if explicit:
+                return explicit
+            if Path(self.executable).is_file():
+                return self.executable
+
         if os.name == "nt":
             candidates = (
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "OpenAI" / "Codex" / "bin" / "codex.exe",
                 Path(os.environ.get("APPDATA", "")) / "npm" / "codex.cmd",
-                Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps" / "codex.exe",
             )
             for candidate in candidates:
                 if candidate.is_file():
                     return str(candidate)
+        found = shutil.which(self.executable)
+        if found and not self._is_windows_apps_path(found):
+            return found
         raise CodexSignInError(
             "לא נמצא Codex CLI פעיל. יש להתקין או לעדכן את OpenAI Codex CLI, ואז לנסות שוב."
         )
 
+    @staticmethod
+    def _is_windows_apps_path(path: str) -> bool:
+        """Avoid the Desktop app executable when discovering a CLI automatically."""
+        normalized = str(path).replace("/", "\\").casefold()
+        return os.name == "nt" and "\\windowsapps\\" in normalized
+
     def _environment(self) -> dict[str, str]:
         env = os.environ.copy()
-        env["CODEX_HOME"] = str(self.home_dir)
-        # This provider must use the interactive ChatGPT/Codex credential, never
-        # an API key or a token inherited from the parent process.
+        # Preserve the user's real CODEX_HOME (if they configured one).  The
+        # official CLI must see the same credential store as ``codex login
+        # status`` in the user's terminal.  Smarti never writes to that store.
+        #
+        # API-key environment variables are deliberately removed so this
+        # provider uses only the official ChatGPT/Codex sign-in mode.
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"):
             env.pop(key, None)
         return env
@@ -93,30 +109,68 @@ class CodexSignInProvider:
         )
         return text[-1200:]
 
-    def _ensure_secure_store_config(self) -> None:
-        self.home_dir.mkdir(parents=True, exist_ok=True)
-        self.workspace_dir.mkdir(parents=True, exist_ok=True)
-        if self.insecure_auth_path.exists():
-            raise CodexSignInError(
-                "נמצאו פרטי התחברות בקובץ לא מאובטח של Codex. התנתקי, עדכני את Codex, "
-                "והתחברי מחדש כדי להשתמש ב-Windows Credential Manager."
-            )
+    def _log_cli_execution(self, command, returncode=None, stdout="", stderr="") -> None:
+        codex_path = str(command[0]) if command else ""
+        try:
+            path_exists = os.path.exists(codex_path)
+        except OSError:
+            path_exists = False
+        try:
+            executable = os.access(codex_path, os.X_OK)
+        except OSError:
+            executable = False
+        logging.info(
+            "CODEX CLI | codex_path=%r exists=%s executable=%s command=%r returncode=%r stdout=%r stderr=%r",
+            codex_path,
+            path_exists,
+            executable,
+            list(command),
+            returncode,
+            self._redact_cli_output(stdout),
+            self._redact_cli_output(stderr),
+        )
 
-        current = ""
-        if self.config_path.exists():
-            current = self.config_path.read_text(encoding="utf-8", errors="replace")
-        setting = 'cli_auth_credentials_store = "keyring"'
-        expression = re.compile(r"(?m)^\s*cli_auth_credentials_store\s*=.*$")
-        updated = expression.sub(setting, current)
-        if updated == current:
-            updated = (current.rstrip() + "\n" if current.strip() else "") + setting + "\n"
-        self.config_path.write_text(updated, encoding="utf-8")
-
-    def _run(self, args: Iterable[str], timeout: int = 30, input_text: str | None = None) -> tuple[int, str, str]:
+    def _run(
+        self,
+        args: Iterable[str],
+        timeout: int = 30,
+        input_text: str | None = None,
+        interactive_console: bool = False,
+    ) -> tuple[int, str, str]:
         command = [self._find_executable(), *[str(item) for item in args]]
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        if interactive_console:
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(self.workspace_dir),
+                    env=self._environment(),
+                    shell=False,
+                    creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                )
+                returncode = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+                self._log_cli_execution(command, None, "", "Interactive login timed out")
+                raise CodexSignInError("פעולת Codex לא הסתיימה בזמן. נסי שוב.")
+            except PermissionError:
+                self._log_cli_execution(command, None, "", "Permission denied")
+                raise CodexSignInError(
+                    "Codex CLI נמצא, אך Windows אינו מאפשר להפעיל אותו. יש להתקין או לעדכן את Codex CLI הרשמי."
+                )
+            except OSError as exc:
+                self._log_cli_execution(command, None, "", str(exc))
+                raise CodexSignInError(f"לא ניתן להפעיל את Codex CLI: {exc}")
+            self._log_cli_execution(command, returncode, "[interactive console]", "[interactive console]")
+            return int(returncode), "", ""
+
         run_kwargs = {
             "cwd": str(self.workspace_dir),
             "env": self._environment(),
+            "shell": False,
             "capture_output": True,
             "text": True,
             "encoding": "utf-8",
@@ -131,18 +185,20 @@ class CodexSignInProvider:
         try:
             completed = subprocess.run(command, **run_kwargs)
         except subprocess.TimeoutExpired:
+            self._log_cli_execution(command, None, "", "Timed out")
             raise CodexSignInError("פעולת Codex לא הסתיימה בזמן. נסי שוב.")
         except PermissionError:
+            self._log_cli_execution(command, None, "", "Permission denied")
             raise CodexSignInError(
                 "Codex CLI נמצא, אך Windows אינו מאפשר להפעיל אותו. יש להתקין או לעדכן את Codex CLI הרשמי."
             )
         except OSError as exc:
+            self._log_cli_execution(command, None, "", str(exc))
             raise CodexSignInError(f"לא ניתן להפעיל את Codex CLI: {exc}")
-        return (
-            int(completed.returncode),
-            self._redact_cli_output(completed.stdout),
-            self._redact_cli_output(completed.stderr),
-        )
+        stdout = self._redact_cli_output(completed.stdout)
+        stderr = self._redact_cli_output(completed.stderr)
+        self._log_cli_execution(command, completed.returncode, stdout, stderr)
+        return int(completed.returncode), stdout, stderr
 
     @classmethod
     def _looks_like_auth_error(cls, output: str) -> bool:
@@ -159,13 +215,7 @@ class CodexSignInProvider:
         return "not_connected"
 
     def connection_status(self) -> CodexConnectionStatus:
-        if self.insecure_auth_path.exists():
-            return CodexConnectionStatus(
-                "reauth_required",
-                "נמצאו פרטי התחברות בקובץ לא מאובטח של Codex. נדרשת התנתקות והתחברות מחדש.",
-            )
         try:
-            self._ensure_secure_store_config()
             code, stdout, stderr = self._run(("login", "status"), timeout=20)
         except CodexSignInError as exc:
             message = str(exc)
@@ -221,20 +271,19 @@ class CodexSignInProvider:
 
     def login(self) -> CodexConnectionStatus:
         """Start the browser OAuth flow exposed by the official Codex CLI."""
+        status = self.connection_status()
+        if status.state == "connected":
+            return status
+        if status.state == "unavailable":
+            return status
         try:
-            self._ensure_secure_store_config()
-            code, stdout, stderr = self._run(("login",), timeout=600)
-        except CodexSignInError as exc:
-            state = "reauth_required" if self.insecure_auth_path.exists() else "unavailable"
-            return CodexConnectionStatus(state, str(exc))
-        if self.insecure_auth_path.exists():
-            # A CLI that ignores the keyring setting must not leave a plaintext
-            # credential behind in Smarti's dedicated Codex home.
-            self._remove_plaintext_auth()
-            return CodexConnectionStatus(
-                "reauth_required",
-                "גרסת Codex זו ניסתה לשמור פרטי התחברות בקובץ. עדכני את Codex והתחברי מחדש.",
+            code, stdout, stderr = self._run(
+                ("login",),
+                timeout=600,
+                interactive_console=(os.name == "nt"),
             )
+        except CodexSignInError as exc:
+            return CodexConnectionStatus("unavailable", str(exc))
         if code == 0:
             return self.connection_status()
         detail = "\n".join(part for part in (stdout, stderr) if part)
@@ -245,29 +294,11 @@ class CodexSignInProvider:
             )
         return CodexConnectionStatus("not_connected", "ההתחברות לא הושלמה. אפשר לנסות שוב.")
 
-    def _remove_plaintext_auth(self) -> None:
-        try:
-            self._run(("logout",), timeout=20)
-        except CodexSignInError:
-            pass
-        finally:
-            try:
-                self.insecure_auth_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
     def logout(self) -> CodexConnectionStatus:
-        self.home_dir.mkdir(parents=True, exist_ok=True)
-        self.workspace_dir.mkdir(parents=True, exist_ok=True)
         try:
-            # A stale plaintext file is removed only on explicit logout. Let the
-            # official CLI clear it first, then remove any remaining local file.
-            if self.insecure_auth_path.exists():
-                code, _stdout, _stderr = self._run(("logout",), timeout=30)
-                self.insecure_auth_path.unlink(missing_ok=True)
-            else:
-                self._ensure_secure_store_config()
-                code, _stdout, _stderr = self._run(("logout",), timeout=30)
+            # Deliberately delegate entirely to the official CLI.  Smarti never
+            # deletes or edits its credential/session files.
+            code, _stdout, _stderr = self._run(("logout",), timeout=30)
         except CodexSignInError as exc:
             return CodexConnectionStatus("unavailable", str(exc))
         if code == 0:
