@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from unittest import mock
+from pathlib import Path
 
 from smarti.codex_signin import CodexConnectionStatus, CodexSignInProvider
 from smarti.common import provider_fallback_models
@@ -152,22 +153,57 @@ class CodexSignInProviderTests(unittest.TestCase):
         )
 
         args = self.provider._run.call_args.args[0]
-        config_index = args.index("--config")
-        self.assertEqual(args[config_index + 1], 'model_reasoning_effort="xhigh"')
+        config_values = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--config"]
+        self.assertIn('model_reasoning_effort="xhigh"', config_values)
         self.assertEqual(args[args.index("--model") + 1], "gpt-5.5")
 
     def test_agent_prompt_preserves_system_tools_without_authorizing_native_codex_actions(self):
-        prompt = self.provider._build_prompt(
+        messages = [
+            {"role": "system", "content": "Use TOOL_CALL syntax when a tool is needed."},
+            {"role": "user", "content": "צור קנבס."},
+        ]
+        instructions = self.provider._build_model_instructions(messages)
+        prompt = self.provider._build_prompt(messages)
+
+        self.assertIn("[SMARTIAI SYSTEM INSTRUCTIONS]", instructions)
+        self.assertIn("Use TOOL_CALL syntax", instructions)
+        self.assertIn("emit exactly the SmartiAI tool-call syntax", instructions)
+        self.assertIn("Never claim that a tool, canvas", instructions)
+        self.assertNotIn("Use TOOL_CALL syntax", prompt)
+        self.assertIn("[USER]", prompt)
+
+    def test_complete_uses_a_temporary_base_instruction_file_and_disables_native_tools(self):
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
+        )
+        captured = {}
+
+        def run(args, **kwargs):
+            args = list(args)
+            config_values = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--config"]
+            instructions_config = next(value for value in config_values if value.startswith("model_instructions_file="))
+            instructions_path = Path(json.loads(instructions_config.split("=", 1)[1]))
+            captured["path"] = instructions_path
+            captured["instructions"] = instructions_path.read_text(encoding="utf-8")
+            captured["args"] = args
+            captured["prompt"] = kwargs["input_text"]
+            return 0, self._codex_jsonl_response(), ""
+
+        self.provider._run = mock.Mock(side_effect=run)
+        self.provider.complete(
             [
-                {"role": "system", "content": "Use TOOL_CALL syntax when a tool is needed."},
-                {"role": "user", "content": "צור קנבס."},
-            ]
+                {"role": "system", "content": "Smarti system rule."},
+                {"role": "user", "content": "שלום"},
+            ],
+            model="gpt-5.5",
         )
 
-        self.assertIn("[SYSTEM]\nUse TOOL_CALL syntax", prompt)
-        self.assertIn("emit exactly the SmartiAI tool-call syntax", prompt)
-        self.assertIn("Never claim that a tool, canvas", prompt)
-        self.assertNotIn("Return only the final response", prompt)
+        self.assertIn("Smarti system rule.", captured["instructions"])
+        self.assertNotIn("Smarti system rule.", captured["prompt"])
+        self.assertIn("--disable", captured["args"])
+        self.assertIn("shell_tool", captured["args"])
+        self.assertIn('web_search="disabled"', captured["args"])
+        self.assertFalse(captured["path"].exists())
 
     def test_login_skips_interactive_command_when_already_connected(self):
         connected = CodexConnectionStatus("connected", "מחובר", "chatgpt")
