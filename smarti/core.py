@@ -6189,8 +6189,12 @@ CWD: {current_dir}
                         self.setup_model()
                         codex_provider = getattr(self, "codex_signin_provider", None)
                     if codex_provider is None:
-                        raise CodexSignInError("ספק Codex לא הופעל. נסי להתחבר מחדש.")
-                    return codex_provider.complete(request_messages, current_model)
+                        raise CodexSignInError("ספק Codex לא הופעל. יש להתחבר מחדש.")
+                    return codex_provider.complete(
+                        request_messages,
+                        current_model,
+                        reasoning_effort=self.settings.get("codex_reasoning_effort", "medium"),
+                    )
                 if self.mode == "gemini":
                     api_key = self._ensure_secret_loaded("gemini_api_key")
                     base_url = get_url(URL_GEMINI_GEN)
@@ -6743,7 +6747,7 @@ CWD: {current_dir}
                 provider_label = self._provider_display_name(self.settings.get("api_mode", getattr(self, "mode", "")))
                 if normalize_provider_name(self.settings.get("api_mode", "")) == CODEX_SIGNIN_PROVIDER:
                     detail = str(getattr(self, "_codex_connection_message", "") or "לא מחובר עם ChatGPT / Codex.")
-                    final_response = f"ERROR_USER: {detail} פתחי את ההגדרות ולחצי על 'התחבר עם ChatGPT / Codex'."
+                    final_response = f"ERROR_USER: {detail} יש לפתוח את ההגדרות וללחוץ על 'התחבר עם ChatGPT / Codex'."
                 else:
                     final_response = f"ERROR_USER: חסר מפתח API של {provider_label}. הזן מפתח בהגדרות או בחלון שנפתח כדי להמשיך."
                 return final_response

@@ -2934,7 +2934,7 @@ class SettingsPage(QWidget):
         layout = QVBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        self.codex_signin_status = QLabel("בחרי OpenAI Codex Sign-in כדי להתחבר.")
+        self.codex_signin_status = QLabel("יש לבחור OpenAI Codex Sign-in כדי להתחבר.")
         self.codex_signin_status.setWordWrap(True)
         self.codex_signin_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.codex_signin_status.setStyleSheet(muted_label_css(12))
@@ -2944,14 +2944,18 @@ class SettingsPage(QWidget):
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(10)
+        compact_button_padding = "QPushButton { padding: 7px 8px; }"
         for button in (self.codex_login_btn, self.codex_check_btn, self.codex_logout_btn):
             button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.setStyleSheet(SECONDARY_BUTTON_CSS)
-            button.setFixedHeight(56)
+            button.setStyleSheet(SECONDARY_BUTTON_CSS + compact_button_padding)
+            # The sign-in and check labels intentionally use two lines.  The
+            # shared button style has generous padding, so 56px clips their
+            # second line on Windows/RTL fonts.
+            button.setFixedHeight(74)
             button.setMinimumWidth(0)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.codex_login_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
+        self.codex_login_btn.setStyleSheet(PRIMARY_BUTTON_CSS + compact_button_padding)
         self.codex_login_btn.clicked.connect(lambda: self._start_codex_signin_action("login"))
         self.codex_check_btn.clicked.connect(lambda: self._start_codex_signin_action("check"))
         self.codex_logout_btn.clicked.connect(lambda: self._start_codex_signin_action("logout"))
@@ -3228,6 +3232,18 @@ class SettingsPage(QWidget):
         self.model_combo = SearchableModelComboBox()
         self.model_combo.setStyleSheet(COMBOBOX_CSS)
         self.model_picker_row = self._make_model_picker_row()
+        self.codex_reasoning_effort_combo = NoScrollComboBox()
+        for label, value in (
+            ("נמוכה", "low"),
+            ("בינונית (ברירת המחדל)", "medium"),
+            ("גבוהה", "high"),
+            ("גבוהה מאוד", "xhigh"),
+        ):
+            self.codex_reasoning_effort_combo.addItem(label, value)
+        saved_reasoning_effort = str(self.core.settings.get("codex_reasoning_effort", "medium") or "medium").strip().lower()
+        saved_reasoning_index = self.codex_reasoning_effort_combo.findData(saved_reasoning_effort)
+        self.codex_reasoning_effort_combo.setCurrentIndex(saved_reasoning_index if saved_reasoning_index >= 0 else 1)
+        self.codex_reasoning_effort_combo.setStyleSheet(COMBOBOX_CSS)
         
         self.api_key_edit = MaskedSecretLineEdit()
         self.api_key_edit.setPlaceholderText("מפתח גישה לספק המודל")
@@ -3827,7 +3843,7 @@ class SettingsPage(QWidget):
         )
         ai.addWidget(self.api_key_status)
         ai.addWidget(self.api_key_help_hint)
-        self._add_field(
+        self.codex_signin_field_container = self._add_field(
             "חיבור ChatGPT / Codex",
             self.codex_signin_row,
             ai,
@@ -3836,7 +3852,17 @@ class SettingsPage(QWidget):
             info=True,
         )
         ai.addWidget(self.codex_signin_warning)
+        self.codex_signin_field_container.setVisible(False)
+        self.codex_signin_warning.setVisible(False)
         self._add_field("מודל", self.model_picker_row, ai, "בחירת המודל הפעיל לשיחה. בחירה נשמרת גם כמועדף כדי שאפשר יהיה להחליף אליו במהירות מהצ'אט.", keywords="favorite favourite star quick switch chat model picker spinner llm")
+        self.codex_reasoning_effort_field_container = self._add_field(
+            "עוצמת חשיבה",
+            self.codex_reasoning_effort_combo,
+            ai,
+            "קובעת כמה מאמץ חשיבה Codex ישקיע בכל בקשה. עוצמה גבוהה יותר עשויה להיות איטית יותר ולצרוך יותר מהמכסה.",
+            keywords="codex reasoning effort low medium high extra high thinking",
+        )
+        self.codex_reasoning_effort_field_container.setVisible(False)
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.", keywords="local server url lm studio ollama localhost endpoint base url")
         self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key_row, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.", keywords="web search internet tavily live current latest")
         ai.addWidget(self.tavily_key_help_hint)
@@ -4022,6 +4048,9 @@ class SettingsPage(QWidget):
             self.api_key_help_link.setVisible(False)
             self.api_key_help_hint.setVisible(False)
             self.api_key_status.setVisible(False)
+            self.codex_signin_field_container.setVisible(True)
+            self.codex_signin_warning.setVisible(True)
+            self.codex_reasoning_effort_field_container.setVisible(True)
             self.populate_models(provider_fallback_models(text), text)
             self._schedule_autosave()
             self._start_codex_signin_action("status")
@@ -4029,6 +4058,9 @@ class SettingsPage(QWidget):
         self.api_key_field_container.setVisible(True)
         self.api_key_row.setVisible(True)
         self.api_key_status.setVisible(True)
+        self.codex_signin_field_container.setVisible(False)
+        self.codex_signin_warning.setVisible(False)
+        self.codex_reasoning_effort_field_container.setVisible(False)
         if text == "local":
             self.api_key_edit.set_secret("")
             self.api_key_edit.setPlaceholderText("לא נדרש מפתח למודל מקומי")
@@ -4191,7 +4223,7 @@ class SettingsPage(QWidget):
             )
 
     def _register_autosave_handlers(self):
-        combos = [self.provider_combo, self.tts_voice_combo]
+        combos = [self.provider_combo, self.tts_voice_combo, self.codex_reasoning_effort_combo]
         combos.extend(self.policy_combos.values())
         for combo in combos:
             combo.currentIndexChanged.connect(lambda _=None: self._schedule_autosave())
@@ -4494,6 +4526,8 @@ class SettingsPage(QWidget):
         previous_provider = normalize_provider_name(before.get("api_mode", provider))
         previous_selected_model = str(before.get(f"selected_{provider}_model", "") or "")
         self.core.settings["api_mode"] = provider
+        reasoning_effort = str(self.codex_reasoning_effort_combo.currentData() or "medium").strip().lower()
+        self.core.settings["codex_reasoning_effort"] = reasoning_effort if reasoning_effort in {"low", "medium", "high", "xhigh"} else "medium"
         self.core.settings["autonomy_mode"] = self._autonomy_profile_key()
         self.core.settings.setdefault("ui_preferences", {})["theme_mode"] = self._theme_mode_key()
         if selected_model and selected_model != "טוען מודלים...":

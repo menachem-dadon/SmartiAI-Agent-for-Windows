@@ -122,8 +122,13 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "codex_signin",
         "secret_key": None,
         "key_instructions": "החיבור נפתח בדפדפן באמצעות Codex sign-in הרשמי של OpenAI. לא נדרש מפתח API.",
-        "default_model": "Codex default",
-        "fallback_models": ["Codex default"],
+        "default_model": "codex default",
+        "fallback_models": [
+            "codex default",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+        ],
     },
     "anthropic": {
         "label": "Anthropic",

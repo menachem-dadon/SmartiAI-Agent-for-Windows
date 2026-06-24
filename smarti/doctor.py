@@ -47,10 +47,12 @@ from .common import (
     fetch_text_models_for_provider,
     normalize_provider_name,
     provider_config,
+    provider_default_model,
     provider_display_name,
     provider_requires_api_key,
     provider_secret_key,
 )
+from .codex_signin import CODEX_SIGNIN_PROVIDER, CodexSignInProvider
 from .config import DEFAULT_POLICY_MATRIX, SETTINGS_SCHEMA_VERSION
 from .runtime import SMARTI_RUNTIME
 from .visual_canvas import new_canvas_artifact, web_canvas_available
@@ -518,6 +520,60 @@ class SmartiDoctor:
     def _selected_model(self, provider):
         return str(getattr(self.core, "settings", {}).get(f"selected_{provider}_model", "") or "").strip()
 
+    def _check_codex_provider(self, model, include_network=False):
+        """Diagnose the official Codex sign-in flow without an API-key probe."""
+        try:
+            codex = CodexSignInProvider(USER_DATA_DIR)
+            connection = codex.check_connection() if include_network else codex.connection_status()
+        except Exception as exc:
+            return self._result(
+                "provider.active", STATUS_ERROR,
+                "לא ניתן היה להפעיל את בדיקת החיבור של Codex.",
+                f"provider={CODEX_SIGNIN_PROVIDER}; selected_model={model}; codex_check_error={self._redact(exc)}",
+                RepairAction(
+                    "open_settings",
+                    "פתיחת הגדרות Codex",
+                    "יש לפתוח את הגדרות ספק Codex ולבדוק את ההתחברות הרשמית.",
+                    "low",
+                ),
+                category="providers", title_he="ספק המודל הפעיל",
+            )
+
+        state = str(getattr(connection, "state", "unavailable") or "unavailable")
+        message = str(getattr(connection, "message", "") or "")
+        check_name = "codex_exec" if include_network else "login_status"
+        detail = (
+            f"provider={CODEX_SIGNIN_PROVIDER}; selected_model={model}; "
+            f"auth_state={state}; connection_check={check_name}; message={self._redact(message)}"
+        )
+        if state == "connected":
+            explanation = (
+                "החיבור ל-ChatGPT / Codex אומת בבדיקת Codex הרשמית."
+                if include_network
+                else "נמצא סשן ChatGPT / Codex פעיל. הבדיקה המהירה הריצה codex login status בלבד."
+            )
+            return self._result(
+                "provider.active", STATUS_PASS, explanation, detail,
+                category="providers", title_he="ספק המודל הפעיל",
+            )
+
+        if state == "reauth_required":
+            explanation = "סשן ChatGPT / Codex פג או דורש התחברות מחדש."
+        elif state == "not_connected":
+            explanation = "לא נמצא חיבור פעיל ל-ChatGPT / Codex."
+        else:
+            explanation = "Codex CLI אינו זמין לבדיקת החיבור."
+        return self._result(
+            "provider.active", STATUS_ERROR, explanation, detail,
+            RepairAction(
+                "open_settings",
+                "התחברות ל-Codex",
+                "יש לפתוח את הגדרות ספק Codex ולהשלים את ההתחברות הרשמית.",
+                "low",
+            ),
+            category="providers", title_he="ספק המודל הפעיל",
+        )
+
     def check_provider(self, include_network=False):
         settings = getattr(self.core, "settings", {}) or {}
         provider = normalize_provider_name(settings.get("api_mode", ""))
@@ -530,6 +586,8 @@ class SmartiDoctor:
                 category="providers", title_he="ספק המודל הפעיל",
             )
         model = self._selected_model(provider)
+        if provider == CODEX_SIGNIN_PROVIDER:
+            return self._check_codex_provider(model or provider_default_model(provider), include_network)
         secret_key = provider_secret_key(provider)
         secret = ""
         if secret_key:

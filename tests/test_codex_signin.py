@@ -1,10 +1,12 @@
 """Focused tests for the official Codex ChatGPT sign-in provider."""
 import os
+import json
 import tempfile
 import unittest
 from unittest import mock
 
 from smarti.codex_signin import CodexConnectionStatus, CodexSignInProvider
+from smarti.common import provider_fallback_models
 
 
 class CodexSignInProviderTests(unittest.TestCase):
@@ -14,6 +16,25 @@ class CodexSignInProviderTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    @staticmethod
+    def _codex_jsonl_response(text="תשובה", input_tokens=10, output_tokens=4, reasoning_tokens=0):
+        return "\n".join(
+            (
+                json.dumps({"type": "thread.started", "thread_id": "thread-1"}),
+                json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": text}}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "type": "turn.completed",
+                        "usage": {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "reasoning_output_tokens": reasoning_tokens,
+                        },
+                    }
+                ),
+            )
+        )
 
     def test_environment_preserves_official_cli_home_without_api_credentials(self):
         with mock.patch.dict(
@@ -37,6 +58,12 @@ class CodexSignInProviderTests(unittest.TestCase):
         path = r"C:\Users\יהודית סיידון\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe"
         with mock.patch.dict(os.environ, {"SMARTI_CODEX_CLI": path}):
             self.assertEqual(self.provider._find_executable(), path)
+
+    def test_codex_model_choices_are_the_supported_curated_list(self):
+        self.assertEqual(
+            provider_fallback_models("openai_codex_signin"),
+            ["codex default", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+        )
 
     def test_windows_apps_desktop_path_is_not_treated_as_the_cli(self):
         desktop_path = r"C:\Program Files\WindowsApps\OpenAI.Codex\app\resources\codex.exe"
@@ -79,7 +106,7 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.provider.connection_status = mock.Mock(
             return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
         )
-        self.provider._run = mock.Mock(return_value=(0, "תשובה", ""))
+        self.provider._run = mock.Mock(return_value=(0, self._codex_jsonl_response("תשובה", 12, 5, 3), ""))
 
         response, usage = self.provider.complete(
             [
@@ -90,25 +117,57 @@ class CodexSignInProviderTests(unittest.TestCase):
         )
 
         self.assertEqual(response, "תשובה")
-        self.assertEqual(usage, {})
+        self.assertEqual(usage, {"prompt": 12, "completion": 8, "total": 20})
         args = self.provider._run.call_args.args[0]
-        self.assertEqual(args[:2], ["exec", "--ephemeral"])
+        self.assertEqual(args[:2], ["exec", "--json"])
+        self.assertIn("--json", args)
         self.assertIn("read-only", args)
         self.assertIn("--skip-git-repo-check", args)
         self.assertIn("--model", args)
         self.assertIn("gpt-5.5", args)
+        self.assertEqual(args[-1], "-")
         self.assertIn("[USER]", self.provider._run.call_args.kwargs["input_text"])
 
     def test_codex_default_defers_model_selection_to_the_signed_in_account(self):
         self.provider.connection_status = mock.Mock(
             return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
         )
-        self.provider._run = mock.Mock(return_value=(0, "תשובה", ""))
+        self.provider._run = mock.Mock(return_value=(0, self._codex_jsonl_response(), ""))
 
-        self.provider.complete([{"role": "user", "content": "שלום"}], model="Codex default")
+        self.provider.complete([{"role": "user", "content": "שלום"}], model="codex default")
 
         args = self.provider._run.call_args.args[0]
         self.assertNotIn("--model", args)
+
+    def test_reasoning_effort_is_passed_as_an_official_cli_config_override(self):
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
+        )
+        self.provider._run = mock.Mock(return_value=(0, self._codex_jsonl_response(), ""))
+
+        self.provider.complete(
+            [{"role": "user", "content": "שלום"}],
+            model="gpt-5.5",
+            reasoning_effort="xhigh",
+        )
+
+        args = self.provider._run.call_args.args[0]
+        config_index = args.index("--config")
+        self.assertEqual(args[config_index + 1], 'model_reasoning_effort="xhigh"')
+        self.assertEqual(args[args.index("--model") + 1], "gpt-5.5")
+
+    def test_agent_prompt_preserves_system_tools_without_authorizing_native_codex_actions(self):
+        prompt = self.provider._build_prompt(
+            [
+                {"role": "system", "content": "Use TOOL_CALL syntax when a tool is needed."},
+                {"role": "user", "content": "צור קנבס."},
+            ]
+        )
+
+        self.assertIn("[SYSTEM]\nUse TOOL_CALL syntax", prompt)
+        self.assertIn("emit exactly the SmartiAI tool-call syntax", prompt)
+        self.assertIn("Never claim that a tool, canvas", prompt)
+        self.assertNotIn("Return only the final response", prompt)
 
     def test_login_skips_interactive_command_when_already_connected(self):
         connected = CodexConnectionStatus("connected", "מחובר", "chatgpt")

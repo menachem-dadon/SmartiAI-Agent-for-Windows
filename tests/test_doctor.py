@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from smarti import doctor
+from smarti.codex_signin import CodexConnectionStatus
 from smarti.config import DEFAULT_POLICY_MATRIX
 
 
@@ -122,6 +123,32 @@ class SmartiDoctorTests(unittest.TestCase):
         self.assertEqual(result.status, doctor.STATUS_PASS)
         self.assertEqual(core.loaded_provider, "openai")
         self.assertIn("api_key_configured=True", result.technical_detail)
+
+    @mock.patch("smarti.doctor.fetch_text_models_for_provider")
+    @mock.patch("smarti.doctor.CodexSignInProvider")
+    def test_codex_provider_uses_official_signin_connection_check(self, provider_class, fetch_models):
+        self.core.settings.update({
+            "api_mode": "openai_codex_signin",
+            "selected_openai_codex_signin_model": "gpt-5.5",
+        })
+        codex = provider_class.return_value
+        codex.connection_status.return_value = CodexConnectionStatus(
+            "connected", "מחובר עם ChatGPT / Codex.", "chatgpt"
+        )
+        codex.check_connection.return_value = CodexConnectionStatus(
+            "connected", "החיבור נבדק בהצלחה עם Codex.", "chatgpt"
+        )
+
+        quick = doctor.SmartiDoctor(self.core).check_provider(include_network=False)
+        full = doctor.SmartiDoctor(self.core).check_provider(include_network=True)
+
+        self.assertEqual(quick.status, doctor.STATUS_PASS)
+        self.assertEqual(full.status, doctor.STATUS_PASS)
+        codex.connection_status.assert_called_once_with()
+        codex.check_connection.assert_called_once_with()
+        fetch_models.assert_not_called()
+        self.assertIn("connection_check=login_status", quick.technical_detail)
+        self.assertIn("connection_check=codex_exec", full.technical_detail)
 
     def test_email_check_uses_the_same_resolved_config_as_the_mail_tool(self):
         class EmailCore(_Core):
