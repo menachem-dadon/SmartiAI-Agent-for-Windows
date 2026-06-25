@@ -2421,7 +2421,9 @@ class MessageBubble(QFrame):
             if self.agent_process_started and self.current_process_group:
                 self.current_process_group.show_thinking()
                 self._refresh_layout()
-                return True
+                # This is a transient spinner update, not new user-visible
+                # process content. Do not make it trigger chat auto-scroll.
+                return False
         elif event_type == "tool_start":
             group = self._current_or_new_process_group()
             group.start_tools(event.get("tools") or [], parallel=bool(event.get("parallel")))

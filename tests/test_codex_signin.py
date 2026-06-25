@@ -329,6 +329,38 @@ class AgentReportTests(unittest.TestCase):
 
         self.assertEqual(report, "מצאתי את אזור הקוד הרלוונטי, ועכשיו אני בודק את הלוגים מולו.")
 
+    def test_first_tool_turn_without_model_report_gets_a_fallback(self):
+        report, source = self.core._select_agent_report_for_tool_turn(
+            "",
+            [{"action": "internet_search", "arguments": {"query": "example"}}],
+            report_count=0,
+        )
+
+        self.assertTrue(report)
+        self.assertEqual(source, "fallback")
+
+    def test_later_tool_turn_without_model_report_does_not_force_fallback(self):
+        report, source = self.core._select_agent_report_for_tool_turn(
+            "",
+            [{"action": "internet_search", "arguments": {"query": "example"}}],
+            last_report="Checking current information.",
+            report_count=1,
+        )
+
+        self.assertEqual(report, "")
+        self.assertEqual(source, "")
+
+    def test_later_tool_turn_with_useful_model_report_is_allowed(self):
+        report, source = self.core._select_agent_report_for_tool_turn(
+            "I found the relevant area and am checking the logs against it.",
+            [{"action": "smart_file_search", "arguments": {"query": "logs"}}],
+            last_report="Checking the relevant files.",
+            report_count=1,
+        )
+
+        self.assertEqual(report, "I found the relevant area and am checking the logs against it.")
+        self.assertEqual(source, "model")
+
 
 if __name__ == "__main__":
     unittest.main()

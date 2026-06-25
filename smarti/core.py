@@ -1181,7 +1181,8 @@ class SmartiCore:
     def _emit_agent_process_event(self, event_type, **payload):
         event = {"type": str(event_type or ""), **(payload or {})}
         events = getattr(self, "_current_agent_process_events", None)
-        if isinstance(events, list):
+        # "thinking" is a live shimmer cue, not durable process content.
+        if isinstance(events, list) and event.get("type") != "thinking":
             events.append(self._json_safe_checkpoint_value(event))
             if len(events) > 120:
                 del events[:-120]
@@ -1298,6 +1299,34 @@ class SmartiCore:
         except Exception:
             pass
         return normalized
+
+    def _select_agent_report_for_tool_turn(
+        self,
+        model_report,
+        calls,
+        last_report="",
+        report_count=0,
+        task_state=None,
+        iteration=1,
+    ):
+        first_tool_report = int(report_count or 0) <= 0
+        model_candidate = self._should_emit_agent_report(
+            model_report,
+            last_report,
+            force=first_tool_report and bool(model_report),
+        )
+        if model_candidate:
+            return model_candidate, "model"
+        if not first_tool_report:
+            return "", ""
+        fallback_candidate = self._should_emit_agent_report(
+            self._fallback_agent_report_for_tools(calls, task_state, iteration),
+            last_report,
+            force=True,
+        )
+        if fallback_candidate:
+            return fallback_candidate, "fallback"
+        return "", ""
 
     def _fallback_agent_report_for_tools(self, calls, task_state=None, iteration=1):
         calls = [call for call in (calls or []) if isinstance(call, dict)]
@@ -6884,14 +6913,24 @@ CWD: {current_dir}
                 return True
 
             def emit_tool_process_report(model_report, calls, source="model"):
-                # The first tool turn should always give the user a natural
-                # orientation cue. Later turns are shown only when the report
-                # differs enough from the previous one to add signal.
-                first_tool_report = process_report_count == 0
-                if emit_process_report(model_report, source=source, force=first_tool_report and bool(model_report)):
-                    return True
-                fallback_report = self._fallback_agent_report_for_tools(calls, task_state, iteration)
-                return emit_process_report(fallback_report, source="fallback", force=first_tool_report)
+                # The first tool turn must orient the user. Later turns are
+                # model-discretionary: if the model stays quiet, Smarti should
+                # not invent a report for every small sequential tool step.
+                report, report_source = self._select_agent_report_for_tool_turn(
+                    model_report,
+                    calls,
+                    last_report=last_process_report,
+                    report_count=process_report_count,
+                    task_state=task_state,
+                    iteration=iteration,
+                )
+                if not report:
+                    return False
+                return emit_process_report(
+                    report,
+                    source=source if report_source == "model" else "fallback",
+                    force=process_report_count == 0,
+                )
 
             checkpoint("resume_ready" if resume_checkpoint else "ready")
 
