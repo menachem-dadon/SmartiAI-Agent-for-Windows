@@ -5,7 +5,7 @@ from .ui_styles import *
 # ==========================================
 # פונקציות עזר UI
 # ==========================================
-def _pixmap_focus_crop(pixmap, padding_ratio=0.045):
+def _pixmap_focus_crop(pixmap, padding_ratio=0.065):
     img = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
     xs = []
     ys = []
