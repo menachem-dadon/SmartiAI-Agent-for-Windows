@@ -337,11 +337,11 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "browser_automation": {
-        "description": "Controls Smarti's dedicated persistent Chrome via Selenium. Do not import modules; driver, auto, By, Keys, WebDriverWait, EC, time, collect_elements, get_page_state and print_page_state are preloaded. The tool automatically returns SMARTI_PAGE_STATE with URL, title, page text and visible actionable elements after each run.",
+        "description": "Structured control of Smarti dedicated persistent Chrome through Playwright/CDP.",
         "inputSchema": {
             "type": "object",
-            "properties": {"code": {"type": "string", "description": "קוד הפייתון/סלניום להרצה"}},
-            "required": ["code"]
+            "properties": {"action": {"type": "string", "description": "Browser action."}},
+            "required": ["action"]
         }
     },
     "close_automation_browser": {
@@ -516,7 +516,7 @@ BUILTIN_DYNAMIC_TOOLS = {
     "save_screenshot_to_disk": "שמירת צילום מסך כקובץ.",
     "set_volume": "השתקת השמע.",
     "email_manager": "Full email access through IMAP/SMTP. Use it for every email task: search/read by UID, send/draft/reply/forward, styled RTL/HTML messages, flags, archive/trash/delete/move/copy, folders, attachments. For Hebrew display-name searches use `from`, `subject_filter`, or `query`; auto mode falls back to local header scan. Use `count: 0` for all matches and preserve each result's `mailbox` when reading.",
-    "browser_automation": "שליטה בדפדפן Smarti ייעודי ומתמשך דרך Selenium. אין לבצע import; זמינים מראש driver, auto, By, Keys, WebDriverWait, EC, time, collect_elements, get_page_state, print_page_state. הכלי מחזיר SMARTI_PAGE_STATE עם URL, טקסט ואלמנטים לאחר כל פעולה.",
+    "browser_automation": "Structured persistent Chrome control through Playwright/CDP: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, network, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
     "close_automation_browser": "סגירת דפדפן Smarti הייעודי.",
     "computer_automation": "שליטה במחשב דרך Windows UI Automation (`auto`) ובמידת הצורך מקלדת/עכבר (`pa`).",
     "read_local_document": "קריאת טקסט מקבצי מסמכים.",
@@ -861,10 +861,10 @@ BUILTIN_TOOL_SCHEMAS["automation_manager"] = {
 
 BROWSER_AUTOMATION_ACTIONS = [
     "start", "status", "doctor", "tabs", "open", "navigate",
-    "snapshot", "screenshot", "pdf", "console", "cdp", "storage", "cookies",
+    "snapshot", "screenshot", "pdf", "console", "network", "cdp", "storage", "cookies",
     "act", "click", "clickCoords", "type", "fill", "press", "hover",
     "select", "upload", "wait", "evaluate", "dialog", "scroll",
-    "scrollIntoView", "resize", "close", "close_tab", "run",
+    "scrollIntoView", "resize", "close", "close_tab",
     "close_browser", "stop", "close_all"
 ]
 
@@ -875,6 +875,9 @@ BROWSER_AUTOMATION_PROPERTIES = {
     "tabId": {"type": "string", "description": "Alias for targetId."},
     "ref": {"type": "string", "description": "Stable element ref from snapshot, for example e12."},
     "selector": {"type": "string", "description": "CSS selector fallback when no ref is available."},
+    "role": {"type": "string", "description": "ARIA role locator fallback, usually with name."},
+    "name": {"type": "string", "description": "Accessible name for role locator, or computer UI element name."},
+    "textSelector": {"type": "string", "description": "Visible text locator fallback."},
     "request": {"type": "object", "description": "For action=act: nested action request with kind plus ref/selector/text/etc."},
     "kind": {"type": "string", "description": "For action=act: click/type/press/hover/select/upload/wait/evaluate/etc."},
     "text": {"type": "string", "description": "Text to type/fill, visible text to wait for, or key name for press."},
@@ -912,8 +915,13 @@ BROWSER_AUTOMATION_PROPERTIES = {
     "method": {"type": "string", "description": "Chrome DevTools Protocol method for action=cdp, for example Runtime.evaluate."},
     "params": {"type": "object", "description": "Chrome DevTools Protocol params object for action=cdp."},
     "urlContains": {"type": "string", "description": "URL substring to wait for."},
+    "waitUntil": {"type": "string", "enum": ["commit", "domcontentloaded", "load", "networkidle"], "description": "Navigation wait state."},
+    "state": {"type": "string", "description": "Load state for action=wait."},
     "accept": {"type": "boolean", "description": "Accept or dismiss current dialog."},
+    "expectDialog": {"type": "boolean", "description": "Install a dialog handler around the triggering action."},
     "promptText": {"type": "string", "description": "Text to enter into prompt dialogs."},
+    "expectDownload": {"type": "boolean", "description": "Wrap click action in a Playwright download wait."},
+    "downloadPath": {"type": "string", "description": "Destination file path for expected download."},
     "submit": {"type": "boolean", "description": "Press Enter after type/fill."},
     "clear": {"type": "boolean", "description": "Clear field before type/fill."},
     "slowly": {"type": "boolean", "description": "Type character by character."},
@@ -927,16 +935,16 @@ BROWSER_AUTOMATION_PROPERTIES = {
 BUILTIN_TOOL_SCHEMAS["browser_automation"] = {
     "description": (
         "Structured control of Smarti's dedicated persistent Chrome. Prefer snapshot -> act by ref. "
-        "Supports navigation, tabs, screenshots, PDF, console logs, CDP, storage/cookies, dialogs, upload, "
-        "wait, evaluate, and a legacy Selenium code fallback with action=run."
+        "Supports navigation, tabs, screenshots, PDF, console logs, network timing, CDP, storage/cookies, dialogs, upload, "
+        "downloads, wait, and JavaScript evaluate. Raw Python browser code is not used."
     ),
     "inputSchema": {
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": BROWSER_AUTOMATION_ACTIONS, "description": "Structured browser action."},
-            "code": {"type": "string", "description": "Legacy Selenium Python code for action=run only."},
             **BROWSER_AUTOMATION_PROPERTIES,
         },
+        "required": ["action"]
     },
 }
 
@@ -947,7 +955,7 @@ BUILTIN_TOOL_SCHEMAS["automation_manager"] = {
         "properties": {
             "target": {"type": "string", "enum": ["browser", "computer"], "description": "Automation target."},
             "action": {"type": "string", "enum": BROWSER_AUTOMATION_ACTIONS + ["inspect", "list_windows", "find", "get_focused", "focus_window", "focus", "invoke", "set_text", "toggle", "expand", "collapse", "send_keys", "hotkey"], "description": "Browser structured action or computer UIA action."},
-            "code": {"type": "string", "description": "Browser legacy code only with action=run, or advanced computer fallback code."},
+            "code": {"type": "string", "description": "Advanced computer fallback code only. Browser raw code is not supported."},
             "window": {"type": "string", "description": "Computer automation window title substring."},
             "name": {"type": "string", "description": "Computer automation element name substring."},
             "automation_id": {"type": "string", "description": "Computer automation AutomationId."},
@@ -978,8 +986,8 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "memory_manager": "Unified memory: search and update.",
     "extension_manager": "Unified MCP and Skills operations.",
     "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
-    "browser_automation": "Structured persistent Chrome control: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, CDP, storage, dialogs, upload, wait, evaluate, and legacy action=run fallback.",
-    "automation_manager": "Unified browser/computer automation. Browser target supports structured snapshot -> act by ref; computer target supports UIA actions."
+    "browser_automation": "Structured persistent Chrome control via Playwright/CDP: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, network timing, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
+    "automation_manager": "Legacy compatibility alias. Prefer separate browser_automation or computer_automation."
 })
 
 LEGACY_BUILTIN_TOOLS = {
@@ -1006,7 +1014,8 @@ PUBLIC_BUILTIN_TOOLS = [
     "memory_manager",
     "canvas_manager",
     "email_manager",
-    "automation_manager",
+    "browser_automation",
+    "computer_automation",
     "extension_manager",
     "create_python_tool"
 ]
@@ -1040,6 +1049,8 @@ TOOL_CATEGORIES = {
     "memory_manager": "memory",
     "canvas_manager": "visual",
     "email_manager": "email",
+    "browser_automation": "automation",
+    "computer_automation": "automation",
     "automation_manager": "automation",
     "extension_manager": "extensions",
     "create_python_tool": "developer"

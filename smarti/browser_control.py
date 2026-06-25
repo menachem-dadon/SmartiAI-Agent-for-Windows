@@ -1,4 +1,4 @@
-"""Structured control plane for Smarti's persistent automation browser."""
+"""Structured Playwright/CDP control plane for Smarti's persistent browser."""
 import json
 import os
 import subprocess
@@ -13,7 +13,7 @@ UNTRUSTED_BROWSER_PREFIX = "[UNTRUSTED_BROWSER_CONTENT]\n"
 
 
 class SmartiBrowserController:
-    """Runs high-level browser actions against the existing Selenium/Chrome runtime."""
+    """Runs high-level browser actions against Smarti Chrome through Playwright/CDP."""
 
     def __init__(self, core):
         self.core = core
@@ -23,59 +23,21 @@ class SmartiBrowserController:
             return "ERROR: Browser automation is disabled by the user in settings."
         args = dict(payload or {})
         action = str(args.get("action") or "snapshot").strip().lower()
-        if action == "run":
-            code = str(args.get("code", "") or "")
-            if not code.strip():
-                return "ERROR: browser_automation action=run requires code."
-            return self.core.run_browser_automation(code)
+        if action == "run" or "code" in args:
+            return (
+                "ERROR: Raw Python browser code was removed. "
+                "Use structured browser actions, action=evaluate for JavaScript, or action=cdp for Chrome DevTools Protocol."
+            )
         if action in {"close_browser", "stop", "close_all"}:
             return self.core._close_automation_browser()
-        if action in {"start", "doctor", "status", "tabs"}:
-            ok, err = self.core._ensure_automation_browser(args.get("url") or "about:blank")
-            if not ok:
-                return err
-        elif action in {"open", "navigate"}:
-            url = args.get("url") or args.get("targetUrl") or args.get("query_or_url")
-            if not url:
-                return "ERROR: Browser action requires url."
-            initial_url = "about:blank" if action == "open" else str(url)
-            ok, err = self.core._ensure_automation_browser(initial_url)
-            if not ok:
-                return err
-        else:
-            ok, err = self.core._ensure_automation_browser()
-            if not ok:
-                return err
 
-        if action in {"status", "doctor"}:
-            return self._status(action)
+        initial_url = "about:blank"
+        if action == "navigate":
+            initial_url = str(args.get("url") or args.get("targetUrl") or args.get("query_or_url") or "about:blank")
+        ok, err = self.core._ensure_automation_browser(initial_url)
+        if not ok:
+            return err
         return self._run_helper(args)
-
-    def _status(self, action):
-        payload = {
-            "ok": True,
-            "action": action,
-            "debugPort": SMARTI_BROWSER_DEBUG_PORT,
-            "endpoint": self.core._automation_browser_endpoint(),
-            "ready": self.core._automation_browser_is_ready(),
-        }
-        try:
-            response = self.core._request_get(self.core._automation_browser_endpoint("/json/version"), timeout=2)
-            payload["browser"] = response.json()
-        except Exception as exc:
-            payload["browserError"] = str(exc)
-        tabs_result = self._run_helper({"action": "tabs"})
-        try:
-            payload["tabs"] = json.loads(self._strip_untrusted(tabs_result)).get("tabs", [])
-        except Exception:
-            payload["tabsText"] = tabs_result
-        return self._json(payload)
-
-    def _strip_untrusted(self, text):
-        text = str(text or "")
-        if text.startswith(UNTRUSTED_BROWSER_PREFIX):
-            return text[len(UNTRUSTED_BROWSER_PREFIX):]
-        return text
 
     def _json(self, payload):
         return self.core._truncate_tool_output(
@@ -91,9 +53,9 @@ class SmartiBrowserController:
             return max(minimum, min(maximum, value))
 
         return {
-            "elementLimit": bounded("browser_snapshot_element_limit", 100, 20, 300),
-            "bodyChars": bounded("browser_snapshot_body_chars", 6000, 1000, 20000),
-            "htmlChars": bounded("browser_snapshot_html_chars", 600, 0, 2000),
+            "elementLimit": bounded("browser_snapshot_element_limit", 120, 20, 350),
+            "bodyChars": bounded("browser_snapshot_body_chars", 8000, 1000, 25000),
+            "htmlChars": bounded("browser_snapshot_html_chars", 600, 0, 2500),
         }
 
     def _output_dir(self):
@@ -111,7 +73,7 @@ class SmartiBrowserController:
         helper_payload.setdefault("snapshot", self._snapshot_defaults())
         helper_payload.setdefault("outputDir", self._output_dir())
         helper_payload.setdefault("debugPort", SMARTI_BROWSER_DEBUG_PORT)
-        helper_payload.setdefault("timestamp", int(time.time()))
+        helper_payload.setdefault("timeoutMs", max(5000, int(timeout * 1000)))
 
         helper_path = None
         try:
@@ -157,7 +119,6 @@ class SmartiBrowserController:
 
 _HELPER_CODE = textwrap.dedent(
     r'''
-    import base64
     import json
     import os
     import re
@@ -169,24 +130,181 @@ _HELPER_CODE = textwrap.dedent(
     sys.stderr = open(sys.stderr.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False)
 
     try:
-        from selenium import webdriver
-        from selenium.common.exceptions import NoAlertPresentException, NoSuchElementException, TimeoutException
-        from selenium.webdriver import ActionChains
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.common.keys import Keys
-        from selenium.webdriver.support.ui import Select, WebDriverWait
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.sync_api import sync_playwright
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": f"Missing required browser libraries: {exc}"}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": f"Missing Playwright. Install requirements.txt: {exc}"}, ensure_ascii=False))
         sys.exit(1)
 
     MARK = "data-smarti-ref"
 
+    INSTALL_JS = r"""
+    (() => {
+      if (window.__smartiConsoleInstalled) return true;
+      window.__smartiConsoleInstalled = true;
+      window.__smartiConsoleHistory = window.__smartiConsoleHistory || [];
+      for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
+        const original = console[level] ? console[level].bind(console) : console.log.bind(console);
+        console[level] = (...args) => {
+          try {
+            window.__smartiConsoleHistory.push({
+              level,
+              ts: Date.now(),
+              text: args.map(v => {
+                try { return typeof v === 'string' ? v : JSON.stringify(v); }
+                catch (e) { return String(v); }
+              }).join(' ')
+            });
+            if (window.__smartiConsoleHistory.length > 500) window.__smartiConsoleHistory.shift();
+          } catch (e) {}
+          return original(...args);
+        };
+      }
+      window.addEventListener('error', event => {
+        try {
+          window.__smartiConsoleHistory.push({level: 'pageerror', ts: Date.now(), text: event.message || String(event.error || '')});
+        } catch (e) {}
+      });
+      window.addEventListener('unhandledrejection', event => {
+        try {
+          window.__smartiConsoleHistory.push({level: 'unhandledrejection', ts: Date.now(), text: String(event.reason || '')});
+        } catch (e) {}
+      });
+      return true;
+    })();
+    """
+
+    COLLECT_JS = r"""
+    (options) => {
+      options = options || {};
+      const limit = options.limit || 120;
+      const bodyChars = options.bodyChars || 8000;
+      const htmlLimit = options.htmlChars || 600;
+      const includeUrls = options.includeUrls !== false;
+      const includeHidden = !!options.includeHidden;
+      const selector = [
+        'a','button','input','textarea','select','option','summary','label',
+        '[role]','[aria-label]','[tabindex]','[contenteditable="true"]',
+        'iframe','video','audio','details','dialog'
+      ].join(',');
+      if (!window.__smartiRefSeq) window.__smartiRefSeq = 1;
+      function textOf(el) {
+        return (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') ||
+          el.getAttribute('placeholder') || el.alt || '').replace(/\s+/g, ' ').trim();
+      }
+      function visible(el) {
+        if (includeHidden) return true;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        if (!style || style.visibility === 'hidden' || style.display === 'none') return false;
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        if (rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight * 2 || rect.left > window.innerWidth * 2) return false;
+        return true;
+      }
+      function cssEscape(value) {
+        if (window.CSS && CSS.escape) return CSS.escape(value);
+        return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+      }
+      function attrSelector(el) {
+        const attrs = ['data-testid','data-test','aria-label','name','placeholder','title','type'];
+        for (const name of attrs) {
+          const value = el.getAttribute(name);
+          if (value) return el.tagName.toLowerCase() + '[' + name + '="' + String(value).replace(/"/g, '\\"') + '"]';
+        }
+        return '';
+      }
+      function selectorFor(el) {
+        if (el.id) return '#' + cssEscape(el.id);
+        const attr = attrSelector(el);
+        if (attr) return attr;
+        let part = el.tagName.toLowerCase();
+        if (el.className && typeof el.className === 'string') {
+          const classes = el.className.trim().split(/\s+/).slice(0, 3).filter(Boolean);
+          if (classes.length) part += '.' + classes.map(cssEscape).join('.');
+        }
+        return part;
+      }
+      const seen = new Set();
+      const nodes = Array.from(document.querySelectorAll(selector)).filter(el => {
+        if (seen.has(el)) return false;
+        seen.add(el);
+        return visible(el);
+      }).slice(0, limit);
+      const elements = nodes.map((el, index) => {
+        let ref = el.getAttribute('data-smarti-ref');
+        if (!ref) {
+          ref = 'e' + (window.__smartiRefSeq++);
+          try { el.setAttribute('data-smarti-ref', ref); } catch (e) {}
+        }
+        const rect = el.getBoundingClientRect();
+        const item = {
+          ref, index,
+          tag: el.tagName.toLowerCase(),
+          role: el.getAttribute('role') || '',
+          name: el.getAttribute('name') || '',
+          id: el.id || '',
+          type: el.getAttribute('type') || '',
+          selector: selectorFor(el),
+          text: textOf(el).slice(0, 700),
+          value: (el.value || '').slice(0, 700),
+          placeholder: el.getAttribute('placeholder') || '',
+          ariaLabel: el.getAttribute('aria-label') || '',
+          title: el.getAttribute('title') || '',
+          disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
+          checked: !!el.checked || el.getAttribute('aria-checked') === 'true',
+          selected: !!el.selected,
+          editable: el.isContentEditable || ['input','textarea','select'].includes(el.tagName.toLowerCase()),
+          rect: {
+            x: Math.round(rect.x), y: Math.round(rect.y),
+            width: Math.round(rect.width), height: Math.round(rect.height)
+          },
+          html: (el.outerHTML || '').slice(0, htmlLimit)
+        };
+        if (includeUrls) {
+          item.href = el.href || '';
+          item.src = el.src || '';
+        }
+        return item;
+      });
+      const bodyText = document.body ? document.body.innerText || '' : '';
+      return {
+        url: location.href,
+        title: document.title,
+        readyState: document.readyState,
+        viewport: {width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio || 1},
+        scroll: {x: Math.round(window.scrollX), y: Math.round(window.scrollY), maxY: Math.max(0, document.documentElement.scrollHeight - window.innerHeight)},
+        bodyText: bodyText.replace(/\s+/g, ' ').trim().slice(0, bodyChars),
+        elements
+      };
+    }
+    """
+
+    OVERLAY_JS = r"""
+    ({elements, clearOnly}) => {
+      for (const old of Array.from(document.querySelectorAll('[data-smarti-overlay="true"]'))) old.remove();
+      if (clearOnly) return true;
+      const root = document.createElement('div');
+      root.setAttribute('data-smarti-overlay', 'true');
+      root.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483647;pointer-events:none;font:12px Arial,sans-serif;';
+      for (const item of (elements || []).slice(0, 140)) {
+        const r = item.rect || {};
+        const box = document.createElement('div');
+        box.style.cssText = `position:absolute;left:${Math.max(0, r.x || 0)}px;top:${Math.max(0, r.y || 0)}px;width:${Math.max(1, r.width || 1)}px;height:${Math.max(1, r.height || 1)}px;border:2px solid #ff2d55;background:rgba(255,45,85,.08);box-sizing:border-box;`;
+        const badge = document.createElement('div');
+        badge.textContent = item.ref || '';
+        badge.style.cssText = 'position:absolute;left:-2px;top:-18px;background:#ff2d55;color:white;padding:1px 4px;border-radius:3px;font-weight:700;line-height:14px;';
+        box.appendChild(badge);
+        root.appendChild(box);
+      }
+      document.documentElement.appendChild(root);
+      return true;
+    }
+    """
+
     def compact(value, limit=500):
         text = "" if value is None else str(value)
         text = re.sub(r"\s+", " ", text).strip()
-        if len(text) > limit:
-            return text[:limit] + "..."
-        return text
+        return text[:limit] + ("..." if len(text) > limit else "")
 
     def to_int(value, default=0):
         try:
@@ -194,308 +312,231 @@ _HELPER_CODE = textwrap.dedent(
         except Exception:
             return default
 
+    def timeout_ms(payload):
+        return max(1000, to_int(payload.get("timeoutMs") or payload.get("timeout") or 30000, 30000))
+
     def sanitize_name(value, default="browser_capture"):
         text = compact(value or default, 80)
         text = re.sub(r"[^\w.\-]+", "_", text, flags=re.UNICODE).strip("._-")
         return text or default
 
-    def normalize_key(key):
-        raw = str(key or "").strip()
-        if not raw:
-            return ""
-        name = raw.upper().replace(" ", "_").replace("-", "_")
-        mapping = {
-            "ENTER": Keys.ENTER, "RETURN": Keys.RETURN, "TAB": Keys.TAB, "ESC": Keys.ESCAPE,
-            "ESCAPE": Keys.ESCAPE, "BACKSPACE": Keys.BACKSPACE, "DELETE": Keys.DELETE,
-            "ARROW_LEFT": Keys.ARROW_LEFT, "LEFT": Keys.ARROW_LEFT,
-            "ARROW_RIGHT": Keys.ARROW_RIGHT, "RIGHT": Keys.ARROW_RIGHT,
-            "ARROW_UP": Keys.ARROW_UP, "UP": Keys.ARROW_UP,
-            "ARROW_DOWN": Keys.ARROW_DOWN, "DOWN": Keys.ARROW_DOWN,
-            "HOME": Keys.HOME, "END": Keys.END, "PAGE_UP": Keys.PAGE_UP, "PAGE_DOWN": Keys.PAGE_DOWN,
-            "SPACE": Keys.SPACE, "CTRL": Keys.CONTROL, "CONTROL": Keys.CONTROL,
-            "ALT": Keys.ALT, "SHIFT": Keys.SHIFT, "META": Keys.META, "COMMAND": Keys.COMMAND,
-        }
-        return mapping.get(name, raw)
+    def output_path(payload, suffix):
+        path = payload.get("path")
+        if path:
+            return os.path.abspath(os.path.expanduser(str(path)))
+        output_dir = payload.get("outputDir") or os.getcwd()
+        os.makedirs(output_dir, exist_ok=True)
+        title = payload.get("titleHint") or "browser"
+        return os.path.join(output_dir, f"{sanitize_name(title)}_{int(time.time())}.{suffix}")
 
-    def connect(debug_port):
-        options = webdriver.ChromeOptions()
-        options.debugger_address = f"127.0.0.1:{debug_port}"
-        return webdriver.Chrome(options=options)
-
-    def switch_target(driver, target):
-        target = str(target or "").strip()
-        if not target:
-            return
-        if target in driver.window_handles:
-            driver.switch_to.window(target)
-            return
-        lowered = target.lower()
-        for handle in driver.window_handles:
-            driver.switch_to.window(handle)
-            if lowered in (driver.title or "").lower() or lowered in (driver.current_url or "").lower():
-                return
-        raise ValueError(f"Target tab not found: {target}")
-
-    def tabs(driver):
-        current = None
+    def connect(payload):
+        pw = sync_playwright().start()
+        endpoint = f"http://127.0.0.1:{payload.get('debugPort') or 49223}"
+        browser = pw.chromium.connect_over_cdp(endpoint, timeout=timeout_ms(payload))
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
         try:
-            current = driver.current_window_handle
+            context.add_init_script(INSTALL_JS)
         except Exception:
             pass
+        if not context.pages:
+            context.new_page()
+        return pw, browser, context
+
+    def page_ref(context, page):
+        pages = context.pages
+        try:
+            return "p" + str(pages.index(page))
+        except Exception:
+            return "p0"
+
+    def tabs(context, current=None):
         result = []
-        for index, handle in enumerate(driver.window_handles):
+        for index, page in enumerate(context.pages):
             try:
-                driver.switch_to.window(handle)
                 result.append({
                     "index": index,
-                    "targetId": handle,
-                    "current": handle == current,
-                    "title": driver.title,
-                    "url": driver.current_url,
+                    "targetId": f"p{index}",
+                    "tabId": f"p{index}",
+                    "current": page == current,
+                    "title": page.title(),
+                    "url": page.url,
                 })
             except Exception as exc:
-                result.append({"index": index, "targetId": handle, "error": str(exc)})
-        if current in driver.window_handles:
-            driver.switch_to.window(current)
+                result.append({"index": index, "targetId": f"p{index}", "error": str(exc)})
         return result
 
-    COLLECT_JS = r"""
-    const options = arguments[0] || {};
-    const limit = options.limit || 100;
-    const bodyChars = options.bodyChars || 6000;
-    const htmlLimit = options.htmlChars || 600;
-    const includeUrls = !!options.includeUrls;
-    const includeHidden = !!options.includeHidden;
-    const selector = [
-      'a','button','input','textarea','select','option','summary','label',
-      '[role]','[aria-label]','[tabindex]','[contenteditable="true"]',
-      'iframe','video','audio','details','dialog'
-    ].join(',');
-    if (!window.__smartiRefSeq) window.__smartiRefSeq = 1;
-    function textOf(el) {
-      return (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') ||
-        el.getAttribute('placeholder') || el.alt || '').replace(/\s+/g, ' ').trim();
-    }
-    function visible(el) {
-      if (includeHidden) return true;
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      if (!style || style.visibility === 'hidden' || style.display === 'none') return false;
-      if (rect.width <= 0 || rect.height <= 0) return false;
-      if (rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight * 2 || rect.left > window.innerWidth * 2) return false;
-      return true;
-    }
-    function cssEscape(value) {
-      if (window.CSS && CSS.escape) return CSS.escape(value);
-      return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
-    }
-    function attrSelector(el) {
-      const attrs = ['data-testid','data-test','aria-label','name','placeholder','title','type'];
-      for (const name of attrs) {
-        const value = el.getAttribute(name);
-        if (value) return el.tagName.toLowerCase() + '[' + name + '="' + String(value).replace(/"/g, '\\"') + '"]';
-      }
-      return '';
-    }
-    function selectorFor(el) {
-      if (el.id) return '#' + cssEscape(el.id);
-      const attr = attrSelector(el);
-      if (attr) return attr;
-      let part = el.tagName.toLowerCase();
-      if (el.className && typeof el.className === 'string') {
-        const classes = el.className.trim().split(/\s+/).slice(0, 3).filter(Boolean);
-        if (classes.length) part += '.' + classes.map(cssEscape).join('.');
-      }
-      return part;
-    }
-    const seen = new Set();
-    const nodes = Array.from(document.querySelectorAll(selector)).filter(el => {
-      if (seen.has(el)) return false;
-      seen.add(el);
-      return visible(el);
-    }).slice(0, limit);
-    const elements = nodes.map((el, index) => {
-      let ref = el.getAttribute('data-smarti-ref');
-      if (!ref) {
-        ref = 'e' + (window.__smartiRefSeq++);
-        try { el.setAttribute('data-smarti-ref', ref); } catch (e) {}
-      }
-      const rect = el.getBoundingClientRect();
-      const item = {
-        ref, index,
-        tag: el.tagName.toLowerCase(),
-        role: el.getAttribute('role') || '',
-        name: el.getAttribute('name') || '',
-        id: el.id || '',
-        type: el.getAttribute('type') || '',
-        selector: selectorFor(el),
-        text: textOf(el).slice(0, 700),
-        value: (el.value || '').slice(0, 700),
-        placeholder: el.getAttribute('placeholder') || '',
-        ariaLabel: el.getAttribute('aria-label') || '',
-        title: el.getAttribute('title') || '',
-        disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
-        checked: !!el.checked || el.getAttribute('aria-checked') === 'true',
-        selected: !!el.selected,
-        editable: el.isContentEditable || ['input','textarea','select'].includes(el.tagName.toLowerCase()),
-        rect: {
-          x: Math.round(rect.x), y: Math.round(rect.y),
-          width: Math.round(rect.width), height: Math.round(rect.height)
-        },
-        html: (el.outerHTML || '').slice(0, htmlLimit)
-      };
-      if (includeUrls) {
-        item.href = el.href || '';
-        item.src = el.src || '';
-      }
-      return item;
-    });
-    const bodyText = document.body ? document.body.innerText || '' : '';
-    return {
-      url: location.href,
-      title: document.title,
-      readyState: document.readyState,
-      viewport: {width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio || 1},
-      scroll: {x: Math.round(window.scrollX), y: Math.round(window.scrollY), maxY: Math.max(0, document.documentElement.scrollHeight - window.innerHeight)},
-      bodyText: bodyText.replace(/\s+/g, ' ').trim().slice(0, bodyChars),
-      elements
-    };
-    """
+    def select_page(context, payload):
+        target = str(payload.get("targetId") or payload.get("tabId") or payload.get("target") or "").strip()
+        pages = context.pages
+        if target:
+            lowered = target.lower()
+            if lowered.startswith("p") and lowered[1:].isdigit():
+                idx = int(lowered[1:])
+                if 0 <= idx < len(pages):
+                    return pages[idx]
+            for page in pages:
+                try:
+                    if lowered in (page.url or "").lower() or lowered in (page.title() or "").lower():
+                        return page
+                except Exception:
+                    pass
+            raise ValueError(f"Target tab not found: {target}")
+        return pages[-1] if pages else context.new_page()
 
-    OVERLAY_JS = r"""
-    const elements = arguments[0] || [];
-    const clearOnly = !!arguments[1];
-    for (const old of Array.from(document.querySelectorAll('[data-smarti-overlay="true"]'))) old.remove();
-    if (clearOnly) return true;
-    const root = document.createElement('div');
-    root.setAttribute('data-smarti-overlay', 'true');
-    root.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483647;pointer-events:none;font:12px Arial,sans-serif;';
-    for (const item of elements.slice(0, 120)) {
-      const r = item.rect || {};
-      const box = document.createElement('div');
-      box.style.cssText = `position:absolute;left:${Math.max(0, r.x || 0)}px;top:${Math.max(0, r.y || 0)}px;width:${Math.max(1, r.width || 1)}px;height:${Math.max(1, r.height || 1)}px;border:2px solid #ff2d55;background:rgba(255,45,85,.08);box-sizing:border-box;`;
-      const badge = document.createElement('div');
-      badge.textContent = item.ref || '';
-      badge.style.cssText = 'position:absolute;left:-2px;top:-18px;background:#ff2d55;color:white;padding:1px 4px;border-radius:3px;font-weight:700;line-height:14px;';
-      box.appendChild(badge);
-      root.appendChild(box);
-    }
-    document.documentElement.appendChild(root);
-    return true;
-    """
+    def install_page_hooks(page):
+        try:
+            page.evaluate(INSTALL_JS)
+        except Exception:
+            pass
 
-    def snapshot(driver, payload):
+    def snapshot(page, payload):
+        install_page_hooks(page)
         snap = dict(payload.get("snapshot") or {})
-        limit = to_int(payload.get("limit", payload.get("max_elements", snap.get("elementLimit", 100))), 100)
-        body_chars = to_int(payload.get("body_chars", payload.get("bodyChars", snap.get("bodyChars", 6000))), 6000)
+        limit = to_int(payload.get("limit", payload.get("max_elements", snap.get("elementLimit", 120))), 120)
+        body_chars = to_int(payload.get("body_chars", payload.get("bodyChars", snap.get("bodyChars", 8000))), 8000)
         html_chars = to_int(payload.get("html_chars", payload.get("htmlChars", snap.get("htmlChars", 600))), 600)
-        include_urls = bool(payload.get("urls", payload.get("includeUrls", True)))
-        include_hidden = bool(payload.get("includeHidden", False))
-        state = driver.execute_script(COLLECT_JS, {
+        state = page.evaluate(COLLECT_JS, {
             "limit": limit,
             "bodyChars": body_chars,
             "htmlChars": html_chars,
-            "includeUrls": include_urls,
-            "includeHidden": include_hidden,
+            "includeUrls": bool(payload.get("urls", payload.get("includeUrls", True))),
+            "includeHidden": bool(payload.get("includeHidden", False)),
         })
+        try:
+            body_locator = page.locator("body")
+            aria_snapshot = getattr(body_locator, "aria_snapshot", None)
+            if callable(aria_snapshot):
+                state["ariaSnapshot"] = aria_snapshot(timeout=min(3000, timeout_ms(payload)))
+        except Exception:
+            pass
         return state or {}
 
-    def resolve(driver, payload):
+    def locator(page, payload):
         ref = str(payload.get("ref") or "").strip()
         selector = str(payload.get("selector") or "").strip()
+        role = str(payload.get("role") or "").strip()
+        name = payload.get("name")
+        text = payload.get("textSelector")
         if ref:
-            try:
-                return driver.find_element(By.CSS_SELECTOR, f'[{MARK}="{ref}"]')
-            except Exception:
-                raise NoSuchElementException(f"STALE_REF: {ref}. Take a fresh snapshot and retry.")
+            return page.locator(f'[{MARK}="{ref}"]').first
         if selector:
-            return driver.find_element(By.CSS_SELECTOR, selector)
-        raise ValueError("Action requires ref or selector.")
+            return page.locator(selector).first
+        if role:
+            opts = {"name": name} if name not in (None, "") else {}
+            return page.get_by_role(role, **opts).first
+        if text:
+            return page.get_by_text(str(text)).first
+        raise ValueError("Action requires ref, selector, role+name, or textSelector.")
 
-    def after(driver, payload, action_result=None):
+    def post(page, payload, result=None):
         if payload.get("noSnapshot"):
-            return {"ok": True, "result": action_result}
-        return {"ok": True, "result": action_result, "page": snapshot(driver, payload)}
+            return {"ok": True, "result": result}
+        return {"ok": True, "result": result, "page": snapshot(page, payload)}
 
-    def navigate(driver, payload):
+    def with_dialog(page, payload, action):
+        dialog_result = {}
+        wants_handler = any(k in payload for k in ("accept", "promptText", "expectDialog"))
+        if not wants_handler:
+            return action(), dialog_result
+
+        def handler(dialog):
+            dialog_result.update({"type": dialog.type, "message": dialog.message, "defaultValue": dialog.default_value})
+            if payload.get("promptText") is not None:
+                dialog.accept(str(payload.get("promptText")))
+            elif payload.get("accept", True):
+                dialog.accept()
+            else:
+                dialog.dismiss()
+
+        page.once("dialog", handler)
+        return action(), dialog_result
+
+    def navigate(context, page, payload, new_tab=False):
         url = payload.get("url") or payload.get("targetUrl") or payload.get("query_or_url")
         if not url:
             raise ValueError("navigate/open requires url.")
-        if payload.get("newTab") or str(payload.get("action")).lower() == "open":
-            driver.switch_to.new_window("tab")
-        driver.get(str(url))
-        return after(driver, payload, {"targetId": driver.current_window_handle, "url": driver.current_url, "title": driver.title})
+        if new_tab:
+            page = context.new_page()
+        page.goto(str(url), wait_until=payload.get("waitUntil") or "domcontentloaded", timeout=timeout_ms(payload))
+        return post(page, payload, {"targetId": page_ref(context, page), "url": page.url, "title": page.title()})
 
-    def click(driver, payload):
+    def click(page, payload):
         if payload.get("x") is not None and payload.get("y") is not None and not (payload.get("ref") or payload.get("selector")):
-            x = float(payload.get("x"))
-            y = float(payload.get("y"))
-            result = driver.execute_script("const el=document.elementFromPoint(arguments[0], arguments[1]); if(!el) return null; el.click(); return {tag:el.tagName.toLowerCase(), text:(el.innerText||el.value||'').slice(0,300)};", x, y)
-            return after(driver, payload, {"clicked": "coords", "x": x, "y": y, "element": result})
-        el = resolve(driver, payload)
-        driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", el)
-        try:
-            el.click()
-        except Exception:
-            driver.execute_script("arguments[0].click();", el)
-        return after(driver, payload, {"clicked": payload.get("ref") or payload.get("selector")})
-
-    def hover(driver, payload):
-        el = resolve(driver, payload)
-        driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", el)
-        ActionChains(driver).move_to_element(el).perform()
-        return after(driver, payload, {"hovered": payload.get("ref") or payload.get("selector")})
-
-    def fill_or_type(driver, payload):
-        el = resolve(driver, payload)
-        text = str(payload.get("text", payload.get("value", "")))
-        driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", el)
-        if payload.get("clear", True):
-            try:
-                el.clear()
-            except Exception:
-                driver.execute_script("if('value' in arguments[0]) arguments[0].value=''; else arguments[0].textContent='';", el)
-        if payload.get("slowly"):
-            delay = max(0.01, min(0.5, float(payload.get("delay", 0.04) or 0.04)))
-            for char in text:
-                el.send_keys(char)
-                time.sleep(delay)
+            x, y = float(payload.get("x")), float(payload.get("y"))
+            result, dialog = with_dialog(page, payload, lambda: page.mouse.click(x, y))
+            return post(page, payload, {"clicked": "coords", "x": x, "y": y, "dialog": dialog})
+        loc = locator(page, payload)
+        download_info = None
+        if payload.get("expectDownload"):
+            with page.expect_download(timeout=timeout_ms(payload)) as download_wait:
+                _, dialog = with_dialog(page, payload, lambda: loc.click(timeout=timeout_ms(payload)))
+            download = download_wait.value
+            path = payload.get("downloadPath")
+            if not path:
+                output_dir = payload.get("outputDir") or os.getcwd()
+                os.makedirs(output_dir, exist_ok=True)
+                path = os.path.join(output_dir, sanitize_name(download.suggested_filename, "download"))
+            download.save_as(path)
+            download_info = {"path": path, "suggestedFilename": download.suggested_filename}
         else:
-            el.send_keys(text)
-        if payload.get("submit"):
-            el.send_keys(Keys.ENTER)
-        return after(driver, payload, {"typed": len(text), "target": payload.get("ref") or payload.get("selector")})
+            _, dialog = with_dialog(page, payload, lambda: loc.click(timeout=timeout_ms(payload)))
+        return post(page, payload, {"clicked": payload.get("ref") or payload.get("selector") or "locator", "dialog": dialog, "download": download_info})
 
-    def press(driver, payload):
+    def fill(page, payload, typing=False):
+        loc = locator(page, payload)
+        text = str(payload.get("text", payload.get("value", "")))
+        loc.scroll_into_view_if_needed(timeout=timeout_ms(payload))
+        loc.focus(timeout=timeout_ms(payload))
+        if typing and payload.get("clear") is False:
+            try:
+                loc.type(text, delay=max(0, int(float(payload.get("delay", 0.02)) * 1000)), timeout=timeout_ms(payload))
+            except Exception:
+                page.keyboard.insert_text(text)
+        elif typing and payload.get("slowly"):
+            loc.fill("", timeout=timeout_ms(payload))
+            try:
+                loc.type(text, delay=max(0, int(float(payload.get("delay", 0.04)) * 1000)), timeout=timeout_ms(payload))
+            except Exception:
+                page.keyboard.insert_text(text)
+        else:
+            loc.fill(text, timeout=timeout_ms(payload))
+        if payload.get("submit"):
+            loc.press("Enter", timeout=timeout_ms(payload))
+        return post(page, payload, {"typed": len(text), "target": payload.get("ref") or payload.get("selector")})
+
+    def press(page, payload):
         keys = payload.get("keys", payload.get("key", payload.get("text", "")))
         if not isinstance(keys, list):
             keys = [keys]
-        target = None
-        if payload.get("ref") or payload.get("selector"):
-            target = resolve(driver, payload)
-            target.click()
-        element = target or driver.switch_to.active_element
-        element.send_keys(*[normalize_key(k) for k in keys])
-        return after(driver, payload, {"pressed": [str(k) for k in keys]})
+        if payload.get("ref") or payload.get("selector") or payload.get("role") or payload.get("textSelector"):
+            loc = locator(page, payload)
+            loc.focus(timeout=timeout_ms(payload))
+            for key in keys:
+                loc.press(str(key), timeout=timeout_ms(payload))
+        else:
+            for key in keys:
+                page.keyboard.press(str(key))
+        return post(page, payload, {"pressed": [str(k) for k in keys]})
 
-    def select_value(driver, payload):
-        el = resolve(driver, payload)
-        sel = Select(el)
+    def select_value(page, payload):
+        loc = locator(page, payload)
         value = payload.get("value")
         label = payload.get("label") or payload.get("text")
         index = payload.get("index")
+        option = {}
         if value is not None:
-            sel.select_by_value(str(value))
-        elif index is not None:
-            sel.select_by_index(to_int(index, 0))
+            option["value"] = str(value)
         elif label is not None:
-            sel.select_by_visible_text(str(label))
+            option["label"] = str(label)
+        elif index is not None:
+            option["index"] = to_int(index, 0)
         else:
             raise ValueError("select requires value, label/text, or index.")
-        return after(driver, payload, {"selected": value if value is not None else label if label is not None else index})
+        loc.select_option(**option, timeout=timeout_ms(payload))
+        return post(page, payload, {"selected": option})
 
-    def upload(driver, payload):
-        el = resolve(driver, payload)
+    def upload(page, payload):
+        loc = locator(page, payload)
         paths = payload.get("paths") or payload.get("files") or payload.get("path") or []
         if isinstance(paths, str):
             paths = [paths]
@@ -503,266 +544,254 @@ _HELPER_CODE = textwrap.dedent(
         missing = [path for path in paths if not os.path.exists(path)]
         if missing:
             raise FileNotFoundError("Missing upload files: " + ", ".join(missing))
-        el.send_keys("\n".join(paths))
-        return after(driver, payload, {"uploaded": paths})
+        loc.set_input_files(paths, timeout=timeout_ms(payload))
+        return post(page, payload, {"uploaded": paths})
 
-    def wait(driver, payload):
-        timeout = max(0.1, float(payload.get("timeoutMs", payload.get("timeout", 10000)) or 10000) / 1000.0)
-        selector = payload.get("selector")
-        text = payload.get("text")
-        url = payload.get("urlContains") or payload.get("url")
-        fn = payload.get("function") or payload.get("script")
-        time_ms = payload.get("timeMs") or payload.get("ms")
-        if time_ms:
-            time.sleep(max(0, float(time_ms) / 1000.0))
-            return after(driver, payload, {"waitedMs": int(time_ms)})
-        end = time.time() + timeout
-        while time.time() < end:
-            if selector:
-                try:
-                    if driver.find_elements(By.CSS_SELECTOR, str(selector)):
-                        return after(driver, payload, {"matched": "selector", "selector": selector})
-                except Exception:
-                    pass
-            if text:
-                try:
-                    if str(text) in (driver.execute_script("return document.body ? document.body.innerText : ''") or ""):
-                        return after(driver, payload, {"matched": "text", "text": text})
-                except Exception:
-                    pass
-            if url and str(url) in (driver.current_url or ""):
-                return after(driver, payload, {"matched": "url", "url": url})
-            if fn:
-                try:
-                    if driver.execute_script("return !!((new Function(arguments[0]))())", str(fn)):
-                        return after(driver, payload, {"matched": "function"})
-                except Exception:
-                    pass
-            if not any([selector, text, url, fn]):
-                try:
-                    if driver.execute_script("return document.readyState") == "complete":
-                        return after(driver, payload, {"matched": "loadState", "state": "complete"})
-                except Exception:
-                    pass
-            time.sleep(0.2)
-        raise TimeoutException("Timed out waiting for requested browser condition.")
+    def wait(page, payload):
+        if payload.get("timeMs") or payload.get("ms"):
+            ms = to_int(payload.get("timeMs") or payload.get("ms"), 0)
+            page.wait_for_timeout(ms)
+            return post(page, payload, {"waitedMs": ms})
+        if payload.get("selector"):
+            page.wait_for_selector(str(payload.get("selector")), timeout=timeout_ms(payload))
+            return post(page, payload, {"matched": "selector", "selector": payload.get("selector")})
+        if payload.get("text"):
+            page.get_by_text(str(payload.get("text"))).first.wait_for(timeout=timeout_ms(payload))
+            return post(page, payload, {"matched": "text", "text": payload.get("text")})
+        if payload.get("urlContains") or payload.get("url"):
+            needle = str(payload.get("urlContains") or payload.get("url"))
+            page.wait_for_url(lambda url: needle in url, timeout=timeout_ms(payload))
+            return post(page, payload, {"matched": "url", "url": needle})
+        if payload.get("function") or payload.get("script"):
+            page.wait_for_function(str(payload.get("function") or payload.get("script")), timeout=timeout_ms(payload))
+            return post(page, payload, {"matched": "function"})
+        page.wait_for_load_state(payload.get("state") or "domcontentloaded", timeout=timeout_ms(payload))
+        return post(page, payload, {"matched": "loadState"})
 
-    def evaluate(driver, payload):
-        source = str(payload.get("script") or payload.get("code") or payload.get("expression") or "")
+    def evaluate(page, payload):
+        source = str(payload.get("script") or payload.get("expression") or "")
         if not source.strip():
-            raise ValueError("evaluate requires script/code/expression.")
-        el = None
-        if payload.get("ref") or payload.get("selector"):
-            el = resolve(driver, payload)
-        result = driver.execute_script(
-            """
-            const source = arguments[0];
-            const el = arguments[1] || null;
-            try {
-              const candidate = (0, eval)('(' + source + ')');
-              if (typeof candidate === 'function') return candidate(el);
-            } catch (err) {}
-            return (new Function('el', source))(el);
-            """,
-            source,
-            el,
-        )
-        return after(driver, payload, {"value": result})
-
-    def storage(driver, payload):
-        kind = str(payload.get("kind") or payload.get("storage") or "local").lower()
-        op = str(payload.get("op") or payload.get("operation") or "get").lower()
-        key = payload.get("key")
-        value = payload.get("value")
-        if kind == "cookies":
-            if op in {"get", "list"}:
-                return {"ok": True, "cookies": driver.get_cookies()}
-            if op == "delete":
-                if key:
-                    driver.delete_cookie(str(key))
-                else:
-                    driver.delete_all_cookies()
-                return after(driver, payload, {"cookiesDeleted": key or "all"})
-            if op in {"set", "add"} and isinstance(value, dict):
-                driver.add_cookie(value)
-                return after(driver, payload, {"cookieSet": value.get("name")})
-            raise ValueError("cookies storage supports get/list, set/add with value object, or delete.")
-        js_storage = "sessionStorage" if kind.startswith("session") else "localStorage"
-        if op in {"get", "list"}:
-            data = driver.execute_script(f"const out={{}}; for(let i=0;i<{js_storage}.length;i++){{const k={js_storage}.key(i); out[k]={js_storage}.getItem(k);}} return out;")
-            return {"ok": True, "storage": kind, "items": data}
-        if op in {"set", "add"}:
-            driver.execute_script(f"{js_storage}.setItem(arguments[0], arguments[1]);", str(key), str(value))
-            return after(driver, payload, {"storageSet": {"kind": kind, "key": key}})
-        if op in {"delete", "remove"}:
-            driver.execute_script(f"{js_storage}.removeItem(arguments[0]);", str(key))
-            return after(driver, payload, {"storageDeleted": {"kind": kind, "key": key}})
-        if op == "clear":
-            driver.execute_script(f"{js_storage}.clear();")
-            return after(driver, payload, {"storageCleared": kind})
-        raise ValueError("storage op must be get/list, set/add, delete/remove, or clear.")
-
-    def console_logs(driver, payload):
+            raise ValueError("evaluate requires script or expression.")
+        handle = None
+        if payload.get("ref") or payload.get("selector") or payload.get("role") or payload.get("textSelector"):
+            handle = locator(page, payload).element_handle(timeout=timeout_ms(payload))
+        element_runner = """(arg, source) => {
+          try {
+            const candidate = (0, eval)('(' + source + ')');
+            if (typeof candidate === 'function') return candidate(arg);
+          } catch (err) {}
+          return (new Function('el', source))(arg);
+        }"""
+        page_runner = """(source) => {
+          const arg = null;
+          try {
+            const candidate = (0, eval)('(' + source + ')');
+            if (typeof candidate === 'function') return candidate(arg);
+          } catch (err) {}
+          return (new Function('el', source))(arg);
+        }"""
         try:
-            logs = driver.get_log("browser")
-            return {"ok": True, "logs": logs[-to_int(payload.get("limit", 100), 100):]}
-        except Exception as exc:
-            return {"ok": False, "error": f"Console logs are unavailable from this Chrome session: {exc}"}
-
-    def screenshot(driver, payload):
-        state = snapshot(driver, payload)
-        labels = bool(payload.get("labels", payload.get("annotate", False)))
-        path = payload.get("path")
-        output_dir = payload.get("outputDir") or os.getcwd()
-        os.makedirs(output_dir, exist_ok=True)
-        if not path:
-            base = sanitize_name(driver.title or "browser")
-            path = os.path.join(output_dir, f"{base}_{int(time.time())}.png")
-        if labels:
-            driver.execute_script(OVERLAY_JS, state.get("elements", []), False)
-            time.sleep(0.15)
-        try:
-            full_page = bool(payload.get("fullPage", payload.get("full_page", False)))
-            if full_page:
-                try:
-                    data = driver.execute_cdp_cmd("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": True})
-                    with open(path, "wb") as fh:
-                        fh.write(base64.b64decode(data["data"]))
-                except Exception:
-                    driver.save_screenshot(path)
+            if handle is not None:
+                result = handle.evaluate(element_runner, source)
+                handle.dispose()
             else:
-                driver.save_screenshot(path)
+                result = page.evaluate(page_runner, source)
         finally:
-            if labels:
-                try:
-                    driver.execute_script(OVERLAY_JS, [], True)
-                except Exception:
-                    pass
-        return {"ok": True, "path": path, "page": state}
+            try:
+                if handle is not None:
+                    handle.dispose()
+            except Exception:
+                pass
+        return post(page, payload, {"value": result})
 
-    def pdf(driver, payload):
-        path = payload.get("path")
-        output_dir = payload.get("outputDir") or os.getcwd()
-        os.makedirs(output_dir, exist_ok=True)
-        if not path:
-            base = sanitize_name(driver.title or "browser")
-            path = os.path.join(output_dir, f"{base}_{int(time.time())}.pdf")
-        result = driver.execute_cdp_cmd("Page.printToPDF", {
-            "printBackground": bool(payload.get("printBackground", True)),
-            "landscape": bool(payload.get("landscape", False)),
-        })
-        with open(path, "wb") as fh:
-            fh.write(base64.b64decode(result["data"]))
-        return {"ok": True, "path": path}
-
-    def dialog(driver, payload):
-        try:
-            alert = driver.switch_to.alert
-            text = alert.text
-            if payload.get("promptText") is not None:
-                alert.send_keys(str(payload.get("promptText")))
-            if payload.get("accept", True):
-                alert.accept()
-                handled = "accepted"
-            else:
-                alert.dismiss()
-                handled = "dismissed"
-            return after(driver, payload, {"dialog": handled, "text": text})
-        except NoAlertPresentException:
-            return {"ok": False, "error": "No browser dialog is currently open."}
-
-    def cdp(driver, payload):
+    def cdp(context, page, payload):
         method = str(payload.get("method") or "").strip()
         params = payload.get("params") or {}
         if not method:
             raise ValueError("cdp requires method, for example Runtime.evaluate or Network.enable.")
         if not isinstance(params, dict):
             raise ValueError("cdp params must be an object.")
-        result = driver.execute_cdp_cmd(method, params)
+        session = context.new_cdp_session(page)
+        result = session.send(method, params)
+        try:
+            session.detach()
+        except Exception:
+            pass
         return {"ok": True, "method": method, "result": result}
 
-    def scroll(driver, payload):
-        if payload.get("ref") or payload.get("selector"):
-            el = resolve(driver, payload)
-            driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", el)
-            return after(driver, payload, {"scrolledTo": payload.get("ref") or payload.get("selector")})
+    def storage(context, page, payload):
+        kind = str(payload.get("kind") or payload.get("storage") or "local").lower()
+        op = str(payload.get("op") or payload.get("operation") or "get").lower()
+        key = payload.get("key")
+        value = payload.get("value")
+        if kind == "cookies":
+            if op in {"get", "list"}:
+                return {"ok": True, "cookies": context.cookies()}
+            if op in {"set", "add"}:
+                cookies = value if isinstance(value, list) else [value]
+                context.add_cookies(cookies)
+                return post(page, payload, {"cookiesSet": len(cookies)})
+            if op in {"delete", "remove", "clear"}:
+                context.clear_cookies()
+                return post(page, payload, {"cookiesCleared": True})
+            raise ValueError("cookies supports get/list, set/add, or clear/delete.")
+        js_storage = "sessionStorage" if kind.startswith("session") else "localStorage"
+        if op in {"get", "list"}:
+            data = page.evaluate(f"() => {{ const out={{}}; for(let i=0;i<{js_storage}.length;i++){{const k={js_storage}.key(i); out[k]={js_storage}.getItem(k);}} return out; }}")
+            return {"ok": True, "storage": kind, "items": data}
+        if op in {"set", "add"}:
+            page.evaluate(f"([key, value]) => {js_storage}.setItem(key, value)", [str(key), str(value)])
+            return post(page, payload, {"storageSet": {"kind": kind, "key": key}})
+        if op in {"delete", "remove"}:
+            page.evaluate(f"(key) => {js_storage}.removeItem(key)", str(key))
+            return post(page, payload, {"storageDeleted": {"kind": kind, "key": key}})
+        if op == "clear":
+            page.evaluate(f"() => {js_storage}.clear()")
+            return post(page, payload, {"storageCleared": kind})
+        raise ValueError("storage op must be get/list, set/add, delete/remove, or clear.")
+
+    def console_logs(page, payload):
+        install_page_hooks(page)
+        logs = page.evaluate("() => window.__smartiConsoleHistory || []")
+        limit = to_int(payload.get("limit", 100), 100)
+        return {"ok": True, "logs": logs[-limit:]}
+
+    def network(page, payload):
+        entries = page.evaluate(
+            """() => performance.getEntriesByType('resource').slice(-300).map(e => ({
+              name: e.name, initiatorType: e.initiatorType, startTime: Math.round(e.startTime),
+              duration: Math.round(e.duration), transferSize: e.transferSize || 0,
+              encodedBodySize: e.encodedBodySize || 0, decodedBodySize: e.decodedBodySize || 0
+            }))"""
+        )
+        nav = page.evaluate("() => performance.getEntriesByType('navigation').map(e => ({name:e.name, type:e.type, duration:Math.round(e.duration), domContentLoadedEventEnd:Math.round(e.domContentLoadedEventEnd), loadEventEnd:Math.round(e.loadEventEnd)}))")
+        return {"ok": True, "navigation": nav, "resources": entries}
+
+    def screenshot(page, payload):
+        state = snapshot(page, payload)
+        path = output_path(dict(payload, titleHint=page.title() or "browser"), "png")
+        labels = bool(payload.get("labels", payload.get("annotate", False)))
+        if labels:
+            page.evaluate(OVERLAY_JS, {"elements": state.get("elements", []), "clearOnly": False})
+            page.wait_for_timeout(120)
+        try:
+            page.screenshot(path=path, full_page=bool(payload.get("fullPage", payload.get("full_page", False))), timeout=timeout_ms(payload))
+        finally:
+            if labels:
+                try:
+                    page.evaluate(OVERLAY_JS, {"elements": [], "clearOnly": True})
+                except Exception:
+                    pass
+        return {"ok": True, "path": path, "page": state}
+
+    def pdf(page, payload):
+        path = output_path(dict(payload, titleHint=page.title() or "browser"), "pdf")
+        page.pdf(path=path, print_background=bool(payload.get("printBackground", True)), landscape=bool(payload.get("landscape", False)), timeout=timeout_ms(payload))
+        return {"ok": True, "path": path}
+
+    def scroll(page, payload):
+        if payload.get("ref") or payload.get("selector") or payload.get("role") or payload.get("textSelector"):
+            loc = locator(page, payload)
+            loc.scroll_into_view_if_needed(timeout=timeout_ms(payload))
+            return post(page, payload, {"scrolledTo": payload.get("ref") or payload.get("selector") or "locator"})
         dx = float(payload.get("deltaX", payload.get("x", 0)) or 0)
         dy = float(payload.get("deltaY", payload.get("y", 800)) or 800)
-        driver.execute_script("window.scrollBy(arguments[0], arguments[1]);", dx, dy)
-        return after(driver, payload, {"scrolledBy": {"x": dx, "y": dy}})
+        page.mouse.wheel(dx, dy)
+        return post(page, payload, {"scrolledBy": {"x": dx, "y": dy}})
 
-    def resize(driver, payload):
+    def resize(page, payload):
         width = to_int(payload.get("width"), 1280)
         height = to_int(payload.get("height"), 900)
-        driver.set_window_size(width, height)
-        return after(driver, payload, {"viewport": {"width": width, "height": height}})
+        page.set_viewport_size({"width": width, "height": height})
+        return post(page, payload, {"viewport": {"width": width, "height": height}})
 
-    def close_tab(driver, payload):
-        closed = driver.current_window_handle
-        driver.close()
-        if driver.window_handles:
-            driver.switch_to.window(driver.window_handles[-1])
-        return {"ok": True, "closedTargetId": closed, "tabs": tabs(driver)}
+    def close_tab(context, page):
+        ref = page_ref(context, page)
+        page.close()
+        current = context.pages[-1] if context.pages else context.new_page()
+        return {"ok": True, "closedTargetId": ref, "tabs": tabs(context, current)}
 
-    DISPATCH = {
-        "tabs": lambda driver, payload: {"ok": True, "tabs": tabs(driver), "currentTargetId": driver.current_window_handle},
-        "start": lambda driver, payload: {"ok": True, "tabs": tabs(driver), "currentTargetId": driver.current_window_handle},
-        "open": navigate,
-        "navigate": navigate,
-        "snapshot": lambda driver, payload: {"ok": True, "page": snapshot(driver, payload)},
-        "screenshot": screenshot,
-        "pdf": pdf,
-        "console": console_logs,
-        "storage": storage,
-        "cookies": lambda driver, payload: storage(driver, dict(payload, kind="cookies")),
-        "click": click,
-        "clickcoords": click,
-        "type": fill_or_type,
-        "fill": fill_or_type,
-        "press": press,
-        "hover": hover,
-        "select": select_value,
-        "upload": upload,
-        "wait": wait,
-        "evaluate": evaluate,
-        "dialog": dialog,
-        "cdp": cdp,
-        "scroll": scroll,
-        "scrollintoview": scroll,
-        "resize": resize,
-        "close": close_tab,
-        "close_tab": close_tab,
-    }
+    def dialog(page, payload):
+        return {"ok": False, "error": "Use accept/promptText/expectDialog on the action that triggers the dialog; Playwright handles dialogs during that action."}
 
     def main():
         payload = json.loads(sys.stdin.read() or "{}")
-        action = str(payload.get("action") or "snapshot").strip().lower()
-        if action == "act":
+        action = str(payload.get("action") or "snapshot").strip()
+        normalized = action.lower().replace("-", "_")
+        if normalized == "act":
             request = dict(payload.get("request") or {})
             for key, value in payload.items():
                 request.setdefault(key, value)
-            action = str(request.get("kind") or request.get("action") or "").strip().lower()
             payload = request
-        action = action.replace("-", "_")
-        action_key = action.replace("_", "")
-        driver = None
+            normalized = str(request.get("kind") or request.get("action") or "").strip().lower().replace("-", "_")
+        pw = browser = context = None
         try:
-            driver = connect(payload.get("debugPort") or 49223)
-            switch_target(driver, payload.get("targetId") or payload.get("tabId") or payload.get("target"))
-            handler = DISPATCH.get(action) or DISPATCH.get(action_key)
-            if not handler:
+            pw, browser, context = connect(payload)
+            page = select_page(context, payload)
+            install_page_hooks(page)
+            if normalized in {"status", "doctor", "start"}:
+                result = {"ok": True, "ready": True, "tabs": tabs(context, page), "currentTargetId": page_ref(context, page)}
+            elif normalized == "tabs":
+                result = {"ok": True, "tabs": tabs(context, page), "currentTargetId": page_ref(context, page)}
+            elif normalized == "open":
+                result = navigate(context, page, payload, new_tab=bool(payload.get("newTab", True)))
+            elif normalized == "navigate":
+                result = navigate(context, page, payload, new_tab=bool(payload.get("newTab", False)))
+            elif normalized == "snapshot":
+                result = {"ok": True, "targetId": page_ref(context, page), "page": snapshot(page, payload)}
+            elif normalized == "screenshot":
+                result = screenshot(page, payload)
+            elif normalized == "pdf":
+                result = pdf(page, payload)
+            elif normalized == "console":
+                result = console_logs(page, payload)
+            elif normalized == "network":
+                result = network(page, payload)
+            elif normalized == "storage":
+                result = storage(context, page, payload)
+            elif normalized == "cookies":
+                result = storage(context, page, dict(payload, kind="cookies"))
+            elif normalized in {"click", "clickcoords", "click_coords"}:
+                result = click(page, payload)
+            elif normalized == "hover":
+                loc = locator(page, payload)
+                loc.hover(timeout=timeout_ms(payload))
+                result = post(page, payload, {"hovered": payload.get("ref") or payload.get("selector") or "locator"})
+            elif normalized == "type":
+                result = fill(page, payload, typing=True)
+            elif normalized == "fill":
+                result = fill(page, payload, typing=False)
+            elif normalized == "press":
+                result = press(page, payload)
+            elif normalized == "select":
+                result = select_value(page, payload)
+            elif normalized == "upload":
+                result = upload(page, payload)
+            elif normalized == "wait":
+                result = wait(page, payload)
+            elif normalized == "evaluate":
+                result = evaluate(page, payload)
+            elif normalized == "cdp":
+                result = cdp(context, page, payload)
+            elif normalized == "dialog":
+                result = dialog(page, payload)
+            elif normalized in {"scroll", "scrollintoview", "scroll_into_view"}:
+                result = scroll(page, payload)
+            elif normalized == "resize":
+                result = resize(page, payload)
+            elif normalized in {"close", "close_tab"}:
+                result = close_tab(context, page)
+            else:
                 raise ValueError(f"Unsupported browser action: {action}")
-            result = handler(driver, payload)
             print(json.dumps(result, ensure_ascii=False, default=str))
         except Exception as exc:
             print(json.dumps({"ok": False, "error": str(exc), "action": action}, ensure_ascii=False, default=str))
         finally:
-            if driver is not None:
-                try:
-                    if getattr(driver, "service", None):
-                        driver.service.stop()
-                except Exception:
-                    pass
+            try:
+                if pw is not None:
+                    pw.stop()
+            except Exception:
+                pass
 
     if __name__ == "__main__":
         main()
