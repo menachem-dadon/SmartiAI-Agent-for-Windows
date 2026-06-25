@@ -859,6 +859,114 @@ BUILTIN_TOOL_SCHEMAS["automation_manager"] = {
     }
 }
 
+BROWSER_AUTOMATION_ACTIONS = [
+    "start", "status", "doctor", "tabs", "open", "navigate",
+    "snapshot", "screenshot", "pdf", "console", "cdp", "storage", "cookies",
+    "act", "click", "clickCoords", "type", "fill", "press", "hover",
+    "select", "upload", "wait", "evaluate", "dialog", "scroll",
+    "scrollIntoView", "resize", "close", "close_tab", "run",
+    "close_browser", "stop", "close_all"
+]
+
+BROWSER_AUTOMATION_PROPERTIES = {
+    "url": {"type": "string", "description": "URL for open/navigate/start."},
+    "targetUrl": {"type": "string", "description": "Alias for url."},
+    "targetId": {"type": "string", "description": "Tab/window target id from tabs/snapshot results."},
+    "tabId": {"type": "string", "description": "Alias for targetId."},
+    "ref": {"type": "string", "description": "Stable element ref from snapshot, for example e12."},
+    "selector": {"type": "string", "description": "CSS selector fallback when no ref is available."},
+    "request": {"type": "object", "description": "For action=act: nested action request with kind plus ref/selector/text/etc."},
+    "kind": {"type": "string", "description": "For action=act: click/type/press/hover/select/upload/wait/evaluate/etc."},
+    "text": {"type": "string", "description": "Text to type/fill, visible text to wait for, or key name for press."},
+    "value": {"description": "Value for fill/select/storage/cookie operations."},
+    "keys": {"type": ["string", "array"], "items": {"type": "string"}, "description": "Key or key sequence for press."},
+    "label": {"type": "string", "description": "Visible select option label."},
+    "index": {"type": "integer", "description": "Select option index."},
+    "x": {"type": "number", "description": "Viewport x coordinate for clickCoords or scroll delta alias."},
+    "y": {"type": "number", "description": "Viewport y coordinate for clickCoords or scroll delta alias."},
+    "deltaX": {"type": "number", "description": "Horizontal scroll delta."},
+    "deltaY": {"type": "number", "description": "Vertical scroll delta."},
+    "width": {"type": "integer", "description": "Viewport width for resize."},
+    "height": {"type": "integer", "description": "Viewport height for resize."},
+    "path": {"type": "string", "description": "Output path for screenshot/pdf or upload file path."},
+    "paths": {"type": "array", "items": {"type": "string"}, "description": "Local files for upload."},
+    "files": {"type": "array", "items": {"type": "string"}, "description": "Alias for paths."},
+    "timeoutMs": {"type": "integer", "description": "Wait/action timeout in milliseconds."},
+    "timeMs": {"type": "integer", "description": "Fixed wait duration in milliseconds."},
+    "limit": {"type": "integer", "description": "Maximum snapshot elements/log entries."},
+    "bodyChars": {"type": "integer", "description": "Maximum page body characters in snapshot."},
+    "htmlChars": {"type": "integer", "description": "Maximum per-element HTML characters in snapshot."},
+    "urls": {"type": "boolean", "description": "Include href/src in snapshot elements."},
+    "includeUrls": {"type": "boolean", "description": "Alias for urls."},
+    "includeHidden": {"type": "boolean", "description": "Include hidden/offscreen candidates in snapshot."},
+    "fullPage": {"type": "boolean", "description": "Capture beyond viewport for screenshots when supported."},
+    "labels": {"type": "boolean", "description": "Draw element ref overlays on screenshot."},
+    "annotate": {"type": "boolean", "description": "Alias for labels."},
+    "storage": {"type": "string", "enum": ["local", "session", "cookies"], "description": "Storage target."},
+    "op": {"type": "string", "enum": ["get", "list", "set", "add", "delete", "remove", "clear"], "description": "Storage/cookie operation."},
+    "operation": {"type": "string", "description": "Alias for op."},
+    "key": {"type": "string", "description": "Storage key or cookie name."},
+    "script": {"type": "string", "description": "JavaScript for evaluate/wait function."},
+    "expression": {"type": "string", "description": "Alias for script."},
+    "function": {"type": "string", "description": "JavaScript predicate for wait."},
+    "method": {"type": "string", "description": "Chrome DevTools Protocol method for action=cdp, for example Runtime.evaluate."},
+    "params": {"type": "object", "description": "Chrome DevTools Protocol params object for action=cdp."},
+    "urlContains": {"type": "string", "description": "URL substring to wait for."},
+    "accept": {"type": "boolean", "description": "Accept or dismiss current dialog."},
+    "promptText": {"type": "string", "description": "Text to enter into prompt dialogs."},
+    "submit": {"type": "boolean", "description": "Press Enter after type/fill."},
+    "clear": {"type": "boolean", "description": "Clear field before type/fill."},
+    "slowly": {"type": "boolean", "description": "Type character by character."},
+    "delay": {"type": "number", "description": "Delay between slow typing characters."},
+    "newTab": {"type": "boolean", "description": "Open/navigate in a new tab."},
+    "noSnapshot": {"type": "boolean", "description": "Skip post-action page snapshot."},
+    "printBackground": {"type": "boolean", "description": "Print CSS backgrounds in PDF."},
+    "landscape": {"type": "boolean", "description": "PDF landscape mode."},
+}
+
+BUILTIN_TOOL_SCHEMAS["browser_automation"] = {
+    "description": (
+        "Structured control of Smarti's dedicated persistent Chrome. Prefer snapshot -> act by ref. "
+        "Supports navigation, tabs, screenshots, PDF, console logs, CDP, storage/cookies, dialogs, upload, "
+        "wait, evaluate, and a legacy Selenium code fallback with action=run."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": BROWSER_AUTOMATION_ACTIONS, "description": "Structured browser action."},
+            "code": {"type": "string", "description": "Legacy Selenium Python code for action=run only."},
+            **BROWSER_AUTOMATION_PROPERTIES,
+        },
+    },
+}
+
+BUILTIN_TOOL_SCHEMAS["automation_manager"] = {
+    "description": "Unified automation tool. For browser work, use structured snapshot -> act by ref before raw code. For Windows desktop work, use structured UI Automation actions.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "target": {"type": "string", "enum": ["browser", "computer"], "description": "Automation target."},
+            "action": {"type": "string", "enum": BROWSER_AUTOMATION_ACTIONS + ["inspect", "list_windows", "find", "get_focused", "focus_window", "focus", "invoke", "set_text", "toggle", "expand", "collapse", "send_keys", "hotkey"], "description": "Browser structured action or computer UIA action."},
+            "code": {"type": "string", "description": "Browser legacy code only with action=run, or advanced computer fallback code."},
+            "window": {"type": "string", "description": "Computer automation window title substring."},
+            "name": {"type": "string", "description": "Computer automation element name substring."},
+            "automation_id": {"type": "string", "description": "Computer automation AutomationId."},
+            "class_name": {"type": "string", "description": "Computer automation ClassName substring."},
+            "control_type": {"type": "string", "description": "Computer automation control type."},
+            "max_depth": {"type": "integer", "description": "Tree depth for inspect/find."},
+            "timeout": {"type": "number", "description": "Seconds to wait."},
+            "include_offscreen": {"type": "boolean", "description": "Include offscreen controls."},
+            "dry_run": {"type": "boolean", "description": "Resolve without mutating."},
+            "allow_mouse_fallback": {"type": "boolean", "description": "Allow resolved-bounds mouse fallback."},
+            "allow_clipboard_fallback": {"type": "boolean", "description": "Allow clipboard fallback for set_text."},
+            "allow_global_keys": {"type": "boolean", "description": "Allow global keyboard actions without target."},
+            "allow_destructive": {"type": "boolean", "description": "Required for destructive-looking UI targets."},
+            **BROWSER_AUTOMATION_PROPERTIES,
+        },
+        "required": ["target", "action"]
+    }
+}
+
 BUILTIN_DYNAMIC_TOOLS.update({
     "system_manager": "Unified system: run_command, git_status, run_project_check, list_processes, set_clipboard, set_volume.",
     "software_manager": "Unified software launcher: list/find/open/refresh installed apps with cached discovery.",
@@ -870,7 +978,8 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "memory_manager": "Unified memory: search and update.",
     "extension_manager": "Unified MCP and Skills operations.",
     "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
-    "automation_manager": "Unified browser/computer automation."
+    "browser_automation": "Structured persistent Chrome control: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, CDP, storage, dialogs, upload, wait, evaluate, and legacy action=run fallback.",
+    "automation_manager": "Unified browser/computer automation. Browser target supports structured snapshot -> act by ref; computer target supports UIA actions."
 })
 
 LEGACY_BUILTIN_TOOLS = {
