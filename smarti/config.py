@@ -336,27 +336,20 @@ BUILTIN_TOOL_SCHEMAS = {
             "required": ["action"]
         }
     },
-    "browser_automation": {
-        "description": "Structured control of Smarti dedicated persistent Chrome through Playwright/CDP.",
+    "browser_automation_manager": {
+        "description": "Structured control manager for Smarti dedicated persistent Chrome through Playwright/CDP.",
         "inputSchema": {
             "type": "object",
             "properties": {"action": {"type": "string", "description": "Browser action."}},
             "required": ["action"]
         }
     },
-    "close_automation_browser": {
-        "description": "סוגר לחלוטין את הדפדפן הנסתר ברקע.",
+    "computer_automation_manager": {
+        "description": "מנהל שליטה במחשב באמצעות Windows UI Automation (`auto`) ובמידת הצורך מקלדת/עכבר (`pa`).",
         "inputSchema": {
             "type": "object",
-            "properties": {}
-        }
-    },
-    "computer_automation": {
-        "description": "שולט במחשב באמצעות Windows UI Automation הרשמי דרך uiautomation (`auto`) ובמידת הצורך מקלדת/עכבר דרך PyAutoGUI (`pa`). אין לבצע import בתוך הקוד; זמינים מראש auto, pa, time, paste_text ועוזרי חלונות. חובה להדפיס אימות ברור עם print בסוף הפעולה.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"code": {"type": "string", "description": "קוד פייתון קצר להרצה. אין לבצע import; זמינים מראש: auto, pa, time, paste_text, list_windows, find_window, activate_window, send_keys, press, hotkey. הדפס תוצאה ברורה עם print."}},
-            "required": ["code"]
+            "properties": {"action": {"type": "string", "description": "Computer automation action."}},
+            "required": ["action"]
         }
     },
     "save_text_file": {
@@ -516,9 +509,8 @@ BUILTIN_DYNAMIC_TOOLS = {
     "save_screenshot_to_disk": "שמירת צילום מסך כקובץ.",
     "set_volume": "השתקת השמע.",
     "email_manager": "Full email access through IMAP/SMTP. Use it for every email task: search/read by UID, send/draft/reply/forward, styled RTL/HTML messages, flags, archive/trash/delete/move/copy, folders, attachments. For Hebrew display-name searches use `from`, `subject_filter`, or `query`; auto mode falls back to local header scan. Use `count: 0` for all matches and preserve each result's `mailbox` when reading.",
-    "browser_automation": "Structured persistent Chrome control through Playwright/CDP: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, network, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
-    "close_automation_browser": "סגירת דפדפן Smarti הייעודי.",
-    "computer_automation": "שליטה במחשב דרך Windows UI Automation (`auto`) ובמידת הצורך מקלדת/עכבר (`pa`).",
+    "browser_automation_manager": "Structured persistent Chrome control manager through Playwright/CDP: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, network, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
+    "computer_automation_manager": "מנהל שליטה במחשב דרך Windows UI Automation (`auto`) ובמידת הצורך מקלדת/עכבר (`pa`).",
     "read_local_document": "קריאת טקסט מקבצי מסמכים.",
     "run_mcp": "הפעלת פונקציות מכלים חיצוניים שהותקנו.",
     "list_skills": "הצגת Skills זמינים.",
@@ -533,7 +525,7 @@ BUILTIN_DYNAMIC_TOOLS = {
     "extract_image_text": "OCR אופציונלי מתמונה מקומית."
   }
 
-BUILTIN_TOOL_SCHEMAS["computer_automation"] = {
+BUILTIN_TOOL_SCHEMAS["computer_automation_manager"] = {
     "description": (
         "Stable Windows desktop control through Microsoft UI Automation. "
         "Prefer structured actions that inspect/find/invoke/set UIA elements. "
@@ -548,7 +540,7 @@ BUILTIN_TOOL_SCHEMAS["computer_automation"] = {
                     "inspect", "list_windows", "find", "get_focused",
                     "focus_window", "focus", "invoke", "click", "set_text",
                     "toggle", "select", "expand", "collapse",
-                    "send_keys", "press", "hotkey"
+                    "send_keys", "press", "hotkey", "code"
                 ],
                 "description": "Structured UIA action. Start with inspect/list_windows/find, then act on a resolved element."
             },
@@ -569,11 +561,12 @@ BUILTIN_TOOL_SCHEMAS["computer_automation"] = {
             "allow_clipboard_fallback": {"type": "boolean", "description": "For set_text when ValuePattern is unavailable. Defaults to true after focusing the target."},
             "allow_global_keys": {"type": "boolean", "description": "Required for keyboard actions without a resolved target/window."},
             "allow_destructive": {"type": "boolean", "description": "Required when the resolved element name/id/class looks destructive, such as delete/remove/reset. Use dry_run first and require user approval."},
-            "code": {"type": "string", "description": "Advanced legacy Python fallback. Do not use unless structured UIA actions cannot express the task. No imports; preloaded: auto, pa, time, paste_text, list_windows, find_window, activate_window, send_keys, press, hotkey."}
-        }
+            "code": {"type": "string", "description": "Advanced Python fallback. Do not use unless structured UIA actions cannot express the task. No imports; preloaded: auto, pa, time, paste_text, list_windows, find_window, activate_window, send_keys, press, hotkey."}
+        },
+        "required": ["action"]
     }
 }
-BUILTIN_DYNAMIC_TOOLS["computer_automation"] = "Structured Windows UI Automation: inspect/list/find UIA elements, then invoke/set/focus them without guessed coordinates."
+BUILTIN_DYNAMIC_TOOLS["computer_automation_manager"] = "Structured Windows UI Automation manager: inspect/list/find UIA elements, then invoke/set/focus them without guessed coordinates."
 
 BUILTIN_TOOL_SCHEMAS["system_manager"] = {
     "description": "Unified local system tool. Use this for shell commands, project checks, git read-only status, process listing, clipboard text, and audio mute/unmute.",
@@ -829,36 +822,6 @@ BUILTIN_TOOL_SCHEMAS["canvas_manager"] = {
 # Keep the implementation in smarti/google_drive.py and SmartiCore.google_drive_manager
 # for a future re-enable, but do not register it as a visible/built-in tool now.
 
-BUILTIN_TOOL_SCHEMAS["automation_manager"] = {
-    "description": "Unified automation tool for Smarti browser automation and Windows computer automation.",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "target": {"type": "string", "enum": ["browser", "computer"], "description": "Automation target."},
-            "action": {"type": "string", "enum": ["run", "close_browser", "inspect", "list_windows", "find", "get_focused", "focus_window", "focus", "invoke", "click", "set_text", "toggle", "select", "expand", "collapse", "send_keys", "press", "hotkey"], "description": "Browser action run/close_browser, or a structured computer action."},
-            "code": {"type": "string", "description": "Browser code or advanced computer fallback code."},
-            "window": {"type": "string", "description": "Computer automation window title substring."},
-            "name": {"type": "string", "description": "Computer automation element name substring."},
-            "automation_id": {"type": "string", "description": "Computer automation AutomationId."},
-            "class_name": {"type": "string", "description": "Computer automation ClassName substring."},
-            "control_type": {"type": "string", "description": "Computer automation control type."},
-            "path": {"type": "string", "description": "Computer automation element path."},
-            "text": {"type": "string", "description": "Text for set_text or press."},
-            "keys": {"type": ["string", "array"], "items": {"type": "string"}, "description": "Keys for keyboard actions."},
-            "max_depth": {"type": "integer", "description": "Tree depth for inspect/find."},
-            "limit": {"type": "integer", "description": "Maximum elements returned."},
-            "timeout": {"type": "number", "description": "Seconds to wait."},
-            "include_offscreen": {"type": "boolean", "description": "Include offscreen controls."},
-            "dry_run": {"type": "boolean", "description": "Resolve without mutating."},
-            "allow_mouse_fallback": {"type": "boolean", "description": "Allow resolved-bounds mouse fallback."},
-            "allow_clipboard_fallback": {"type": "boolean", "description": "Allow clipboard fallback for set_text."},
-            "allow_global_keys": {"type": "boolean", "description": "Allow global keyboard actions without target."},
-            "allow_destructive": {"type": "boolean", "description": "Required for destructive-looking UI targets."}
-        },
-        "required": ["target", "action"]
-    }
-}
-
 BROWSER_AUTOMATION_ACTIONS = [
     "start", "status", "doctor", "tabs", "open", "navigate",
     "snapshot", "screenshot", "pdf", "console", "network", "cdp", "storage", "cookies",
@@ -932,9 +895,9 @@ BROWSER_AUTOMATION_PROPERTIES = {
     "landscape": {"type": "boolean", "description": "PDF landscape mode."},
 }
 
-BUILTIN_TOOL_SCHEMAS["browser_automation"] = {
+BUILTIN_TOOL_SCHEMAS["browser_automation_manager"] = {
     "description": (
-        "Structured control of Smarti's dedicated persistent Chrome. Prefer snapshot -> act by ref. "
+        "Structured browser automation manager for Smarti's dedicated persistent Chrome. Prefer snapshot -> act by ref. "
         "Supports navigation, tabs, screenshots, PDF, console logs, network timing, CDP, storage/cookies, dialogs, upload, "
         "downloads, wait, and JavaScript evaluate. Raw Python browser code is not used."
     ),
@@ -948,33 +911,6 @@ BUILTIN_TOOL_SCHEMAS["browser_automation"] = {
     },
 }
 
-BUILTIN_TOOL_SCHEMAS["automation_manager"] = {
-    "description": "Unified automation tool. For browser work, use structured snapshot -> act by ref before raw code. For Windows desktop work, use structured UI Automation actions.",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "target": {"type": "string", "enum": ["browser", "computer"], "description": "Automation target."},
-            "action": {"type": "string", "enum": BROWSER_AUTOMATION_ACTIONS + ["inspect", "list_windows", "find", "get_focused", "focus_window", "focus", "invoke", "set_text", "toggle", "expand", "collapse", "send_keys", "hotkey"], "description": "Browser structured action or computer UIA action."},
-            "code": {"type": "string", "description": "Advanced computer fallback code only. Browser raw code is not supported."},
-            "window": {"type": "string", "description": "Computer automation window title substring."},
-            "name": {"type": "string", "description": "Computer automation element name substring."},
-            "automation_id": {"type": "string", "description": "Computer automation AutomationId."},
-            "class_name": {"type": "string", "description": "Computer automation ClassName substring."},
-            "control_type": {"type": "string", "description": "Computer automation control type."},
-            "max_depth": {"type": "integer", "description": "Tree depth for inspect/find."},
-            "timeout": {"type": "number", "description": "Seconds to wait."},
-            "include_offscreen": {"type": "boolean", "description": "Include offscreen controls."},
-            "dry_run": {"type": "boolean", "description": "Resolve without mutating."},
-            "allow_mouse_fallback": {"type": "boolean", "description": "Allow resolved-bounds mouse fallback."},
-            "allow_clipboard_fallback": {"type": "boolean", "description": "Allow clipboard fallback for set_text."},
-            "allow_global_keys": {"type": "boolean", "description": "Allow global keyboard actions without target."},
-            "allow_destructive": {"type": "boolean", "description": "Required for destructive-looking UI targets."},
-            **BROWSER_AUTOMATION_PROPERTIES,
-        },
-        "required": ["target", "action"]
-    }
-}
-
 BUILTIN_DYNAMIC_TOOLS.update({
     "system_manager": "Unified system: run_command, git_status, run_project_check, list_processes, set_clipboard, set_volume.",
     "software_manager": "Unified software launcher: list/find/open/refresh installed apps with cached discovery.",
@@ -986,8 +922,8 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "memory_manager": "Unified memory: search and update.",
     "extension_manager": "Unified MCP and Skills operations.",
     "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
-    "browser_automation": "Structured persistent Chrome control via Playwright/CDP: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, network timing, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
-    "automation_manager": "Legacy compatibility alias. Prefer separate browser_automation or computer_automation."
+    "browser_automation_manager": "Browser automation manager via Playwright/CDP: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, network timing, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
+    "computer_automation_manager": "Computer automation manager via Windows UI Automation: inspect/list/find UIA elements, then invoke/set/focus them without guessed coordinates."
 })
 
 LEGACY_BUILTIN_TOOLS = {
@@ -999,7 +935,6 @@ LEGACY_BUILTIN_TOOLS = {
     "schedule_background_task", "list_background_tasks", "cancel_background_task", "retry_background_task",
     "search_memory", "update_memory",
     "search_mcp", "install_mcp", "run_mcp", "list_skills", "search_skills", "install_skill", "install_skill_requirements", "run_skill",
-    "browser_automation", "close_automation_browser", "computer_automation"
 }
 
 PUBLIC_BUILTIN_TOOLS = [
@@ -1014,8 +949,8 @@ PUBLIC_BUILTIN_TOOLS = [
     "memory_manager",
     "canvas_manager",
     "email_manager",
-    "browser_automation",
-    "computer_automation",
+    "browser_automation_manager",
+    "computer_automation_manager",
     "extension_manager",
     "create_python_tool"
 ]
@@ -1049,9 +984,8 @@ TOOL_CATEGORIES = {
     "memory_manager": "memory",
     "canvas_manager": "visual",
     "email_manager": "email",
-    "browser_automation": "automation",
-    "computer_automation": "automation",
-    "automation_manager": "automation",
+    "browser_automation_manager": "automation",
+    "computer_automation_manager": "automation",
     "extension_manager": "extensions",
     "create_python_tool": "developer"
 }
