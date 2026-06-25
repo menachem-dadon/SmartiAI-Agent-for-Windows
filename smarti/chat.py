@@ -5034,7 +5034,7 @@ class ChatWindow(QMainWindow):
         if hasattr(self, "logo_lbl"):
             logo_path = os.path.join(ASSETS_DIR, "logo.png")
             if os.path.exists(logo_path):
-                pixmap = make_circular_pixmap(logo_path, 50)
+                pixmap = make_circular_pixmap(logo_path, 50, focus_content=True)
                 if pixmap:
                     self.logo_lbl.setPixmap(pixmap)
             self.logo_lbl.setStyleSheet("border: none; background-color: transparent;")
@@ -5156,9 +5156,10 @@ class ChatWindow(QMainWindow):
         
         self.logo_lbl = QLabel()
         self.logo_lbl.setFixedSize(50, 50)
+        self.logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(logo_path):
-            circular_pixmap = make_circular_pixmap(logo_path, 50)
+            circular_pixmap = make_circular_pixmap(logo_path, 50, focus_content=True)
             if circular_pixmap: self.logo_lbl.setPixmap(circular_pixmap)
             self.logo_lbl.setStyleSheet("border: none; background-color: transparent;")
         else:
@@ -6553,7 +6554,7 @@ class AnimatedSplash(QWidget):
 
     def _set_splash_logo(self, fallback_path, border_color):
         if os.path.exists(fallback_path):
-            pixmap = make_circular_pixmap(fallback_path, 76, border_color=border_color, border_width=2, bg_color=BG_COLOR)
+            pixmap = make_circular_pixmap(fallback_path, 76, border_color=border_color, border_width=2, bg_color=BG_COLOR, focus_content=True)
             if pixmap:
                 self.logo_lbl.setPixmap(pixmap)
                 self.logo_lbl.setStyleSheet("background: transparent; border: none;")

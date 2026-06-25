@@ -5,9 +5,44 @@ from .ui_styles import *
 # ==========================================
 # פונקציות עזר UI
 # ==========================================
-def make_circular_pixmap(image_path, size, border_color=None, border_width=0, bg_color=None):
+def _pixmap_focus_crop(pixmap, padding_ratio=0.045):
+    img = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    xs = []
+    ys = []
+    for y in range(img.height()):
+        for x in range(img.width()):
+            color = QColor(img.pixelColor(x, y))
+            alpha = color.alpha()
+            if alpha <= 8:
+                continue
+            luma = 0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()
+            saturation = max(color.red(), color.green(), color.blue()) - min(color.red(), color.green(), color.blue())
+            if saturation > 55 and luma > 40:
+                xs.append(x)
+                ys.append(y)
+    if not xs:
+        return pixmap
+
+    left = min(xs)
+    right = max(xs)
+    top = min(ys)
+    bottom = max(ys)
+    content_w = right - left + 1
+    content_h = bottom - top + 1
+    side = max(content_w, content_h)
+    side += max(0, round(side * padding_ratio) * 2)
+    side = min(side, pixmap.width(), pixmap.height())
+    cx = (left + right) / 2.0
+    cy = (top + bottom) / 2.0
+    crop_x = round(max(0, min(pixmap.width() - side, cx - side / 2.0)))
+    crop_y = round(max(0, min(pixmap.height() - side, cy - side / 2.0)))
+    return pixmap.copy(crop_x, crop_y, side, side)
+
+def make_circular_pixmap(image_path, size, border_color=None, border_width=0, bg_color=None, focus_content=False):
     original = QPixmap(image_path)
     if original.isNull(): return None
+    if focus_content:
+        original = _pixmap_focus_crop(original)
     img_size = size - 2 * border_width
     scaled = original.scaled(img_size, img_size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
     dim = min(scaled.width(), scaled.height())

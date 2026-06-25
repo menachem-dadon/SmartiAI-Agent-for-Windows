@@ -141,7 +141,7 @@ class LegalAgreementDialog(QDialog):
         self.logo_lbl.setFixedSize(48, 48)
         logo_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(logo_path):
-            pixmap = make_circular_pixmap(logo_path, 48, border_color=LINE_COLOR, border_width=1, bg_color=PANEL_COLOR)
+            pixmap = make_circular_pixmap(logo_path, 48, border_color=LINE_COLOR, border_width=1, bg_color=PANEL_COLOR, focus_content=True)
             if pixmap:
                 self.logo_lbl.setPixmap(pixmap)
         if self.logo_lbl.pixmap() is None:
