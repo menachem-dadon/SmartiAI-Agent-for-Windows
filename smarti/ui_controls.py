@@ -1062,21 +1062,26 @@ class AnimatedStackedWidget(QStackedWidget):
     def setCurrentWidget(self, widget):
         if widget is self.currentWidget():
             return
+        old_index = self.currentIndex()
+        new_index = self.indexOf(widget)
         super().setCurrentWidget(widget)
-        self._animate_current_widget()
+        self._animate_current_widget(old_index, new_index)
 
     def setCurrentIndex(self, index):
         if index == self.currentIndex():
             return
+        old_index = self.currentIndex()
         super().setCurrentIndex(index)
-        self._animate_current_widget()
+        self._animate_current_widget(old_index, index)
 
-    def _animate_current_widget(self):
+    def _animate_current_widget(self, old_index=None, new_index=None):
         widget = self.currentWidget()
         if not widget:
             return
         end_pos = widget.pos()
         slide_offset = -26 if self.layoutDirection() == Qt.LayoutDirection.RightToLeft else 26
+        if old_index is not None and new_index is not None and new_index < old_index:
+            slide_offset = -slide_offset
         widget.move(end_pos + QPoint(slide_offset, 0))
 
         effect = QGraphicsOpacityEffect(widget)
