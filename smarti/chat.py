@@ -2754,17 +2754,7 @@ class ChatMessageContainer(QWidget):
         self._enter_anim.setEndValue(1.0)
         self._enter_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
 
-        end_pos = self.content_wrap.pos()
-        start_pos = end_pos + QPoint(0, 18)
-        self.content_wrap.move(start_pos)
-        self._enter_slide_anim = QPropertyAnimation(self.content_wrap, b"pos", self)
-        self._enter_slide_anim.setDuration(360)
-        self._enter_slide_anim.setStartValue(start_pos)
-        self._enter_slide_anim.setEndValue(end_pos)
-        self._enter_slide_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
-
         def cleanup():
-            self.content_wrap.move(end_pos)
             self.content_wrap.setGraphicsEffect(None)
             self._actions_can_show = True
             if self.show_actions:
@@ -2772,8 +2762,16 @@ class ChatMessageContainer(QWidget):
             self.updateGeometry()
 
         self._enter_anim.finished.connect(cleanup)
-        self._enter_slide_anim.start()
         self._enter_anim.start()
+
+    def finish_entry_without_animation(self):
+        self._entry_pending = False
+        self._entry_started = True
+        self.content_wrap.setGraphicsEffect(None)
+        self._actions_can_show = True
+        if self.show_actions:
+            self.actions_opacity.setOpacity(1.0)
+        self.updateGeometry()
 
     def reveal_with_entry_animation(self):
         self.show()
@@ -4594,6 +4592,70 @@ class ChatWindow(QMainWindow):
     def _favorite_model_label(self, provider, model):
         return self.format_model_name(model)
 
+    def _codex_reasoning_options(self):
+        return [
+            ("low", "נמוכה"),
+            ("medium", "בינונית"),
+            ("high", "גבוהה"),
+            ("xhigh", "גבוהה מאוד"),
+        ]
+
+    def _current_model_provider(self):
+        return normalize_provider_name(self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini")) or "gemini")
+
+    def _current_codex_reasoning_effort(self):
+        effort = str(self.core.settings.get("codex_reasoning_effort", "medium") or "medium").strip().lower()
+        return effort if effort in {value for value, _ in self._codex_reasoning_options()} else "medium"
+
+    def _add_menu_header(self, menu, text):
+        action = menu.addAction(str(text or ""))
+        action.setEnabled(False)
+        font = app_font(10, QFont.Weight.Bold)
+        font.setItalic(False)
+        action.setFont(font)
+        return action
+
+    def _reasoning_selected_icon(self):
+        return themed_icon(
+            "reasoning_effort_selected_icon",
+            "reasoning_effort_selected",
+            "reasoning_selected_icon",
+            "reasoning_selected",
+            "codex_reasoning_selected_icon",
+            "codex_reasoning_selected",
+        )
+
+    def _add_codex_reasoning_menu_items(self, menu):
+        if self._current_model_provider() != "openai_codex_signin":
+            return False
+        self._add_menu_header(menu, "עוצמת חשיבה")
+        current_effort = self._current_codex_reasoning_effort()
+        check_icon = self._reasoning_selected_icon()
+        for value, label in self._codex_reasoning_options():
+            action = menu.addAction(label)
+            if value == current_effort and not check_icon.isNull():
+                action.setIcon(check_icon)
+                action.setIconVisibleInMenu(True)
+            action.triggered.connect(lambda checked=False, effort=value: self._select_codex_reasoning_effort(effort))
+        menu.addSeparator()
+        return True
+
+    def _select_codex_reasoning_effort(self, effort):
+        effort = str(effort or "medium").strip().lower()
+        if effort not in {value for value, _ in self._codex_reasoning_options()}:
+            effort = "medium"
+        if effort == self._current_codex_reasoning_effort():
+            return
+        self.core.settings["codex_reasoning_effort"] = effort
+        self.core._save_settings()
+        if getattr(self, "settings_page", None) is not None and hasattr(self.settings_page, "codex_reasoning_effort_combo"):
+            combo = self.settings_page.codex_reasoning_effort_combo
+            index = combo.findData(effort)
+            if index >= 0:
+                previous = combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(previous)
+
     def _fit_quick_input_button(self, button, text, base_width=150, max_width=320, min_width=92):
         try:
             text = str(text or "")
@@ -4721,6 +4783,7 @@ class ChatWindow(QMainWindow):
         menu = QMenu(self)
         menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         prepare_popup_menu(menu)
+        self._add_codex_reasoning_menu_items(menu)
         for provider, models in self._favorites_by_provider():
             sub = menu.addMenu(provider_display_name(provider))
             sub.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -5992,7 +6055,7 @@ class ChatWindow(QMainWindow):
         self.update_action_btn_visuals()
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
-    def add_message(self, text, is_user, show_actions=True, attachments=None, canvases=None, anchor_user=False, is_background_task=False):
+    def add_message(self, text, is_user, show_actions=True, attachments=None, canvases=None, anchor_user=False, is_background_task=False, animate=True):
         attachments = normalize_attachments(attachments or [])
         if not text and is_user and not attachments: return
         self._set_welcome_visible(False)
@@ -6009,7 +6072,10 @@ class ChatWindow(QMainWindow):
         )
         self._wire_message_container(container)
         self.chat_layout.addWidget(container)
-        QTimer.singleShot(0, container.start_entry_animation)
+        if animate:
+            QTimer.singleShot(0, container.start_entry_animation)
+        else:
+            container.finish_entry_without_animation()
         if is_user and anchor_user:
             self._last_user_anchor_container = container
             self._schedule_scroll_container_to_view_top(container)
@@ -6310,6 +6376,8 @@ class ChatWindow(QMainWindow):
         return metadata.get("kind") == "welcome" or metadata.get("ui_only") is True
 
     def load_active_chat_session(self):
+        self._chat_load_generation = int(getattr(self, "_chat_load_generation", 0) or 0) + 1
+        generation = self._chat_load_generation
         self._clear_chat_widgets()
         messages = self.core.active_chat_messages()
         visible_messages = []
@@ -6330,19 +6398,30 @@ class ChatWindow(QMainWindow):
             return
 
         self._set_welcome_visible(False)
-        for role, content, metadata, attachments in visible_messages:
-            is_bg = bool(metadata.get("triggered_by_background"))
-            container = self.add_message(
-                content,
-                is_user=(role == "user"),
-                attachments=attachments,
-                canvases=metadata.get("canvases", []) if role == "assistant" else None,
-                is_background_task=is_bg,
-            )
-            if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
-                container.bubble.restore_agent_process(metadata.get("agent_process"))
         self.refresh_chat_title()
-        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+
+        def add_batch(index=0, batch_size=8):
+            if generation != getattr(self, "_chat_load_generation", None):
+                return
+            for role, content, metadata, attachments in visible_messages[index:index + batch_size]:
+                is_bg = bool(metadata.get("triggered_by_background"))
+                container = self.add_message(
+                    content,
+                    is_user=(role == "user"),
+                    attachments=attachments,
+                    canvases=metadata.get("canvases", []) if role == "assistant" else None,
+                    is_background_task=is_bg,
+                    animate=False,
+                )
+                if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
+                    container.bubble.restore_agent_process(metadata.get("agent_process"))
+            next_index = index + batch_size
+            if next_index < len(visible_messages):
+                QTimer.singleShot(8, lambda: add_batch(next_index, batch_size))
+            else:
+                QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+
+        QTimer.singleShot(0, add_batch)
 
     def start_new_chat(self):
         if self.agent_running:

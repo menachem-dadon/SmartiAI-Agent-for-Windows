@@ -1012,19 +1012,20 @@ def segmented_control_css():
         QWidget#SegmentedControl {{
             background: {GLASS_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
-            border-radius: 23px;
+            border-radius: 22px;
         }}
         QPushButton {{
             background: transparent;
             border: none;
             color: {MUTED_TEXT_COLOR};
             border-radius: 18px;
-            margin: 2px;
-            padding: 9px 14px;
+            margin: 0px;
+            padding: 0px 14px;
             font-size: 13px;
             font-weight: 700;
             outline: none;
-            min-height: 34px;
+            min-height: 36px;
+            max-height: 36px;
         }}
         QPushButton:hover {{
             background: {HOVER_TINT};

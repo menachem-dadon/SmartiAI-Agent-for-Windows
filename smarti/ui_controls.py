@@ -661,8 +661,10 @@ class SegmentedControl(QWidget):
     def __init__(self, items=None, parent=None):
         super().__init__(parent)
         self.setObjectName("SegmentedControl")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(44)
         self._items = []
         self._buttons = []
         self._button_icon_names = {}
@@ -686,7 +688,7 @@ class SegmentedControl(QWidget):
         btn.setCheckable(True)
         btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn.setMinimumHeight(34)
+        btn.setFixedHeight(36)
         btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         btn.clicked.connect(lambda checked=False, i=index: self.setCurrentIndex(i))
         self._buttons.append(btn)

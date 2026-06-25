@@ -27,7 +27,6 @@ MAX_CANVAS_CONTEXT_CHARS = 350_000
 # Images are kept in the conversation and fed back to the model with the rest
 # of the canvas.  Keep them compact enough that a valid new artifact always
 # fits in the model context rather than silently dropping the whole canvas.
-MAX_CANVAS_IMAGES = 3
 MAX_CANVAS_IMAGE_DATA_URL_CHARS = 120_000
 _CANVAS_SCHEME_REGISTERED = False
 
@@ -171,8 +170,6 @@ def new_canvas_artifact(payload, allow_remote_images=False):
     images = payload.get("images", [])
     if not isinstance(images, list):
         raise ValueError("images must be an array.")
-    if len(images) > MAX_CANVAS_IMAGES:
-        raise ValueError(f"Too many canvas images (maximum {MAX_CANVAS_IMAGES}).")
     cleaned_images = [
         image for index, item in enumerate(images)
         if (image := _clean_image(item, index, allow_remote_images=allow_remote_images))
