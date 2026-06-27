@@ -509,7 +509,7 @@ BUILTIN_DYNAMIC_TOOLS = {
     "save_screenshot_to_disk": "שמירת צילום מסך כקובץ.",
     "set_volume": "השתקת השמע.",
     "email_manager": "Full email access through IMAP/SMTP. Use it for every email task: search/read by UID, send/draft/reply/forward, styled RTL/HTML messages, flags, archive/trash/delete/move/copy, folders, attachments. For Hebrew display-name searches use `from`, `subject_filter`, or `query`; auto mode falls back to local header scan. Use `count: 0` for all matches and preserve each result's `mailbox` when reading.",
-    "browser_automation_manager": "Structured persistent Chrome control manager through Playwright/CDP: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, network, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
+    "browser_automation_manager": "Structured Chrome control manager through Smarti's persistent Playwright/CDP Chrome profile: stable tabs, accessibility snapshots/ref maps, act by ref, screenshots/PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
     "computer_automation_manager": "מנהל שליטה במחשב דרך Windows UI Automation (`auto`) ובמידת הצורך מקלדת/עכבר (`pa`).",
     "read_local_document": "קריאת טקסט מקבצי מסמכים.",
     "run_mcp": "הפעלת פונקציות מכלים חיצוניים שהותקנו.",
@@ -823,20 +823,24 @@ BUILTIN_TOOL_SCHEMAS["canvas_manager"] = {
 # for a future re-enable, but do not register it as a visible/built-in tool now.
 
 BROWSER_AUTOMATION_ACTIONS = [
-    "start", "status", "doctor", "tabs", "open", "navigate",
-    "snapshot", "screenshot", "pdf", "console", "network", "cdp", "storage", "cookies",
-    "act", "click", "clickCoords", "type", "fill", "press", "hover",
-    "select", "upload", "wait", "evaluate", "dialog", "scroll",
-    "scrollIntoView", "resize", "close", "close_tab",
-    "close_browser", "stop", "close_all"
+    "doctor", "status", "start", "stop", "profiles", "tabs",
+    "open", "focus", "close", "navigate", "snapshot", "screenshot",
+    "act", "console", "errors", "requests", "network", "trace",
+    "storage", "cookies", "upload", "download", "dialog", "evaluate",
+    "pdf", "cdp", "click", "clickCoords", "type", "fill", "press",
+    "hover", "select", "wait", "scroll", "scrollIntoView", "resize",
+    "close_tab", "close_browser", "close_all"
 ]
 
 BROWSER_AUTOMATION_PROPERTIES = {
     "url": {"type": "string", "description": "URL for open/navigate/start."},
     "targetUrl": {"type": "string", "description": "Alias for url."},
+    "profile": {"type": "string", "enum": ["smarti"], "description": "Browser profile. Only Smarti's persistent Playwright/CDP Chrome profile is supported."},
     "targetId": {"type": "string", "description": "Tab/window target id from tabs/snapshot results."},
     "tabId": {"type": "string", "description": "Alias for targetId."},
     "ref": {"type": "string", "description": "Stable element ref from snapshot, for example e12."},
+    "refs": {"type": "string", "enum": ["aria", "dom"], "description": "Snapshot ref mode. aria uses accessibility-tree refs plus DOM actionable refs; dom is lighter."},
+    "snapshotFormat": {"type": "string", "description": "Optional snapshot format hint, usually aria or dom."},
     "selector": {"type": "string", "description": "CSS selector fallback when no ref is available."},
     "role": {"type": "string", "description": "ARIA role locator fallback, usually with name."},
     "name": {"type": "string", "description": "Accessible name for role locator, or computer UI element name."},
@@ -860,14 +864,20 @@ BROWSER_AUTOMATION_PROPERTIES = {
     "timeoutMs": {"type": "integer", "description": "Wait/action timeout in milliseconds."},
     "timeMs": {"type": "integer", "description": "Fixed wait duration in milliseconds."},
     "limit": {"type": "integer", "description": "Maximum snapshot elements/log entries."},
+    "maxChars": {"type": "integer", "description": "Maximum compact snapshot characters."},
     "bodyChars": {"type": "integer", "description": "Maximum page body characters in snapshot."},
+    "maxBodyChars": {"type": "integer", "description": "Maximum request/response body preview characters for requests."},
     "htmlChars": {"type": "integer", "description": "Maximum per-element HTML characters in snapshot."},
     "urls": {"type": "boolean", "description": "Include href/src in snapshot elements."},
     "includeUrls": {"type": "boolean", "description": "Alias for urls."},
     "includeHidden": {"type": "boolean", "description": "Include hidden/offscreen candidates in snapshot."},
     "fullPage": {"type": "boolean", "description": "Capture beyond viewport for screenshots when supported."},
+    "clip": {"type": "object", "description": "Viewport clip for screenshot: x/y/width/height.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "width": {"type": "number"}, "height": {"type": "number"}}},
     "labels": {"type": "boolean", "description": "Draw element ref overlays on screenshot."},
     "annotate": {"type": "boolean", "description": "Alias for labels."},
+    "includeBody": {"type": "boolean", "description": "Include captured fetch/XHR request/response body previews for action=requests."},
+    "responseBody": {"type": "boolean", "description": "Alias for includeBody."},
+    "includeValues": {"type": "boolean", "description": "For cookies, include cookie values. Defaults false/redacted."},
     "storage": {"type": "string", "enum": ["local", "session", "cookies"], "description": "Storage target."},
     "op": {"type": "string", "enum": ["get", "list", "set", "add", "delete", "remove", "clear"], "description": "Storage/cookie operation."},
     "operation": {"type": "string", "description": "Alias for op."},
@@ -889,7 +899,10 @@ BROWSER_AUTOMATION_PROPERTIES = {
     "clear": {"type": "boolean", "description": "Clear field before type/fill."},
     "slowly": {"type": "boolean", "description": "Type character by character."},
     "delay": {"type": "number", "description": "Delay between slow typing characters."},
+    "delayMs": {"type": "integer", "description": "Delay between slow typing characters in milliseconds."},
     "newTab": {"type": "boolean", "description": "Open/navigate in a new tab."},
+    "cleanup": {"type": "boolean", "description": "For tabs: close extra tabs after selecting the current tab."},
+    "closeOthers": {"type": "boolean", "description": "For tabs: close all tabs except the selected/current tab."},
     "noSnapshot": {"type": "boolean", "description": "Skip post-action page snapshot."},
     "printBackground": {"type": "boolean", "description": "Print CSS backgrounds in PDF."},
     "landscape": {"type": "boolean", "description": "PDF landscape mode."},
@@ -897,9 +910,9 @@ BROWSER_AUTOMATION_PROPERTIES = {
 
 BUILTIN_TOOL_SCHEMAS["browser_automation_manager"] = {
     "description": (
-        "Structured browser automation manager for Smarti's dedicated persistent Chrome. Prefer snapshot -> act by ref. "
-        "Supports navigation, tabs, screenshots, PDF, console logs, network timing, CDP, storage/cookies, dialogs, upload, "
-        "downloads, wait, and JavaScript evaluate. Raw Python browser code is not used."
+        "Structured browser automation manager for Smarti's persistent Chrome profile. Prefer snapshot -> act by ref. "
+        "Supports profiles, stable tabs, accessibility snapshots/ref maps, navigation, screenshots, PDF, console/errors/requests/trace, CDP, storage/cookies, dialogs, upload, "
+        "downloads, wait, and JavaScript evaluate. profile='smarti' uses Smarti's persistent Playwright/CDP browser. Raw Python browser code is not used."
     ),
     "inputSchema": {
         "type": "object",
@@ -922,7 +935,7 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "memory_manager": "Unified memory: search and update.",
     "extension_manager": "Unified MCP and Skills operations.",
     "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
-    "browser_automation_manager": "Browser automation manager via Playwright/CDP: snapshot refs, act by ref, navigation, tabs, screenshots, PDF, console, network timing, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
+    "browser_automation_manager": "Browser automation manager via Smarti's persistent Playwright/CDP Chrome profile: profiles, tabs, accessibility refs, act by ref, screenshots, PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
     "computer_automation_manager": "Computer automation manager via Windows UI Automation: inspect/list/find UIA elements, then invoke/set/focus them without guessed coordinates."
 })
 
@@ -1103,6 +1116,11 @@ DEFAULT_SETTINGS = {
     "browser_snapshot_body_chars": 4000,
     "browser_snapshot_element_limit": 80,
     "browser_snapshot_html_chars": 500,
+    "browser_snapshot_max_chars": 12000,
+    "browser_allow_private_network": False,
+    "browser_allowed_hosts": [],
+    "browser_capture_dir": "",
+    "browser_download_dir": "",
     "email_default_read_body_chars": 6000,
     "email_multi_read_body_chars": 3000,
     "privacy_redact_logs": True,

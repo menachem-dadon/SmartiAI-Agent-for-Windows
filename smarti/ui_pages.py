@@ -3796,10 +3796,11 @@ class SettingsPage(QWidget):
         inner.setSpacing(8)
         widget.setMinimumWidth(1)
         widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        show_info = bool(hint and self._setting_needs_info(widget.text() if hasattr(widget, "text") else "", hint, advanced, info))
-        embedded_info = self._attach_checkbox_info_button(widget, hint) if show_info else None
+        info_text = hint if info is True or info is None else str(info or "")
+        show_info = bool(info_text and self._setting_needs_info(widget.text() if hasattr(widget, "text") else "", hint, advanced, info))
+        embedded_info = self._attach_checkbox_info_button(widget, info_text) if show_info else None
         if show_info and embedded_info is None:
-            inner.addWidget(self._make_info_button(hint), 0, Qt.AlignmentFlag.AlignTop)
+            inner.addWidget(self._make_info_button(info_text), 0, Qt.AlignmentFlag.AlignTop)
         inner.addWidget(widget, 1)
         layout.addWidget(container)
         self._register_setting_entry(widget.text() if hasattr(widget, "text") else "", widget, container, hint or "", keywords, advanced, setting_id)
@@ -3839,8 +3840,9 @@ class SettingsPage(QWidget):
         lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
         lbl.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 13px; font-weight: 700; margin-top: 4px;")
         group_layout.addWidget(lbl, 0)
-        if hint and self._setting_needs_info(label_text, hint, advanced, info):
-            group_layout.addWidget(self._make_info_button(hint), 0, Qt.AlignmentFlag.AlignTop)
+        info_text = hint if info is True or info is None else str(info or "")
+        if info_text and self._setting_needs_info(label_text, hint, advanced, info):
+            group_layout.addWidget(self._make_info_button(info_text), 0, Qt.AlignmentFlag.AlignTop)
         label_row.addWidget(label_group, 0, Qt.AlignmentFlag.AlignRight)
         label_row.addStretch()
         inner.addLayout(label_row)
@@ -4012,7 +4014,12 @@ class SettingsPage(QWidget):
         policy_layout.addStretch()
 
         self._add_internal_back(tools, "כלים ותקשורת")
-        self._add_checkbox(self.browser_auto_cb, tools, "פתיחת דפדפן וביצוע פעולות בדפי אינטרנט לפי רמת ההרשאות.", keywords="browser web automation selenium page click")
+        self._add_checkbox(
+            self.browser_auto_cb,
+            tools,
+            "פותח ושולט בפרופיל Chrome הקבוע של סמארטי דרך Playwright/CDP. הפרופיל מבודד מה-Chrome האישי, אבל שומר התחברויות שבוצעו בו ידנית.",
+            keywords="browser web automation chrome smarti profile page click"
+        )
         self._add_checkbox(self.computer_control_cb, tools, "קריאת עץ הנגישות של Windows ופעולה על רכיבים מזוהים.", keywords="computer control windows accessibility ui automation mouse keyboard")
         self._add_checkbox(self.mcp_cb, tools, "שימוש בכלים חיצוניים שמרחיבים את סמארטי, בכפוף להרשאות.", keywords="mcp external tools extensions")
         self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows beta instructions", advanced=True)

@@ -7,8 +7,10 @@ import unittest
 from unittest import mock
 
 from smarti import doctor
+from smarti import core as smarti_core
+from smarti.browser_control import SmartiBrowserController, UNTRUSTED_BROWSER_PREFIX
 from smarti.codex_signin import CodexConnectionStatus
-from smarti.config import DEFAULT_POLICY_MATRIX
+from smarti.config import BROWSER_AUTOMATION_ACTIONS, BUILTIN_TOOL_SCHEMAS, DEFAULT_POLICY_MATRIX, DEFAULT_SETTINGS
 
 
 class _Core:
@@ -341,6 +343,117 @@ class SmartiDoctorTests(unittest.TestCase):
         self.assertIn("extensions.custom_tools", result_ids)
         self.assertIn("extensions.skills", result_ids)
         self.assertNotIn("data.sqlite", result_ids)
+
+
+class _BrowserAutomationCore:
+    def __init__(self):
+        self.settings = dict(DEFAULT_SETTINGS)
+        self.settings["enable_browser_automation"] = True
+        self.ensure_called = False
+        self.tempdir = tempfile.TemporaryDirectory()
+
+    def cleanup(self):
+        self.tempdir.cleanup()
+
+    def _truncate_tool_output(self, text):
+        return text
+
+    def _automation_browser_is_ready(self):
+        return False
+
+    def _automation_browser_endpoint(self, path="/json/version"):
+        return f"http://127.0.0.1:49223{path}"
+
+    def _automation_browser_profile_dir(self):
+        return os.path.join(self.tempdir.name, "SmartiChromeProfile")
+
+    def _chrome_executable(self):
+        return "chrome.exe"
+
+    def _request_get(self, *_args, **_kwargs):
+        raise RuntimeError("not running")
+
+    def _ensure_automation_browser(self, _initial_url="about:blank"):
+        self.ensure_called = True
+        return True, None
+
+    def _close_automation_browser(self):
+        return "SUCCESS: Smarti browser closed."
+
+    def _sandbox_enabled(self):
+        return False
+
+    def _default_output_dir(self):
+        return self.tempdir.name
+
+    def _abs_path(self, path):
+        return os.path.abspath(os.path.expanduser(str(path).strip(' "\'')))
+
+    def _ensure_sandbox_path_allowed(self, *_args, **_kwargs):
+        return True, None
+
+    def _ensure_cloud_upload_allowed(self, *_args, **_kwargs):
+        return True, None
+
+    def _timeout(self, _name, default):
+        return default
+
+
+class BrowserAutomationManagerTests(unittest.TestCase):
+    def test_schema_contains_world_class_actions(self):
+        expected = {
+            "doctor", "status", "start", "stop", "profiles", "tabs",
+            "open", "focus", "close", "navigate", "snapshot", "screenshot",
+            "act", "console", "errors", "requests", "storage", "cookies",
+            "upload", "download", "dialog", "evaluate", "pdf", "trace",
+        }
+        self.assertTrue(expected.issubset(set(BROWSER_AUTOMATION_ACTIONS)))
+
+    def test_profiles_reports_only_smarti_profile(self):
+        core = _BrowserAutomationCore()
+        try:
+            result = SmartiBrowserController(core).run({"action": "profiles"})
+            self.assertTrue(result.startswith(UNTRUSTED_BROWSER_PREFIX))
+            payload = json.loads(result[len(UNTRUSTED_BROWSER_PREFIX):])
+            self.assertEqual(payload["defaultProfile"], "smarti")
+            self.assertEqual([item["id"] for item in payload["profiles"]], ["smarti"])
+            smarti_profile = payload["profiles"][0]
+            self.assertEqual(smarti_profile["kind"], "local-managed")
+            self.assertTrue(smarti_profile["canStop"])
+            self.assertIn("cdpEndpoint", smarti_profile)
+        finally:
+            core.cleanup()
+
+    def test_schema_exposes_only_smarti_profile(self):
+        profile_schema = BUILTIN_TOOL_SCHEMAS["browser_automation_manager"]["inputSchema"]["properties"]["profile"]
+        self.assertEqual(profile_schema["enum"], ["smarti"])
+
+    def test_private_navigation_is_blocked_before_browser_launch(self):
+        core = _BrowserAutomationCore()
+        try:
+            result = SmartiBrowserController(core).run({"action": "navigate", "url": "http://127.0.0.1:8000"})
+            self.assertTrue(result.startswith("ERROR:"))
+            self.assertIn("blocked by policy", result)
+            self.assertFalse(core.ensure_called)
+        finally:
+            core.cleanup()
+
+    def test_unknown_profile_is_rejected_before_browser_launch(self):
+        core = _BrowserAutomationCore()
+        try:
+            result = SmartiBrowserController(core).run({"action": "status", "profile": "personal"})
+            self.assertTrue(result.startswith("ERROR:"))
+            self.assertIn("Unknown browser profile", result)
+            self.assertFalse(core.ensure_called)
+        finally:
+            core.cleanup()
+
+    def test_chrome_debug_ports_bind_to_loopback(self):
+        core = object.__new__(smarti_core.SmartiCore)
+        core._chrome_executable = lambda: "chrome.exe"
+        core._automation_browser_profile_dir = lambda: os.path.join(os.getcwd(), "SmartiChromeProfile")
+        core._allow_insecure_ssl = lambda: False
+        self.assertIn("--remote-debugging-address=127.0.0.1", core._automation_browser_args())
 
 
 if __name__ == "__main__":

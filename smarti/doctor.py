@@ -739,21 +739,21 @@ class SmartiDoctor:
         settings = getattr(self.core, "settings", {}) or {}
         enabled = bool(settings.get("enable_browser_automation", False))
         chrome = getattr(self.core, "_chrome_executable", lambda: None)()
-        selenium_available = importlib.util.find_spec("selenium") is not None
+        playwright_available = importlib.util.find_spec("playwright") is not None
         profile_dir = getattr(self.core, "_automation_browser_profile_dir", lambda: "")()
         if not chrome:
             return self._result(
                 "browser.automation", STATUS_ERROR if enabled else STATUS_SKIPPED,
                 "אוטומציית הדפדפן אינה זמינה כי Google Chrome לא נמצא." if enabled else "אוטומציית הדפדפן כבויה, ו‑Google Chrome לא נמצא לבדיקת מוכנות.",
-                f"enabled={enabled}; chrome_found=false; selenium_available={selenium_available}",
+                f"enabled={enabled}; chrome_found=false; playwright_available={playwright_available}",
                 RepairAction("open_settings", "פתיחת הגדרות אוטומציה", "לאחר התקנת Chrome אפשר להפעיל ולבדוק את אוטומציית הדפדפן.", "low"),
                 category="browser", title_he="דפדפן האוטומציה",
             )
-        if not selenium_available:
+        if not playwright_available:
             return self._result(
                 "browser.automation", STATUS_ERROR if enabled else STATUS_WARNING,
-                "ספריית Selenium חסרה, ולכן Smarti לא יכול להתחבר ל‑Chrome הייעודי.",
-                f"enabled={enabled}; chrome={chrome}; selenium_available=false; profile_exists={os.path.isdir(profile_dir)}",
+                "ספריית Playwright חסרה, ולכן Smarti לא יכול להתחבר ל‑Chrome דרך CDP.",
+                f"enabled={enabled}; chrome={chrome}; playwright_available=false; profile_exists={os.path.isdir(profile_dir)}",
                 RepairAction("open_settings", "פתיחת הגדרות אוטומציה", "בדקי את התקנת Smarti או הפעילי מחדש את המתקין כדי לשחזר רכיבים חסרים.", "medium"),
                 category="browser", title_he="דפדפן האוטומציה",
             )
@@ -768,64 +768,63 @@ class SmartiDoctor:
             return self._result(
                 "browser.automation", STATUS_WARNING,
                 "אוטומציית הדפדפן כבויה, אך Chrome הייעודי של Smarti עדיין פועל ברקע. אפשר לסגור רק את הפרופיל הייעודי הזה.",
-                f"enabled=false; chrome_found=true; selenium_available=true; profile_exists={os.path.isdir(profile_dir)}; smarti_browser_ready=true",
+                f"enabled=false; chrome_found=true; playwright_available=true; profile_exists={os.path.isdir(profile_dir)}; smarti_browser_ready=true",
                 RepairAction("close_orphaned_browser", "סגירת Chrome הייעודי", "ייסגר רק Chrome שפועל עם פרופיל האוטומציה והפורט של Smarti; חלונות Chrome האישיים שלך לא ייסגרו.", "medium"),
                 category="browser", title_he="דפדפן האוטומציה",
             )
         if not enabled:
             return self._result(
                 "browser.automation", STATUS_SKIPPED,
-                "רכיבי Chrome ו‑Selenium זמינים, אבל אוטומציית הדפדפן כבויה לפי בחירתך. לא הופעל דפדפן בבדיקה זו.",
-                f"enabled=false; chrome_found=true; selenium_available=true; profile_exists={os.path.isdir(profile_dir)}; smarti_browser_ready=false",
+                "רכיבי Chrome ו‑Playwright זמינים, אבל אוטומציית הדפדפן כבויה לפי בחירתך. לא הופעל דפדפן בבדיקה זו.",
+                f"enabled=false; chrome_found=true; playwright_available=true; profile_exists={os.path.isdir(profile_dir)}; smarti_browser_ready=false",
                 RepairAction("open_settings", "פתיחת הגדרות אוטומציה", "אפשר להפעיל את היכולת רק אם היא נחוצה לך.", "low"),
                 category="browser", title_he="דפדפן האוטומציה",
             )
         if not include_network:
             return self._result(
                 "browser.automation", STATUS_PASS,
-                "רכיבי Chrome ו‑Selenium זמינים. בדיקה מהירה לא מפעילה את פרופיל האוטומציה.",
-                f"enabled=true; chrome_found=true; selenium_available=true; profile_dir={profile_dir or '<unknown>'}; connection_check=skipped",
+                "רכיבי Chrome ו‑Playwright זמינים. בדיקה מהירה לא מפעילה את פרופיל האוטומציה.",
+                f"enabled=true; chrome_found=true; playwright_available=true; profile_dir={profile_dir or '<unknown>'}; connection_check=skipped",
                 category="browser", title_he="דפדפן האוטומציה",
             )
-        driver = None
+        pw = None
+        browser = None
         was_ready = bool(getattr(self.core, "_automation_browser_is_ready", lambda: False)())
         started_by_doctor = not was_ready
         try:
             ok, error = getattr(self.core, "_ensure_automation_browser")()
             if not ok:
                 raise RuntimeError(error or "Browser did not become ready")
-            from selenium import webdriver
-            options = webdriver.ChromeOptions()
-            options.debugger_address = f"127.0.0.1:{SMARTI_BROWSER_DEBUG_PORT}"
-            driver = webdriver.Chrome(options=options)
-            version = (getattr(driver, "capabilities", {}) or {}).get("browserVersion", "unknown")
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{SMARTI_BROWSER_DEBUG_PORT}", timeout=8000)
+            version = getattr(browser, "version", "unknown")
+            if callable(version):
+                version = version()
             lifecycle_note = (
                 "Chrome נפתח רק לצורך הבדיקה וייסגר מיד בסיומה."
                 if started_by_doctor else "Chrome כבר היה פעיל לפני הבדיקה ולכן נשאר פתוח."
             )
             return self._result(
                 "browser.automation", STATUS_PASS,
-                f"המערכת התחברה ל‑Chrome הייעודי דרך Selenium בהצלחה. לא נפתח אתר ולא נקרא תוכן משתמש. {lifecycle_note}",
-                f"enabled=true; chrome_version={version}; profile_dir={profile_dir or '<unknown>'}; selenium_attach=ok; started_by_doctor={started_by_doctor}",
+                f"המערכת התחברה ל‑Chrome הייעודי דרך Playwright/CDP בהצלחה. לא נפתח אתר ולא נקרא תוכן משתמש. {lifecycle_note}",
+                f"enabled=true; chrome_version={version}; profile_dir={profile_dir or '<unknown>'}; playwright_cdp=ok; started_by_doctor={started_by_doctor}",
                 category="browser", title_he="דפדפן האוטומציה",
             )
         except Exception as exc:
             return self._result(
                 "browser.automation", STATUS_ERROR,
-                "הדפדפן Chrome נמצא, אבל Smarti לא הצליח להתחבר לפרופיל האוטומציה שלו דרך Selenium.",
-                f"enabled=true; profile_dir={profile_dir or '<unknown>'}; selenium_attach={type(exc).__name__}: {self._redact(exc)}",
+                "הדפדפן Chrome נמצא, אבל Smarti לא הצליח להתחבר לפרופיל האוטומציה שלו דרך Playwright/CDP.",
+                f"enabled=true; profile_dir={profile_dir or '<unknown>'}; playwright_cdp={type(exc).__name__}: {self._redact(exc)}",
                 RepairAction("reset_browser_profile", "איפוס פרופיל האוטומציה", "פרופיל Smarti יועבר לתיקיית גיבוי וייבנה מחדש; לא יימחקו קובצי Chrome האישיים שלך.", "high"),
                 category="browser", title_he="דפדפן האוטומציה",
             )
         finally:
-            if driver is not None:
+            if pw is not None:
                 try:
-                    getattr(self.core, "_detach_selenium_driver")(driver)
+                    pw.stop()
                 except Exception:
-                    try:
-                        driver.quit()
-                    except Exception:
-                        pass
+                    pass
             # Keep an already active user automation session intact, but never
             # leave a visible Chrome window behind when Doctor opened it only
             # for this probe.
