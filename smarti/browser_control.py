@@ -1,8 +1,10 @@
 """Structured Playwright/CDP control plane for Smarti's persistent browser."""
 import ipaddress
+import importlib.metadata
 import json
 import os
 import re
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,6 +16,7 @@ from .common import SMARTI_BROWSER_DEBUG_PORT, WIN_CREATE_NO_WINDOW
 
 
 UNTRUSTED_BROWSER_PREFIX = "[UNTRUSTED_BROWSER_CONTENT]\n"
+HELPER_RESULT_PREFIX = "SMARTI_BROWSER_RESULT="
 
 
 class SmartiBrowserController:
@@ -36,6 +39,8 @@ class SmartiBrowserController:
 
         if action == "profiles":
             return self._json(self._profiles_payload())
+        if action == "doctor":
+            return self._json(self._doctor_payload())
 
         profile, profile_error = self._normalize_profile(args.get("profile"))
         if profile_error:
@@ -50,7 +55,7 @@ class SmartiBrowserController:
         if not ok:
             return err
 
-        if action in {"status", "doctor"} and not self.core._automation_browser_is_ready():
+        if action == "status" and not self.core._automation_browser_is_ready():
             return self._json({
                 "ok": True,
                 "ready": False,
@@ -102,6 +107,52 @@ class SmartiBrowserController:
         return self.core._truncate_tool_output(
             UNTRUSTED_BROWSER_PREFIX + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
         )
+
+    def _playwright_dependency(self):
+        try:
+            import playwright.sync_api  # noqa: F401
+            try:
+                version = importlib.metadata.version("playwright")
+            except Exception:
+                version = "unknown"
+            return {"installed": True, "version": version, "error": ""}
+        except Exception as exc:
+            return {"installed": False, "version": "", "error": str(exc)}
+
+    def _doctor_payload(self):
+        profiles = self._profiles_payload()
+        playwright = self._playwright_dependency()
+        chrome_path = ""
+        try:
+            chrome_path = getattr(self.core, "_chrome_executable", lambda: "")() or ""
+        except Exception:
+            chrome_path = ""
+        ready = bool(self.core._automation_browser_is_ready())
+        checks = [
+            {"id": "settings.enabled", "ok": bool(self.core.settings.get("enable_browser_automation", False))},
+            {"id": "python.playwright", "ok": bool(playwright.get("installed")), "version": playwright.get("version", ""), "error": playwright.get("error", "")},
+            {"id": "chrome.executable", "ok": bool(chrome_path), "path": chrome_path},
+            {"id": "chrome.cdp_ready", "ok": ready, "endpoint": self.core._automation_browser_endpoint("").rstrip("/")},
+            {"id": "profile.smarti", "ok": True, "path": self.core._automation_browser_profile_dir()},
+        ]
+        return {
+            "ok": all(item.get("ok") for item in checks[:3]),
+            "ready": ready,
+            "profile": "smarti",
+            "dependencies": {
+                "python": sys.executable,
+                "playwright": playwright,
+                "chrome": {"found": bool(chrome_path), "path": chrome_path},
+            },
+            "checks": checks,
+            "profiles": profiles["profiles"],
+            "verifyCommands": [
+                "python -m pip install -r requirements.txt",
+                "python -m pip check",
+                "python -c \"from playwright.sync_api import sync_playwright; print('playwright ok')\"",
+            ],
+            "message": "Use action='start' to launch Smarti Chrome if dependencies are OK but cdp_ready is false.",
+        }
 
     def _snapshot_defaults(self):
         def bounded(name, default, minimum, maximum):
@@ -202,6 +253,28 @@ class SmartiBrowserController:
                 ok, err = self._url_allowed(url)
                 if not ok:
                     return False, "ERROR: " + err
+        if (action == "cookies" or (action == "storage" and str(args.get("kind") or args.get("storage") or "").lower() == "cookies")) and args.get("includeValues"):
+            ok, err = self._ensure_sensitive_allowed(
+                "אישור חשיפת Cookies",
+                "פעולת הדפדפן מבקשת לחשוף ערכי Cookies. העדף includeValues=false אלא אם המשתמש ביקש זאת במפורש.",
+            )
+            if not ok:
+                return False, err
+        if action in {"storage", "cookies"}:
+            op = str(args.get("op") or args.get("operation") or "get").lower()
+            if op in {"set", "add", "delete", "remove", "clear"}:
+                ok, err = self._ensure_sensitive_allowed(
+                    "אישור שינוי אחסון דפדפן",
+                    f"פעולת הדפדפן מבקשת לשנות {action} עם op={op}.",
+                )
+                if not ok:
+                    return False, err
+        return True, None
+
+    def _ensure_sensitive_allowed(self, title, details):
+        checker = getattr(self.core, "_ensure_capability_allowed", None)
+        if callable(checker):
+            return checker("browser_automation", title, details, risk="high")
         return True, None
 
     def _result_page_urls(self, value):
@@ -252,14 +325,16 @@ class SmartiBrowserController:
                 candidate = root_path / candidate
             target = candidate.resolve()
             if target == root_path or target.is_dir():
-                target = target / f"{default_prefix}_{int(time.time())}.{suffix}"
+                name = f"{default_prefix}_{int(time.time())}" + (f".{suffix}" if suffix else "")
+                target = target / name
             if suffix and not target.suffix:
                 target = target.with_suffix("." + suffix)
             if not (target == root_path or root_path in target.parents):
                 return None, f"ERROR: Browser artifacts must stay inside the controlled directory: {root_path}"
             target.parent.mkdir(parents=True, exist_ok=True)
             return str(target), None
-        target = root_path / f"{default_prefix}_{int(time.time())}.{suffix}"
+        name = f"{default_prefix}_{int(time.time())}" + (f".{suffix}" if suffix else "")
+        target = root_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         return str(target), None
 
@@ -297,6 +372,11 @@ class SmartiBrowserController:
             prepared["path"] = path
         elif effective_action == "pdf":
             path, err = self._resolve_controlled_path(captures, effective_args.get("path"), "pdf", "browser_page")
+            if err:
+                return None, err
+            prepared["path"] = path
+        elif effective_action == "trace" and (effective_args.get("path") or effective_args.get("record") or effective_args.get("save")):
+            path, err = self._resolve_controlled_path(captures, effective_args.get("path"), "json", "browser_trace")
             if err:
                 return None, err
             prepared["path"] = path
@@ -351,6 +431,12 @@ class SmartiBrowserController:
                 return self.core._truncate_tool_output("ERROR: Browser action failed.\n" + detail)
             if not stdout:
                 stdout = json.dumps({"ok": True, "message": "Browser action completed."}, ensure_ascii=False)
+            result_lines = [line[len(HELPER_RESULT_PREFIX):] for line in stdout.splitlines() if line.startswith(HELPER_RESULT_PREFIX)]
+            if result_lines:
+                stdout = result_lines[-1].strip()
+            else:
+                detail = f"STDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+                return self.core._truncate_tool_output("ERROR: Browser action returned no trusted result marker.\n" + detail)
             try:
                 parsed = json.loads(stdout)
             except Exception:
@@ -387,10 +473,12 @@ _HELPER_CODE = textwrap.dedent(
     sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False)
     sys.stderr = open(sys.stderr.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False)
 
+    RESULT_PREFIX = "SMARTI_BROWSER_RESULT="
+
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": f"Missing Playwright. Install requirements.txt: {exc}"}, ensure_ascii=False))
+        print(RESULT_PREFIX + json.dumps({"ok": False, "error": f"Missing Playwright. Install requirements.txt: {exc}"}, ensure_ascii=False))
         sys.exit(1)
 
     MARK = "data-smarti-ref"
@@ -567,6 +655,7 @@ _HELPER_CODE = textwrap.dedent(
       ].join(',');
       if (!window.__smartiRefSeq) window.__smartiRefSeq = 1;
       if (!window.__smartiSnapshotEpoch) window.__smartiSnapshotEpoch = 0;
+      window.__smartiRefMapByEpoch = window.__smartiRefMapByEpoch || {};
       window.__smartiSnapshotEpoch += 1;
       const epoch = window.__smartiSnapshotEpoch;
       window.__smartiRefMap = {};
@@ -720,13 +809,22 @@ _HELPER_CODE = textwrap.dedent(
       }
       const bodyText = document.body ? document.body.innerText || '' : '';
       const refs = {...window.__smartiRefMap};
+      window.__smartiLatestSnapshotEpoch = epoch;
+      window.__smartiRefMapByEpoch[String(epoch)] = refs;
+      const retainedEpochs = Object.keys(window.__smartiRefMapByEpoch).map(Number).sort((a, b) => a - b);
+      while (retainedEpochs.length > 8) {
+        const stale = String(retainedEpochs.shift());
+        delete window.__smartiRefMapByEpoch[stale];
+      }
       return {
         url: location.href,
         title: document.title,
         readyState: document.readyState,
         epoch,
+        snapshotEpoch: epoch,
         snapshot: lines.join('\n') + (truncated ? '\n[SNAPSHOT_TRUNCATED]' : ''),
         refs,
+        refMapMeta: {latestEpoch: epoch, retainedEpochs: Object.keys(window.__smartiRefMapByEpoch).map(Number).sort((a, b) => a - b), refCount: Object.keys(refs).length},
         stats: {elements: elements.length, refs: Object.keys(refs).length, truncated},
         viewport: {width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio || 1},
         scroll: {x: Math.round(window.scrollX), y: Math.round(window.scrollY), maxY: Math.max(0, document.documentElement.scrollHeight - window.innerHeight)},
@@ -737,18 +835,22 @@ _HELPER_CODE = textwrap.dedent(
     """
 
     OVERLAY_JS = r"""
-    ({elements, clearOnly}) => {
+    ({elements, clearOnly, fullPage}) => {
       for (const old of Array.from(document.querySelectorAll('[data-smarti-overlay="true"]'))) old.remove();
       if (clearOnly) return true;
       const root = document.createElement('div');
       root.setAttribute('data-smarti-overlay', 'true');
-      root.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;z-index:2147483647;pointer-events:none;font:12px Arial,sans-serif;';
+      root.style.cssText = (fullPage
+        ? 'position:absolute;left:0;top:0;width:100%;height:100%;'
+        : 'position:fixed;left:0;top:0;right:0;bottom:0;') + 'z-index:2147483647;pointer-events:none;font:12px Arial,sans-serif;';
+      const sx = fullPage ? window.scrollX : 0;
+      const sy = fullPage ? window.scrollY : 0;
       for (const item of (elements || []).slice(0, 160)) {
         const r = item.rect || {};
         const box = document.createElement('div');
-        box.style.cssText = `position:absolute;left:${Math.max(0, r.x || 0)}px;top:${Math.max(0, r.y || 0)}px;width:${Math.max(1, r.width || 1)}px;height:${Math.max(1, r.height || 1)}px;border:2px solid #ff2d55;background:rgba(255,45,85,.08);box-sizing:border-box;`;
+        box.style.cssText = `position:absolute;left:${Math.max(0, (r.x || 0) + sx)}px;top:${Math.max(0, (r.y || 0) + sy)}px;width:${Math.max(1, r.width || 1)}px;height:${Math.max(1, r.height || 1)}px;border:2px solid #ff2d55;background:rgba(255,45,85,.08);box-sizing:border-box;`;
         const badge = document.createElement('div');
-        badge.textContent = item.ref || '';
+        badge.textContent = String(item.number || '') + (item.ref ? ':' + item.ref : '');
         badge.style.cssText = 'position:absolute;left:-2px;top:-18px;background:#ff2d55;color:white;padding:1px 4px;border-radius:3px;font-weight:700;line-height:14px;';
         box.appendChild(badge);
         root.appendChild(box);
@@ -785,6 +887,12 @@ _HELPER_CODE = textwrap.dedent(
         os.makedirs(output_dir, exist_ok=True)
         title = payload.get("titleHint") or "browser"
         return os.path.join(output_dir, f"{sanitize_name(title)}_{int(time.time())}.{suffix}")
+
+    def emit_result(payload):
+        print(RESULT_PREFIX + json.dumps(payload, ensure_ascii=False, default=str))
+
+    def want_true(payload, *names):
+        return any(payload.get(name) is True for name in names)
 
     def connect(payload):
         pw = sync_playwright().start()
@@ -913,6 +1021,60 @@ _HELPER_CODE = textwrap.dedent(
                     pass
             raise ValueError(f"Target tab not found: {target}")
         return pages[-1] if pages else context.new_page()
+
+    def validate_ref(page, payload):
+        ref = str(payload.get("ref") or "").strip()
+        if not ref:
+            return {}
+        expected_epoch = payload.get("snapshotEpoch", payload.get("snapshot_epoch", payload.get("epoch", payload.get("refEpoch", payload.get("ref_epoch")))))
+        if payload.get("allowStaleRef"):
+            expected_epoch = None
+        info = page.evaluate(
+            """([mark, ref, expectedEpoch]) => {
+              const el = document.querySelector('[' + mark + '="' + String(ref).replace(/"/g, '\\"') + '"]');
+              const latest = window.__smartiLatestSnapshotEpoch || 0;
+              const byEpoch = window.__smartiRefMapByEpoch || {};
+              const epochKey = expectedEpoch === null || expectedEpoch === undefined || expectedEpoch === '' ? '' : String(expectedEpoch);
+              const inExpectedEpoch = epochKey ? !!((byEpoch[epochKey] || {})[ref]) : true;
+              const inLatestEpoch = latest ? !!((byEpoch[String(latest)] || {})[ref]) : false;
+              return {
+                exists: !!el,
+                ref,
+                expectedEpoch: epochKey,
+                latestEpoch: latest,
+                inExpectedEpoch,
+                inLatestEpoch,
+                retainedEpochs: Object.keys(byEpoch).map(Number).filter(n => !Number.isNaN(n)).sort((a, b) => a - b)
+              };
+            }""",
+            [MARK, ref, expected_epoch],
+        )
+        if not info.get("exists"):
+            raise ValueError(f"Stale or missing browser ref '{ref}'. Take a fresh snapshot for the same targetId and retry with the new ref.")
+        if info.get("expectedEpoch") and not info.get("inExpectedEpoch"):
+            raise ValueError(
+                f"Browser ref '{ref}' is not in snapshotEpoch {info.get('expectedEpoch')}. "
+                f"Latest snapshotEpoch is {info.get('latestEpoch')}; resnapshot and retry."
+            )
+        return info
+
+    def remember_snapshot_refs(page, state):
+        try:
+            refs = state.get("refs") or {}
+            epoch = state.get("epoch") or state.get("snapshotEpoch")
+            if not refs or not epoch:
+                return
+            page.evaluate(
+                """({epoch, refs}) => {
+                  window.__smartiRefMapByEpoch = window.__smartiRefMapByEpoch || {};
+                  window.__smartiRefMap = Object.assign(window.__smartiRefMap || {}, refs || {});
+                  window.__smartiRefMapByEpoch[String(epoch)] = Object.assign(window.__smartiRefMapByEpoch[String(epoch)] || {}, refs || {});
+                  window.__smartiLatestSnapshotEpoch = epoch;
+                }""",
+                {"epoch": epoch, "refs": refs},
+            )
+        except Exception:
+            pass
 
     def ax_value(node, key):
         value = node.get(key)
@@ -1068,6 +1230,9 @@ _HELPER_CODE = textwrap.dedent(
         state["targetId"] = page_ref(context, page) if context is not None else ""
         state["tabId"] = tab_id_for(state["targetId"])
         state["label"] = get_tab_label(page)
+        meta = state.setdefault("refMapMeta", {})
+        meta.update({"targetId": state["targetId"], "tabId": state["tabId"], "snapshotEpoch": state.get("epoch"), "refCount": len(state.get("refs") or {})})
+        remember_snapshot_refs(page, state)
         return state or {}
 
     def locator(page, payload):
@@ -1077,6 +1242,7 @@ _HELPER_CODE = textwrap.dedent(
         name = payload.get("name")
         text = payload.get("textSelector")
         if ref:
+            validate_ref(page, payload)
             return page.locator(f'[{MARK}="{ref}"]').first
         if selector:
             return page.locator(selector).first
@@ -1332,7 +1498,100 @@ _HELPER_CODE = textwrap.dedent(
         limit = to_int(payload.get("limit", 100), 100)
         return {"ok": True, "errors": logs[-limit:]}
 
-    def request_log(page, payload):
+    def capture_cdp_requests(context, page, payload):
+        capture_ms = to_int(payload.get("captureMs", payload.get("capture_ms", 0)), 0)
+        reload_page = want_true(payload, "reload", "refresh")
+        live = want_true(payload, "live", "capture")
+        if context is None or (capture_ms <= 0 and not reload_page and not live):
+            return []
+        capture_ms = max(250, min(capture_ms or 1200, timeout_ms(payload)))
+        include_body = bool(payload.get("includeBody", payload.get("include_body", payload.get("responseBody", payload.get("response_body", False)))))
+        body_chars = to_int(payload.get("maxBodyChars", payload.get("max_body_chars", payload.get("bodyChars", payload.get("body_chars", 2000)))), 2000)
+        session = context.new_cdp_session(page)
+        requests = {}
+        order = []
+
+        def ensure_item(request_id):
+            item = requests.setdefault(request_id, {"requestId": request_id})
+            if request_id not in order:
+                order.append(request_id)
+            return item
+
+        def on_request(event):
+            request_id = str(event.get("requestId") or "")
+            request = event.get("request") or {}
+            item = ensure_item(request_id)
+            item.update({
+                "url": request.get("url", ""),
+                "method": request.get("method", ""),
+                "type": event.get("type", ""),
+                "timestamp": event.get("timestamp"),
+                "wallTime": event.get("wallTime"),
+                "initiator": event.get("initiator", {}).get("type", ""),
+            })
+            if include_body and request.get("postData"):
+                item["requestBodyPreview"] = compact(request.get("postData"), body_chars)
+
+        def on_response(event):
+            request_id = str(event.get("requestId") or "")
+            response = event.get("response") or {}
+            item = ensure_item(request_id)
+            item.update({
+                "url": response.get("url", item.get("url", "")),
+                "status": response.get("status"),
+                "statusText": response.get("statusText", ""),
+                "mimeType": response.get("mimeType", ""),
+                "fromDiskCache": response.get("fromDiskCache", False),
+                "fromServiceWorker": response.get("fromServiceWorker", False),
+                "encodedDataLength": response.get("encodedDataLength", 0),
+                "responseHeaders": response.get("headers", {}),
+            })
+
+        def on_finished(event):
+            request_id = str(event.get("requestId") or "")
+            item = ensure_item(request_id)
+            item["finished"] = True
+            item["encodedDataLength"] = event.get("encodedDataLength", item.get("encodedDataLength", 0))
+
+        def on_failed(event):
+            request_id = str(event.get("requestId") or "")
+            item = ensure_item(request_id)
+            item["failed"] = True
+            item["errorText"] = event.get("errorText", "")
+
+        try:
+            session.on("Network.requestWillBeSent", on_request)
+            session.on("Network.responseReceived", on_response)
+            session.on("Network.loadingFinished", on_finished)
+            session.on("Network.loadingFailed", on_failed)
+            session.send("Network.enable", {})
+            if reload_page:
+                page.reload(wait_until=payload.get("waitUntil") or payload.get("wait_until") or "domcontentloaded", timeout=timeout_ms(payload))
+            page.wait_for_timeout(capture_ms)
+            if include_body:
+                for request_id in order:
+                    item = requests.get(request_id) or {}
+                    mime = str(item.get("mimeType") or "")
+                    if not item.get("finished") or not re.search(r"json|text|html|xml|javascript|x-www-form-urlencoded", mime, re.I):
+                        continue
+                    try:
+                        body = session.send("Network.getResponseBody", {"requestId": request_id})
+                        text = body.get("body", "")
+                        if body.get("base64Encoded"):
+                            item["responseBodyBase64"] = True
+                            item["responseBodyPreview"] = compact(text, body_chars)
+                        else:
+                            item["responseBodyPreview"] = compact(text, body_chars)
+                    except Exception as exc:
+                        item["responseBodyError"] = compact(str(exc), 220)
+            return [requests[request_id] for request_id in order][-to_int(payload.get("limit", 120), 120):]
+        finally:
+            try:
+                session.detach()
+            except Exception:
+                pass
+
+    def request_log(page, payload, context=None):
         install_page_hooks(page)
         limit = to_int(payload.get("limit", 120), 120)
         include_body = bool(payload.get("includeBody", payload.get("include_body", payload.get("responseBody", payload.get("response_body", False)))))
@@ -1355,14 +1614,51 @@ _HELPER_CODE = textwrap.dedent(
             }))"""
         )
         nav = page.evaluate("() => performance.getEntriesByType('navigation').map(e => ({name:e.name, type:e.type, duration:Math.round(e.duration), domContentLoadedEventEnd:Math.round(e.domContentLoadedEventEnd), loadEventEnd:Math.round(e.loadEventEnd)}))")
-        return {"ok": True, "navigation": nav, "requests": clean_records, "resources": resources}
+        cdp_records = capture_cdp_requests(context, page, payload)
+        return {"ok": True, "navigation": nav, "requests": clean_records, "cdpRequests": cdp_records, "resources": resources}
 
-    def network(page, payload):
-        return request_log(page, dict(payload, includeBody=False))
+    def network(page, payload, context=None):
+        return request_log(page, dict(payload, includeBody=False), context)
+
+    def record_cdp_trace(context, page, payload):
+        if context is None:
+            return {"ok": False, "error": "CDP trace requires a browser context."}
+        path = output_path(dict(payload, titleHint=page.title() or "browser_trace"), "json")
+        capture_ms = max(250, min(to_int(payload.get("captureMs", payload.get("capture_ms", payload.get("timeMs", payload.get("time_ms", 1200)))), 1200), timeout_ms(payload)))
+        categories = str(payload.get("traceCategories") or payload.get("trace_categories") or "devtools.timeline,v8.execute,blink.user_timing,loading")
+        events = []
+        done = {"complete": False}
+        session = context.new_cdp_session(page)
+
+        def on_data(event):
+            events.extend(event.get("value") or [])
+
+        def on_complete(_event):
+            done["complete"] = True
+
+        try:
+            session.on("Tracing.dataCollected", on_data)
+            session.on("Tracing.tracingComplete", on_complete)
+            session.send("Tracing.start", {"categories": categories, "transferMode": "ReportEvents"})
+            if want_true(payload, "reload", "refresh"):
+                page.reload(wait_until=payload.get("waitUntil") or payload.get("wait_until") or "domcontentloaded", timeout=timeout_ms(payload))
+            page.wait_for_timeout(capture_ms)
+            session.send("Tracing.end")
+            deadline = time.time() + min(5, timeout_ms(payload) / 1000)
+            while not done.get("complete") and time.time() < deadline:
+                page.wait_for_timeout(100)
+            with open(path, "w", encoding="utf-8") as fp:
+                json.dump({"traceEvents": events, "metadata": {"url": page.url, "title": page.title(), "captureMs": capture_ms, "categories": categories}}, fp, ensure_ascii=False)
+            return {"ok": True, "path": path, "events": len(events), "captureMs": capture_ms, "categories": categories}
+        finally:
+            try:
+                session.detach()
+            except Exception:
+                pass
 
     def trace(context, page, payload):
         limit = to_int(payload.get("limit", 80), 80)
-        return {
+        result = {
             "ok": True,
             "profile": payload.get("profile") or "smarti",
             "currentTargetId": page_ref(context, page),
@@ -1371,41 +1667,101 @@ _HELPER_CODE = textwrap.dedent(
             "tabs": tabs(context, page),
             "console": console_logs(page, {"limit": min(limit, 80)}).get("logs", []),
             "errors": page_errors(page, {"limit": min(limit, 80)}).get("errors", []),
-            "network": request_log(page, {"limit": min(limit, 80), "includeBody": False}),
+            "network": request_log(page, {"limit": min(limit, 80), "includeBody": False}, context),
         }
+        if want_true(payload, "record", "save") or payload.get("path") or payload.get("captureMs") or payload.get("capture_ms"):
+            result["devtoolsTrace"] = record_cdp_trace(context, page, payload)
+        return result
+
+    def build_annotations(state, payload, mode, clip_box=None, full_page=False):
+        annotations = []
+        scroll = state.get("scroll") or {}
+        scroll_x = float(scroll.get("x") or 0)
+        scroll_y = float(scroll.get("y") or 0)
+        clip = clip_box or (payload.get("clip") if isinstance(payload.get("clip"), dict) else None)
+        for item in (state.get("elements") or [])[:160]:
+            rect = item.get("rect") or {}
+            x = float(rect.get("x") or 0)
+            y = float(rect.get("y") or 0)
+            w = float(rect.get("width") or 0)
+            h = float(rect.get("height") or 0)
+            if w <= 0 or h <= 0:
+                continue
+            if clip:
+                cx, cy = float(clip.get("x") or 0), float(clip.get("y") or 0)
+                cw, ch = float(clip.get("width") or 0), float(clip.get("height") or 0)
+                if x + w < cx or x > cx + cw or y + h < cy or y > cy + ch:
+                    continue
+                box = {
+                    "x": round(max(0, x - cx)),
+                    "y": round(max(0, y - cy)),
+                    "width": round(min(w, max(0, cx + cw - x), max(0, x + w - cx))),
+                    "height": round(min(h, max(0, cy + ch - y), max(0, y + h - cy))),
+                }
+                coordinate_space = "clip-css-pixels"
+            elif full_page:
+                box = {"x": round(x + scroll_x), "y": round(y + scroll_y), "width": round(w), "height": round(h)}
+                coordinate_space = "document-css-pixels"
+            else:
+                box = {"x": round(x), "y": round(y), "width": round(w), "height": round(h)}
+                coordinate_space = "viewport-css-pixels"
+            if box["width"] <= 0 or box["height"] <= 0:
+                continue
+            number = len(annotations) + 1
+            annotations.append({
+                "number": number,
+                "ref": item.get("ref") or "",
+                "role": item.get("role") or item.get("tag") or "",
+                "name": compact(item.get("text") or item.get("ariaLabel") or item.get("placeholder") or item.get("name") or "", 160),
+                "box": box,
+                "coordinateSpace": coordinate_space,
+                "rect": rect,
+            })
+        return annotations
 
     def screenshot(page, payload, context=None):
         state = snapshot(page, payload, context)
         path = output_path(dict(payload, titleHint=page.title() or "browser"), "png")
         labels = bool(payload.get("labels", payload.get("annotate", False)))
+        full_page = bool(payload.get("fullPage", payload.get("full_page", False)))
+        clip_box = payload.get("clip") if isinstance(payload.get("clip"), dict) else None
+        loc = None
+        if payload.get("ref") or payload.get("selector") or payload.get("role") or payload.get("textSelector"):
+            loc = locator(page, payload)
+            loc.scroll_into_view_if_needed(timeout=timeout_ms(payload))
+            if labels:
+                clip_box = loc.bounding_box(timeout=timeout_ms(payload))
+                if not clip_box:
+                    raise ValueError("Target element has no visible bounding box for labeled element screenshot.")
+        mode = "page"
+        if clip_box:
+            mode = "element" if loc is not None else "clip"
+        annotations = build_annotations(state, payload, mode, clip_box=clip_box, full_page=full_page) if labels else []
         if labels:
-            page.evaluate(OVERLAY_JS, {"elements": state.get("elements", []), "clearOnly": False})
+            page.evaluate(OVERLAY_JS, {"elements": annotations or state.get("elements", []), "clearOnly": False, "fullPage": full_page})
             page.wait_for_timeout(120)
         try:
-            if payload.get("ref") or payload.get("selector") or payload.get("role") or payload.get("textSelector"):
-                loc = locator(page, payload)
-                loc.scroll_into_view_if_needed(timeout=timeout_ms(payload))
-                loc.screenshot(path=path, timeout=timeout_ms(payload))
-                mode = "element"
-            elif isinstance(payload.get("clip"), dict):
-                clip = payload.get("clip")
+            if clip_box:
+                clip = clip_box
                 page.screenshot(path=path, clip={
                     "x": float(clip.get("x", 0)),
                     "y": float(clip.get("y", 0)),
                     "width": float(clip.get("width", 1)),
                     "height": float(clip.get("height", 1)),
                 }, timeout=timeout_ms(payload))
-                mode = "clip"
+            elif loc is not None:
+                loc.screenshot(path=path, timeout=timeout_ms(payload))
+                mode = "element"
             else:
-                page.screenshot(path=path, full_page=bool(payload.get("fullPage", payload.get("full_page", False))), timeout=timeout_ms(payload))
+                page.screenshot(path=path, full_page=full_page, timeout=timeout_ms(payload))
                 mode = "page"
         finally:
             if labels:
                 try:
-                    page.evaluate(OVERLAY_JS, {"elements": [], "clearOnly": True})
+                    page.evaluate(OVERLAY_JS, {"elements": [], "clearOnly": True, "fullPage": False})
                 except Exception:
                     pass
-        return {"ok": True, "path": path, "mode": mode, "page": state}
+        return {"ok": True, "path": path, "mode": mode, "labels": labels, "labelsCount": len(annotations), "annotations": annotations, "page": state}
 
     def pdf(page, payload):
         path = output_path(dict(payload, titleHint=page.title() or "browser"), "pdf")
@@ -1491,9 +1847,9 @@ _HELPER_CODE = textwrap.dedent(
             elif normalized == "errors":
                 result = page_errors(page, payload)
             elif normalized in {"requests", "request_log"}:
-                result = request_log(page, payload)
+                result = request_log(page, payload, context)
             elif normalized == "network":
-                result = network(page, payload)
+                result = network(page, payload, context)
             elif normalized == "trace":
                 result = trace(context, page, payload)
             elif normalized == "storage":
@@ -1534,9 +1890,9 @@ _HELPER_CODE = textwrap.dedent(
                 result = close_tab(context, page)
             else:
                 raise ValueError(f"Unsupported browser action: {action}")
-            print(json.dumps(result, ensure_ascii=False, default=str))
+            emit_result(result)
         except Exception as exc:
-            print(json.dumps({"ok": False, "error": str(exc), "action": action}, ensure_ascii=False, default=str))
+            emit_result({"ok": False, "error": str(exc), "action": action})
         finally:
             try:
                 if pw is not None:

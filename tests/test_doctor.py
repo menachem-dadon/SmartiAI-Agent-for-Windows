@@ -8,7 +8,7 @@ from unittest import mock
 
 from smarti import doctor
 from smarti import core as smarti_core
-from smarti.browser_control import SmartiBrowserController, UNTRUSTED_BROWSER_PREFIX
+from smarti.browser_control import HELPER_RESULT_PREFIX, SmartiBrowserController, UNTRUSTED_BROWSER_PREFIX
 from smarti.codex_signin import CodexConnectionStatus
 from smarti.config import BROWSER_AUTOMATION_ACTIONS, BUILTIN_TOOL_SCHEMAS, DEFAULT_POLICY_MATRIX, DEFAULT_SETTINGS
 
@@ -395,6 +395,9 @@ class _BrowserAutomationCore:
     def _ensure_cloud_upload_allowed(self, *_args, **_kwargs):
         return True, None
 
+    def _ensure_capability_allowed(self, *_args, **_kwargs):
+        return True, None
+
     def _timeout(self, _name, default):
         return default
 
@@ -404,10 +407,13 @@ class BrowserAutomationManagerTests(unittest.TestCase):
         expected = {
             "doctor", "status", "start", "stop", "profiles", "tabs",
             "open", "focus", "close", "navigate", "snapshot", "screenshot",
-            "act", "console", "errors", "requests", "storage", "cookies",
+            "act", "console", "errors", "requests", "network", "storage", "cookies",
             "upload", "download", "dialog", "evaluate", "pdf", "trace",
         }
         self.assertTrue(expected.issubset(set(BROWSER_AUTOMATION_ACTIONS)))
+        props = BUILTIN_TOOL_SCHEMAS["browser_automation_manager"]["inputSchema"]["properties"]
+        for key in ["snapshotEpoch", "refEpoch", "allowStaleRef", "captureMs", "reload", "live", "record", "traceCategories"]:
+            self.assertIn(key, props)
 
     def test_profiles_reports_only_smarti_profile(self):
         core = _BrowserAutomationCore()
@@ -421,6 +427,18 @@ class BrowserAutomationManagerTests(unittest.TestCase):
             self.assertEqual(smarti_profile["kind"], "local-managed")
             self.assertTrue(smarti_profile["canStop"])
             self.assertIn("cdpEndpoint", smarti_profile)
+        finally:
+            core.cleanup()
+
+    def test_doctor_reports_dependencies_without_launching_browser(self):
+        core = _BrowserAutomationCore()
+        try:
+            result = SmartiBrowserController(core).run({"action": "doctor"})
+            self.assertTrue(result.startswith(UNTRUSTED_BROWSER_PREFIX))
+            payload = json.loads(result[len(UNTRUSTED_BROWSER_PREFIX):])
+            self.assertIn("dependencies", payload)
+            self.assertIn("verifyCommands", payload)
+            self.assertFalse(core.ensure_called)
         finally:
             core.cleanup()
 
@@ -454,6 +472,20 @@ class BrowserAutomationManagerTests(unittest.TestCase):
         core._automation_browser_profile_dir = lambda: os.path.join(os.getcwd(), "SmartiChromeProfile")
         core._allow_insecure_ssl = lambda: False
         self.assertIn("--remote-debugging-address=127.0.0.1", core._automation_browser_args())
+
+    def test_download_directory_default_name_has_no_trailing_dot(self):
+        core = _BrowserAutomationCore()
+        try:
+            downloads = os.path.join(core.tempdir.name, "downloads")
+            os.makedirs(downloads, exist_ok=True)
+            path, err = SmartiBrowserController(core)._resolve_controlled_path(downloads, downloads, "", "download")
+            self.assertIsNone(err)
+            self.assertFalse(path.endswith("."))
+        finally:
+            core.cleanup()
+
+    def test_helper_result_prefix_is_explicit(self):
+        self.assertEqual(HELPER_RESULT_PREFIX, "SMARTI_BROWSER_RESULT=")
 
 
 if __name__ == "__main__":
