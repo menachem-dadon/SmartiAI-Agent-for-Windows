@@ -321,6 +321,50 @@ class SmartiDoctorTests(unittest.TestCase):
         instance.perform_repair(result.repair_action.id)
         self.assertIn("calendar", core.installed)
 
+    def test_tool_catalog_policy_requires_search_and_skill_schemas(self):
+        self.core.tool_registry = {"local_tool": {}}
+        self.core.mcp_registry = {"server": {}}
+        self.core.skill_registry = {"guide": {}}
+        result = doctor.SmartiDoctor(self.core).check_tool_catalog_policy()
+        self.assertEqual(result.status, doctor.STATUS_PASS)
+        self.assertIn("search_tools", BUILTIN_TOOL_SCHEMAS)
+        self.assertIn("load_skill", BUILTIN_TOOL_SCHEMAS)
+        self.assertIn("python_tools=1", result.technical_detail)
+
+    def test_loaded_skill_context_is_inserted_and_removed_from_system_messages(self):
+        core = smarti_core.SmartiCore.__new__(smarti_core.SmartiCore)
+        core.mode = "local"
+        core.system_prompt = "base prompt"
+        core._truncate_tool_output = lambda text: str(text)
+        messages = [{"role": "system", "content": "base prompt"}, {"role": "user", "content": "hello"}]
+        loaded = {}
+        result = {
+            "action": "load_skill",
+            "effective_action": "load_skill",
+            "status": "ok",
+            "feedback": "SKILL_INSTRUCTIONS: writing\nUse the writing workflow.",
+        }
+
+        self.assertTrue(core._update_loaded_skill_contexts_from_results(loaded, [result]))
+        core._apply_loaded_skill_system_context(messages, loaded, "base prompt")
+        self.assertIn("[SMARTI_LOADED_SKILLS_BEGIN]", messages[1]["content"])
+
+        core._apply_loaded_skill_system_context(messages, {}, "base prompt")
+        self.assertFalse(any("[SMARTI_LOADED_SKILLS_BEGIN]" in str(m.get("content", "")) for m in messages))
+
+    def test_loaded_skill_context_is_scoped_to_gemini_system_prompt(self):
+        core = smarti_core.SmartiCore.__new__(smarti_core.SmartiCore)
+        core.mode = "gemini"
+        core.system_prompt = "base prompt"
+        core._truncate_tool_output = lambda text: str(text)
+        loaded = {"writing": "SKILL_INSTRUCTIONS: writing\nUse the writing workflow."}
+
+        core._apply_loaded_skill_system_context([], loaded, "base prompt")
+        self.assertIn("[SMARTI_LOADED_SKILLS_BEGIN]", core.system_prompt)
+
+        core._apply_loaded_skill_system_context([], {}, "base prompt")
+        self.assertEqual(core.system_prompt, "base prompt")
+
     def test_security_flags_disabled_log_redaction_with_a_safe_repair(self):
         self.core.settings["privacy_redact_logs"] = False
         self.core.settings["privacy"] = {"redact_logs": False}

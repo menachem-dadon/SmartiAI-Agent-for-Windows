@@ -143,6 +143,7 @@ def apply_high_contrast_link_label(label, size=12):
 
 BUILTIN_TOOL_DISPLAY_LABELS = {
     "get_tool_info": "מידע על כלי וסכמות",
+    "search_tools": "חיפוש כלים ויכולות",
     "system_manager": "ניהול מערכת",
     "software_manager": "ניהול תוכנות",
     "file_manager": "ניהול קבצים",
@@ -189,6 +190,7 @@ BUILTIN_TOOL_DISPLAY_LABELS = {
     "search_skills": "חיפוש מיומנויות",
     "install_skill": "התקנת מיומנות",
     "install_skill_requirements": "התקנת דרישות מיומנות",
+    "load_skill": "טעינת הוראות מיומנות",
     "run_skill": "הרצת מיומנות",
     "browser_automation": "אוטומציית דפדפן",
     "close_automation_browser": "סגירת דפדפן אוטומציה",
@@ -1882,6 +1884,34 @@ class ToolsSettingsPage(QWidget):
         hint.setWordWrap(True)
         hint.setStyleSheet(muted_label_css(12))
         layout.addWidget(hint)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        refresh_btn = QPushButton("רענון")
+        refresh_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        refresh_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        refresh_btn.clicked.connect(self.refresh_tools_page)
+        action_row.addWidget(refresh_btn)
+
+        install_skill_btn = QPushButton("התקנת Skill")
+        install_skill_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        install_skill_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
+        install_skill_btn.clicked.connect(self.install_skill_manually)
+        action_row.addWidget(install_skill_btn)
+
+        install_python_btn = QPushButton("התקנת כלי Python")
+        install_python_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        install_python_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        install_python_btn.clicked.connect(self.install_python_tool_manually)
+        action_row.addWidget(install_python_btn)
+
+        install_mcp_btn = QPushButton("הוספת MCP")
+        install_mcp_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        install_mcp_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        install_mcp_btn.clicked.connect(self.install_mcp_manually)
+        action_row.addWidget(install_mcp_btn)
+        action_row.addStretch()
+        layout.addLayout(action_row)
         
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1986,7 +2016,9 @@ class ToolsSettingsPage(QWidget):
         for name, spec in sorted(registry.items()):
             has_skills = True
             key = f"skill_{name}"
-            cb = SmartiCheckBox(f"{name} ({spec.get('source', 'local')})")
+            handler = str(spec.get("handler") or "instructions")
+            kind_label = "מדריך" if handler == "instructions" else ("Skill עם Python handler" if handler == "handler.py" else "Skill מובנה")
+            cb = SmartiCheckBox(f"{name} ({kind_label}, {spec.get('source', 'local')})")
             cb.setChecked(self.core._skill_enabled(name))
             cb.setStyleSheet(CHECKBOX_CSS)
             self.checkboxes[key] = cb
@@ -2003,6 +2035,69 @@ class ToolsSettingsPage(QWidget):
 
         scroll.setWidget(content)
         layout.addWidget(scroll)
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(1800)
+        self._refresh_timer.timeout.connect(self._refresh_if_catalog_changed)
+        self._refresh_timer.start()
+
+    def refresh_tools_page(self):
+        try:
+            self.core.refresh_extension_catalogs(force=True)
+        except Exception:
+            logging.exception("Failed to refresh extension catalogs from Tools page.")
+        QTimer.singleShot(0, self.main_window.show_tools_page)
+
+    def _refresh_if_catalog_changed(self):
+        try:
+            if self.core.refresh_extension_catalogs_if_changed(rebuild_prompt=False):
+                QTimer.singleShot(0, self.main_window.show_tools_page)
+        except RuntimeError:
+            pass
+        except Exception:
+            logging.exception("Tools page catalog watcher failed.")
+
+    def _show_install_result(self, title, result):
+        if str(result).startswith("SUCCESS:"):
+            QMessageBox.information(self, title, str(result))
+            QTimer.singleShot(0, self.main_window.show_tools_page)
+        else:
+            QMessageBox.warning(self, title, str(result))
+
+    def install_skill_manually(self):
+        choice, ok = QInputDialog.getItem(self, "התקנת Skill", "מקור התקנה:", ["קובץ ZIP", "תיקייה"], 0, False)
+        if not ok:
+            return
+        if choice == "תיקייה":
+            path = QFileDialog.getExistingDirectory(self, "בחירת תיקיית Skill", os.path.expanduser("~"))
+        else:
+            path, _ = QFileDialog.getOpenFileName(self, "בחירת קובץ Skill ZIP", os.path.expanduser("~"), "Skill ZIP (*.zip)")
+        if not path:
+            return
+        result = self.core.install_local_skill_package(path)
+        self._show_install_result("התקנת Skill", result)
+
+    def install_python_tool_manually(self):
+        path, _ = QFileDialog.getOpenFileName(self, "בחירת כלי Python", os.path.expanduser("~"), "Python Tool (*.py *.pyw *.zip)")
+        if not path:
+            return
+        result = self.core.install_python_tool_from_path(path)
+        self._show_install_result("התקנת כלי Python", result)
+
+    def install_mcp_manually(self):
+        choice, ok = QInputDialog.getItem(self, "הוספת MCP", "מקור התקנה:", ["חבילת npm נעולה", "קובץ JSON"], 0, False)
+        if not ok:
+            return
+        if choice == "קובץ JSON":
+            path, _ = QFileDialog.getOpenFileName(self, "בחירת קובץ MCP JSON", os.path.expanduser("~"), "MCP JSON (*.json)")
+            if not path:
+                return
+            result = self.core.install_mcp_manual(config_path=path)
+        else:
+            package, ok = QInputDialog.getText(self, "הוספת MCP", "שם חבילה עם גרסה, למשל @scope/server@1.2.3:")
+            if not ok or not str(package).strip():
+                return
+            result = self.core.install_mcp_manual(package=str(package).strip())
+        self._show_install_result("הוספת MCP", result)
 
     def _tool_label(self, tool_name):
         return BUILTIN_TOOL_DISPLAY_LABELS.get(tool_name, str(tool_name).replace("_", " "))
@@ -3506,6 +3601,17 @@ class SettingsPage(QWidget):
         self.skills_beta_cb = SmartiCheckBox("Skills בטא")
         self.skills_beta_cb.setChecked(self.core.settings.get("enable_skills_beta", True))
         self.skills_beta_cb.setStyleSheet(CHECKBOX_CSS)
+        self.tool_search_catalog_cb = SmartiCheckBox("קטלוג חיפוש כלים חכם")
+        self.tool_search_catalog_cb.setChecked(self.core.settings.get("enable_tool_search_catalog", True))
+        self.tool_search_catalog_cb.setStyleSheet(CHECKBOX_CSS)
+        self.skills_load_watch_cb = SmartiCheckBox("רענון אוטומטי של Skills וכלים")
+        self.skills_load_watch_cb.setChecked(self.core.settings.get("skills_load_watch", True))
+        self.skills_load_watch_cb.setStyleSheet(CHECKBOX_CSS)
+        self.skill_unknown_scan_combo = SegmentedControl()
+        self.skill_unknown_scan_options = [("allow_with_warning", "אפשר עם אזהרה"), ("block", "חסום")]
+        self.skill_unknown_scan_combo.addItems([label for _, label in self.skill_unknown_scan_options])
+        current_unknown_policy = str(self.core.settings.get("skill_install_unknown_scan_policy", "allow_with_warning"))
+        self.skill_unknown_scan_combo.setCurrentIndex(1 if current_unknown_policy == "block" else 0)
         self.web_canvas_cb = SmartiCheckBox("קנבס חזותי מתקדם (ניסיוני)")
         self.web_canvas_cb.setChecked(
             bool(self.core.settings.get("enable_visual_surfaces", False) and self.core.settings.get("enable_web_canvas", False))
@@ -4023,6 +4129,9 @@ class SettingsPage(QWidget):
         self._add_checkbox(self.computer_control_cb, tools, "קריאת עץ הנגישות של Windows ופעולה על רכיבים מזוהים.", keywords="computer control windows accessibility ui automation mouse keyboard")
         self._add_checkbox(self.mcp_cb, tools, "שימוש בכלים חיצוניים שמרחיבים את סמארטי, בכפוף להרשאות.", keywords="mcp external tools extensions")
         self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows beta instructions", advanced=True)
+        self._add_checkbox(self.tool_search_catalog_cb, tools, "מאפשר לסוכן לחפש בקטלוג הכלים הפנימי לפני בחירה, התקנה או יצירת כלי חדש.", keywords="tool search catalog tools python mcp skills selection", advanced=True)
+        self._add_checkbox(self.skills_load_watch_cb, tools, "מרענן את קטלוג הכלים, MCP ו-Skills כאשר נוספו או שונו קבצים מקומיים.", keywords="refresh watch reload tools mcp skills filesystem", advanced=True)
+        self._add_field("מדיניות סריקה לא חד-משמעית של Skill", self.skill_unknown_scan_combo, tools, "מה לעשות כאשר ClawHub לא מחזיר תשובת סריקה חד-משמעית: לאפשר התקנה עם אזהרה או לחסום.", keywords="skill scan clawhub safety unknown policy", advanced=True)
         self._add_checkbox(self.web_canvas_cb, tools, "מוסיף קנבס HTML מקומי ומבודד לצד הצ'אט עבור בקשות חזותיות מפורשות בלבד. רכיב WebEngine נדרש; הקנבס חוסם רשת, קבצים חיצוניים, הורדות וחלונות קופצים.", keywords="canvas visual dashboard graph form chart mermaid webengine html interactive", advanced=True)
         self._add_checkbox(self.web_canvas_remote_images_cb, tools, "מאפשר רק טעינת תמונות HTTPS שנבחרו לקנבס. ניווט, הורדות, קבצים, חלונות קופצים ושאר בקשות הרשת נותרים חסומים.", keywords="canvas remote image https web image visual", advanced=True)
         # Google Drive settings section is intentionally hidden for now.
@@ -4346,7 +4455,7 @@ class SettingsPage(QWidget):
             )
 
     def _register_autosave_handlers(self):
-        combos = [self.provider_combo, self.tts_voice_combo, self.codex_reasoning_effort_combo]
+        combos = [self.provider_combo, self.tts_voice_combo, self.codex_reasoning_effort_combo, self.skill_unknown_scan_combo]
         combos.extend(self.policy_combos.values())
         for combo in combos:
             combo.currentIndexChanged.connect(lambda _=None: self._schedule_autosave())
@@ -4361,7 +4470,9 @@ class SettingsPage(QWidget):
         for cb in [
             self.sandbox_cb, self.sandbox_read_outside_cb, self.redact_logs_cb, self.audit_log_cb,
             self.developer_trace_cb, self.raw_shell_approval_cb, self.marketplace_approval_cb,
-            self.browser_auto_cb, self.computer_control_cb, self.mcp_cb, self.skills_beta_cb, self.web_canvas_cb, self.web_canvas_remote_images_cb,
+            self.browser_auto_cb, self.computer_control_cb, self.mcp_cb, self.skills_beta_cb,
+            self.tool_search_catalog_cb, self.skills_load_watch_cb,
+            self.web_canvas_cb, self.web_canvas_remote_images_cb,
             self.update_auto_cb,
             self.tts_cb, self.tts_voice_cb, self.insecure_ssl_cb, self.cloud_upload_cb,
             self.write_outside_dirs_approval_cb, self.mcp_pin_cb,
@@ -4701,6 +4812,10 @@ class SettingsPage(QWidget):
         self.core.settings["voice_beep_enabled"] = self.voice_beep_cb.isChecked()
         self.core.settings["enable_mcp_clawhub"] = self.mcp_cb.isChecked()
         self.core.settings["enable_skills_beta"] = self.skills_beta_cb.isChecked()
+        self.core.settings["enable_tool_search_catalog"] = self.tool_search_catalog_cb.isChecked()
+        self.core.settings["skills_load_watch"] = self.skills_load_watch_cb.isChecked()
+        scan_policy_index = max(0, min(self.skill_unknown_scan_combo.currentIndex(), len(self.skill_unknown_scan_options) - 1))
+        self.core.settings["skill_install_unknown_scan_policy"] = self.skill_unknown_scan_options[scan_policy_index][0]
         self.core.settings["enable_visual_surfaces"] = self.web_canvas_cb.isChecked()
         self.core.settings["enable_web_canvas"] = self.web_canvas_cb.isChecked()
         self.core.settings["enable_canvas_remote_images"] = bool(

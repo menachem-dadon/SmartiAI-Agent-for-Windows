@@ -1195,7 +1195,7 @@ class AttachmentPreviewStrip(QWidget):
 AGENT_TOOL_DEFAULT_ICON_NAMES = ("agent_tool_row_status",)
 AGENT_TOOL_GROUP_ICON_NAMES = ("agent_tool_status", "agent_tool_icon", "tools_icon")
 AGENT_TOOL_MCP_ACTIONS = {"search_mcp", "install_mcp", "run_mcp"}
-AGENT_TOOL_SKILL_ACTIONS = {"list_skills", "search_skills", "install_skill", "install_skill_requirements", "run_skill"}
+AGENT_TOOL_SKILL_ACTIONS = {"list_skills", "search_skills", "install_skill", "install_skill_requirements", "load_skill", "run_skill"}
 AGENT_TOOL_BUILTIN_ACTIONS = set(BUILT_IN_TOOLS) | set(LEGACY_BUILTIN_TOOLS) | set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner"}
 
 def _agent_tool_asset_stem(name):

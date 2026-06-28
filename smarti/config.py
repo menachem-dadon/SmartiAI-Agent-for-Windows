@@ -259,6 +259,18 @@ BUILTIN_TOOL_SCHEMAS = {
             "required": ["tool_name"]
         }
     },
+    "search_tools": {
+        "description": "Search Smarti's effective tool catalog across built-in tools, Python tools, MCP packages, and Skills before choosing, installing, or creating a capability.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Task, capability, tool name, package, or skill to search for."},
+                "kind": {"type": "string", "enum": ["any", "builtin", "python", "mcp", "skill"], "description": "Optional catalog filter."},
+                "include_disabled": {"type": "boolean", "description": "Include disabled or untrusted entries for diagnosis only."},
+                "limit": {"type": "integer", "description": "Maximum results to return. Default 12."}
+            }
+        }
+    },
     "agent_planner": {
         "description": "כלי פנימי לבקשת תכנון משימה, תכנון המשכי או תכנון מחדש. השתמש בו רק כאשר התכנון ישפר איכות/בטיחות; אל תשתמש בו לברכה, שיחה פשוטה, או פעולה חד-שלבית ברורה. אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, התוכנית חייבת להתחיל בשלב discovery קצר ללמידת הסביבה לפני פעולה משנה. ניתן לקרוא שוב לכלי זה כאשר מידע חדש, שגיאות חוזרות, כשלי אימות או שינויי סביבה מצביעים שהתוכנית הקודמת כבר לא מתאימה.",
         "inputSchema": {
@@ -417,6 +429,17 @@ BUILTIN_TOOL_SCHEMAS = {
             "required": ["name"]
         }
     },
+    "load_skill": {
+        "description": "Loads the full instructions for a trusted Skill when the available_skills catalog clearly matches the task. Reading a Skill does not execute code.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Skill name from the available_skills catalog."},
+                "task": {"type": "string", "description": "Brief task context so dependency guidance can be specific."}
+            },
+            "required": ["name"]
+        }
+    },
     "search_memory": {
         "description": "Search Smarti's structured memory with local RAG. Use this when a task may depend on prior preferences, tool history, project facts, or user facts. Treat results as context, not live truth.",
         "inputSchema": {
@@ -517,6 +540,7 @@ BUILTIN_DYNAMIC_TOOLS = {
     "search_skills": "חיפוש Skills ב-ClawHub.",
     "install_skill": "התקנת Skill בטא.",
     "install_skill_requirements": "התקנת דרישות חיצוניות של Skill.",
+    "load_skill": "טעינת הוראות Skill.",
     "run_skill": "הרצת Skill בטא.",
     "git_status": "Git קריאה בלבד: status, diff, log, show.",
     "run_project_check": "הרצת בדיקות או build בפרויקט תחת מדיניות.",
@@ -747,7 +771,7 @@ BUILTIN_TOOL_SCHEMAS["extension_manager"] = {
     "inputSchema": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["search_mcp", "install_mcp", "run_mcp", "list_skills", "search_skills", "install_skill", "install_skill_requirements", "run_skill"], "description": "Extension operation."},
+            "action": {"type": "string", "enum": ["search_mcp", "install_mcp", "run_mcp", "list_skills", "search_skills", "install_skill", "install_skill_requirements", "load_skill", "run_skill"], "description": "Extension operation."},
             "query": {"type": "string", "description": "Search query for search_mcp/search_skills."},
             "package": {"type": "string", "description": "MCP package name."},
             "function": {"type": "string", "description": "MCP function name."},
@@ -755,7 +779,7 @@ BUILTIN_TOOL_SCHEMAS["extension_manager"] = {
             "source": {"type": "string", "description": "Skill source, usually clawhub."},
             "id": {"type": "string", "description": "Skill id/slug for install_skill."},
             "path": {"type": "string", "description": "Local skill path when explicitly approved."},
-            "name": {"type": "string", "description": "Skill name for run_skill or install_skill_requirements."},
+            "name": {"type": "string", "description": "Skill name for load_skill, run_skill, or install_skill_requirements."},
             "reason": {"type": "string", "description": "Reason for installing requirements."}
         },
         "required": ["action"]
@@ -943,6 +967,7 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "notification_manager": "Unified Windows toasts, reminders, calendar events, Calendar/Clock/settings opening.",
     "memory_manager": "Unified memory: search and update.",
     "extension_manager": "Unified MCP and Skills operations.",
+    "search_tools": "Search Smarti's effective catalog before selecting, installing, or creating a tool.",
     "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
     "browser_automation_manager": "Browser automation manager via Smarti's persistent Playwright/CDP Chrome profile: profiles, tabs, accessibility refs, act by ref, screenshots, PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
     "computer_automation_manager": "Computer automation manager via Windows UI Automation: inspect/list/find UIA elements, then invoke/set/focus them without guessed coordinates."
@@ -956,11 +981,12 @@ LEGACY_BUILTIN_TOOLS = {
     "capture_screen", "save_screenshot_to_disk", "analyze_local_image",
     "schedule_background_task", "list_background_tasks", "cancel_background_task", "retry_background_task",
     "search_memory", "update_memory",
-    "search_mcp", "install_mcp", "run_mcp", "list_skills", "search_skills", "install_skill", "install_skill_requirements", "run_skill",
+    "search_mcp", "install_mcp", "run_mcp", "list_skills", "search_skills", "install_skill", "install_skill_requirements", "load_skill", "run_skill",
 }
 
 PUBLIC_BUILTIN_TOOLS = [
     "get_tool_info",
+    "search_tools",
     "system_manager",
     "software_manager",
     "file_manager",
@@ -996,6 +1022,7 @@ TOOL_CATEGORY_LABELS = {
 TOOL_CATEGORIES = {
     "agent_planner": "schema",
     "get_tool_info": "schema",
+    "search_tools": "schema",
     "system_manager": "system",
     "software_manager": "software",
     "file_manager": "files",
@@ -1089,6 +1116,9 @@ DEFAULT_SETTINGS = {
     "voice_beep_enabled": True,
     "enable_mcp_clawhub": False,
     "enable_skills_beta": True,
+    "enable_tool_search_catalog": True,
+    "skills_load_watch": True,
+    "skill_install_unknown_scan_policy": "allow_with_warning",
     "skills_config": {},
     "enable_browser_automation": False,
     "enable_computer_control": False,
@@ -1207,6 +1237,7 @@ DEFAULT_SETTINGS = {
     },
     "require_approval_for_cloud_upload": True,
     "mcp_require_pinned_versions": True,
+    "mcp_protocol_version": "2025-11-25",
     "mcp_package_configs": {},
     "mcp_package_aliases": {},
     "enable_final_verifier": True,

@@ -53,7 +53,7 @@ from .common import (
     provider_secret_key,
 )
 from .codex_signin import CODEX_SIGNIN_PROVIDER, CodexSignInProvider
-from .config import DEFAULT_POLICY_MATRIX, SETTINGS_SCHEMA_VERSION
+from .config import BUILTIN_TOOL_SCHEMAS, DEFAULT_POLICY_MATRIX, SETTINGS_SCHEMA_VERSION
 from .runtime import SMARTI_RUNTIME
 from .visual_canvas import new_canvas_artifact, web_canvas_available
 from .workers import test_email_connection
@@ -197,6 +197,7 @@ class SmartiDoctor:
             ("קטלוג חבילות MCP", self.check_mcp_catalog),
             ("כלים מותאמים", self.check_custom_tools),
             ("Skills ותלויות", self.check_skill_dependencies),
+            ("מדיניות בחירת כלים ו-Skills", self.check_tool_catalog_policy),
             ("משימות רקע והתאוששות", self.check_background_tasks),
             ("שמירת סודות", self.check_secret_storage),
             ("מדיניות ואבטחה", self.check_security),
@@ -1064,6 +1065,7 @@ class SmartiDoctor:
     def check_mcp_catalog(self):
         settings = getattr(self.core, "settings", {}) or {}
         mcp_enabled = bool(settings.get("enable_mcp_clawhub", False))
+        protocol_version = str(settings.get("mcp_protocol_version", "2025-11-25") or "").strip()
         descriptor_paths = sorted(glob.glob(os.path.join(MCP_TOOLS_DIR, "*.txt"))) if os.path.isdir(MCP_TOOLS_DIR) else []
         wrapper_paths = sorted(glob.glob(os.path.join(MCP_TOOLS_DIR, "*.pyw"))) if os.path.isdir(MCP_TOOLS_DIR) else []
         invalid_descriptors = []
@@ -1097,7 +1099,8 @@ class SmartiDoctor:
         technical = (
             f"mcp_enabled={mcp_enabled}; descriptors={len(descriptor_paths)}; invalid_descriptors={invalid_descriptors or 'none'}; "
             f"orphan_wrappers={orphan_wrappers or 'none'}; enabled_without_descriptor={enabled_without_descriptor or 'none'}; "
-            f"mcp_config_exists={config_exists}; mcp_config_problem={config_problem or 'none'}"
+            f"mcp_config_exists={config_exists}; mcp_config_problem={config_problem or 'none'}; "
+            f"mcp_protocol_version={protocol_version or 'empty'}"
         )
         if invalid_descriptors or orphan_wrappers or enabled_without_descriptor:
             parts = []
@@ -1211,6 +1214,74 @@ class SmartiDoctor:
             "extensions.skills", STATUS_PASS,
             "כל ה־Skills המותקנים עומדים בתלויות ההרצה שלהם.", technical,
             category="extensions", title_he="תלויות של Skills",
+        )
+
+    def check_tool_catalog_policy(self):
+        settings = getattr(self.core, "settings", {}) or {}
+        search_enabled = bool(settings.get("enable_tool_search_catalog", True))
+        watch_enabled = bool(settings.get("skills_load_watch", True))
+        unknown_policy = str(settings.get("skill_install_unknown_scan_policy", "allow_with_warning") or "").strip().lower()
+        protocol_version = str(settings.get("mcp_protocol_version", "2025-11-25") or "").strip()
+        schema_missing = [
+            name for name in ("search_tools", "load_skill", "get_tool_info", "run_skill")
+            if name not in BUILTIN_TOOL_SCHEMAS
+        ]
+        tool_count = len(getattr(self.core, "tool_registry", {}) or {})
+        mcp_count = len(getattr(self.core, "mcp_registry", {}) or {})
+        skill_count = len(getattr(self.core, "skill_registry", {}) or {})
+        catalog_stale = False
+        signature_problem = ""
+        signature_getter = getattr(self.core, "_extension_dirs_signature", None)
+        if callable(signature_getter):
+            try:
+                current_signature = signature_getter()
+                loaded_signature = getattr(self.core, "_extension_catalog_signature", None)
+                catalog_stale = bool(watch_enabled and loaded_signature and current_signature and current_signature != loaded_signature)
+            except Exception as exc:
+                signature_problem = type(exc).__name__
+        technical = (
+            f"tool_search_enabled={search_enabled}; skills_load_watch={watch_enabled}; "
+            f"unknown_skill_scan_policy={unknown_policy or 'empty'}; mcp_protocol_version={protocol_version or 'empty'}; "
+            f"schema_missing={schema_missing or 'none'}; python_tools={tool_count}; mcp_tools={mcp_count}; "
+            f"skills={skill_count}; catalog_stale={catalog_stale}; signature_problem={signature_problem or 'none'}"
+        )
+        if schema_missing:
+            return self._result(
+                "extensions.tool_policy", STATUS_ERROR,
+                "חסרות סכמות לכלי בחירה וטעינת Skills. הסוכן עלול לא לראות את קטלוג הכלים המלא.",
+                technical,
+                RepairAction("open_doctor_log", "פתיחת יומן Doctor", "פתחי את היומן המסונן כדי לראות אילו סכמות חסרות לפני תיקון קוד.", "low"),
+                category="extensions", title_he="מדיניות בחירת כלים ו-Skills",
+            )
+        if unknown_policy not in {"allow_with_warning", "block"} or not protocol_version:
+            return self._result(
+                "extensions.tool_policy", STATUS_WARNING,
+                "נמצאה הגדרת מדיניות לא תקינה עבור התקנת Skills או גרסת MCP.",
+                technical,
+                RepairAction("open_settings", "פתיחת הגדרות", "בדקי את מדיניות סריקת Skills ואת גרסת פרוטוקול MCP תחת כלים ותקשורת.", "low"),
+                category="extensions", title_he="מדיניות בחירת כלים ו-Skills",
+            )
+        if catalog_stale:
+            return self._result(
+                "extensions.tool_policy", STATUS_WARNING,
+                "קטלוג הכלים המקומי נראה מיושן מול הקבצים בתיקיות ההרחבות. רענון מסך הכלים אמור לסנכרן אותו.",
+                technical,
+                RepairAction("open_tools", "פתיחת מסך הכלים", "פתחי את מסך הכלים והשתמשי בכפתור רענון כדי לסנכרן Skills, כלי Python ו-MCP.", "low"),
+                category="extensions", title_he="מדיניות בחירת כלים ו-Skills",
+            )
+        if not search_enabled:
+            return self._result(
+                "extensions.tool_policy", STATUS_SKIPPED,
+                "קטלוג חיפוש הכלים כבוי בהגדרות, ולכן הסוכן ישתמש ברשימת הכלים הרגילה בלי חיפוש מקדים.",
+                technical,
+                RepairAction("open_settings", "פתיחת הגדרות", "אפשרי את קטלוג חיפוש הכלים אם תרצי בחירה עשירה יותר בין כלי מערכת, Python, MCP ו-Skills.", "low"),
+                category="extensions", title_he="מדיניות בחירת כלים ו-Skills",
+            )
+        return self._result(
+            "extensions.tool_policy", STATUS_PASS,
+            "מדיניות בחירת הכלים פעילה, הסכמות זמינות והקטלוגים המקומיים עקביים.",
+            technical,
+            category="extensions", title_he="מדיניות בחירת כלים ו-Skills",
         )
 
     def check_background_tasks(self):
