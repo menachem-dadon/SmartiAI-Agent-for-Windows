@@ -2759,6 +2759,15 @@ class ChatMessageContainer(QWidget):
         self.actions_opacity.setOpacity(1.0 if self._actions_can_show else 0.0)
         self.updateGeometry()
 
+    def _reveal_actions_after_layout(self):
+        if not self.show_actions or not self._actions_available:
+            return
+        self._actions_can_show = True
+        self.actions_container.setFixedHeight(self.ACTION_ROW_HEIGHT)
+        self.actions_container.show()
+        self.actions_opacity.setOpacity(1.0)
+        self.updateGeometry()
+
     def start_entry_animation(self):
         self._entry_pending = False
         if self._entry_started or not self.isVisible():
@@ -2798,7 +2807,8 @@ class ChatMessageContainer(QWidget):
         if self.show_actions and self._actions_available:
             self.actions_container.setFixedHeight(self.ACTION_ROW_HEIGHT)
             self.actions_container.show()
-            self.actions_opacity.setOpacity(1.0)
+            self.actions_opacity.setOpacity(0.0)
+            QTimer.singleShot(0, lambda: QTimer.singleShot(0, self._reveal_actions_after_layout))
         self.updateGeometry()
 
     def reveal_with_entry_animation(self):

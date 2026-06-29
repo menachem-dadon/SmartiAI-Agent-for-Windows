@@ -6,7 +6,7 @@ from .ui_controls import *
 from .visual_canvas import web_canvas_available
 from .doctor import CheckResult, RepairAction
 from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker, EmailConnectionTestWorker, DiagnosticCheckWorker, DiagnosticRepairWorker
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import QRect, QUrl
 from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
 
 
@@ -965,6 +965,7 @@ class SmartiDiagnosticPage(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
         self.content = QWidget()
         self.content.setObjectName("DiagnosticResults")
@@ -1084,7 +1085,7 @@ class SmartiDiagnosticPage(QWidget):
             self.content_layout.addWidget(empty)
             return
         for result in visible:
-            self.content_layout.addWidget(self._result_card(result))
+            self.content_layout.addWidget(self._result_card(result), 0, Qt.AlignmentFlag.AlignRight)
         self.content_layout.addStretch(1)
 
     def _result_card(self, result):
@@ -1104,13 +1105,8 @@ class SmartiDiagnosticPage(QWidget):
         layout.setDirection(QBoxLayout.Direction.TopToBottom)
 
         header = QHBoxLayout()
-        header.setDirection(QBoxLayout.Direction.LeftToRight)
+        header.setDirection(QBoxLayout.Direction.RightToLeft)
         header.setSpacing(8)
-        pill = QLabel(f" {glyph} {status_text} ")
-        pill.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pill.setStyleSheet(f"color: {color}; background: {ACCENT_TINT if result.status == 'pass' else ACCENT_TINT_STRONG}; border: 1px solid {color}; border-radius: 11px; padding: 3px 7px; font-size: 11px; font-weight: 800;")
-        header.addWidget(pill)
         category_icon = QLabel()
         category_icon.setFixedSize(26, 26)
         category_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1122,8 +1118,13 @@ class SmartiDiagnosticPage(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         title.setWordWrap(True)
         title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 800; border: none; background: transparent;")
-        header.addWidget(title, 1)
         header.addWidget(category_icon)
+        header.addWidget(title, 1)
+        pill = QLabel(f" {glyph} {status_text} ")
+        pill.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pill.setStyleSheet(f"color: {color}; background: {ACCENT_TINT if result.status == 'pass' else ACCENT_TINT_STRONG}; border: 1px solid {color}; border-radius: 11px; padding: 3px 7px; font-size: 11px; font-weight: 800;")
+        header.addWidget(pill)
         layout.addLayout(header)
 
         explanation = QLabel(result.explanation_he)
@@ -1144,12 +1145,14 @@ class SmartiDiagnosticPage(QWidget):
         layout.addWidget(details)
 
         footer = QHBoxLayout()
-        footer.setDirection(QBoxLayout.Direction.LeftToRight)
+        footer.setDirection(QBoxLayout.Direction.RightToLeft)
         footer.setSpacing(8)
         details_btn = QPushButton("פרטים טכניים")
         details_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         details_btn.setStyleSheet(ghost_button_css())
         details_btn.clicked.connect(lambda _=False, label=details, btn=details_btn: self._toggle_details(label, btn))
+        footer.addWidget(details_btn)
+        footer.addStretch(1)
         if result.repair_action is not None:
             repair = result.repair_action
             repair_btn = QPushButton(repair.title_he)
@@ -1158,8 +1161,6 @@ class SmartiDiagnosticPage(QWidget):
             repair_btn.setStyleSheet(PRIMARY_BUTTON_CSS if repair.risk in {"medium", "high"} else SECONDARY_BUTTON_CSS)
             repair_btn.clicked.connect(lambda _=False, action=repair: self.request_repair(action))
             footer.addWidget(repair_btn)
-        footer.addStretch(1)
-        footer.addWidget(details_btn)
         layout.addLayout(footer)
         return card
 
@@ -2101,20 +2102,37 @@ class ToolsSettingsPage(QWidget):
         icon = themed_icon("check_updates_icon", "update_icon", "refresh_icon")
         return icon.pixmap(22, 22) if not icon.isNull() else QPixmap()
 
+    def _pixmap_alpha_center(self, pixmap):
+        image = pixmap.toImage()
+        left = image.width()
+        top = image.height()
+        right = -1
+        bottom = -1
+        for y in range(image.height()):
+            for x in range(image.width()):
+                if image.pixelColor(x, y).alpha() <= 8:
+                    continue
+                left = min(left, x)
+                top = min(top, y)
+                right = max(right, x)
+                bottom = max(bottom, y)
+        if right < left or bottom < top:
+            return pixmap.width() / 2, pixmap.height() / 2
+        return (left + right + 1) / 2, (top + bottom + 1) / 2
+
     def _refresh_icon_canvas(self, pixmap, angle=0):
         if pixmap.isNull():
             return QPixmap()
+        base = pixmap.scaled(22, 22, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        visual_x, visual_y = self._pixmap_alpha_center(base)
         canvas = QPixmap(26, 26)
         canvas.fill(Qt.GlobalColor.transparent)
         painter = QPainter(canvas)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        center = canvas.rect().center()
-        painter.translate(center)
-        painter.rotate(float(angle))
-        painter.translate(-center)
-        x = (canvas.width() - pixmap.width()) // 2
-        y = (canvas.height() - pixmap.height()) // 2
-        painter.drawPixmap(x, y, pixmap)
+        painter.translate(canvas.width() / 2, canvas.height() / 2)
+        if angle:
+            painter.rotate(float(angle))
+        painter.drawPixmap(QRectF(-visual_x, -visual_y, base.width(), base.height()), base, QRectF(base.rect()))
         painter.end()
         return canvas
 
@@ -2221,23 +2239,14 @@ class ToolsSettingsPage(QWidget):
     def _skill_source_label(self, source):
         return {
             "builtin": "מובנה",
-            "local": "מקומי",
+            "local": "הותקן ידנית",
             "clawhub": "ClawHub",
-        }.get(str(source or "local").strip().lower(), "מקומי")
-
-    def _skill_type_label(self, handler):
-        handler = str(handler or "instructions").strip().lower()
-        if handler == "instructions":
-            return "מדריך תהליך"
-        if handler == "handler.py":
-            return "מפעיל Python"
-        return "יכולת מובנית"
+        }.get(str(source or "local").strip().lower(), "הותקן ידנית")
 
     def _skill_display_label(self, name, spec):
         spec = spec if isinstance(spec, dict) else {}
         source_label = self._skill_source_label(spec.get("source", "local"))
-        type_label = self._skill_type_label(spec.get("handler", "instructions"))
-        return f"{name}  ·  מקור: {source_label}  ·  סוג: {type_label}"
+        return f"{name} ({source_label})"
 
     def _external_artifact_row(self, checkbox, kind, name):
         label_text = checkbox.text()
@@ -2745,7 +2754,6 @@ class SettingsPage(QWidget):
         layout.setContentsMargins(14, 11, 14, 11)
         self._info_popup_label = QLabel()
         self._info_popup_label.setWordWrap(True)
-        self._info_popup_label.setMinimumWidth(180)
         self._info_popup_label.setMaximumWidth(320)
         self._info_popup_label.setContentsMargins(0, 0, 0, 0)
         self._info_popup_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
@@ -2759,16 +2767,22 @@ class SettingsPage(QWidget):
             return
         self._ensure_info_popup()
         self._info_popup_label.setText(text)
-        text_len = len(text)
         natural_width = QFontMetrics(self._info_popup_label.font()).horizontalAdvance(text) + 6
-        target_width = 220 if text_len < 80 else (280 if text_len < 150 else 320)
-        label_width = min(320, max(180, min(target_width, natural_width if text_len < 80 else target_width)))
-        self._info_popup_label.setFixedWidth(label_width)
-        label_height = self._info_popup_label.heightForWidth(label_width)
-        self._info_popup_label.setMinimumHeight(max(18, label_height + 2 if label_height > 0 else 18))
-        self._info_popup_label.adjustSize()
-        self._info_popup.adjustSize()
-        self._info_popup.resize(self._info_popup.sizeHint())
+        label_width = max(96, min(320, natural_width))
+        wrapped_rect = QFontMetrics(self._info_popup_label.font()).boundingRect(
+            QRect(0, 0, int(label_width), 10_000),
+            Qt.TextFlag.TextWordWrap,
+            text,
+        )
+        label_height = max(18, wrapped_rect.height() + 4)
+        self._info_popup_label.setMinimumSize(0, 0)
+        self._info_popup_label.setMaximumWidth(int(label_width))
+        self._info_popup_label.resize(int(label_width), int(label_height))
+        margins = self._info_popup.layout().contentsMargins()
+        self._info_popup.resize(
+            int(label_width + margins.left() + margins.right()),
+            int(label_height + margins.top() + margins.bottom()),
+        )
         pos = button.mapToGlobal(QPoint(button.width() - self._info_popup.width(), button.height() + 6))
         screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
         if screen:
@@ -4249,8 +4263,8 @@ class SettingsPage(QWidget):
         ai.addStretch()
 
         self._add_internal_back(safety, "אבטחה ופרטיות")
-        self._add_field("פרופיל בטיחות", self.permission_combo, safety, "קובע כמה סמארטי יכול לפעול לבד: בטוח מבקש יותר אישורים, מאוזן מתאים לרוב העבודה, ואוטונומי מאפשר יותר רצף פעולה.", keywords="safe balanced autonomous full access permission autonomy approval security")
-        self._add_checkbox(self.custom_permissions_cb, safety, "מאפשר להגדיר הרשאות פרטניות במקום לבחור פרופיל בטיחות כללי.", keywords="custom permissions profile policy matrix granular allow ask deny הרשאות מותאמות אישית פרופיל מדיניות יכולות שאל חסום אפשר")
+        self._add_field("פרופיל בטיחות", self.permission_combo, safety, "קובע כמה סמארטי יכול לפעול לבד: בטוח מבקש יותר אישורים, מאוזן מתאים לרוב העבודה, ואוטונומי מאפשר יותר רצף פעולה.", keywords="safe balanced autonomous full access permission autonomy approval security", info=True)
+        self._add_checkbox(self.custom_permissions_cb, safety, "מאפשר להגדיר הרשאות פרטניות במקום לבחור פרופיל בטיחות כללי.", keywords="custom permissions profile policy matrix granular allow ask deny הרשאות מותאמות אישית פרופיל מדיניות יכולות שאל חסום אפשר", info=True)
         self.policy_btn = QPushButton("הגדרת התאמה אישית")
         self.policy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.policy_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
@@ -4259,13 +4273,13 @@ class SettingsPage(QWidget):
         self.policy_field_container = self._add_field("טבלת יכולות מפורטת", self.policy_btn, safety, "לוח מתקדם לקביעה פרטנית אם סמארטי ישאל, ירשה או יחסום כל יכולת.", keywords="matrix capability policy allow ask deny granular custom permissions טבלת יכולות הרשאות מותאמות אישית מדיניות שאל חסום אפשר")
         self.policy_field_container.setVisible(self.custom_permissions_cb.isChecked())
         self._add_section_header("ארגז חול", safety)
-        self._add_checkbox(self.sandbox_cb, safety, "מגביל את סמארטי לתיקייה אחת. מצב זה מתאים לעבודה בטוחה על פרויקט או תיקייה מוגדרת.", keywords="sandbox project folder safe workspace")
-        self._add_field("תיקיית ארגז החול", self.sandbox_root_picker, safety, "בחר את התיקייה שבה סמארטי רשאי לעבוד כאשר ארגז החול פעיל.", keywords="workspace root allowed folder path")
-        self._add_checkbox(self.sandbox_read_outside_cb, safety, "מאפשר לסמארטי לקרוא קבצים מחוץ לארגז החול, אך עדיין חוסם כתיבה, שינוי ומחיקה מחוץ אליו.", keywords="read outside sandbox files privacy", advanced=True)
+        self._add_checkbox(self.sandbox_cb, safety, "מגביל את סמארטי לתיקייה אחת. מצב זה מתאים לעבודה בטוחה על פרויקט או תיקייה מוגדרת.", keywords="sandbox project folder safe workspace", info=True)
+        self._add_field("תיקיית ארגז החול", self.sandbox_root_picker, safety, "בחר את התיקייה שבה סמארטי רשאי לעבוד כאשר ארגז החול פעיל.", keywords="workspace root allowed folder path", info=True)
+        self._add_checkbox(self.sandbox_read_outside_cb, safety, "מאפשר לסמארטי לקרוא קבצים מחוץ לארגז החול, אך עדיין חוסם כתיבה, שינוי ומחיקה מחוץ אליו.", keywords="read outside sandbox files privacy", advanced=True, info=True)
         self._add_section_header("קבצים ונתונים", safety)
-        self._add_field("תיקיית ברירת מחדל ליצירת קבצים", self.default_output_dir_picker, safety, "כאשר ביקשת ליצור או לשמור קובץ בלי לציין מיקום, סמארטי ישמור אותו כאן. זו לא מגבלת הרשאה ולא ארגז חול.", keywords="output save export write folder default")
+        self._add_field("תיקיית ברירת מחדל ליצירת קבצים", self.default_output_dir_picker, safety, "כאשר ביקשת ליצור או לשמור קובץ בלי לציין מיקום, סמארטי ישמור אותו כאן. זו לא מגבלת הרשאה ולא ארגז חול.", keywords="output save export write folder default", info=True)
         self._add_checkbox(self.write_outside_dirs_approval_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני כתיבה מחוץ לתיקיית הפלט. באוטונומיה מלאה האפשרות נכבית אוטומטית, אלא אם ארגז חול פעיל.", keywords="write outside approval delete modify file safety")
-        self._add_checkbox(self.cloud_upload_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני שליחת קבצים, צילום מסך או אימייל למודל חיצוני.", keywords="cloud upload external model privacy screenshot email")
+        self._add_checkbox(self.cloud_upload_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני שליחת קבצים, צילום מסך או אימייל למודל חיצוני.", keywords="cloud upload external model privacy screenshot email", info=True)
         self._add_checkbox(self.mcp_pin_cb, safety, "מחייב התקנת כלים חיצוניים בגרסה קבועה, כדי למנוע שינוי לא צפוי בהתנהגות הכלי.", keywords="pinned versions mcp supply chain", advanced=True)
         self._add_checkbox(self.raw_shell_approval_cb, safety, "גם במצב אוטונומי, פקודות מערכת בסיכון גבוה יעצרו לאישור משתמש.", keywords="shell command dangerous powershell cmd terminal approval", advanced=True)
         self._add_checkbox(self.marketplace_approval_cb, safety, "מונע התקנה שקטה של קוד חיצוני חדש ממאגרי MCP או מיומנויות.", keywords="marketplace install approval mcp skills external code מיומנויות התקנה קוד חיצוני", advanced=True)
@@ -4286,14 +4300,14 @@ class SettingsPage(QWidget):
             keywords="browser web automation chrome smarti profile page click"
         )
         self._add_checkbox(self.computer_control_cb, tools, "קריאת עץ הנגישות של Windows ופעולה על רכיבים מזוהים.", keywords="computer control windows accessibility ui automation mouse keyboard")
-        self._add_checkbox(self.tool_search_catalog_cb, tools, "מאפשר לסוכן לחפש בקטלוג הכלים הפנימי לפני בחירה, התקנה או יצירת כלי חדש.", keywords="tool search catalog tools python mcp skills selection")
-        self._add_checkbox(self.web_canvas_cb, tools, "מוסיף קנבס HTML מקומי ומבודד לצד הצ'אט עבור בקשות חזותיות מפורשות בלבד. רכיב WebEngine נדרש; הקנבס חוסם רשת, קבצים חיצוניים, הורדות וחלונות קופצים.", keywords="canvas visual dashboard graph form chart mermaid webengine html interactive")
-        self._add_checkbox(self.web_canvas_remote_images_cb, tools, "מאפשר רק טעינת תמונות HTTPS שנבחרו לקנבס. ניווט, הורדות, קבצים, חלונות קופצים ושאר בקשות הרשת נותרים חסומים.", keywords="canvas remote image https web image visual")
+        self._add_checkbox(self.tool_search_catalog_cb, tools, "מאפשר לסוכן לחפש בקטלוג הכלים הפנימי לפני בחירה, התקנה או יצירת כלי חדש.", keywords="tool search catalog tools python mcp skills selection", info=True)
+        self._add_checkbox(self.web_canvas_cb, tools, "מוסיף קנבס HTML מקומי ומבודד לצד הצ'אט עבור בקשות חזותיות מפורשות בלבד. רכיב WebEngine נדרש; הקנבס חוסם רשת, קבצים חיצוניים, הורדות וחלונות קופצים.", keywords="canvas visual dashboard graph form chart mermaid webengine html interactive", info=True)
+        self._add_checkbox(self.web_canvas_remote_images_cb, tools, "מאפשר רק טעינת תמונות HTTPS שנבחרו לקנבס. ניווט, הורדות, קבצים, חלונות קופצים ושאר בקשות הרשת נותרים חסומים.", keywords="canvas remote image https web image visual", info=True)
         self._add_section_header("מיומנויות", tools)
-        self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows instructions")
+        self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows instructions", info=True)
         self._add_field("מדיניות סריקה לא חד-משמעית של מיומנות", self.skill_unknown_scan_combo, tools, "מה לעשות כאשר ClawHub לא מחזיר תשובת סריקה חד-משמעית: לאפשר התקנה עם אזהרה או לחסום.", keywords="skill skills מיומנות מיומנויות scan clawhub safety unknown policy סריקה מדיניות", advanced=True)
         self._add_section_header("MCP", tools)
-        self._add_checkbox(self.mcp_cb, tools, "שימוש בחבילות MCP שמרחיבות את סמארטי, בכפוף להרשאות.", keywords="mcp packages protocol external tools extensions")
+        self._add_checkbox(self.mcp_cb, tools, "שימוש בחבילות MCP שמרחיבות את סמארטי, בכפוף להרשאות.", keywords="mcp packages protocol external tools extensions", info=True)
         # Google Drive settings section is intentionally hidden for now.
         self._add_section_header("אימייל", tools)
         self._add_field("כתובת אימייל", self.email, tools, "כתובת האימייל שממנה סמארטי יקרא או ישלח הודעות, אם אישרת שימוש באימייל.", keywords="email address account username login")
