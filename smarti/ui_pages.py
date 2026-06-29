@@ -965,7 +965,6 @@ class SmartiDiagnosticPage(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
         self.content = QWidget()
         self.content.setObjectName("DiagnosticResults")
@@ -974,7 +973,7 @@ class SmartiDiagnosticPage(QWidget):
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(2, 2, 2, 6)
         self.content_layout.setSpacing(10)
-        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll.setWidget(self.content)
         layout.addWidget(self.scroll, 1)
         self.render_results()
@@ -1038,7 +1037,7 @@ class SmartiDiagnosticPage(QWidget):
             "running": ("● הבדיקה פועלת", ACCENT_COLOR),
             "complete": ("✓ הבדיקה הושלמה", ACCENT_SECONDARY_COLOR),
             "cancelled": ("■ הבדיקה הופסקה", ACCENT_PINK_COLOR),
-            "failed": ("× הבדיקה לא הושלמה", DANGER_COLOR),
+            "failed": ("× הסריקה לא הושלמה", DANGER_COLOR),
         }
         text, color = labels.get(state, labels["idle"])
         if hasattr(self, "completion_label"):
@@ -1085,7 +1084,7 @@ class SmartiDiagnosticPage(QWidget):
             self.content_layout.addWidget(empty)
             return
         for result in visible:
-            self.content_layout.addWidget(self._result_card(result), 0, Qt.AlignmentFlag.AlignRight)
+            self.content_layout.addWidget(self._result_card(result))
         self.content_layout.addStretch(1)
 
     def _result_card(self, result):
@@ -2246,7 +2245,7 @@ class ToolsSettingsPage(QWidget):
     def _skill_display_label(self, name, spec):
         spec = spec if isinstance(spec, dict) else {}
         source_label = self._skill_source_label(spec.get("source", "local"))
-        return f"{name} ({source_label})"
+        return f"\u2066{str(name or '').strip()} ({source_label})\u2069"
 
     def _external_artifact_row(self, checkbox, kind, name):
         label_text = checkbox.text()

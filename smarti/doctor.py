@@ -164,13 +164,17 @@ class SmartiDiagnostic:
         try:
             return check()
         except Exception as exc:
-            return self._result(
-                f"{check.__name__}.unexpected", STATUS_SKIPPED,
-                "לא ניתן להשלים את הבדיקה הזאת כרגע. Smarti נשאר זמין, והפרטים הטכניים נשמרו ביומן המאובטח.",
-                f"Unexpected diagnostic check failure: {type(exc).__name__}: {self._redact(exc)}",
-                RepairAction("open_diagnostic_log", "פתיחת יומן Diagnostic", "פתחי את היומן המסונן כדי לראות את פרטי התקלה.", "low"),
-                category="system", title_he="בדיקה שלא הושלמה",
+            self._log(
+                CheckResult(
+                    f"{check.__name__}.unexpected",
+                    "internal_error",
+                    "",
+                    f"Unexpected diagnostic check failure: {type(exc).__name__}: {self._redact(exc)}",
+                    category="system",
+                    title_he="internal diagnostic exception",
+                )
             )
+            return None
 
     def run(
         self,
@@ -208,6 +212,8 @@ class SmartiDiagnostic:
             if progress_callback:
                 progress_callback(index, total, label)
             result = self._run_check(check)
+            if result is None:
+                continue
             results.append(result)
             if result_callback:
                 result_callback(result)

@@ -2566,7 +2566,7 @@ class ChatMessageContainer(QWidget):
     ACTION_ICON_SIZE = 22
     ACTION_ROW_HEIGHT = 40
 
-    def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None, canvases=None, is_background_task=False, parent=None):
+    def __init__(self, text, is_user=False, parent_width=450, show_actions=True, attachments=None, canvases=None, is_background_task=False, defer_actions=False, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
@@ -2575,6 +2575,7 @@ class ChatMessageContainer(QWidget):
         self.bubble = MessageBubble(text, is_user, parent_width, attachments=attachments, canvases=canvases, is_background_task=is_background_task)
         self.is_user = is_user
         self.show_actions = bool(show_actions)
+        self._defer_actions_until_layout = bool(defer_actions)
         self._tts_active = False
         self._tts_blocked = False
         self._actions_available = not (self.show_actions and not self.is_user and not str(text or "").strip())
@@ -2755,18 +2756,25 @@ class ChatMessageContainer(QWidget):
             return
         self.actions_container.setFixedHeight(self.ACTION_ROW_HEIGHT)
         self.actions_container.show()
-        self._actions_can_show = bool(self._entry_started)
+        self._actions_can_show = bool(self._entry_started) and not self._defer_actions_until_layout
         self.actions_opacity.setOpacity(1.0 if self._actions_can_show else 0.0)
         self.updateGeometry()
 
     def _reveal_actions_after_layout(self):
         if not self.show_actions or not self._actions_available:
             return
+        self._defer_actions_until_layout = False
         self._actions_can_show = True
         self.actions_container.setFixedHeight(self.ACTION_ROW_HEIGHT)
         self.actions_container.show()
         self.actions_opacity.setOpacity(1.0)
         self.updateGeometry()
+
+    def reveal_deferred_actions(self):
+        if not self.show_actions or not self._actions_available:
+            self._defer_actions_until_layout = False
+            return
+        QTimer.singleShot(0, self._reveal_actions_after_layout)
 
     def start_entry_animation(self):
         self._entry_pending = False
@@ -2803,12 +2811,13 @@ class ChatMessageContainer(QWidget):
         self._entry_pending = False
         self._entry_started = True
         self.content_wrap.setGraphicsEffect(None)
-        self._actions_can_show = bool(self._actions_available)
+        self._actions_can_show = bool(self._actions_available) and not self._defer_actions_until_layout
         if self.show_actions and self._actions_available:
             self.actions_container.setFixedHeight(self.ACTION_ROW_HEIGHT)
             self.actions_container.show()
             self.actions_opacity.setOpacity(0.0)
-            QTimer.singleShot(0, lambda: QTimer.singleShot(0, self._reveal_actions_after_layout))
+            if not self._defer_actions_until_layout:
+                QTimer.singleShot(0, lambda: QTimer.singleShot(0, self._reveal_actions_after_layout))
         self.updateGeometry()
 
     def reveal_with_entry_animation(self):
@@ -6141,7 +6150,7 @@ class ChatWindow(QMainWindow):
         self.update_action_btn_visuals()
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
-    def add_message(self, text, is_user, show_actions=True, attachments=None, canvases=None, anchor_user=False, is_background_task=False, animate=True):
+    def add_message(self, text, is_user, show_actions=True, attachments=None, canvases=None, anchor_user=False, is_background_task=False, animate=True, defer_actions=False):
         attachments = normalize_attachments(attachments or [])
         if not text and is_user and not attachments: return
         self._set_welcome_visible(False)
@@ -6154,6 +6163,7 @@ class ChatWindow(QMainWindow):
             attachments=attachments,
             canvases=canvases,
             is_background_task=is_background_task,
+            defer_actions=defer_actions,
             parent=self.chat_widget,
         )
         self._wire_message_container(container)
@@ -6488,6 +6498,7 @@ class ChatWindow(QMainWindow):
 
         self._set_welcome_visible(False)
         self.refresh_chat_title()
+        history_containers = []
 
         def add_batch(index=0, batch_size=8):
             if generation != getattr(self, "_chat_load_generation", None):
@@ -6501,14 +6512,24 @@ class ChatWindow(QMainWindow):
                     canvases=metadata.get("canvases", []) if role == "assistant" else None,
                     is_background_task=is_bg,
                     animate=False,
+                    defer_actions=True,
                 )
+                if container is not None:
+                    history_containers.append(container)
                 if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
                     container.bubble.restore_agent_process(metadata.get("agent_process"))
             next_index = index + batch_size
             if next_index < len(visible_messages):
                 QTimer.singleShot(8, lambda: add_batch(next_index, batch_size))
             else:
-                QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+                QTimer.singleShot(0, lambda: QTimer.singleShot(0, finish_history_load))
+
+        def finish_history_load():
+            if generation != getattr(self, "_chat_load_generation", None):
+                return
+            self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum())
+            for container in history_containers:
+                container.reveal_deferred_actions()
 
         QTimer.singleShot(0, add_batch)
 
