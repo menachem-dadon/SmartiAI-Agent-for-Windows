@@ -44,11 +44,11 @@ def _create_update_mutex():
 def _send_command_to_existing_instance(command):
     socket = QLocalSocket()
     socket.connectToServer(INSTANCE_SERVER_NAME)
-    if not socket.waitForConnected(180):
+    if not socket.waitForConnected(1200):
         return False
     socket.write(str(command or "show_new_chat").encode("utf-8"))
     socket.flush()
-    socket.waitForBytesWritten(500)
+    socket.waitForBytesWritten(1000)
     socket.disconnectFromServer()
     return True
 

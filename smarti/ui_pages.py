@@ -3787,7 +3787,7 @@ class SettingsPage(QWidget):
         self.web_canvas_cb.setStyleSheet(CHECKBOX_CSS)
         self.web_canvas_cb.setEnabled(web_canvas_available())
         if not web_canvas_available():
-            self.web_canvas_cb.setToolTip("נדרש PyQt6-WebEngine. התקן/י את requirements-web-canvas.txt כדי להפעיל קנבס.")
+            self.web_canvas_cb.setToolTip("נדרש PyQt6-WebEngine. התקן/י את requirements.txt כדי להפעיל קנבס.")
         self.web_canvas_remote_images_cb = SmartiCheckBox("אפשר תמונות HTTPS מהרשת בתוך קנבס")
         self.web_canvas_remote_images_cb.setChecked(bool(self.core.settings.get("enable_canvas_remote_images", False)))
         self.web_canvas_remote_images_cb.setStyleSheet(CHECKBOX_CSS)

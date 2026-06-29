@@ -19,7 +19,10 @@ for package in ("certifi", "keyring"):
     except Exception:
         pass
 
-hiddenimports = []
+hiddenimports = [
+    "PyQt6.QtWebEngineCore",
+    "PyQt6.QtWebEngineWidgets",
+]
 for package in (
     "bs4",
     "docx",

@@ -1,3 +1,0 @@
-# Optional advanced Live Visual Canvas runtime.
-# The main Smarti chat remains usable when this package is not installed.
-PyQt6-WebEngine>=6.7

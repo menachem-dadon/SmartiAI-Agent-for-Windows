@@ -104,7 +104,7 @@ pythonw smarti_core.pyw
 - Voice input requires a working microphone, `SpeechRecognition`, `keyboard`, and `PyAudio`.
 - OCR requires `pytesseract`, `Pillow`, and a system Tesseract OCR installation available in `PATH`.
 - Usage-cost estimates are richer when `litellm` is installed.
-- Live Visual Canvas is experimental and off by default. For source runs install `pip install -r requirements-web-canvas.txt`, then enable **קנבס חזותי מתקדם** under Settings → Tools & Communication → Advanced. It uses an isolated local WebEngine profile; network, external files, downloads, popups, and media permissions are blocked by default. The separate **אפשר תמונות HTTPS מהרשת בתוך קנבס** setting permits HTTPS image resources only; navigation and every other external request remain blocked.
+- Live Visual Canvas is experimental and off by default. The WebEngine dependency is included in `requirements.txt`; enable **קנבס חזותי מתקדם** under Settings → Tools & Communication → Advanced. It uses an isolated local WebEngine profile; network, external files, downloads, popups, and media permissions are blocked by default. The separate **אפשר תמונות HTTPS מהרשת בתוך קנבס** setting permits HTTPS image resources only; navigation and every other external request remain blocked.
 - Packaged releases include a private Python runtime used for custom Python tools, MCP support, and Skill dependency installs.
 
 ## Building a Windows Release
@@ -153,16 +153,18 @@ Installed copies prefer a setup EXE. Portable copies prefer a portable ZIP. When
 ## Project Structure
 
 ```text
-smarti_core.pyw          Compatibility launcher and main entry point
+smarti_core.pyw          Source launcher and main entry point
 smarti/                  Modular application code
   app.py                 Startup, splash screen, legal gate, and main window setup
-  core.py                Agent engine, tool routing, permissions, automation, email, memory, and background work
+  core.py                Compatibility facade that composes SmartiCore from domain mixins
+  agent/                 SmartiCore domain modules: lifecycle, policy, tool calls, automation, email, web, memory, TTS
   runtime.py             Source vs packaged runtime and private toolchain resolution
   config.py              Tool schemas, categories, and default settings
   chat.py                Chat UI, tray behavior, voice input, updates, notifications, and background-task UI
   ui_pages.py            Settings, tools, task center, usage, developer logs, and about pages
   managers.py            Settings migration, memory, policy, audit, MCP, Skills, and tool registries
   workers.py             QThreads for agent work, voice, TTS, model loading, and validation
+docs/                    Architecture notes and maintainer-facing documentation
 assets/                  Logo, icons, fonts, sounds, and UI assets
 packaging/               PyInstaller spec, Inno Setup script, and runtime version recipe
 scripts/                 Release build and private runtime preparation scripts
@@ -351,16 +353,18 @@ pythonw smarti_core.pyw
 ## מבנה הפרויקט
 
 ```text
-smarti_core.pyw          מפעיל תאימות ונקודת הכניסה הראשית
+smarti_core.pyw          מפעיל מקור ונקודת הכניסה הראשית
 smarti/                  קוד האפליקציה המודולרי
   app.py                 פתיחה, מסך Splash, אישור משפטי והכנת החלון הראשי
-  core.py                מנוע הסוכן, ניתוב כלים, הרשאות, אוטומציה, אימייל, זיכרון ומשימות רקע
+  core.py                חזית תאימות שמרכיבה את SmartiCore ממודולים תחומיים
+  agent/                 מודולי SmartiCore: אתחול, מדיניות, קריאות כלים, אוטומציה, אימייל, web, זיכרון ו-TTS
   runtime.py             זיהוי מקור/הפצה ופתרון runtimes פרטיים
   config.py              סכמות כלים, קטגוריות והגדרות ברירת מחדל
   chat.py                צ'אט, מגש מערכת, קול, עדכונים, התראות וממשק משימות רקע
   ui_pages.py            הגדרות, כלים, מרכז משימות, שימוש, לוגים ואודות
   managers.py            מיגרציית הגדרות, זיכרון, מדיניות, audit, MCP, Skills ורישומי כלים
   workers.py             QThreads לעבודת סוכן, קול, TTS, טעינת מודלים ואימות
+docs/                    הערות ארכיטקטורה ותיעוד לתחזוקה
 assets/                  לוגו, אייקונים, פונטים, צלילים ונכסי UI
 packaging/               מתכון PyInstaller, סקריפט Inno Setup וגרסאות runtime
 scripts/                 סקריפטי בנייה והכנת runtime פרטי
