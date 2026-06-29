@@ -2637,17 +2637,19 @@ class ChatMessageContainer(QWidget):
             self.tts_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             self.tts_btn.clicked.connect(lambda checked=False: self.tts_button_clicked.emit(self))
 
+        if self.show_actions:
+            if is_user:
+                actions_layout.addWidget(self.copy_btn)
+                actions_layout.addWidget(self.user_collapse_btn)
+                actions_layout.addStretch()
+            else:
+                actions_layout.addStretch()
+                actions_layout.addWidget(self.copy_btn)
+                actions_layout.addWidget(self.tts_btn)
+
         if not self.show_actions or not self._actions_available:
             self.actions_container.setFixedHeight(0)
             self.actions_container.hide()
-        elif is_user:
-            actions_layout.addWidget(self.copy_btn)
-            actions_layout.addWidget(self.user_collapse_btn)
-            actions_layout.addStretch()
-        else:
-            actions_layout.addStretch()
-            actions_layout.addWidget(self.copy_btn)
-            actions_layout.addWidget(self.tts_btn)
 
         self.actions_opacity = QGraphicsOpacityEffect(self.actions_container)
         self.actions_opacity.setOpacity(0.0 if self.show_actions else 1.0)

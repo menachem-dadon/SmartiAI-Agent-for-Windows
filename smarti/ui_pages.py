@@ -968,11 +968,12 @@ class SmartiDiagnosticPage(QWidget):
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
         self.content = QWidget()
         self.content.setObjectName("DiagnosticResults")
+        self.content.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.content.setStyleSheet("background: transparent;")
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(2, 2, 2, 6)
         self.content_layout.setSpacing(10)
-        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
         self.scroll.setWidget(self.content)
         layout.addWidget(self.scroll, 1)
         self.render_results()
@@ -1091,6 +1092,7 @@ class SmartiDiagnosticPage(QWidget):
         card = QFrame()
         card.setObjectName("DiagnosticResultCard")
         card.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         card.setStyleSheet(
             f"QFrame#DiagnosticResultCard {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:1 {CARD_GRADIENT_END}); "
             f"border: 1px solid {color}; border-radius: 18px; }}"
@@ -1102,26 +1104,26 @@ class SmartiDiagnosticPage(QWidget):
         layout.setDirection(QBoxLayout.Direction.TopToBottom)
 
         header = QHBoxLayout()
-        header.setDirection(QBoxLayout.Direction.RightToLeft)
+        header.setDirection(QBoxLayout.Direction.LeftToRight)
         header.setSpacing(8)
+        pill = QLabel(f" {glyph} {status_text} ")
+        pill.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pill.setStyleSheet(f"color: {color}; background: {ACCENT_TINT if result.status == 'pass' else ACCENT_TINT_STRONG}; border: 1px solid {color}; border-radius: 11px; padding: 3px 7px; font-size: 11px; font-weight: 800;")
+        header.addWidget(pill)
         category_icon = QLabel()
         category_icon.setFixedSize(26, 26)
         category_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_names = self.CATEGORY_ICONS.get(result.category, ("doctor_icon",))
         set_themed_label_icon(category_icon, icon_names, glyph, 22)
         category_icon.setStyleSheet(f"color: {color}; font-size: 18px; font-weight: 900; border: none; background: transparent;")
-        header.addWidget(category_icon)
         title = QLabel(result.title_he)
         title.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         title.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         title.setWordWrap(True)
         title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 800; border: none; background: transparent;")
         header.addWidget(title, 1)
-        pill = QLabel(f" {glyph} {status_text} ")
-        pill.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pill.setStyleSheet(f"color: {color}; background: {ACCENT_TINT if result.status == 'pass' else ACCENT_TINT_STRONG}; border: 1px solid {color}; border-radius: 11px; padding: 3px 7px; font-size: 11px; font-weight: 800;")
-        header.addWidget(pill)
+        header.addWidget(category_icon)
         layout.addLayout(header)
 
         explanation = QLabel(result.explanation_he)
@@ -1142,14 +1144,12 @@ class SmartiDiagnosticPage(QWidget):
         layout.addWidget(details)
 
         footer = QHBoxLayout()
-        footer.setDirection(QBoxLayout.Direction.RightToLeft)
+        footer.setDirection(QBoxLayout.Direction.LeftToRight)
         footer.setSpacing(8)
         details_btn = QPushButton("פרטים טכניים")
         details_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         details_btn.setStyleSheet(ghost_button_css())
         details_btn.clicked.connect(lambda _=False, label=details, btn=details_btn: self._toggle_details(label, btn))
-        footer.addWidget(details_btn)
-        footer.addStretch(1)
         if result.repair_action is not None:
             repair = result.repair_action
             repair_btn = QPushButton(repair.title_he)
@@ -1158,6 +1158,8 @@ class SmartiDiagnosticPage(QWidget):
             repair_btn.setStyleSheet(PRIMARY_BUTTON_CSS if repair.risk in {"medium", "high"} else SECONDARY_BUTTON_CSS)
             repair_btn.clicked.connect(lambda _=False, action=repair: self.request_repair(action))
             footer.addWidget(repair_btn)
+        footer.addStretch(1)
+        footer.addWidget(details_btn)
         layout.addLayout(footer)
         return card
 
@@ -1341,11 +1343,31 @@ def _is_memory_usage_model_name(model_name):
 
 class UsageStatsLoadWorker(QThread):
     ready = pyqtSignal(int, str, object)
+    _cost_suffix_cache = {}
+    _litellm_module = None
+    _litellm_unavailable = False
 
     def __init__(self, generation, timeframe, parent=None):
         super().__init__(parent)
         self.generation = int(generation)
         self.timeframe = str(timeframe or "today")
+
+    @classmethod
+    def _litellm(cls):
+        if cls._litellm_unavailable:
+            return None
+        if cls._litellm_module is not None:
+            return cls._litellm_module
+        if not LITELLM_INSTALLED:
+            cls._litellm_unavailable = True
+            return None
+        try:
+            import litellm
+            cls._litellm_module = litellm
+            return litellm
+        except Exception:
+            cls._litellm_unavailable = True
+            return None
 
     def run(self):
         payload = {"models": [], "memory": None, "error": ""}
@@ -1408,28 +1430,48 @@ class UsageStatsLoadWorker(QThread):
 
     def _cost_suffix(self, model_name, stats):
         suffix = " | מחיר מוערך: חינמי / לא במאגר"
-        if not LITELLM_INSTALLED:
+        litellm = self._litellm()
+        if litellm is None:
             return suffix
+        cache_key = None
+        calculated = False
         try:
-            import litellm
-
             litellm_model = str(model_name or "")
             lower_name = litellm_model.lower()
             if "gemini" in lower_name:
                 litellm_model = f"gemini/{litellm_model}"
             elif "claude" in lower_name:
                 litellm_model = f"anthropic/{litellm_model}"
-            cost = litellm.cost_calculator.cost_per_token(
-                model=litellm_model,
-                prompt_tokens=int(stats.get("prompt", 0) or 0),
-                completion_tokens=int(stats.get("completion", 0) or 0),
-            )
+            prompt_tokens = int(stats.get("prompt", 0) or 0)
+            completion_tokens = int(stats.get("completion", 0) or 0)
+            cache_key = (litellm_model, prompt_tokens, completion_tokens)
+            if cache_key in self._cost_suffix_cache:
+                return self._cost_suffix_cache[cache_key]
+            cost = None
+            model_costs = getattr(litellm, "model_cost", {}) or {}
+            info = model_costs.get(litellm_model)
+            if not info and "/" in litellm_model:
+                info = model_costs.get(litellm_model.split("/", 1)[1])
+            if isinstance(info, dict):
+                input_rate = info.get("input_cost_per_token")
+                output_rate = info.get("output_cost_per_token")
+                if input_rate is not None or output_rate is not None:
+                    cost = prompt_tokens * float(input_rate or 0) + completion_tokens * float(output_rate or 0)
+            if cost is None:
+                cost = litellm.cost_calculator.cost_per_token(
+                    model=litellm_model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
+            calculated = True
             if isinstance(cost, (tuple, list)):
                 cost = sum(float(part or 0) for part in cost)
             if cost and cost > 0:
-                return f" | עלות מוערכת: ${cost:.6f}" if cost < 0.0001 else f" | עלות מוערכת: ${cost:.4f}"
+                suffix = f" | עלות מוערכת: ${cost:.6f}" if cost < 0.0001 else f" | עלות מוערכת: ${cost:.4f}"
         except Exception:
             pass
+        if cache_key is not None and calculated:
+            self._cost_suffix_cache[cache_key] = suffix
         return suffix
 
     def _load_memory_summary(self, usage_stats):
@@ -1891,10 +1933,10 @@ class ToolsSettingsPage(QWidget):
 
     def _section_header_row(self, title, action_tooltip="", action_callback=None):
         row = QWidget()
-        row.setStyleSheet("background: transparent;")
+        row.setStyleSheet(f"background: transparent; border-top: 1px solid {SOFT_LINE_COLOR};")
         row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 12, 0, 0)
+        row_layout.setContentsMargins(0, 16, 0, 0)
         row_layout.setSpacing(8)
         if action_callback is not None:
             row_layout.addWidget(
@@ -1922,13 +1964,13 @@ class ToolsSettingsPage(QWidget):
         title.setStyleSheet(page_title_css(18))
         top_bar.addWidget(title)
         top_bar.addStretch()
-        refresh_btn = self._make_header_icon_button(
+        self.refresh_btn = self._make_header_icon_button(
             ("check_updates_icon", "update_icon", "refresh_icon"),
             "רענון קטלוג הכלים",
             self.refresh_tools_page,
             "R",
         )
-        top_bar.addWidget(refresh_btn)
+        top_bar.addWidget(self.refresh_btn)
         layout.addLayout(top_bar)
         hint = QLabel("כאן מנהלים אילו יכולות זמינות לסמארטי. התקנה ידנית זמינה מכפתור + ליד האזור המתאים.")
         hint.setWordWrap(True)
@@ -2029,10 +2071,7 @@ class ToolsSettingsPage(QWidget):
         for name, spec in sorted(registry.items()):
             has_skills = True
             key = f"skill_{name}"
-            handler = str(spec.get("handler") or "instructions")
-            kind_label = "מדריך" if handler == "instructions" else ("מפעיל Python" if handler == "handler.py" else "מיומנות מובנית")
-            source_label = self._skill_source_label(spec.get("source", "local"))
-            cb = SmartiCheckBox(f"{name} - {kind_label} - {source_label}")
+            cb = SmartiCheckBox(self._skill_display_label(name, spec))
             cb.setChecked(self.core._skill_enabled(name))
             cb.setStyleSheet(CHECKBOX_CSS)
             self.checkboxes[key] = cb
@@ -2053,18 +2092,81 @@ class ToolsSettingsPage(QWidget):
         self._refresh_timer.setInterval(1800)
         self._refresh_timer.timeout.connect(self._refresh_if_catalog_changed)
         self._refresh_timer.start()
+        self._refresh_spin_timer = QTimer(self)
+        self._refresh_spin_timer.setInterval(18)
+        self._refresh_spin_timer.timeout.connect(self._spin_refresh_icon)
+        self._refresh_spin_angle = 0
+
+    def _refresh_icon_pixmap(self):
+        icon = themed_icon("check_updates_icon", "update_icon", "refresh_icon")
+        return icon.pixmap(22, 22) if not icon.isNull() else QPixmap()
+
+    def _refresh_icon_canvas(self, pixmap, angle=0):
+        if pixmap.isNull():
+            return QPixmap()
+        canvas = QPixmap(26, 26)
+        canvas.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        center = canvas.rect().center()
+        painter.translate(center)
+        painter.rotate(float(angle))
+        painter.translate(-center)
+        x = (canvas.width() - pixmap.width()) // 2
+        y = (canvas.height() - pixmap.height()) // 2
+        painter.drawPixmap(x, y, pixmap)
+        painter.end()
+        return canvas
+
+    def _start_refresh_spin(self):
+        if not hasattr(self, "refresh_btn"):
+            return
+        self._refresh_spin_base_pixmap = self._refresh_icon_pixmap()
+        if self._refresh_spin_base_pixmap.isNull():
+            return
+        self._refresh_spin_angle = 0
+        self.refresh_btn.setIcon(QIcon(self._refresh_icon_canvas(self._refresh_spin_base_pixmap, 0)))
+        self.refresh_btn.setIconSize(QSize(26, 26))
+        self._refresh_spin_timer.start()
+
+    def _spin_refresh_icon(self):
+        pixmap = getattr(self, "_refresh_spin_base_pixmap", QPixmap())
+        if pixmap.isNull() or not hasattr(self, "refresh_btn"):
+            self._refresh_spin_timer.stop()
+            return
+        self._refresh_spin_angle += 24
+        if self._refresh_spin_angle >= 360:
+            self._refresh_spin_timer.stop()
+            refresh_themed_button_icon(self.refresh_btn)
+            return
+        self.refresh_btn.setIcon(QIcon(self._refresh_icon_canvas(pixmap, self._refresh_spin_angle)))
+        self.refresh_btn.setIconSize(QSize(26, 26))
+
+    def rebuild_tools_content(self):
+        if self._refresh_timer.isActive():
+            self._refresh_timer.stop()
+        main_window = self.main_window
+        stack = main_window.stacked_widget
+        old_page = self
+        new_page = ToolsSettingsPage(self.core, main_window)
+        main_window.tools_page = new_page
+        stack.addWidget(new_page)
+        QStackedWidget.setCurrentWidget(stack, new_page)
+        stack.removeWidget(old_page)
+        old_page.deleteLater()
 
     def refresh_tools_page(self):
+        self._start_refresh_spin()
         try:
             self.core.refresh_extension_catalogs(force=True)
         except Exception:
             logging.exception("Failed to refresh extension catalogs from Tools page.")
-        QTimer.singleShot(0, self.main_window.show_tools_page)
+        QTimer.singleShot(340, self.rebuild_tools_content)
 
     def _refresh_if_catalog_changed(self):
         try:
             if self.core.refresh_extension_catalogs_if_changed(rebuild_prompt=False):
-                QTimer.singleShot(0, self.main_window.show_tools_page)
+                QTimer.singleShot(0, self.rebuild_tools_content)
         except RuntimeError:
             pass
         except Exception:
@@ -2122,6 +2224,20 @@ class ToolsSettingsPage(QWidget):
             "local": "מקומי",
             "clawhub": "ClawHub",
         }.get(str(source or "local").strip().lower(), "מקומי")
+
+    def _skill_type_label(self, handler):
+        handler = str(handler or "instructions").strip().lower()
+        if handler == "instructions":
+            return "מדריך תהליך"
+        if handler == "handler.py":
+            return "מפעיל Python"
+        return "יכולת מובנית"
+
+    def _skill_display_label(self, name, spec):
+        spec = spec if isinstance(spec, dict) else {}
+        source_label = self._skill_source_label(spec.get("source", "local"))
+        type_label = self._skill_type_label(spec.get("handler", "instructions"))
+        return f"{name}  ·  מקור: {source_label}  ·  סוג: {type_label}"
 
     def _external_artifact_row(self, checkbox, kind, name):
         label_text = checkbox.text()
@@ -2623,14 +2739,15 @@ class SettingsPage(QWidget):
         popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         popup.setStyleSheet(
             f"QFrame#SettingsInfoPopup {{ background: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-            "border-radius: 0px; padding: 10px; }}"
+            "border-radius: 0px; padding: 0px; }}"
         )
         layout = QVBoxLayout(popup)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(14, 11, 14, 11)
         self._info_popup_label = QLabel()
         self._info_popup_label.setWordWrap(True)
-        self._info_popup_label.setFixedWidth(320)
-        self._info_popup_label.setContentsMargins(2, 2, 2, 2)
+        self._info_popup_label.setMinimumWidth(180)
+        self._info_popup_label.setMaximumWidth(320)
+        self._info_popup_label.setContentsMargins(0, 0, 0, 0)
         self._info_popup_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
         self._info_popup_label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 12px; line-height: 1.35; background: transparent;")
         layout.addWidget(self._info_popup_label)
@@ -2642,10 +2759,13 @@ class SettingsPage(QWidget):
             return
         self._ensure_info_popup()
         self._info_popup_label.setText(text)
-        label_width = self._info_popup_label.width() or 320
+        text_len = len(text)
+        natural_width = QFontMetrics(self._info_popup_label.font()).horizontalAdvance(text) + 6
+        target_width = 220 if text_len < 80 else (280 if text_len < 150 else 320)
+        label_width = min(320, max(180, min(target_width, natural_width if text_len < 80 else target_width)))
+        self._info_popup_label.setFixedWidth(label_width)
         label_height = self._info_popup_label.heightForWidth(label_width)
-        if label_height > 0:
-            self._info_popup_label.setMinimumHeight(label_height + 8)
+        self._info_popup_label.setMinimumHeight(max(18, label_height + 2 if label_height > 0 else 18))
         self._info_popup_label.adjustSize()
         self._info_popup.adjustSize()
         self._info_popup.resize(self._info_popup.sizeHint())
@@ -3647,7 +3767,7 @@ class SettingsPage(QWidget):
         self.skill_unknown_scan_combo.addItems([label for _, label in self.skill_unknown_scan_options])
         current_unknown_policy = str(self.core.settings.get("skill_install_unknown_scan_policy", "allow_with_warning"))
         self.skill_unknown_scan_combo.setCurrentIndex(1 if current_unknown_policy == "block" else 0)
-        self.web_canvas_cb = SmartiCheckBox("קנבס חזותי מתקדם (ניסיוני)")
+        self.web_canvas_cb = SmartiCheckBox("קנבס חזותי")
         self.web_canvas_cb.setChecked(
             bool(self.core.settings.get("enable_visual_surfaces", False) and self.core.settings.get("enable_web_canvas", False))
         )
@@ -4166,11 +4286,11 @@ class SettingsPage(QWidget):
             keywords="browser web automation chrome smarti profile page click"
         )
         self._add_checkbox(self.computer_control_cb, tools, "קריאת עץ הנגישות של Windows ופעולה על רכיבים מזוהים.", keywords="computer control windows accessibility ui automation mouse keyboard")
-        self._add_checkbox(self.tool_search_catalog_cb, tools, "מאפשר לסוכן לחפש בקטלוג הכלים הפנימי לפני בחירה, התקנה או יצירת כלי חדש.", keywords="tool search catalog tools python mcp skills selection", advanced=True)
-        self._add_checkbox(self.web_canvas_cb, tools, "מוסיף קנבס HTML מקומי ומבודד לצד הצ'אט עבור בקשות חזותיות מפורשות בלבד. רכיב WebEngine נדרש; הקנבס חוסם רשת, קבצים חיצוניים, הורדות וחלונות קופצים.", keywords="canvas visual dashboard graph form chart mermaid webengine html interactive", advanced=True)
-        self._add_checkbox(self.web_canvas_remote_images_cb, tools, "מאפשר רק טעינת תמונות HTTPS שנבחרו לקנבס. ניווט, הורדות, קבצים, חלונות קופצים ושאר בקשות הרשת נותרים חסומים.", keywords="canvas remote image https web image visual", advanced=True)
+        self._add_checkbox(self.tool_search_catalog_cb, tools, "מאפשר לסוכן לחפש בקטלוג הכלים הפנימי לפני בחירה, התקנה או יצירת כלי חדש.", keywords="tool search catalog tools python mcp skills selection")
+        self._add_checkbox(self.web_canvas_cb, tools, "מוסיף קנבס HTML מקומי ומבודד לצד הצ'אט עבור בקשות חזותיות מפורשות בלבד. רכיב WebEngine נדרש; הקנבס חוסם רשת, קבצים חיצוניים, הורדות וחלונות קופצים.", keywords="canvas visual dashboard graph form chart mermaid webengine html interactive")
+        self._add_checkbox(self.web_canvas_remote_images_cb, tools, "מאפשר רק טעינת תמונות HTTPS שנבחרו לקנבס. ניווט, הורדות, קבצים, חלונות קופצים ושאר בקשות הרשת נותרים חסומים.", keywords="canvas remote image https web image visual")
         self._add_section_header("מיומנויות", tools)
-        self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows instructions", advanced=True)
+        self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows instructions")
         self._add_field("מדיניות סריקה לא חד-משמעית של מיומנות", self.skill_unknown_scan_combo, tools, "מה לעשות כאשר ClawHub לא מחזיר תשובת סריקה חד-משמעית: לאפשר התקנה עם אזהרה או לחסום.", keywords="skill skills מיומנות מיומנויות scan clawhub safety unknown policy סריקה מדיניות", advanced=True)
         self._add_section_header("MCP", tools)
         self._add_checkbox(self.mcp_cb, tools, "שימוש בחבילות MCP שמרחיבות את סמארטי, בכפוף להרשאות.", keywords="mcp packages protocol external tools extensions")
