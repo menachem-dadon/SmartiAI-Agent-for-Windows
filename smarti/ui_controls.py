@@ -738,6 +738,16 @@ class SegmentedControl(QWidget):
             return self._items[self._current_index]
         return ""
 
+    def clearSelection(self, emit=True):
+        if self._current_index < 0:
+            return
+        self._current_index = -1
+        for i, btn in enumerate(self._buttons):
+            btn.setChecked(False)
+            self._apply_button_icon(i)
+        if emit:
+            self.currentIndexChanged.emit(-1)
+
     def setCurrentIndex(self, index, emit=True):
         if not self._items:
             self._current_index = -1

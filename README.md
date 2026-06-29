@@ -2,7 +2,7 @@
 
 עברית: [מעבר לגרסה העברית](#עברית)
 
-SmartiAI Agent for Windows is a local-first desktop AI agent for practical work on a Windows computer. It combines a Hebrew RTL chat interface, configurable model providers, local memory, file and web tools, browser and desktop automation, email handling, background tasks, notifications, custom tools, MCP packages, and beta Skills.
+SmartiAI Agent for Windows is a local-first desktop AI agent for practical work on a Windows computer. It combines a Hebrew RTL chat interface, configurable model providers, local memory, file and web tools, browser and desktop automation, email handling, background tasks, notifications, custom tools, MCP packages, and Skills.
 
 Smarti is designed to help operate the computer while keeping the user in control. Sensitive actions are visible, configurable, and can require approval before they run.
 
@@ -19,7 +19,7 @@ Current release target: `V0.76.0`.
 - Email over IMAP/SMTP: search, read, draft, send, reply, forward, archive, trash/delete, move/copy, manage folders, flags, styled RTL/HTML messages, and attachments.
 - Background work: one-time and recurring tasks, reminders, retry/cancel/edit flows, Windows toast notifications, and calendar event file creation.
 - Local memory with user, short-term, long-term, and tool memory buckets, including expiry and Markdown export.
-- Extensibility through custom Python tools, MCP packages, and beta Skills with controlled install/run permissions.
+- Extensibility through custom Python tools, MCP packages, and Skills with controlled install/run permissions.
 - Usage tracking, developer logs, runtime traces, audit logs, and optional cost estimates through `litellm`.
 
 ## Built-In Tool Areas
@@ -35,7 +35,7 @@ Current release target: `V0.76.0`.
 | Email | IMAP/SMTP mailbox search, reading, sending, drafts, replies, forwarding, folders, flags, archiving, deletion, and attachments. |
 | Tasks & Notifications | Background tasks, recurring work, reminders, Windows toasts, calendar events, and Calendar/Clock/settings launch targets. |
 | Memory | Search, add, update, replace, clear, expire, or forget local memories. |
-| Extensions | Custom Python tools, MCP package search/install/run, and beta Skill search/install/run. |
+| Extensions | Custom Python tools, MCP package search/install/run, and Skill search/install/run. |
 
 ## Example Use Cases
 
@@ -158,7 +158,7 @@ smarti/                  Modular application code
   app.py                 Startup, splash screen, legal gate, and main window setup
   core.py                Agent engine, tool routing, permissions, automation, email, memory, and background work
   runtime.py             Source vs packaged runtime and private toolchain resolution
-  config.py              Built-in tool schemas, categories, and default settings
+  config.py              Tool schemas, categories, and default settings
   chat.py                Chat UI, tray behavior, voice input, updates, notifications, and background-task UI
   ui_pages.py            Settings, tools, task center, usage, developer logs, and about pages
   managers.py            Settings migration, memory, policy, audit, MCP, Skills, and tool registries
@@ -201,7 +201,7 @@ For the full license terms, see the `LICENSE` file.
 
 ## עברית
 
-SmartiAI Agent for Windows הוא סוכן AI שולחני לעבודה מעשית על מחשב Windows. הוא משלב ממשק צ'אט עברי מימין לשמאל, ספקי מודלים ניתנים להגדרה, זיכרון מקומי, כלי קבצים ורשת, אוטומציית דפדפן ושולחן עבודה, ניהול אימייל, משימות רקע, התראות, כלים מותאמים אישית, חבילות MCP ו-Skills בגרסת בטא.
+SmartiAI Agent for Windows הוא סוכן AI שולחני לעבודה מעשית על מחשב Windows. הוא משלב ממשק צ'אט עברי מימין לשמאל, ספקי מודלים ניתנים להגדרה, זיכרון מקומי, כלי קבצים ורשת, אוטומציית דפדפן ושולחן עבודה, ניהול אימייל, משימות רקע, התראות, כלים מותאמים אישית, חבילות MCP ו-Skills.
 
 סמארטי נועד לעזור להפעיל את המחשב תוך שמירה על שליטה מלאה של המשתמש. פעולות רגישות מוצגות בצורה שקופה, ניתנות להגדרה, ויכולות לדרוש אישור לפני הרצה.
 
@@ -218,7 +218,7 @@ SmartiAI Agent for Windows הוא סוכן AI שולחני לעבודה מעשי
 - ניהול אימייל דרך IMAP/SMTP: חיפוש, קריאה, טיוטות, שליחה, תשובה, העברה, ארכוב, מחיקה, העברה/העתקה בין תיקיות, דגלים, הודעות HTML/RTL וקבצים מצורפים.
 - עבודה ברקע: משימות חד-פעמיות וחוזרות, תזכורות, עריכה/ביטול/הרצה מחדש, התראות Windows ויצירת קבצי אירוע ליומן.
 - זיכרון מקומי עם סוגי זיכרון למשתמש, טווח קצר, טווח ארוך וכלים, כולל תפוגה וייצוא Markdown.
-- הרחבות דרך כלי Python מותאמים אישית, חבילות MCP ו-Skills בגרסת בטא עם בקרות התקנה והרצה.
+- הרחבות דרך כלי Python מותאמים אישית, חבילות MCP ו-Skills עם בקרות התקנה והרצה.
 - מעקב שימוש, לוגים למפתחים, runtime trace, audit log והערכת עלויות אופציונלית דרך `litellm`.
 
 ## אזורי כלים מובנים

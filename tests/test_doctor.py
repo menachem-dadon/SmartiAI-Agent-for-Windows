@@ -1,4 +1,4 @@
-"""Focused contract tests for Smarti Doctor's local diagnostics."""
+"""Focused contract tests for Smarti Diagnostic's local diagnostics."""
 import copy
 import json
 import os
@@ -40,7 +40,7 @@ class _Core:
         return None
 
 
-class SmartiDoctorTests(unittest.TestCase):
+class SmartiDiagnosticTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.originals = {
@@ -79,7 +79,7 @@ class SmartiDoctorTests(unittest.TestCase):
             json.dump(payload, handle)
 
     def test_check_result_serializes_without_secret_values(self):
-        instance = doctor.SmartiDoctor(self.core)
+        instance = doctor.SmartiDiagnostic(self.core)
         result = instance._result(
             "provider.test", doctor.STATUS_ERROR, "תקלה", "api_key=very-secret-value",
             category="providers", title_he="ספק",
@@ -93,7 +93,7 @@ class SmartiDoctorTests(unittest.TestCase):
     def test_invalid_json_is_reported_with_an_explicit_repair(self):
         with open(doctor.SETTINGS_FILE, "w", encoding="utf-8") as handle:
             handle.write("{broken")
-        result = doctor.SmartiDoctor(self.core).check_data_files()
+        result = doctor.SmartiDiagnostic(self.core).check_data_files()
         self.assertEqual(result.status, doctor.STATUS_ERROR)
         self.assertIsNotNone(result.repair_action)
         self.assertEqual(result.repair_action.id, "open_data_folder")
@@ -101,7 +101,7 @@ class SmartiDoctorTests(unittest.TestCase):
     def test_backup_repair_creates_a_local_zip(self):
         self._write_json(doctor.SETTINGS_FILE, {"settings_schema_version": 2})
         self._write_json(doctor.MEMORY_FILE, {"entries": []})
-        message = doctor.SmartiDoctor(self.core).perform_repair("create_backup")
+        message = doctor.SmartiDiagnostic(self.core).perform_repair("create_backup")
         self.assertIn("נוצר גיבוי", message)
         self.assertTrue(any(name.endswith(".zip") for name in os.listdir(self.temp.name)))
 
@@ -121,7 +121,7 @@ class SmartiDoctorTests(unittest.TestCase):
                 return "credential-manager-secret"
 
         core = ProviderCore()
-        result = doctor.SmartiDoctor(core).check_provider(include_network=False)
+        result = doctor.SmartiDiagnostic(core).check_provider(include_network=False)
         self.assertEqual(result.status, doctor.STATUS_PASS)
         self.assertEqual(core.loaded_provider, "openai")
         self.assertIn("api_key_configured=True", result.technical_detail)
@@ -141,8 +141,8 @@ class SmartiDoctorTests(unittest.TestCase):
             "connected", "החיבור נבדק בהצלחה עם Codex.", "chatgpt"
         )
 
-        quick = doctor.SmartiDoctor(self.core).check_provider(include_network=False)
-        full = doctor.SmartiDoctor(self.core).check_provider(include_network=True)
+        quick = doctor.SmartiDiagnostic(self.core).check_provider(include_network=False)
+        full = doctor.SmartiDiagnostic(self.core).check_provider(include_network=True)
 
         self.assertEqual(quick.status, doctor.STATUS_PASS)
         self.assertEqual(full.status, doctor.STATUS_PASS)
@@ -167,7 +167,7 @@ class SmartiDoctorTests(unittest.TestCase):
                     "smtp_starttls": True,
                 }
 
-        result = doctor.SmartiDoctor(EmailCore()).check_email(include_network=False)
+        result = doctor.SmartiDiagnostic(EmailCore()).check_email(include_network=False)
         self.assertEqual(result.status, doctor.STATUS_PASS)
         self.assertNotIn("app-password", result.technical_detail)
 
@@ -182,7 +182,7 @@ class SmartiDoctorTests(unittest.TestCase):
                 return "C:/Program Files/Google/Chrome/Application/chrome.exe"
 
             def _automation_browser_profile_dir(self):
-                return os.path.join(tempfile.gettempdir(), "SmartiDoctorTestProfile")
+                return os.path.join(tempfile.gettempdir(), "SmartiDiagnosticTestProfile")
 
             def _automation_browser_is_ready(self):
                 return False
@@ -195,7 +195,7 @@ class SmartiDoctorTests(unittest.TestCase):
 
         core = BrowserCore()
         with mock.patch.object(doctor.importlib.util, "find_spec", return_value=object()):
-            result = doctor.SmartiDoctor(core).check_browser(include_network=True)
+            result = doctor.SmartiDiagnostic(core).check_browser(include_network=True)
         self.assertEqual(result.status, doctor.STATUS_ERROR)
         self.assertTrue(core.closed)
 
@@ -215,7 +215,7 @@ class SmartiDoctorTests(unittest.TestCase):
             def _sandbox_enabled(self):
                 return False
 
-        result = doctor.SmartiDoctor(SearchCore()).check_search()
+        result = doctor.SmartiDiagnostic(SearchCore()).check_search()
         self.assertEqual(result.status, doctor.STATUS_PASS)
         self.assertEqual(result.repair_action.id, "test_search_connection")
 
@@ -233,7 +233,7 @@ class SmartiDoctorTests(unittest.TestCase):
                 return 1
 
         self.core.memory_manager = MemoryManager()
-        instance = doctor.SmartiDoctor(self.core)
+        instance = doctor.SmartiDiagnostic(self.core)
         result = instance.check_memory_health()
         self.assertEqual(result.status, doctor.STATUS_WARNING)
         self.assertEqual(result.repair_action.id, "prune_expired_memory")
@@ -242,7 +242,7 @@ class SmartiDoctorTests(unittest.TestCase):
 
     def test_plaintext_secret_audit_never_includes_the_secret_value(self):
         self._write_json(doctor.SETTINGS_FILE, {"openai_api_key": "very-secret-value"})
-        result = doctor.SmartiDoctor(self.core).check_secret_storage()
+        result = doctor.SmartiDiagnostic(self.core).check_secret_storage()
         self.assertEqual(result.status, doctor.STATUS_WARNING)
         self.assertEqual(result.repair_action.id, "secure_plaintext_secrets")
         self.assertNotIn("very-secret-value", result.technical_detail)
@@ -259,7 +259,7 @@ class SmartiDoctorTests(unittest.TestCase):
                 return True
 
         with mock.patch.object(doctor.importlib.util, "find_spec", return_value=object()):
-            result = doctor.SmartiDoctor(BrowserCore()).check_browser(include_network=False)
+            result = doctor.SmartiDiagnostic(BrowserCore()).check_browser(include_network=False)
         self.assertEqual(result.status, doctor.STATUS_WARNING)
         self.assertEqual(result.repair_action.id, "close_orphaned_browser")
 
@@ -273,7 +273,7 @@ class SmartiDoctorTests(unittest.TestCase):
                 return {"PATH": ""}
 
         with mock.patch.object(doctor.shutil, "which", return_value=None):
-            result = doctor.SmartiDoctor(McpCore()).check_mcp_node_runtime()
+            result = doctor.SmartiDiagnostic(McpCore()).check_mcp_node_runtime()
         self.assertEqual(result.status, doctor.STATUS_ERROR)
         self.assertEqual(result.repair_action.id, "disable_mcp")
         self.assertIn("npx_found=False", result.technical_detail)
@@ -282,7 +282,7 @@ class SmartiDoctorTests(unittest.TestCase):
         os.makedirs(doctor.MCP_TOOLS_DIR)
         with open(os.path.join(doctor.MCP_TOOLS_DIR, "broken-package.txt"), "w", encoding="utf-8") as handle:
             handle.write("{not json")
-        result = doctor.SmartiDoctor(self.core).check_mcp_catalog()
+        result = doctor.SmartiDiagnostic(self.core).check_mcp_catalog()
         self.assertEqual(result.status, doctor.STATUS_WARNING)
         self.assertIn("broken-package.txt", result.explanation_he)
         self.assertEqual(result.repair_action.id, "open_tools")
@@ -291,7 +291,7 @@ class SmartiDoctorTests(unittest.TestCase):
         os.makedirs(doctor.TOOLS_DIR)
         with open(os.path.join(doctor.TOOLS_DIR, "my_tool.py"), "w", encoding="utf-8") as handle:
             handle.write("def broken(:\n")
-        result = doctor.SmartiDoctor(self.core).check_custom_tools()
+        result = doctor.SmartiDiagnostic(self.core).check_custom_tools()
         self.assertEqual(result.status, doctor.STATUS_WARNING)
         self.assertIn("my_tool.py", result.explanation_he)
         self.assertTrue(result.explanation_he.startswith("כלים"))
@@ -312,7 +312,7 @@ class SmartiDoctorTests(unittest.TestCase):
                 return "SUCCESS: installed"
 
         core = SkillCore()
-        instance = doctor.SmartiDoctor(core)
+        instance = doctor.SmartiDiagnostic(core)
         result = instance.check_skill_dependencies()
         self.assertEqual(result.status, doctor.STATUS_WARNING)
         self.assertEqual(result.repair_action.id, "install_skill_requirements:calendar")
@@ -325,7 +325,7 @@ class SmartiDoctorTests(unittest.TestCase):
         self.core.tool_registry = {"local_tool": {}}
         self.core.mcp_registry = {"server": {}}
         self.core.skill_registry = {"guide": {}}
-        result = doctor.SmartiDoctor(self.core).check_tool_catalog_policy()
+        result = doctor.SmartiDiagnostic(self.core).check_tool_catalog_policy()
         self.assertEqual(result.status, doctor.STATUS_PASS)
         self.assertIn("search_tools", BUILTIN_TOOL_SCHEMAS)
         self.assertIn("load_skill", BUILTIN_TOOL_SCHEMAS)
@@ -368,14 +368,14 @@ class SmartiDoctorTests(unittest.TestCase):
     def test_security_flags_disabled_log_redaction_with_a_safe_repair(self):
         self.core.settings["privacy_redact_logs"] = False
         self.core.settings["privacy"] = {"redact_logs": False}
-        result = doctor.SmartiDoctor(self.core).check_security()
+        result = doctor.SmartiDiagnostic(self.core).check_security()
         self.assertEqual(result.status, doctor.STATUS_WARNING)
         self.assertEqual(result.repair_action.id, "enable_log_redaction")
-        doctor.SmartiDoctor(self.core).perform_repair("enable_log_redaction")
+        doctor.SmartiDiagnostic(self.core).perform_repair("enable_log_redaction")
         self.assertTrue(self.core.settings["privacy_redact_logs"])
 
     def test_full_local_run_has_no_sqlite_check(self):
-        results = doctor.SmartiDoctor(self.core).run(include_network=False)
+        results = doctor.SmartiDiagnostic(self.core).run(include_network=False)
         result_ids = {result.id for result in results}
         self.assertIn("search.runtime", result_ids)
         self.assertIn("memory.health", result_ids)

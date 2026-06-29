@@ -299,7 +299,7 @@ SMARTI_APP_AUMID = "SmartiAI"
 class SmartiCancelled(Exception):
     pass
 
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGridLayout,
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGridLayout, QBoxLayout,
                              QHBoxLayout, QTextEdit, QPlainTextEdit, QPushButton, QLabel,
                              QScrollArea, QFrame, QMenu, QLineEdit, QTextBrowser, QProgressBar,
                              QCheckBox, QFormLayout, QSizePolicy, QMessageBox, QComboBox, QSystemTrayIcon, QSlider, QStackedWidget, QStyleOptionButton, QStyle, QGraphicsOpacityEffect, QGraphicsEffect, QGraphicsDropShadowEffect, QFileDialog, QDialog, QDialogButtonBox, QInputDialog, QListWidget, QListWidgetItem, QAbstractItemView, QToolTip)
@@ -526,12 +526,12 @@ CAPABILITY_LABELS = {
     "shell": "הרצת פקודות מערכת",
     "python_tool_create": "יצירת כלי מותאם אישית",
     "python_tool_run": "הרצת כלי מותאם אישית",
-    "mcp_search": "חיפוש כלים חיצוניים",
-    "mcp_install": "התקנת כלים חיצוניים",
-    "mcp_run": "הרצת כלים חיצוניים",
-    "skill_search": "חיפוש Skills",
-    "skill_install": "התקנת Skills",
-    "skill_run": "הרצת Skills",
+    "mcp_search": "חיפוש כלי MCP",
+    "mcp_install": "התקנת כלי MCP",
+    "mcp_run": "הרצת כלי MCP",
+    "skill_search": "חיפוש מיומנויות",
+    "skill_install": "התקנת מיומנויות",
+    "skill_run": "הרצת מיומנויות",
     "network": "גישה לאינטרנט",
     "browser_open": "פתיחת דפדפן גלוי",
     "file_open": "פתיחת קבצים ותיקיות",

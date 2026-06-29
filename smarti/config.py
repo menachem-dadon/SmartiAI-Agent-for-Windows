@@ -260,7 +260,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "search_tools": {
-        "description": "Search Smarti's effective tool catalog across built-in tools, Python tools, MCP packages, and Skills before choosing, installing, or creating a capability.",
+        "description": "חיפוש בקטלוג הכלים הפעילים של סמארטי, כולל כלים מובנים, כלי Python, חבילות MCP ומיומנויות, לפני בחירה, התקנה או יצירת יכולת.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -396,7 +396,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "install_skill": {
-        "description": "מתקין Skill בטא. הסוכן רשאי להתקין רק מ-ClawHub; המשתמש יכול להתקין ידנית מתיקייה מקומית אם אישר זאת.",
+        "description": "מתקין Skill. הסוכן רשאי להתקין רק מ-ClawHub; המשתמש יכול להתקין ידנית מתיקייה מקומית אם אישר זאת.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -538,10 +538,10 @@ BUILTIN_DYNAMIC_TOOLS = {
     "run_mcp": "הפעלת פונקציות מכלים חיצוניים שהותקנו.",
     "list_skills": "הצגת Skills זמינים.",
     "search_skills": "חיפוש Skills ב-ClawHub.",
-    "install_skill": "התקנת Skill בטא.",
+    "install_skill": "התקנת Skill.",
     "install_skill_requirements": "התקנת דרישות חיצוניות של Skill.",
     "load_skill": "טעינת הוראות Skill.",
-    "run_skill": "הרצת Skill בטא.",
+    "run_skill": "הרצת Skill.",
     "git_status": "Git קריאה בלבד: status, diff, log, show.",
     "run_project_check": "הרצת בדיקות או build בפרויקט תחת מדיניות.",
     "list_processes": "הצגת תהליכים פעילים.",
@@ -844,7 +844,7 @@ BUILTIN_TOOL_SCHEMAS["canvas_manager"] = {
 
 # Google Drive is parked until the OAuth flow is reliable enough for end users.
 # Keep the implementation in smarti/google_drive.py and SmartiCore.google_drive_manager
-# for a future re-enable, but do not register it as a visible/built-in tool now.
+# for a future re-enable, but do not register it as a visible tool now.
 
 BROWSER_AUTOMATION_ACTIONS = [
     "doctor", "status", "start", "stop", "profiles", "tabs",
@@ -1164,6 +1164,7 @@ DEFAULT_SETTINGS = {
     "email_multi_read_body_chars": 3000,
     "privacy_redact_logs": True,
     "permission_level": 2,
+    "custom_permission_profile_enabled": False,
     "policy_matrix": copy.deepcopy(DEFAULT_POLICY_MATRIX),
     "tool_trust": {},
     "mcp_registry": {},
@@ -1207,7 +1208,7 @@ DEFAULT_SETTINGS = {
     "external_code_requires_trust": True,
     "allow_autonomous_mcp_install": False,
     "mcp_env_allowlist": copy.deepcopy(DEFAULT_MCP_ENV_ALLOWLIST),
-    "max_total_task_seconds": 900,
+    "max_total_task_seconds": 3600,
     "conversation_history_limit": 16,
     "conversation_summary": "",
     "memory": {

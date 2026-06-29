@@ -1,6 +1,6 @@
 """Read-only health diagnostics and explicitly approved repairs for SmartiAI.
 
-The Doctor deliberately keeps diagnosis separate from repair.  A scan may make
+Smarti Diagnostic deliberately keeps diagnosis separate from repair.  A scan may make
 short, local connectivity checks when the user asks for a full scan, but it
 never changes settings, deletes profiles, or restores data by itself.
 """
@@ -77,7 +77,7 @@ class RepairAction:
 
 @dataclass(frozen=True)
 class CheckResult:
-    """Structured Doctor result, matching the product-plan contract."""
+    """Structured diagnostic result, matching the product-plan contract."""
 
     id: str
     status: str
@@ -92,10 +92,10 @@ class CheckResult:
         return data
 
 
-class SmartiDoctor:
+class SmartiDiagnostic:
     """Runs bounded diagnostics against the active SmartiCore instance."""
 
-    LOG_FILENAME = "smarti_doctor.log"
+    LOG_FILENAME = "smarti_diagnostic.log"
     _SECRET_VALUE_RE = re.compile(
         r"(?i)(api[_ -]?key|token|password|secret|authorization)\s*[:=]\s*([^\s,;]+)"
     )
@@ -165,10 +165,10 @@ class SmartiDoctor:
             return check()
         except Exception as exc:
             return self._result(
-                f"{check.__name__}.unexpected", STATUS_WARNING,
-                "לא ניתן להשלים את הבדיקה הזאת. Smarti נשאר זמין, והפרטים הטכניים נשמרו ביומן המאובטח.",
-                f"Unexpected Doctor check failure: {type(exc).__name__}: {self._redact(exc)}",
-                RepairAction("open_doctor_log", "פתיחת יומן Doctor", "פתחי את היומן המסונן כדי לראות את פרטי התקלה.", "low"),
+                f"{check.__name__}.unexpected", STATUS_SKIPPED,
+                "לא ניתן להשלים את הבדיקה הזאת כרגע. Smarti נשאר זמין, והפרטים הטכניים נשמרו ביומן המאובטח.",
+                f"Unexpected diagnostic check failure: {type(exc).__name__}: {self._redact(exc)}",
+                RepairAction("open_diagnostic_log", "פתיחת יומן Diagnostic", "פתחי את היומן המסונן כדי לראות את פרטי התקלה.", "low"),
                 category="system", title_he="בדיקה שלא הושלמה",
             )
 
@@ -226,7 +226,7 @@ class SmartiDoctor:
                 category="data", title_he="תיקיית נתונים",
             )
         try:
-            fd, probe_path = tempfile.mkstemp(prefix=".smarti_doctor_", suffix=".tmp", dir=USER_DATA_DIR)
+            fd, probe_path = tempfile.mkstemp(prefix=".smarti_diagnostic_", suffix=".tmp", dir=USER_DATA_DIR)
             os.close(fd)
             os.remove(probe_path)
         except Exception as exc:
@@ -265,7 +265,7 @@ class SmartiDoctor:
                 "runtime.python", STATUS_ERROR,
                 "המערכת לא מצאה את Python שבו Smarti אמור להשתמש, ולכן כלים מקומיים עלולים לא לפעול.",
                 f"python_executable={python_exe or '<empty>'}; resolved=false; {resolution_error}",
-                RepairAction("open_data_folder", "פתיחת תיקיית הנתונים", "בדקי את יומן ההתקנה או הפעילי מחדש את מתקין Smarti; Doctor לא מוריד או מחליף רכיבי הרצה בעצמו.", "low"),
+                RepairAction("open_data_folder", "פתיחת תיקיית הנתונים", "בדקי את יומן ההתקנה או הפעילי מחדש את מתקין Smarti; Diagnostic לא מוריד או מחליף רכיבי הרצה בעצמו.", "low"),
                 category="system", title_he="סביבת Python של Smarti",
             )
         try:
@@ -281,7 +281,7 @@ class SmartiDoctor:
                 "runtime.python", STATUS_ERROR,
                 "נמצא Python עבור Smarti, אך הוא לא הגיב לבדיקת ההרצה. כלים מקומיים עלולים להיכשל.",
                 f"python_executable={resolved}; probe={type(exc).__name__}: {self._redact(exc)}",
-                RepairAction("open_data_folder", "פתיחת תיקיית הנתונים", "הפעילי מחדש את Smarti. אם הבעיה נשארת, הריצי תיקון התקנה; Doctor לא משנה את סביבת ההרצה אוטומטית.", "low"),
+                RepairAction("open_data_folder", "פתיחת תיקיית הנתונים", "הפעילי מחדש את Smarti. אם הבעיה נשארת, הריצי תיקון התקנה; Diagnostic לא משנה את סביבת ההרצה אוטומטית.", "low"),
                 category="system", title_he="סביבת Python של Smarti",
             )
         return self._result(
@@ -359,7 +359,7 @@ class SmartiDoctor:
         except Exception as exc:
             return self._result(
                 "settings.schema", STATUS_WARNING,
-                "לא ניתן לבדוק את גרסת מבנה ההגדרות כי הקובץ אינו קריא. Doctor לא משנה אותו אוטומטית.",
+                "לא ניתן לבדוק את גרסת מבנה ההגדרות כי הקובץ אינו קריא. Diagnostic לא משנה אותו אוטומטית.",
                 f"settings_schema_read={type(exc).__name__}: {self._redact(exc)}",
                 RepairAction("open_data_folder", "פתיחת תיקיית הנתונים", "אפשר לגבות את קובץ ההגדרות או לשחזר גיבוי קיים לפני ניסיון תיקון.", "low"),
                 category="data", title_he="מבנה הגדרות והעברת גרסה",
@@ -427,7 +427,7 @@ class SmartiDoctor:
         if not isinstance(payload, dict) or not isinstance(payload.get("entries", []), list):
             return self._result(
                 "memory.health", STATUS_ERROR,
-                "מבנה הזיכרון המקומי אינו תקין. Doctor לא מאפס מידע אישי אוטומטית.",
+                "מבנה הזיכרון המקומי אינו תקין. Diagnostic לא מאפס מידע אישי אוטומטית.",
                 f"memory_root={type(payload).__name__}; entries_type={type(payload.get('entries') if isinstance(payload, dict) else None).__name__}",
                 RepairAction("open_data_folder", "פתיחת תיקיית הנתונים", "פתחי את תיקיית הנתונים כדי לגבות את הקובץ או לשחזר גיבוי קודם.", "low"),
                 category="data", title_he="זיכרון מקומי ותוקף מידע",
@@ -454,7 +454,7 @@ class SmartiDoctor:
                 "memory.health", STATUS_WARNING,
                 "חלק מרשומות הזיכרון אינן במבנה הצפוי. הזיכרון התקין נשמר, אך כדאי לעבור על הקובץ לפני המשך שימוש.",
                 technical,
-                RepairAction("open_data_folder", "פתיחת תיקיית הנתונים", "פתחי את תיקיית הנתונים כדי לגבות או לבדוק את קובץ הזיכרון; Doctor אינו מוחק רשומות חריגות.", "low"),
+                RepairAction("open_data_folder", "פתיחת תיקיית הנתונים", "פתחי את תיקיית הנתונים כדי לגבות או לבדוק את קובץ הזיכרון; Diagnostic אינו מוחק רשומות חריגות.", "low"),
                 category="data", title_he="זיכרון מקומי ותוקף מידע",
             )
         if expired:
@@ -485,7 +485,7 @@ class SmartiDoctor:
             if not os.path.isdir(path):
                 continue
             try:
-                fd, probe_path = tempfile.mkstemp(prefix=".smarti_doctor_", suffix=".tmp", dir=path)
+                fd, probe_path = tempfile.mkstemp(prefix=".smarti_diagnostic_", suffix=".tmp", dir=path)
                 os.close(fd)
                 os.remove(probe_path)
             except Exception:
@@ -613,7 +613,7 @@ class SmartiDoctor:
                 "provider.active", STATUS_ERROR,
                 f"הספק {provider_display_name(provider)} נבחר, אך לא נמצא מפתח API שמור.",
                 f"provider={provider}; api_key_configured=false; selected_model={model}",
-                RepairAction("open_settings", "הזנת מפתח API", "פתחי את הגדרות הספק והזיני מפתח. המפתח לא יוצג ב‑Doctor או ביומן.", "low"),
+                RepairAction("open_settings", "הזנת מפתח API", "פתחי את הגדרות הספק והזיני מפתח. המפתח לא יוצג ב‑Diagnostic או ביומן.", "low"),
                 category="providers", title_he="ספק המודל הפעיל",
             )
         if not include_network:
@@ -731,7 +731,7 @@ class SmartiDoctor:
             )
         return self._result(
             "automation.computer", STATUS_PASS,
-            "רכיבי אוטומציית המחשב זמינים. Doctor לא שלט בעכבר, במקלדת או בחלון כלשהו.",
+            "רכיבי אוטומציית המחשב זמינים. Diagnostic לא שלט בעכבר, במקלדת או בחלון כלשהו.",
             f"enabled=true; dependencies={dependencies}",
             category="automation", title_he="אוטומציית מחשב",
         )
@@ -827,7 +827,7 @@ class SmartiDoctor:
                 except Exception:
                     pass
             # Keep an already active user automation session intact, but never
-            # leave a visible Chrome window behind when Doctor opened it only
+            # leave a visible Chrome window behind when Diagnostic opened it only
             # for this probe.
             if started_by_doctor:
                 try:
@@ -900,7 +900,7 @@ class SmartiDoctor:
             )
         return self._result(
             "email.connection", STATUS_PASS,
-            "חיבור הדוא\"ל תקין: IMAP ו‑SMTP זמינים. Doctor לא שלח הודעה.",
+            "חיבור הדוא\"ל תקין: IMAP ו‑SMTP זמינים. Diagnostic לא שלח הודעה.",
             f"imap={cfg['imap_host']}:{cfg['imap_port']}; smtp={cfg['smtp_host']}:{cfg['smtp_port']}; result=ok",
             category="email", title_he="דוא\"ל",
         )
@@ -910,7 +910,7 @@ class SmartiDoctor:
         visual_enabled = bool(settings.get("enable_visual_surfaces", False))
         web_enabled = bool(settings.get("enable_web_canvas", False))
         try:
-            new_canvas_artifact({"title": "Doctor", "html": "<p>ok</p>"})
+            new_canvas_artifact({"title": "Diagnostic", "html": "<p>ok</p>"})
             schema_ok = True
         except Exception as exc:
             schema_ok = False
@@ -979,7 +979,7 @@ class SmartiDoctor:
             )
         return self._result(
             "voice.runtime", STATUS_PASS,
-            "רכיבי הקול הזמינים תואמים להגדרות. Doctor לא הקליט, לא שלח ולא שמר אודיו.",
+            "רכיבי הקול הזמינים תואמים להגדרות. Diagnostic לא הקליט, לא שלח ולא שמר אודיו.",
             f"speech_recognition={stt_ok}; keyboard={hotkey_ok}; edge_tts={EDGE_TTS_INSTALLED}; gtts={GTTS_INSTALLED}",
             category="voice", title_he="קול והקראה",
         )
@@ -1057,7 +1057,7 @@ class SmartiDoctor:
             )
         return self._result(
             "mcp.node_runtime", STATUS_PASS,
-            "סביבת MCP תקינה: Node.js, npm ו־npx זמינים ומגיבים. Doctor לא הפעיל חבילת MCP ולא הוריד דבר.",
+            "סביבת MCP תקינה: Node.js, npm ו־npx זמינים ומגיבים. Diagnostic לא הפעיל חבילת MCP ולא הוריד דבר.",
             technical,
             category="extensions", title_he="סביבת Node.js ו־MCP",
         )
@@ -1112,7 +1112,7 @@ class SmartiDoctor:
                 parts.append("חבילות מסומנות כפעילות ללא תיאור: " + ", ".join(enabled_without_descriptor))
             return self._result(
                 "mcp.catalog", STATUS_WARNING,
-                "נמצאה אי־התאמה בקטלוג MCP. " + "\n• ".join([""] + parts) + "\nהפעולה הבטוחה היא לבדוק או להתקין מחדש רק את החבילה המצוינת; Doctor לא מוחק חבילות אוטומטית.",
+                "נמצאה אי־התאמה בקטלוג MCP. " + "\n• ".join([""] + parts) + "\nהפעולה הבטוחה היא לבדוק או להתקין מחדש רק את החבילה המצוינת; Diagnostic לא מוחק חבילות אוטומטית.",
                 technical,
                 RepairAction("open_tools", "פתיחת מסך ההרחבות", "במסך הכלים אפשר לראות את שם החבילה, רמת האמון שלה, ולמחוק או להתקין מחדש רק את הפריט הבעייתי.", "low"),
                 category="extensions", title_he="קטלוג חבילות MCP",
@@ -1146,9 +1146,9 @@ class SmartiDoctor:
         if syntax_errors:
             return self._result(
                 "extensions.custom_tools", STATUS_WARNING,
-                "כלים מותאמים שדורשים תיקון תחבירי:\n• " + "\n• ".join(syntax_errors) + "\nה־Doctor קרא את הקוד בלבד ולא הפעיל אותו. תיקון אוטומטי עלול לשנות לוגיקה אישית, לכן פתיחת הכלי לעריכה היא האפשרות הבטוחה.",
+                "כלים מותאמים שדורשים תיקון תחבירי:\n• " + "\n• ".join(syntax_errors) + "\nה־Diagnostic קרא את הקוד בלבד ולא הפעיל אותו. תיקון אוטומטי עלול לשנות לוגיקה אישית, לכן פתיחת הכלי לעריכה היא האפשרות הבטוחה.",
                 technical,
-                RepairAction("open_tools", "פתיחת הכלים המותאמים", "אפשר לפתוח או להשבית רק את הכלי המופיע ברשימה. Doctor לא משנה את הקוד האישי שלך ללא בחירה מפורשת.", "low"),
+                RepairAction("open_tools", "פתיחת הכלים המותאמים", "אפשר לפתוח או להשבית רק את הכלי המופיע ברשימה. Diagnostic לא משנה את הקוד האישי שלך ללא בחירה מפורשת.", "low"),
                 category="extensions", title_he="כלים מותאמים",
             )
         if not tool_paths:
@@ -1250,7 +1250,7 @@ class SmartiDoctor:
                 "extensions.tool_policy", STATUS_ERROR,
                 "חסרות סכמות לכלי בחירה וטעינת Skills. הסוכן עלול לא לראות את קטלוג הכלים המלא.",
                 technical,
-                RepairAction("open_doctor_log", "פתיחת יומן Doctor", "פתחי את היומן המסונן כדי לראות אילו סכמות חסרות לפני תיקון קוד.", "low"),
+                RepairAction("open_diagnostic_log", "פתיחת יומן Diagnostic", "פתחי את היומן המסונן כדי לראות אילו סכמות חסרות לפני תיקון קוד.", "low"),
                 category="extensions", title_he="מדיניות בחירת כלים ו-Skills",
             )
         if unknown_policy not in {"allow_with_warning", "block"} or not protocol_version:
@@ -1384,7 +1384,7 @@ class SmartiDoctor:
         if plaintext_keys:
             return self._result(
                 "security.secrets", STATUS_WARNING,
-                "נמצאו סודות השמורים כטקסט בקובץ ההגדרות. אפשר להעביר אותם לאחסון המאובטח של Windows או להצפנת DPAPI, בלי לחשוף אותם ב‑Doctor.",
+                "נמצאו סודות השמורים כטקסט בקובץ ההגדרות. אפשר להעביר אותם לאחסון המאובטח של Windows או להצפנת DPAPI, בלי לחשוף אותם ב‑Diagnostic.",
                 technical,
                 RepairAction("secure_plaintext_secrets", "אבטחת הסודות השמורים", "Smarti ישמור את הסודות דרך Windows Credential Manager כאשר הוא זמין, או בהצפנת Windows מקומית. הערכים לא יוצגו ולא יישלחו לרשת.", "medium"),
                 category="security", title_he="שמירת סודות",
@@ -1522,7 +1522,7 @@ class SmartiDoctor:
             installer = getattr(self.core, "install_skill_requirements", None)
             if not callable(installer):
                 raise RuntimeError("ממשק התקנת דרישות Skill אינו זמין")
-            outcome = str(installer(skill_name, reason="Smarti Doctor approved repair") or "")
+            outcome = str(installer(skill_name, reason="Smarti Diagnostic approved repair") or "")
             if outcome.lstrip().startswith("ERROR:"):
                 raise RuntimeError(self._redact(outcome))
             return f"דרישות ה־Skill '{skill_name}' טופלו.\n{self._redact(outcome)}"
@@ -1547,20 +1547,20 @@ class SmartiDoctor:
                     repaired.append(key)
             self._save_settings()
             return "שוחזרו ערכי מדיניות לא תקינים: " + (", ".join(repaired) if repaired else "לא נדרשו שינויים")
-        raise ValueError(f"Unsupported Doctor repair action: {action_id}")
+        raise ValueError(f"Unsupported Diagnostic repair action: {action_id}")
 
     def _test_search_connection(self):
         search = getattr(self.core, "search_internet", None)
         if not callable(search):
             raise RuntimeError("מנוע חיפוש האינטרנט של Smarti אינו זמין")
-        result = str(search("Smarti Doctor connectivity check") or "")
+        result = str(search("Smarti Diagnostic connectivity check") or "")
         if result.startswith("Error:") or result.startswith("ERROR"):
             raise RuntimeError(self._redact(result))
         return "חיפוש האינטרנט אומת בהצלחה. נשלחה שאילתת בדיקה קצרה אחת ל‑Tavily."
 
     def _create_backup(self):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        archive = os.path.join(USER_DATA_DIR, f"smarti_doctor_backup.{stamp}.zip")
+        archive = os.path.join(USER_DATA_DIR, f"smarti_diagnostic_backup.{stamp}.zip")
         candidates = [
             SETTINGS_FILE, MEMORY_FILE, CHAT_HISTORY_FILE, USAGE_FILE,
             ACTIVE_TASK_CHECKPOINT_FILE, MCP_CONFIG_FILE,

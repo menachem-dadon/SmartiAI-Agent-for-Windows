@@ -369,8 +369,8 @@ class EmailConnectionTestWorker(QThread):
         self.finished_signal.emit(ok, message)
 
 
-class DoctorCheckWorker(QThread):
-    """Run Doctor diagnostics outside the GUI event loop."""
+class DiagnosticCheckWorker(QThread):
+    """Run Smarti Diagnostic checks outside the GUI event loop."""
 
     progress_signal = pyqtSignal(int, int, str)
     result_signal = pyqtSignal(dict)
@@ -390,9 +390,9 @@ class DoctorCheckWorker(QThread):
     def run(self):
         try:
             # Local import avoids a workers <-> doctor module import cycle.
-            from .doctor import SmartiDoctor
+            from .doctor import SmartiDiagnostic
 
-            self._doctor = SmartiDoctor(self.core)
+            self._doctor = SmartiDiagnostic(self.core)
             results = self._doctor.run(
                 include_network=self.include_network,
                 progress_callback=lambda current, total, label: self.progress_signal.emit(current, total, label),
@@ -404,14 +404,14 @@ class DoctorCheckWorker(QThread):
                 self._doctor._cancelled(),
             )
         except Exception as exc:
-            logging.exception("Doctor worker failed.")
+            logging.exception("Diagnostic worker failed.")
             self.failed_signal.emit(str(exc))
         finally:
             self._doctor = None
 
 
-class DoctorRepairWorker(QThread):
-    """Perform an already-approved Doctor repair away from the GUI thread."""
+class DiagnosticRepairWorker(QThread):
+    """Perform an already-approved Smarti Diagnostic repair away from the GUI thread."""
 
     finished_signal = pyqtSignal(str)
     failed_signal = pyqtSignal(str)
@@ -423,12 +423,12 @@ class DoctorRepairWorker(QThread):
 
     def run(self):
         try:
-            from .doctor import SmartiDoctor
+            from .doctor import SmartiDiagnostic
 
-            message = SmartiDoctor(self.core).perform_repair(self.action_id)
+            message = SmartiDiagnostic(self.core).perform_repair(self.action_id)
             self.finished_signal.emit(str(message or "התיקון הסתיים."))
         except Exception as exc:
-            logging.exception("Doctor repair failed.")
+            logging.exception("Diagnostic repair failed.")
             self.failed_signal.emit(str(exc))
 
 

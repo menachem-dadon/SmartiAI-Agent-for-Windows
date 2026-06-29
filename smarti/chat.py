@@ -6,9 +6,9 @@ from .common import *
 from .attachments import *
 from .ui_styles import *
 from .ui_controls import *
-from .config import BUILT_IN_TOOLS, LEGACY_BUILTIN_TOOLS, PUBLIC_BUILTIN_TOOLS
+from .config import PUBLIC_BUILTIN_TOOLS
 from .workers import AgentWorker, VoiceWorker, TTSWorker
-from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, SmartiDoctorPage, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
+from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, SmartiDiagnosticPage, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
 from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
@@ -515,7 +515,7 @@ def _style_markdown_blocks(rendered_html, is_user=False, code_blocks=None):
                     f'<img src="{html.escape(copy_icon, quote=True)}" width="16" height="16" /></a>'
                 )
             else:
-                copy_link = f'<a href="smarti-copy-code:{copy_index}" style="color:{fg}; text-decoration:none; font-weight:800;">Copy</a>'
+                copy_link = f'<a href="smarti-copy-code:{copy_index}" style="color:{fg}; text-decoration:none; font-weight:800;">העתק</a>'
         header = (
             f'<div dir="ltr" align="left" style="background-color:{header_bg}; color:{muted}; '
             f'border:1px solid {border}; border-bottom:0; padding:7px 12px; margin:8px 0 0 0;">'
@@ -1196,7 +1196,13 @@ AGENT_TOOL_DEFAULT_ICON_NAMES = ("agent_tool_row_status",)
 AGENT_TOOL_GROUP_ICON_NAMES = ("agent_tool_status", "agent_tool_icon", "tools_icon")
 AGENT_TOOL_MCP_ACTIONS = {"search_mcp", "install_mcp", "run_mcp"}
 AGENT_TOOL_SKILL_ACTIONS = {"list_skills", "search_skills", "install_skill", "install_skill_requirements", "load_skill", "run_skill"}
-AGENT_TOOL_BUILTIN_ACTIONS = set(BUILT_IN_TOOLS) | set(LEGACY_BUILTIN_TOOLS) | set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner"}
+AGENT_TOOL_MAIN_ACTIONS = set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner"}
+AGENT_TOOL_STAGE_ICON_ALIASES = {
+    "agent_planner": ("agent_tool_agent_planner",),
+    "agent_verifier": ("agent_tool_final_verifier",),
+    "final_verifier": ("agent_tool_final_verifier",),
+    "smarti_final_verifier": ("agent_tool_final_verifier",),
+}
 
 def _agent_tool_asset_stem(name):
     stem = re.sub(r"[^0-9a-zA-Z]+", "_", str(name or "").strip().lower()).strip("_")
@@ -1218,7 +1224,6 @@ def _agent_tool_icon_names(tool):
     effective = str(tool.get("effective_action") or "").strip()
     args = tool.get("arguments") if isinstance(tool.get("arguments"), dict) else {}
     manager_action = str(args.get("action") or "").strip()
-    target = str(args.get("target") or "").strip()
     action_names = {name for name in (action, effective, manager_action) if name}
     candidates = []
 
@@ -1232,18 +1237,10 @@ def _agent_tool_icon_names(tool):
     if action_names & AGENT_TOOL_SKILL_ACTIONS:
         candidates.append("agent_tool_skill")
 
-    if action == "automation_manager" and target:
-        target_stem = _agent_tool_asset_stem(target)
-        if target_stem:
-            candidates.append(f"agent_tool_automation_manager_{target_stem}")
-    if action and manager_action:
-        action_stem = _agent_tool_asset_stem(action)
-        manager_stem = _agent_tool_asset_stem(manager_action)
-        if action_stem and manager_stem:
-            candidates.append(f"agent_tool_{action_stem}_{manager_stem}")
-
     for name in (effective, action):
-        if name in AGENT_TOOL_BUILTIN_ACTIONS:
+        if name in AGENT_TOOL_STAGE_ICON_ALIASES:
+            candidates.extend(AGENT_TOOL_STAGE_ICON_ALIASES[name])
+        if name in AGENT_TOOL_MAIN_ACTIONS:
             stem = _agent_tool_asset_stem(name)
             if stem:
                 candidates.append(f"agent_tool_{stem}")
@@ -1669,6 +1666,9 @@ class AgentToolGroupWidget(QWidget):
         if not self.tools:
             return
         self.details_expanded = not self.details_expanded
+        if not self.details_expanded:
+            for widget in getattr(self, "tool_widgets", []):
+                widget.set_expanded(False)
         self._refresh_details()
         self.updateGeometry()
 
@@ -1747,7 +1747,7 @@ class AgentToolGroupWidget(QWidget):
                 self._update_tool_widget(index, item)
         self.running = False
         if self.run_count:
-            self.status_label.setText(f"הורצו {self.run_count} כלים")
+            self.status_label.setText("הורץ כלי 1" if self.run_count == 1 else f"הורצו {self.run_count} כלים")
             self._fit_status_label_width()
         self.status_label.stop_shimmer()
         self._refresh_tool_icon()
@@ -2093,7 +2093,7 @@ class MessageBubble(QFrame):
         local_path = _local_path_from_href(href)
         if local_path:
             if not _open_local_link_path(local_path):
-                QMessageBox.warning(self, "Local link unavailable", f"Could not open:\n{local_path}")
+                QMessageBox.warning(self, "קישור מקומי לא זמין", f"לא ניתן לפתוח:\n{local_path}")
             return
         if _is_valid_display_href(href):
             webbrowser.open(href)
@@ -2520,6 +2520,9 @@ class MessageBubble(QFrame):
         if not self.agent_process_started:
             return
         self.is_expanded = not self.is_expanded
+        if not self.is_expanded:
+            for group in getattr(self, "agent_process_groups", []):
+                group.collapse_details()
         self.process_details.setVisible(self.is_expanded)
         self._update_agent_process_header()
         self._refresh_layout()
@@ -2574,6 +2577,7 @@ class ChatMessageContainer(QWidget):
         self.show_actions = bool(show_actions)
         self._tts_active = False
         self._tts_blocked = False
+        self._actions_available = not (self.show_actions and not self.is_user and not str(text or "").strip())
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2629,11 +2633,11 @@ class ChatMessageContainer(QWidget):
         if self.show_actions and not is_user:
             self.tts_btn = QPushButton()
             self.tts_btn.setFixedSize(self.ACTION_BUTTON_SIZE, self.ACTION_BUTTON_SIZE)
-            self.tts_btn.setToolTip("Read aloud")
+            self.tts_btn.setToolTip("הקרא בקול")
             self.tts_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             self.tts_btn.clicked.connect(lambda checked=False: self.tts_button_clicked.emit(self))
 
-        if not self.show_actions:
+        if not self.show_actions or not self._actions_available:
             self.actions_container.setFixedHeight(0)
             self.actions_container.hide()
         elif is_user:
@@ -2732,8 +2736,26 @@ class ChatMessageContainer(QWidget):
             ("read_aloud_icon", "speaker_icon", "tts_icon")
         )
         set_themed_button_icon(self.tts_btn, icon_names, "X" if active else "A", self.ACTION_ICON_SIZE, clear_text=True)
-        self.tts_btn.setToolTip("Stop reading" if active else "Read aloud")
+        self.tts_btn.setToolTip("עצור הקראה" if active else "הקרא בקול")
         self.tts_btn.setStyleSheet(self._button_css(active))
+
+    def set_actions_available(self, available):
+        if not self.show_actions:
+            return
+        self._actions_available = bool(available) or self.is_user
+        if not self._actions_available:
+            self.opacity_anim.stop()
+            self._actions_can_show = False
+            self.actions_opacity.setOpacity(0.0)
+            self.actions_container.setFixedHeight(0)
+            self.actions_container.hide()
+            self.updateGeometry()
+            return
+        self.actions_container.setFixedHeight(self.ACTION_ROW_HEIGHT)
+        self.actions_container.show()
+        self._actions_can_show = bool(self._entry_started)
+        self.actions_opacity.setOpacity(1.0 if self._actions_can_show else 0.0)
+        self.updateGeometry()
 
     def start_entry_animation(self):
         self._entry_pending = False
@@ -2756,8 +2778,10 @@ class ChatMessageContainer(QWidget):
 
         def cleanup():
             self.content_wrap.setGraphicsEffect(None)
-            self._actions_can_show = True
-            if self.show_actions:
+            self._actions_can_show = bool(self._actions_available)
+            if self.show_actions and self._actions_available:
+                self.actions_container.setFixedHeight(self.ACTION_ROW_HEIGHT)
+                self.actions_container.show()
                 self.actions_opacity.setOpacity(1.0)
             self.updateGeometry()
 
@@ -2768,8 +2792,10 @@ class ChatMessageContainer(QWidget):
         self._entry_pending = False
         self._entry_started = True
         self.content_wrap.setGraphicsEffect(None)
-        self._actions_can_show = True
-        if self.show_actions:
+        self._actions_can_show = bool(self._actions_available)
+        if self.show_actions and self._actions_available:
+            self.actions_container.setFixedHeight(self.ACTION_ROW_HEIGHT)
+            self.actions_container.show()
             self.actions_opacity.setOpacity(1.0)
         self.updateGeometry()
 
@@ -2789,7 +2815,7 @@ class ChatMessageContainer(QWidget):
         super().leaveEvent(event)
 
     def _set_actions_visible(self, visible):
-        if not self.show_actions:
+        if not self.show_actions or not self._actions_available:
             return
         self.opacity_anim.stop()
         self.actions_opacity.setOpacity(1.0 if self._actions_can_show else 0.0)
@@ -4015,6 +4041,8 @@ class ChatWindow(QMainWindow):
         self.current_agent_bubble = None
         self.current_agent_container = None
         self._last_user_anchor_container = None
+        self._chat_auto_scroll_enabled = False
+        self._suppress_chat_scroll_tracking = False
         self.active_tts_container = None
         self.tts_active = False
         self.tts_thread = None
@@ -4821,6 +4849,7 @@ class ChatWindow(QMainWindow):
     def _apply_autonomy_profile_to_settings(self, profile_key):
         profile = AUTONOMY_PROFILES.get(profile_key, AUTONOMY_PROFILES["balanced"])
         self.core.settings["autonomy_mode"] = profile_key
+        self.core.settings["custom_permission_profile_enabled"] = False
         self.core.settings["permission_level"] = profile["permission_level"]
         self.core.settings["policy_matrix"] = copy.deepcopy(profile["policy_matrix"])
         self.core.settings["raw_shell_requires_approval"] = bool(profile["raw_shell_requires_approval"])
@@ -4832,12 +4861,16 @@ class ChatWindow(QMainWindow):
         if not hasattr(self, "autonomy_quick_btn"):
             return
         current = str(self.core.settings.get("autonomy_mode", "balanced") or "balanced")
+        if self.core.settings.get("custom_permission_profile_enabled", False):
+            current = "custom"
         icon_names = {
             "locked_down": ("autonomy_safe", "autonomy_safe_icon", "security_safe_icon", "shield_safe_icon"),
             "balanced": ("autonomy_balanced", "autonomy_balanced_icon", "security_balanced_icon", "balance_icon"),
             "max_autonomy": ("autonomy_full", "autonomy_full_icon", "security_full_icon", "full_access_icon"),
+            "custom": ("policy_icon", "settings_icon"),
         }
         labels = dict(self._autonomy_items())
+        labels["custom"] = "מותאם אישית"
         label = labels.get(current, labels["balanced"])
         self.autonomy_quick_btn.setText(label)
         icon = themed_icon(*icon_names.get(current, ()))
@@ -5111,7 +5144,7 @@ class ChatWindow(QMainWindow):
         self._menu_actions = []
         self._add_menu_action("שיחה חדשה", self.start_new_chat, "new_chat_icon", "plus_icon")
         self._add_menu_action("היסטוריית שיחות", self.show_history_page, "chat_history_icon", "history_icon")
-        self._add_menu_action("Smarti Doctor", self.show_doctor_page, "doctor_icon", "policy_icon", "connection_test_icon")
+        self._add_menu_action("Smarti Diagnostic", self.show_doctor_page, "doctor_icon", "policy_icon", "connection_test_icon")
         self._add_menu_action("כלים", self.show_tools_page, "tools_icon", "toolbox_icon")
         self._add_menu_action("הגדרות", self.show_settings_page, "settings_icon")
         self._add_menu_action("מרכז משימות", self.show_task_center_page, "task_center_icon", "tasks_icon")
@@ -5203,6 +5236,8 @@ class ChatWindow(QMainWindow):
         self.chat_layout.setSpacing(8)
         self.scroll.setWidget(self.chat_widget)
         body_layout.addWidget(self.scroll, 0, 0)
+        self.scroll.viewport().installEventFilter(self)
+        self.scroll.verticalScrollBar().installEventFilter(self)
 
         self.welcome_overlay = QWidget()
         self.welcome_overlay.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -5404,7 +5439,7 @@ class ChatWindow(QMainWindow):
     def show_doctor_page(self):
         self._close_canvas_for_secondary_page()
         if self.doctor_page is None:
-            self.doctor_page = SmartiDoctorPage(self.core, self)
+            self.doctor_page = SmartiDiagnosticPage(self.core, self)
             self.stacked_widget.addWidget(self.doctor_page)
         self.stacked_widget.setCurrentWidget(self.doctor_page)
         self._reset_page_scrolls(self.doctor_page)
@@ -5743,8 +5778,9 @@ class ChatWindow(QMainWindow):
             if container:
                 container.bubble.set_final_text(result)
                 container.bubble.apply_theme()
+                container.set_actions_available(True)
                 container.reveal_with_entry_animation()
-                self._schedule_scroll_last_user_to_view_top(delays=(50, 160))
+                self._schedule_scroll_chat_to_bottom(delays=(50, 160), force=True)
 
     def handle_conversation_switch_requested(self, session_id):
         if self.agent_running:
@@ -5784,6 +5820,19 @@ class ChatWindow(QMainWindow):
         # The native frame margins only become final after the first show on
         # Windows. Align once more then so no edge can slip under the taskbar.
         self._schedule_canvas_taskbar_alignment()
+
+    def eventFilter(self, watched, event):
+        if hasattr(self, "scroll") and watched in (self.scroll.viewport(), self.scroll.verticalScrollBar()):
+            if event.type() in (
+                QEvent.Type.Wheel,
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.MouseMove,
+                QEvent.Type.KeyPress,
+            ):
+                if not getattr(self, "_suppress_chat_scroll_tracking", False):
+                    QTimer.singleShot(0, self._sync_chat_auto_scroll_from_position)
+        return super().eventFilter(watched, event)
 
     def _schedule_chat_width_refresh(self):
         QTimer.singleShot(0, self._refresh_chat_message_widths)
@@ -5825,28 +5874,52 @@ class ChatWindow(QMainWindow):
         if margins.bottom() != overlay_h:
             self.chat_layout.setContentsMargins(margins.left(), margins.top(), margins.right(), overlay_h)
 
-    def _scroll_container_to_view_top(self, container):
-        if not container or not hasattr(self, "scroll") or not hasattr(self, "chat_widget"):
+    def _is_chat_scrolled_to_bottom(self, threshold=28):
+        if not hasattr(self, "scroll"):
+            return True
+        bar = self.scroll.verticalScrollBar()
+        return bar.maximum() - bar.value() <= int(threshold)
+
+    def _sync_chat_auto_scroll_from_position(self):
+        if not hasattr(self, "scroll"):
+            return
+        self._chat_auto_scroll_enabled = self._is_chat_scrolled_to_bottom()
+
+    def _begin_chat_auto_scroll_for_request(self):
+        self._chat_auto_scroll_enabled = True
+
+    def _scroll_chat_to_bottom(self, force=False):
+        if not hasattr(self, "scroll") or not hasattr(self, "chat_widget"):
+            return
+        if not force and not getattr(self, "_chat_auto_scroll_enabled", False) and not self._is_chat_scrolled_to_bottom():
             return
         try:
             self._update_chat_bottom_padding()
             self.chat_widget.adjustSize()
             bar = self.scroll.verticalScrollBar()
-            y = container.mapTo(self.chat_widget, QPoint(0, 0)).y()
-            bar.setValue(max(bar.minimum(), min(y, bar.maximum())))
+            self._suppress_chat_scroll_tracking = True
+            bar.setValue(bar.maximum())
+            self._chat_auto_scroll_enabled = True
+            QTimer.singleShot(80, lambda: setattr(self, "_suppress_chat_scroll_tracking", False))
         except RuntimeError:
+            self._suppress_chat_scroll_tracking = False
             pass
         except Exception as exc:
-            logging.debug("Failed to align chat scroll anchor: %s", exc)
+            self._suppress_chat_scroll_tracking = False
+            logging.debug("Failed to scroll chat to bottom: %s", exc)
+
+    def _schedule_scroll_chat_to_bottom(self, delays=(0, 60, 180), force=False):
+        for delay in delays:
+            QTimer.singleShot(int(delay), lambda f=bool(force): self._scroll_chat_to_bottom(force=f))
+
+    def _scroll_container_to_view_top(self, container):
+        self._scroll_chat_to_bottom(force=False)
 
     def _schedule_scroll_container_to_view_top(self, container, delays=(0, 60, 180)):
-        if not container:
-            return
-        for delay in delays:
-            QTimer.singleShot(int(delay), lambda c=container: self._scroll_container_to_view_top(c))
+        self._schedule_scroll_chat_to_bottom(delays=delays, force=False)
 
     def _schedule_scroll_last_user_to_view_top(self, delays=(0, 60, 180)):
-        self._schedule_scroll_container_to_view_top(getattr(self, "_last_user_anchor_container", None), delays)
+        self._schedule_scroll_chat_to_bottom(delays=delays, force=False)
 
     def on_tts_status(self, is_playing):
         self.tts_active = bool(is_playing)
@@ -6079,7 +6152,8 @@ class ChatWindow(QMainWindow):
             container.finish_entry_without_animation()
         if is_user and anchor_user:
             self._last_user_anchor_container = container
-            self._schedule_scroll_container_to_view_top(container)
+            self._begin_chat_auto_scroll_for_request()
+            self._schedule_scroll_chat_to_bottom()
         return container
 
     def send_text(self):
@@ -6325,6 +6399,7 @@ class ChatWindow(QMainWindow):
                 self.current_agent_bubble.show()
                 self.current_agent_bubble.set_final_text(msg)
                 if self.current_agent_container:
+                    self.current_agent_container.set_actions_available(True)
                     self.current_agent_container.reveal_with_entry_animation()
             else: self.add_message(msg, is_user=False)
         else:
@@ -6333,6 +6408,7 @@ class ChatWindow(QMainWindow):
                 self.current_agent_bubble.set_final_text(response)
                 self.current_agent_bubble.set_canvas_artifacts(response_canvases)
                 if self.current_agent_container:
+                    self.current_agent_container.set_actions_available(True)
                     self.current_agent_container.reveal_with_entry_animation()
                 response_container = self.current_agent_container
             else:
@@ -6349,7 +6425,7 @@ class ChatWindow(QMainWindow):
         if self.history_page is not None:
             self.history_page.load_sessions()
         self.refresh_chat_title()
-        self._schedule_scroll_last_user_to_view_top(delays=(0, 80, 220))
+        self._schedule_scroll_chat_to_bottom(delays=(0, 80, 220), force=True)
 
     def _clear_chat_widgets(self):
         self.core.stop_speaking()

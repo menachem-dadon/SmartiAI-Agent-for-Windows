@@ -5,13 +5,13 @@ from .ui_styles import *
 from .ui_controls import *
 from .visual_canvas import web_canvas_available
 from .doctor import CheckResult, RepairAction
-from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker, EmailConnectionTestWorker, DoctorCheckWorker, DoctorRepairWorker
+from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker, EmailConnectionTestWorker, DiagnosticCheckWorker, DiagnosticRepairWorker
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
 
 
 def doctor_action_button_css(primary=False):
-    """A single 48px visual rhythm for Doctor's scan controls in every theme."""
+    """A single 48px visual rhythm for diagnostic scan controls in every theme."""
     background = (
         f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {ACCENT_COLOR}, "
         f"stop:0.52 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR})"
@@ -51,12 +51,12 @@ def doctor_stop_button_css():
     """
 
 
-class DoctorScanActionRow(QFrame):
+class DiagnosticScanActionRow(QFrame):
     """A truly equal-width RTL action row, independent of button text hints."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("DoctorScanActionRow")
+        self.setObjectName("DiagnosticScanActionRow")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setFixedHeight(50)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -88,18 +88,18 @@ class DoctorScanActionRow(QFrame):
 
 def doctor_filter_css():
     return f"""
-        QFrame#DoctorFilterControl {{
+        QFrame#DiagnosticFilterControl {{
             min-height: 48px; max-height: 48px;
             background: {GLASS_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 24px;
         }}
-        QFrame#DoctorFilterControl QPushButton {{
+        QFrame#DiagnosticFilterControl QPushButton {{
             min-height: 40px; max-height: 40px;
             background: transparent; border: none; border-radius: 20px;
             color: {MUTED_TEXT_COLOR}; margin: 0; padding: 0 14px;
             font-size: 13px; font-weight: 800; outline: none;
         }}
-        QFrame#DoctorFilterControl QPushButton:hover {{ background: {HOVER_TINT}; color: {TEXT_COLOR}; }}
-        QFrame#DoctorFilterControl QPushButton:checked {{
+        QFrame#DiagnosticFilterControl QPushButton:hover {{ background: {HOVER_TINT}; color: {TEXT_COLOR}; }}
+        QFrame#DiagnosticFilterControl QPushButton:checked {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                 stop:0 {ACCENT_COLOR}, stop:0.58 {ACCENT_PINK_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR});
             color: {ACCENT_TEXT_COLOR};
@@ -154,7 +154,10 @@ BUILTIN_TOOL_DISPLAY_LABELS = {
     "memory_manager": "ניהול זיכרון",
     "email_manager": "ניהול דוא\"ל",
     "automation_manager": "אוטומציה בדפדפן ובמחשב",
-    "extension_manager": "ניהול הרחבות, MCP ו-Skills",
+    "extension_manager": "ניהול הרחבות, MCP ומיומנויות",
+    "canvas_manager": "קנבס חזותי",
+    "browser_automation_manager": "אוטומציית דפדפן",
+    "computer_automation_manager": "אוטומציית מחשב",
     "create_python_tool": "יצירת כלי Python מותאם",
     "system_command": "הרצת פקודת מערכת",
     "git_status": "בדיקת מצב Git",
@@ -206,6 +209,7 @@ TOOL_CATEGORY_DISPLAY_LABELS = {
     "screen": "מסך",
     "tasks": "משימות רקע",
     "memory": "זיכרון",
+    "visual": "קנבס חזותי",
     "email": "דוא\"ל",
     "automation": "אוטומציה",
     "extensions": "הרחבות",
@@ -802,7 +806,7 @@ class ApiKeyRequiredDialog(QDialog):
     def api_key(self):
         return sanitize_secret_value(self.api_key_edit.secret())
 
-class SmartiDoctorPage(QWidget):
+class SmartiDiagnosticPage(QWidget):
     """RTL health centre for diagnostics, explanations, and approved repairs."""
 
     STATUS_META = {
@@ -858,8 +862,8 @@ class SmartiDoctorPage(QWidget):
 
         heading_box = QVBoxLayout()
         heading_box.setSpacing(1)
-        self.title_label = QLabel("Smarti Doctor")
-        self.title_label.setObjectName("DoctorPageTitle")
+        self.title_label = QLabel("Smarti Diagnostic")
+        self.title_label.setObjectName("DiagnosticPageTitle")
         heading_box.addWidget(self.title_label)
         self.subtitle_label = QLabel("אבחון מונחה, הסבר אנושי ותיקון רק באישור שלך")
         self.subtitle_label.setWordWrap(True)
@@ -868,13 +872,13 @@ class SmartiDoctorPage(QWidget):
 
         self.log_btn = QPushButton("יומן")
         self.log_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.log_btn.setToolTip("פתיחת יומן טכני מסונן של Smarti Doctor")
+        self.log_btn.setToolTip("פתיחת יומן טכני מסונן של Smarti Diagnostic")
         self.log_btn.clicked.connect(self.open_log)
         top_bar.addWidget(self.log_btn)
         layout.addLayout(top_bar)
 
         self.hero = QFrame()
-        self.hero.setObjectName("DoctorHero")
+        self.hero.setObjectName("DiagnosticHero")
         hero_layout = QHBoxLayout(self.hero)
         hero_layout.setContentsMargins(18, 16, 18, 16)
         hero_layout.setSpacing(14)
@@ -882,7 +886,7 @@ class SmartiDoctorPage(QWidget):
         score_box = QVBoxLayout()
         score_box.setSpacing(0)
         self.score_label = QLabel("—")
-        self.score_label.setObjectName("DoctorScore")
+        self.score_label.setObjectName("DiagnosticScore")
         self.score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         score_box.addWidget(self.score_label)
         self.score_caption = QLabel("ציון מצב")
@@ -893,11 +897,11 @@ class SmartiDoctorPage(QWidget):
         hero_text = QVBoxLayout()
         hero_text.setSpacing(5)
         self.summary_label = QLabel("עוד לא בוצעה בדיקה. אפשר להתחיל בבדיקה מהירה או מלאה.")
-        self.summary_label.setObjectName("DoctorSummary")
+        self.summary_label.setObjectName("DiagnosticSummary")
         self.summary_label.setWordWrap(True)
         hero_text.addWidget(self.summary_label)
         self.completion_label = QLabel("● מוכן לבדיקה")
-        self.completion_label.setObjectName("DoctorCompletion")
+        self.completion_label.setObjectName("DiagnosticCompletion")
         hero_text.addWidget(self.completion_label)
         self.progress_label = QLabel("בדיקה מהירה נשארת מקומית; בדיקה מלאה מאמתת חיבורי ספק ודוא\"ל. אם היא פותחת את Chrome הייעודי לצורך בדיקה, הוא נסגר מיד בסיום.")
         self.progress_label.setWordWrap(True)
@@ -910,7 +914,7 @@ class SmartiDoctorPage(QWidget):
         hero_layout.addLayout(hero_text, 1)
         layout.addWidget(self.hero)
 
-        self.scan_action_row = DoctorScanActionRow()
+        self.scan_action_row = DiagnosticScanActionRow()
         self.quick_scan_btn = QPushButton("בדיקה מהירה")
         self.quick_scan_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.quick_scan_btn.setFixedHeight(48)
@@ -939,7 +943,7 @@ class SmartiDoctorPage(QWidget):
         filter_row.addWidget(filter_hint)
         self.filter_keys = ["all", "attention", "pass", "skipped"]
         self.filter_segment = QFrame()
-        self.filter_segment.setObjectName("DoctorFilterControl")
+        self.filter_segment.setObjectName("DiagnosticFilterControl")
         self.filter_segment.setFixedHeight(48)
         filter_buttons_layout = QHBoxLayout(self.filter_segment)
         filter_buttons_layout.setContentsMargins(4, 4, 4, 4)
@@ -963,7 +967,7 @@ class SmartiDoctorPage(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
         self.content = QWidget()
-        self.content.setObjectName("DoctorResults")
+        self.content.setObjectName("DiagnosticResults")
         self.content.setStyleSheet("background: transparent;")
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(2, 2, 2, 6)
@@ -1012,7 +1016,7 @@ class SmartiDoctorPage(QWidget):
         self.scan_action_row.arrange_buttons()
         self.filter_segment.setStyleSheet(doctor_filter_css())
         self.hero.setStyleSheet(
-            f"QFrame#DoctorHero {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:0.55 {PANEL_ELEVATED_COLOR}, stop:1 {CARD_GRADIENT_END}); "
+            f"QFrame#DiagnosticHero {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:0.55 {PANEL_ELEVATED_COLOR}, stop:1 {CARD_GRADIENT_END}); "
             f"border: 1px solid {LINE_COLOR}; border-radius: 22px; }}"
             f"QProgressBar {{ background: {FIELD_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; border-radius: 5px; min-height: 8px; max-height: 8px; }}"
             f"QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {ACCENT_COLOR}, stop:1 {ACCENT_SECONDARY_COLOR}); border-radius: 4px; }}"
@@ -1063,10 +1067,11 @@ class SmartiDoctorPage(QWidget):
         visible = self._visible_results()
         if not visible:
             empty = QFrame()
+            empty.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
             empty.setStyleSheet(card_css(18, 22))
             empty_layout = QVBoxLayout(empty)
             empty_layout.setSpacing(6)
-            label = QLabel("Smarti Doctor מוכן לבדיקה")
+            label = QLabel("Smarti Diagnostic מוכן לבדיקה")
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             label.setStyleSheet(section_title_css(16))
             empty_layout.addWidget(label)
@@ -1084,17 +1089,20 @@ class SmartiDoctorPage(QWidget):
     def _result_card(self, result):
         status_text, glyph, color = self.STATUS_META.get(result.status, self.STATUS_META["skipped"])
         card = QFrame()
-        card.setObjectName("DoctorResultCard")
+        card.setObjectName("DiagnosticResultCard")
+        card.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         card.setStyleSheet(
-            f"QFrame#DoctorResultCard {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:1 {CARD_GRADIENT_END}); "
+            f"QFrame#DiagnosticResultCard {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {GLASS_STRONG_COLOR}, stop:1 {CARD_GRADIENT_END}); "
             f"border: 1px solid {color}; border-radius: 18px; }}"
             "QLabel { background: transparent; border: none; }"
         )
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 12, 14, 13)
         layout.setSpacing(8)
+        layout.setDirection(QBoxLayout.Direction.TopToBottom)
 
         header = QHBoxLayout()
+        header.setDirection(QBoxLayout.Direction.RightToLeft)
         header.setSpacing(8)
         category_icon = QLabel()
         category_icon.setFixedSize(26, 26)
@@ -1110,6 +1118,7 @@ class SmartiDoctorPage(QWidget):
         title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 800; border: none; background: transparent;")
         header.addWidget(title, 1)
         pill = QLabel(f" {glyph} {status_text} ")
+        pill.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
         pill.setStyleSheet(f"color: {color}; background: {ACCENT_TINT if result.status == 'pass' else ACCENT_TINT_STRONG}; border: 1px solid {color}; border-radius: 11px; padding: 3px 7px; font-size: 11px; font-weight: 800;")
         header.addWidget(pill)
@@ -1133,6 +1142,7 @@ class SmartiDoctorPage(QWidget):
         layout.addWidget(details)
 
         footer = QHBoxLayout()
+        footer.setDirection(QBoxLayout.Direction.RightToLeft)
         footer.setSpacing(8)
         details_btn = QPushButton("פרטים טכניים")
         details_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1174,17 +1184,17 @@ class SmartiDoctorPage(QWidget):
         if self.repair_worker is not None and self.repair_worker.isRunning():
             return
         if bool(getattr(self.main_window, "agent_running", False)):
-            QMessageBox.information(self, "Smarti Doctor", "כדי למנוע התנגשות עם משימת סוכן פעילה, יש להמתין לסיום המשימה לפני הבדיקה.")
+            QMessageBox.information(self, "Smarti Diagnostic", "כדי למנוע התנגשות עם משימת סוכן פעילה, יש להמתין לסיום המשימה לפני הבדיקה.")
             return
         self.results = []
         self.log_path = ""
         self.progress_bar.setValue(0)
-        self.summary_label.setText("Smarti Doctor בודק את המערכת…")
+        self.summary_label.setText("Smarti Diagnostic בודק את המערכת…")
         self.progress_label.setText("מתחיל בדיקה מלאה…" if include_network else "מתחיל בדיקה מהירה ומקומית…")
         self._set_scan_state("running")
         self._set_busy(True)
         self.render_results()
-        self.doctor_worker = DoctorCheckWorker(self.core, include_network=include_network)
+        self.doctor_worker = DiagnosticCheckWorker(self.core, include_network=include_network)
         self.doctor_worker.progress_signal.connect(self._on_scan_progress)
         self.doctor_worker.result_signal.connect(self._on_scan_result)
         self.doctor_worker.finished_signal.connect(self._on_scan_finished)
@@ -1225,9 +1235,9 @@ class SmartiDoctorPage(QWidget):
         self._set_busy(False)
         self._set_scan_state("failed")
         self.progress_label.setText("הבדיקה נעצרה בגלל תקלה פנימית.")
-        self.summary_label.setText("לא ניתן להשלים את הבדיקה. אפשר לנסות שוב או לפתוח את יומן Doctor.")
+        self.summary_label.setText("לא ניתן להשלים את הבדיקה. אפשר לנסות שוב או לפתוח את יומן Diagnostic.")
         self.doctor_worker = None
-        QMessageBox.warning(self, "Smarti Doctor", f"לא ניתן להשלים את הבדיקה:\n{message}")
+        QMessageBox.warning(self, "Smarti Diagnostic", f"לא ניתן להשלים את הבדיקה:\n{message}")
 
     def _refresh_summary(self):
         counts = {status: sum(1 for item in self.results if item.status == status) for status in self.STATUS_META}
@@ -1255,12 +1265,12 @@ class SmartiDoctorPage(QWidget):
 
     def request_repair(self, action):
         if self.doctor_worker is not None and self.doctor_worker.isRunning():
-            QMessageBox.information(self, "Smarti Doctor", "המתיני לסיום הבדיקה לפני הפעלת תיקון.")
+            QMessageBox.information(self, "Smarti Diagnostic", "המתיני לסיום הבדיקה לפני הפעלת תיקון.")
             return
         if bool(getattr(self.main_window, "agent_running", False)):
-            QMessageBox.information(self, "Smarti Doctor", "כדי למנוע התנגשות עם משימת סוכן פעילה, יש להמתין לסיום המשימה לפני תיקון.")
+            QMessageBox.information(self, "Smarti Diagnostic", "כדי למנוע התנגשות עם משימת סוכן פעילה, יש להמתין לסיום המשימה לפני תיקון.")
             return
-        if action.id in {"open_settings", "open_tools", "open_data_folder", "open_task_center", "open_doctor_log"}:
+        if action.id in {"open_settings", "open_tools", "open_data_folder", "open_task_center", "open_diagnostic_log", "open_doctor_log"}:
             self._open_navigation_action(action.id)
             return
         title = f"אישור תיקון: {action.title_he}"
@@ -1272,7 +1282,7 @@ class SmartiDoctorPage(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self._set_repair_busy(True, action.title_he)
-        self.repair_worker = DoctorRepairWorker(self.core, action.id)
+        self.repair_worker = DiagnosticRepairWorker(self.core, action.id)
         self.repair_worker.finished_signal.connect(self._on_repair_finished)
         self.repair_worker.failed_signal.connect(self._on_repair_failed)
         self.repair_worker.start()
@@ -1291,14 +1301,14 @@ class SmartiDoctorPage(QWidget):
     def _on_repair_finished(self, message):
         self._set_repair_busy(False)
         self.repair_worker = None
-        QMessageBox.information(self, "Smarti Doctor", str(message))
+        QMessageBox.information(self, "Smarti Diagnostic", str(message))
         self.start_scan(False)
 
     def _on_repair_failed(self, message):
         self._set_repair_busy(False)
         self.repair_worker = None
         self.progress_label.setText("התיקון לא הושלם. לא בוצע ניסיון נוסף באופן אוטומטי.")
-        QMessageBox.warning(self, "Smarti Doctor", f"התיקון לא הושלם:\n{message}")
+        QMessageBox.warning(self, "Smarti Diagnostic", f"התיקון לא הושלם:\n{message}")
 
     def _open_navigation_action(self, action_id):
         if action_id == "open_settings":
@@ -1309,13 +1319,17 @@ class SmartiDoctorPage(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(USER_DATA_DIR))
         elif action_id == "open_task_center":
             self.main_window.show_task_center_page()
-        elif action_id == "open_doctor_log":
+        elif action_id in {"open_diagnostic_log", "open_doctor_log"}:
             self.open_log()
 
     def open_log(self):
-        path = self.log_path or os.path.join(USER_DATA_DIR, "smarti_doctor.log")
+        path = self.log_path or os.path.join(USER_DATA_DIR, "smarti_diagnostic.log")
         if not os.path.exists(path):
-            QMessageBox.information(self, "Smarti Doctor", "אין עדיין יומן Doctor. הריצי בדיקה כדי ליצור יומן טכני מסונן.")
+            legacy_path = os.path.join(USER_DATA_DIR, "smarti_doctor.log")
+            if os.path.exists(legacy_path):
+                path = legacy_path
+        if not os.path.exists(path):
+            QMessageBox.information(self, "Smarti Diagnostic", "אין עדיין יומן Diagnostic. הריצי בדיקה כדי ליצור יומן טכני מסונן.")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
@@ -1865,6 +1879,35 @@ class DeveloperTracePage(QWidget):
         self.text.setPlainText("\n".join(lines))
 
 class ToolsSettingsPage(QWidget):
+    def _make_header_icon_button(self, icon_names, tooltip, callback, fallback="+"):
+        button = QPushButton()
+        button.setFixedSize(36, 36)
+        button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        button.setToolTip(str(tooltip or ""))
+        button.setStyleSheet(icon_button_css(36))
+        set_themed_button_icon(button, icon_names, fallback, 22, clear_text=True)
+        button.clicked.connect(callback)
+        return button
+
+    def _section_header_row(self, title, action_tooltip="", action_callback=None):
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        row.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 12, 0, 0)
+        row_layout.setSpacing(8)
+        if action_callback is not None:
+            row_layout.addWidget(
+                self._make_header_icon_button(("plus_icon", "add_icon"), action_tooltip, action_callback, "+"),
+                0,
+                Qt.AlignmentFlag.AlignVCenter,
+            )
+        row_layout.addStretch(1)
+        label = QLabel(title)
+        label.setStyleSheet(section_title_css(16))
+        row_layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
+
     def __init__(self, core, main_window):
         super().__init__(getattr(main_window, "stacked_widget", None))
         self.core = core
@@ -1879,39 +1922,18 @@ class ToolsSettingsPage(QWidget):
         title.setStyleSheet(page_title_css(18))
         top_bar.addWidget(title)
         top_bar.addStretch()
+        refresh_btn = self._make_header_icon_button(
+            ("check_updates_icon", "update_icon", "refresh_icon"),
+            "רענון קטלוג הכלים",
+            self.refresh_tools_page,
+            "R",
+        )
+        top_bar.addWidget(refresh_btn)
         layout.addLayout(top_bar)
-        hint = QLabel("השינויים במסך זה נשמרים מיד.")
+        hint = QLabel("כאן מנהלים אילו יכולות זמינות לסמארטי. התקנה ידנית זמינה מכפתור + ליד האזור המתאים.")
         hint.setWordWrap(True)
         hint.setStyleSheet(muted_label_css(12))
         layout.addWidget(hint)
-
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
-        refresh_btn = QPushButton("רענון")
-        refresh_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        refresh_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
-        refresh_btn.clicked.connect(self.refresh_tools_page)
-        action_row.addWidget(refresh_btn)
-
-        install_skill_btn = QPushButton("התקנת Skill")
-        install_skill_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        install_skill_btn.setStyleSheet(PRIMARY_BUTTON_CSS)
-        install_skill_btn.clicked.connect(self.install_skill_manually)
-        action_row.addWidget(install_skill_btn)
-
-        install_python_btn = QPushButton("התקנת כלי Python")
-        install_python_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        install_python_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
-        install_python_btn.clicked.connect(self.install_python_tool_manually)
-        action_row.addWidget(install_python_btn)
-
-        install_mcp_btn = QPushButton("הוספת MCP")
-        install_mcp_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        install_mcp_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
-        install_mcp_btn.clicked.connect(self.install_mcp_manually)
-        action_row.addWidget(install_mcp_btn)
-        action_row.addStretch()
-        layout.addLayout(action_row)
         
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1928,9 +1950,7 @@ class ToolsSettingsPage(QWidget):
         self.checkbox_kinds = {}
         config = self.core.settings.get("tools_config", {})
         
-        lbl1 = QLabel("כלים מובנים (Built-in):")
-        lbl1.setStyleSheet(section_title_css(16) + " margin-top: 10px;")
-        self.form.addRow(lbl1)
+        self.form.addRow(self._section_header_row("כלים מובנים"))
         
         public_tools = [tool for tool in PUBLIC_BUILTIN_TOOLS if tool in BUILTIN_TOOL_SCHEMAS]
         grouped_tools = {}
@@ -1961,9 +1981,7 @@ class ToolsSettingsPage(QWidget):
             cb.stateChanged.connect(lambda _=None, key=tool: self._apply_tool_checkbox(key))
             self.form.addRow(cb)
             
-        lbl2 = QLabel("כלים חיצוניים (custom_tools):")
-        lbl2.setStyleSheet(section_title_css(16) + " margin-top: 20px;")
-        self.form.addRow(lbl2)
+        self.form.addRow(self._section_header_row("כלים חיצוניים", "התקנת כלי Python", self.install_python_tool_manually))
         
         has_custom = False
         if os.path.exists(TOOLS_DIR):
@@ -1984,10 +2002,7 @@ class ToolsSettingsPage(QWidget):
             lbl_no_tools.setStyleSheet(muted_label_css(13))
             self.form.addRow(lbl_no_tools)
 
-        # --- הוספת אזור למיומנויות MCP ---
-        lbl3 = QLabel("מיומנויות MCP מותקנות:")
-        lbl3.setStyleSheet(section_title_css(16) + " margin-top: 20px;")
-        self.form.addRow(lbl3)
+        self.form.addRow(self._section_header_row("כלי MCP מותקנים", "הוספת כלי MCP", self.install_mcp_manually))
         
         has_mcp = False
         if os.path.exists(MCP_TOOLS_DIR):
@@ -2008,17 +2023,16 @@ class ToolsSettingsPage(QWidget):
             lbl_no_mcp.setStyleSheet(muted_label_css(13))
             self.form.addRow(lbl_no_mcp)
 
-        lbl4 = QLabel("מיומנויות (Skills) מותקנות:")
-        lbl4.setStyleSheet(section_title_css(16) + " margin-top: 20px;")
-        self.form.addRow(lbl4)
+        self.form.addRow(self._section_header_row("מיומנויות מותקנות", "התקנת מיומנות", self.install_skill_manually))
         has_skills = False
         registry = getattr(self.core, "skill_registry", {}) or self.core._load_skill_registry()
         for name, spec in sorted(registry.items()):
             has_skills = True
             key = f"skill_{name}"
             handler = str(spec.get("handler") or "instructions")
-            kind_label = "מדריך" if handler == "instructions" else ("Skill עם Python handler" if handler == "handler.py" else "Skill מובנה")
-            cb = SmartiCheckBox(f"{name} ({kind_label}, {spec.get('source', 'local')})")
+            kind_label = "מדריך" if handler == "instructions" else ("מפעיל Python" if handler == "handler.py" else "מיומנות מובנית")
+            source_label = self._skill_source_label(spec.get("source", "local"))
+            cb = SmartiCheckBox(f"{name} - {kind_label} - {source_label}")
             cb.setChecked(self.core._skill_enabled(name))
             cb.setStyleSheet(CHECKBOX_CSS)
             self.checkboxes[key] = cb
@@ -2029,7 +2043,7 @@ class ToolsSettingsPage(QWidget):
             else:
                 self.form.addRow(self._external_artifact_row(cb, "skill", name))
         if not has_skills:
-            lbl_no_skills = QLabel("אין מיומנויות (Skills) מותקנות.")
+            lbl_no_skills = QLabel("אין מיומנויות מותקנות.")
             lbl_no_skills.setStyleSheet(muted_label_css(13))
             self.form.addRow(lbl_no_skills)
 
@@ -2064,17 +2078,17 @@ class ToolsSettingsPage(QWidget):
             QMessageBox.warning(self, title, str(result))
 
     def install_skill_manually(self):
-        choice, ok = QInputDialog.getItem(self, "התקנת Skill", "מקור התקנה:", ["קובץ ZIP", "תיקייה"], 0, False)
+        choice, ok = QInputDialog.getItem(self, "התקנת מיומנות", "מקור התקנה:", ["קובץ ZIP", "תיקייה"], 0, False)
         if not ok:
             return
         if choice == "תיקייה":
-            path = QFileDialog.getExistingDirectory(self, "בחירת תיקיית Skill", os.path.expanduser("~"))
+            path = QFileDialog.getExistingDirectory(self, "בחירת תיקיית מיומנות", os.path.expanduser("~"))
         else:
-            path, _ = QFileDialog.getOpenFileName(self, "בחירת קובץ Skill ZIP", os.path.expanduser("~"), "Skill ZIP (*.zip)")
+            path, _ = QFileDialog.getOpenFileName(self, "בחירת קובץ מיומנות ZIP", os.path.expanduser("~"), "Skill ZIP (*.zip)")
         if not path:
             return
         result = self.core.install_local_skill_package(path)
-        self._show_install_result("התקנת Skill", result)
+        self._show_install_result("התקנת מיומנות", result)
 
     def install_python_tool_manually(self):
         path, _ = QFileDialog.getOpenFileName(self, "בחירת כלי Python", os.path.expanduser("~"), "Python Tool (*.py *.pyw *.zip)")
@@ -2101,6 +2115,13 @@ class ToolsSettingsPage(QWidget):
 
     def _tool_label(self, tool_name):
         return BUILTIN_TOOL_DISPLAY_LABELS.get(tool_name, str(tool_name).replace("_", " "))
+
+    def _skill_source_label(self, source):
+        return {
+            "builtin": "מובנה",
+            "local": "מקומי",
+            "clawhub": "ClawHub",
+        }.get(str(source or "local").strip().lower(), "מקומי")
 
     def _external_artifact_row(self, checkbox, kind, name):
         label_text = checkbox.text()
@@ -2139,7 +2160,7 @@ class ToolsSettingsPage(QWidget):
         return {
             "custom": "כלי Python מותאם",
             "mcp": "חבילת MCP",
-            "skill": "Skill",
+            "skill": "מיומנות",
         }.get(kind, "פריט חיצוני")
 
     def _delete_confirmation_details(self, kind, name):
@@ -2288,8 +2309,10 @@ class SettingsPage(QWidget):
 
     def handle_back(self):
         if hasattr(self, "settings_stack") and self.settings_stack.currentWidget() is not self.settings_home_page:
-            self.settings_stack.setCurrentWidget(self.settings_home_page)
-            self._reset_scrolls_in_widget(self.settings_home_page)
+            current = self.settings_stack.currentWidget()
+            target = getattr(self, "_settings_back_targets", {}).get(current, self.settings_home_page)
+            self.settings_stack.setCurrentWidget(target)
+            self._reset_scrolls_in_widget(target)
         else:
             self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page)
 
@@ -2600,13 +2623,14 @@ class SettingsPage(QWidget):
         popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         popup.setStyleSheet(
             f"QFrame#SettingsInfoPopup {{ background: {MENU_BG_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-            "border-radius: 0px; padding: 8px; }}"
+            "border-radius: 0px; padding: 10px; }}"
         )
         layout = QVBoxLayout(popup)
-        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setContentsMargins(12, 10, 12, 10)
         self._info_popup_label = QLabel()
         self._info_popup_label.setWordWrap(True)
-        self._info_popup_label.setFixedWidth(280)
+        self._info_popup_label.setFixedWidth(320)
+        self._info_popup_label.setContentsMargins(2, 2, 2, 2)
         self._info_popup_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
         self._info_popup_label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 12px; line-height: 1.35; background: transparent;")
         layout.addWidget(self._info_popup_label)
@@ -2618,6 +2642,10 @@ class SettingsPage(QWidget):
             return
         self._ensure_info_popup()
         self._info_popup_label.setText(text)
+        label_width = self._info_popup_label.width() or 320
+        label_height = self._info_popup_label.heightForWidth(label_width)
+        if label_height > 0:
+            self._info_popup_label.setMinimumHeight(label_height + 8)
         self._info_popup_label.adjustSize()
         self._info_popup.adjustSize()
         self._info_popup.resize(self._info_popup.sizeHint())
@@ -3491,7 +3519,14 @@ class SettingsPage(QWidget):
         self.permission_combo.setItemIconNames(0, ("autonomy_safe", "autonomy_safe_icon", "security_safe_icon", "shield_safe_icon"))
         self.permission_combo.setItemIconNames(1, ("autonomy_balanced", "autonomy_balanced_icon", "security_balanced_icon", "balance_icon"))
         self.permission_combo.setItemIconNames(2, ("autonomy_full", "autonomy_full_icon", "security_full_icon", "full_access_icon"))
-        self.permission_combo.setCurrentIndex(max(0, min(2, self.core.settings.get("permission_level", 1) - 1)))
+        custom_permissions_enabled = bool(self.core.settings.get("custom_permission_profile_enabled", False))
+        if custom_permissions_enabled:
+            self.permission_combo.clearSelection(emit=False)
+        else:
+            self.permission_combo.setCurrentIndex(max(0, min(2, self.core.settings.get("permission_level", 2) - 1)))
+        self.custom_permissions_cb = SmartiCheckBox("התאמה אישית של הרשאות")
+        self.custom_permissions_cb.setChecked(custom_permissions_enabled)
+        self.custom_permissions_cb.setStyleSheet(CHECKBOX_CSS)
 
         self.autonomy_combo = SegmentedControl()
         self.autonomy_options = [
@@ -3558,7 +3593,7 @@ class SettingsPage(QWidget):
         self.mcp_allowed_dirs = DirectoryPicker(
             self.core.settings.get("mcp_allowed_directories", [APP_DIR]),
             allow_multiple=True,
-            dialog_title="בחר תיקייה לכלים חיצוניים",
+            dialog_title="בחר תיקייה לכלי MCP",
             default_path=APP_DIR
         )
         self.sandbox_root_picker = DirectoryPicker(
@@ -3585,7 +3620,7 @@ class SettingsPage(QWidget):
         self.raw_shell_approval_cb = SmartiCheckBox("דרוש אישור לפקודות Shell בסיכון גבוה")
         self.raw_shell_approval_cb.setChecked(self.core.settings.get("raw_shell_requires_approval", True))
         self.raw_shell_approval_cb.setStyleSheet(CHECKBOX_CSS)
-        self.marketplace_approval_cb = SmartiCheckBox("דרוש אישור להתקנת MCP ו-Skills")
+        self.marketplace_approval_cb = SmartiCheckBox("דרוש אישור להתקנת MCP ומיומנויות")
         self.marketplace_approval_cb.setChecked(self.core.settings.get("marketplace_install_requires_approval", True))
         self.marketplace_approval_cb.setStyleSheet(CHECKBOX_CSS)
 
@@ -3595,16 +3630,16 @@ class SettingsPage(QWidget):
         self.computer_control_cb = SmartiCheckBox("שליטה במחשב")
         self.computer_control_cb.setChecked(self.core.settings.get("enable_computer_control", False))
         self.computer_control_cb.setStyleSheet(CHECKBOX_CSS)
-        self.mcp_cb = SmartiCheckBox("כלים חיצוניים (MCP)")
+        self.mcp_cb = SmartiCheckBox("חבילות MCP")
         self.mcp_cb.setChecked(self.core.settings.get("enable_mcp_clawhub", False))
         self.mcp_cb.setStyleSheet(CHECKBOX_CSS)
-        self.skills_beta_cb = SmartiCheckBox("Skills בטא")
+        self.skills_beta_cb = SmartiCheckBox("מיומנויות")
         self.skills_beta_cb.setChecked(self.core.settings.get("enable_skills_beta", True))
         self.skills_beta_cb.setStyleSheet(CHECKBOX_CSS)
         self.tool_search_catalog_cb = SmartiCheckBox("קטלוג חיפוש כלים חכם")
         self.tool_search_catalog_cb.setChecked(self.core.settings.get("enable_tool_search_catalog", True))
         self.tool_search_catalog_cb.setStyleSheet(CHECKBOX_CSS)
-        self.skills_load_watch_cb = SmartiCheckBox("רענון אוטומטי של Skills וכלים")
+        self.skills_load_watch_cb = SmartiCheckBox("רענון אוטומטי של מיומנויות וכלים")
         self.skills_load_watch_cb.setChecked(self.core.settings.get("skills_load_watch", True))
         self.skills_load_watch_cb.setStyleSheet(CHECKBOX_CSS)
         self.skill_unknown_scan_combo = SegmentedControl()
@@ -3690,7 +3725,7 @@ class SettingsPage(QWidget):
         self.voice_beep_cb.setChecked(bool(self.core.settings.get("voice_beep_enabled", True)))
         self.voice_beep_cb.setStyleSheet(CHECKBOX_CSS)
 
-        self.insecure_ssl_cb = SmartiCheckBox("תאימות SSL לכלים חיצוניים")
+        self.insecure_ssl_cb = SmartiCheckBox("תאימות SSL לכלי MCP")
         self.insecure_ssl_cb.setChecked(self.core.settings.get("allow_insecure_ssl_compat", True))
         self.insecure_ssl_cb.setStyleSheet(CHECKBOX_CSS)
         self.cloud_upload_cb = SmartiCheckBox("אישור לפני שליחת נתונים למודל חיצוני")
@@ -3699,7 +3734,7 @@ class SettingsPage(QWidget):
         self.write_outside_dirs_approval_cb = SmartiCheckBox("אישור לפני כתיבה מחוץ לתיקיית הפלט")
         self.write_outside_dirs_approval_cb.setChecked(self.core.settings.get("write_outside_allowed_dirs_requires_approval", True))
         self.write_outside_dirs_approval_cb.setStyleSheet(CHECKBOX_CSS)
-        self.mcp_pin_cb = SmartiCheckBox("דרוש גרסה קבועה לכלים חיצוניים")
+        self.mcp_pin_cb = SmartiCheckBox("דרוש גרסה קבועה לכלי MCP")
         self.mcp_pin_cb.setChecked(self.core.settings.get("mcp_require_pinned_versions", True))
         self.mcp_pin_cb.setStyleSheet(CHECKBOX_CSS)
 
@@ -3707,7 +3742,7 @@ class SettingsPage(QWidget):
         self.tool_timeout = QLineEdit(str(self.core.settings.get("tool_timeout_seconds", 120)))
         self.mcp_timeout = QLineEdit(str(self.core.settings.get("mcp_timeout_seconds", 60)))
         self.max_chars_edit = QLineEdit(str(self.core.settings.get("max_tool_output_chars", 100000)))
-        self.total_timeout = QLineEdit(str(self.core.settings.get("max_total_task_seconds", 900)))
+        self.total_timeout = QLineEdit(str(self.core.settings.get("max_total_task_seconds", 3600)))
         self.permission_notification_timeout = QLineEdit(str(self.core.settings.get("permission_notification_timeout_seconds", 0)))
         budgets = self.core.settings.get("budgets", {})
         self.daily_token_budget = QLineEdit(str(budgets.get("daily_token_budget", 0)))
@@ -4018,6 +4053,7 @@ class SettingsPage(QWidget):
         ai_page, ai = self._make_scroll_page()
         safety_page, safety = self._make_scroll_page()
         policy_page, policy_layout = self._make_scroll_page()
+        self._settings_back_targets = {policy_page: safety_page}
         tools_page, tools = self._make_scroll_page()
         app_page, app_settings = self._make_scroll_page()
         advanced_page, advanced = self._make_scroll_page()
@@ -4047,7 +4083,7 @@ class SettingsPage(QWidget):
 
         home.addWidget(self._nav_card("מודלי AI וספקים", "ספק מודל, מודל פעיל, מפתחות גישה וחיפוש אינטרנט", ai_page))
         home.addWidget(self._nav_card("אבטחה ופרטיות", "פרופיל בטיחות, אישורים, ארגז חול וקבצים", safety_page))
-        home.addWidget(self._nav_card("כלים ותקשורת", "דפדפן, מחשב, אימייל, MCP ו-Skills", tools_page))
+        home.addWidget(self._nav_card("כלים ותקשורת", "דפדפן, מחשב, אימייל, MCP ומיומנויות", tools_page))
         home.addWidget(self._nav_card("קול, מראה ומערכת", "ערכת נושא, הקראה, האזנה ועדכונים", app_page))
         self.advanced_home_card = self._nav_card("מתקדם ומפתחים", "זמני המתנה, תקציבים, תאימות, Trace ולוגים", advanced_page)
         home.addWidget(self.advanced_home_card)
@@ -4094,12 +4130,14 @@ class SettingsPage(QWidget):
 
         self._add_internal_back(safety, "אבטחה ופרטיות")
         self._add_field("פרופיל בטיחות", self.permission_combo, safety, "קובע כמה סמארטי יכול לפעול לבד: בטוח מבקש יותר אישורים, מאוזן מתאים לרוב העבודה, ואוטונומי מאפשר יותר רצף פעולה.", keywords="safe balanced autonomous full access permission autonomy approval security")
-        policy_btn = QPushButton("התאמה אישית של הרשאות")
-        policy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        policy_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
-        set_themed_button_icon(policy_btn, ("policy_icon", "security_icon", "settings_icon"), policy_btn.text(), 18, clear_text=False)
-        policy_btn.clicked.connect(lambda: self._set_settings_section(policy_page))
-        self._add_field("טבלת יכולות מפורטת", policy_btn, safety, "לוח מתקדם לקביעה פרטנית אם סמארטי ישאל, ירשה או יחסום כל יכולת.", keywords="matrix capability policy allow ask deny granular custom permissions", advanced=True)
+        self._add_checkbox(self.custom_permissions_cb, safety, "מאפשר להגדיר הרשאות פרטניות במקום לבחור פרופיל בטיחות כללי.", keywords="custom permissions profile policy matrix granular allow ask deny הרשאות מותאמות אישית פרופיל מדיניות יכולות שאל חסום אפשר")
+        self.policy_btn = QPushButton("הגדרת התאמה אישית")
+        self.policy_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.policy_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        set_themed_button_icon(self.policy_btn, ("policy_icon", "security_icon", "settings_icon"), self.policy_btn.text(), 18, clear_text=False)
+        self.policy_btn.clicked.connect(lambda: self._set_settings_section(policy_page))
+        self.policy_field_container = self._add_field("טבלת יכולות מפורטת", self.policy_btn, safety, "לוח מתקדם לקביעה פרטנית אם סמארטי ישאל, ירשה או יחסום כל יכולת.", keywords="matrix capability policy allow ask deny granular custom permissions טבלת יכולות הרשאות מותאמות אישית מדיניות שאל חסום אפשר")
+        self.policy_field_container.setVisible(self.custom_permissions_cb.isChecked())
         self._add_section_header("ארגז חול", safety)
         self._add_checkbox(self.sandbox_cb, safety, "מגביל את סמארטי לתיקייה אחת. מצב זה מתאים לעבודה בטוחה על פרויקט או תיקייה מוגדרת.", keywords="sandbox project folder safe workspace")
         self._add_field("תיקיית ארגז החול", self.sandbox_root_picker, safety, "בחר את התיקייה שבה סמארטי רשאי לעבוד כאשר ארגז החול פעיל.", keywords="workspace root allowed folder path")
@@ -4110,16 +4148,17 @@ class SettingsPage(QWidget):
         self._add_checkbox(self.cloud_upload_cb, safety, "כאשר האפשרות פעילה, סמארטי יבקש אישור לפני שליחת קבצים, צילום מסך או אימייל למודל חיצוני.", keywords="cloud upload external model privacy screenshot email")
         self._add_checkbox(self.mcp_pin_cb, safety, "מחייב התקנת כלים חיצוניים בגרסה קבועה, כדי למנוע שינוי לא צפוי בהתנהגות הכלי.", keywords="pinned versions mcp supply chain", advanced=True)
         self._add_checkbox(self.raw_shell_approval_cb, safety, "גם במצב אוטונומי, פקודות מערכת בסיכון גבוה יעצרו לאישור משתמש.", keywords="shell command dangerous powershell cmd terminal approval", advanced=True)
-        self._add_checkbox(self.marketplace_approval_cb, safety, "מונע התקנה שקטה של קוד חיצוני חדש ממאגרי MCP או Skills.", keywords="marketplace install approval mcp skills external code", advanced=True)
+        self._add_checkbox(self.marketplace_approval_cb, safety, "מונע התקנה שקטה של קוד חיצוני חדש ממאגרי MCP או מיומנויות.", keywords="marketplace install approval mcp skills external code מיומנויות התקנה קוד חיצוני", advanced=True)
         safety.addStretch()
 
         self._add_internal_back(policy_layout, "שליטה מתקדמת ביכולות")
         self._add_hint("הפרופיל הראשי מספיק לרוב השימושים. כאן אפשר לדייק יכולות בודדות בלי להפוך את כל מסך האבטחה למסובך.", policy_layout)
         for cap, label in CAPABILITY_LABELS.items():
-            self._add_field(label, self.policy_combos[cap], policy_layout, "בחר אם סמארטי יוכל להשתמש ביכולת הזו, יבקש אישור בכל פעם, או יחסום אותה לחלוטין.", keywords=f"capability policy matrix allow ask deny {cap}", advanced=True)
+            self._add_field(label, self.policy_combos[cap], policy_layout, "בחר אם סמארטי יוכל להשתמש ביכולת הזו, יבקש אישור בכל פעם, או יחסום אותה לחלוטין.", keywords=f"capability policy matrix allow ask deny {cap}")
         policy_layout.addStretch()
 
         self._add_internal_back(tools, "כלים ותקשורת")
+        self._add_section_header("כלים מקומיים ותצוגות", tools)
         self._add_checkbox(
             self.browser_auto_cb,
             tools,
@@ -4127,13 +4166,14 @@ class SettingsPage(QWidget):
             keywords="browser web automation chrome smarti profile page click"
         )
         self._add_checkbox(self.computer_control_cb, tools, "קריאת עץ הנגישות של Windows ופעולה על רכיבים מזוהים.", keywords="computer control windows accessibility ui automation mouse keyboard")
-        self._add_checkbox(self.mcp_cb, tools, "שימוש בכלים חיצוניים שמרחיבים את סמארטי, בכפוף להרשאות.", keywords="mcp external tools extensions")
-        self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows beta instructions", advanced=True)
         self._add_checkbox(self.tool_search_catalog_cb, tools, "מאפשר לסוכן לחפש בקטלוג הכלים הפנימי לפני בחירה, התקנה או יצירת כלי חדש.", keywords="tool search catalog tools python mcp skills selection", advanced=True)
-        self._add_checkbox(self.skills_load_watch_cb, tools, "מרענן את קטלוג הכלים, MCP ו-Skills כאשר נוספו או שונו קבצים מקומיים.", keywords="refresh watch reload tools mcp skills filesystem", advanced=True)
-        self._add_field("מדיניות סריקה לא חד-משמעית של Skill", self.skill_unknown_scan_combo, tools, "מה לעשות כאשר ClawHub לא מחזיר תשובת סריקה חד-משמעית: לאפשר התקנה עם אזהרה או לחסום.", keywords="skill scan clawhub safety unknown policy", advanced=True)
         self._add_checkbox(self.web_canvas_cb, tools, "מוסיף קנבס HTML מקומי ומבודד לצד הצ'אט עבור בקשות חזותיות מפורשות בלבד. רכיב WebEngine נדרש; הקנבס חוסם רשת, קבצים חיצוניים, הורדות וחלונות קופצים.", keywords="canvas visual dashboard graph form chart mermaid webengine html interactive", advanced=True)
         self._add_checkbox(self.web_canvas_remote_images_cb, tools, "מאפשר רק טעינת תמונות HTTPS שנבחרו לקנבס. ניווט, הורדות, קבצים, חלונות קופצים ושאר בקשות הרשת נותרים חסומים.", keywords="canvas remote image https web image visual", advanced=True)
+        self._add_section_header("מיומנויות", tools)
+        self._add_checkbox(self.skills_beta_cb, tools, "תהליכי עבודה שמכוונים את סמארטי איך להשתמש בכלים קיימים וב-MCP.", keywords="skills workflows instructions", advanced=True)
+        self._add_field("מדיניות סריקה לא חד-משמעית של מיומנות", self.skill_unknown_scan_combo, tools, "מה לעשות כאשר ClawHub לא מחזיר תשובת סריקה חד-משמעית: לאפשר התקנה עם אזהרה או לחסום.", keywords="skill skills מיומנות מיומנויות scan clawhub safety unknown policy סריקה מדיניות", advanced=True)
+        self._add_section_header("MCP", tools)
+        self._add_checkbox(self.mcp_cb, tools, "שימוש בחבילות MCP שמרחיבות את סמארטי, בכפוף להרשאות.", keywords="mcp packages protocol external tools extensions")
         # Google Drive settings section is intentionally hidden for now.
         self._add_section_header("אימייל", tools)
         self._add_field("כתובת אימייל", self.email, tools, "כתובת האימייל שממנה סמארטי יקרא או ישלח הודעות, אם אישרת שימוש באימייל.", keywords="email address account username login")
@@ -4182,7 +4222,7 @@ class SettingsPage(QWidget):
         self._add_checkbox(self.insecure_ssl_cb, advanced, "הגדרת תאימות SSL שמרפה אימות תעודות עבור סביבות שבהן חיבורי HTTPS נחסמים או מוחלפים, למשל בסינוני רשת. פעיל כברירת מחדל כדי לצמצם תקלות חיבור בסביבות מסוננות.", keywords="ssl certificate verify insecure network filter proxy", advanced=True)
         self._add_field("זמן המתנה לפקודות מחשב (שניות)", self.cmd_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לפקודת מערכת לפני עצירה.", keywords="command timeout shell seconds", advanced=True)
         self._add_field("זמן המתנה לכלים מותאמים אישית (שניות)", self.tool_timeout, advanced, "משך הזמן המקסימלי להרצת כלי מותאם אישית לפני שסמארטי מפסיק אותו.", keywords="custom tool timeout seconds", advanced=True)
-        self._add_field("זמן המתנה לכלים חיצוניים (שניות)", self.mcp_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לתשובה מכלי חיצוני.", keywords="mcp timeout external tool seconds", advanced=True)
+        self._add_field("זמן המתנה לכלי MCP (שניות)", self.mcp_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לתשובה מכלי MCP.", keywords="mcp timeout external tool seconds", advanced=True)
         self._add_field("זמן כולל מקסימלי למשימה (שניות)", self.total_timeout, advanced, "מונע מלולאת הסוכן להיתקע זמן רב מדי בבקשה אחת.", keywords="task timeout total max seconds", advanced=True)
         self._add_field("זמן הצגת התראת הרשאה (שניות)", self.permission_notification_timeout, advanced, "0 פירושו ללא הגבלה: כאשר סמארטי ברקע, חלון ההרשאה הרגיל ייפתח בסמארטי וגם תופיע התראת Windows, והם יישארו מסונכרנים עד שתאשר או תדחה. מספר חיובי מבטל רק את התראת Windows אחרי הזמן הזה; חלון ההרשאה הרגיל נשאר פתוח.", keywords="permission approval notification timeout unlimited toast dialog", advanced=True)
         self._add_field("מגבלת תווים בתוצאת כלי", self.max_chars_edit, advanced, "מגביל את אורך פלט הכלים שנשלח חזרה למודל, כדי לשמור על יציבות ועל עלויות נמוכות.", keywords="tool output chars limit context token", advanced=True)
@@ -4208,7 +4248,7 @@ class SettingsPage(QWidget):
         self._add_checkbox(self.developer_trace_cb, advanced, "שומר Trace פנימי של תכנון, בחירת כלים, תוצאות ביניים ותשובה סופית.", keywords="developer trace debug planning tool calls", advanced=True)
         self._add_checkbox(self.audit_log_cb, advanced, "שומר יומן אודיט מקומי של החלטות הרשאה, התחלת כלים וסיום כלים.", keywords="audit log policy tool execution", advanced=True)
         self._add_checkbox(self.redact_logs_cb, advanced, "מסתיר מפתחות, סיסמאות ופרטים רגישים מקובצי הלוג ככל האפשר.", keywords="redact logs secrets password privacy", advanced=True)
-        self._add_field("תיקיות גישה לכלים חיצוניים (MCP)", self.mcp_allowed_dirs, advanced, "שורשי תיקיות שמותר להעביר לכלי MCP כתיאום גישה. זו אינה מגבלת כתיבה של סמארטי; כאשר ארגז חול פעיל, ארגז החול גובר על ההגדרה הזו.", keywords="mcp allowed directories folders roots external tools", advanced=True)
+        self._add_field("תיקיות גישה לכלי MCP", self.mcp_allowed_dirs, advanced, "שורשי תיקיות שמותר להעביר לכלי MCP כתיאום גישה. זו אינה מגבלת כתיבה של סמארטי; כאשר ארגז חול פעיל, ארגז החול גובר על ההגדרה הזו.", keywords="mcp allowed directories folders roots external tools", advanced=True)
         refresh_logs_btn = QPushButton("רענן לוגים")
         refresh_logs_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
         refresh_logs_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -4235,7 +4275,7 @@ class SettingsPage(QWidget):
         log_switcher = QGridLayout()
         log_switcher.setHorizontalSpacing(8)
         log_switcher.setVerticalSpacing(8)
-        for index, (key, label) in enumerate([("agent", "Agent Log"), ("trace", "Runtime Trace"), ("audit", "Audit Log"), ("skills", "Skills Log")]):
+        for index, (key, label) in enumerate([("agent", "יומן סוכן"), ("trace", "יומן זמן ריצה"), ("audit", "יומן אבטחה"), ("skills", "יומן מיומנויות")]):
             btn = QPushButton(label)
             btn.setMinimumWidth(118)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -4259,7 +4299,7 @@ class SettingsPage(QWidget):
         self.developer_log_text.setPalette(log_palette)
         self.developer_log_text.setStyleSheet(LOG_TEXT_CSS)
         developer_log_panel_layout.addWidget(self.developer_log_text)
-        self._add_field("צפייה בלוגים", developer_log_panel, advanced, "צפייה ב-Agent Log, Runtime Trace, Audit Log ו-Skills Log מתוך מסך ההגדרות.", keywords="logs trace audit skills agent developer debug", advanced=True)
+        self._add_field("צפייה בלוגים", developer_log_panel, advanced, "צפייה ביומני הסוכן, זמן הריצה, האבטחה והמיומנויות מתוך מסך ההגדרות.", keywords="logs trace audit skills agent developer debug יומן לוגים מיומנויות אבטחה", advanced=True)
         advanced.addStretch()
         self.load_developer_logs()
 
@@ -4471,7 +4511,7 @@ class SettingsPage(QWidget):
             self.sandbox_cb, self.sandbox_read_outside_cb, self.redact_logs_cb, self.audit_log_cb,
             self.developer_trace_cb, self.raw_shell_approval_cb, self.marketplace_approval_cb,
             self.browser_auto_cb, self.computer_control_cb, self.mcp_cb, self.skills_beta_cb,
-            self.tool_search_catalog_cb, self.skills_load_watch_cb,
+            self.tool_search_catalog_cb,
             self.web_canvas_cb, self.web_canvas_remote_images_cb,
             self.update_auto_cb,
             self.tts_cb, self.tts_voice_cb, self.insecure_ssl_cb, self.cloud_upload_cb,
@@ -4480,6 +4520,7 @@ class SettingsPage(QWidget):
             self.voice_dynamic_energy_cb, self.voice_beep_cb
         ]:
             cb.stateChanged.connect(lambda _=None: self._schedule_autosave())
+        self.custom_permissions_cb.stateChanged.connect(lambda _=None: self.on_custom_permissions_change())
 
         self.api_key_edit.secretEdited.connect(self._on_api_key_edited)
         self.api_key_edit.editingFinished.connect(self._validate_current_api_key_before_save)
@@ -4588,7 +4629,10 @@ class SettingsPage(QWidget):
         self._schedule_autosave()
 
     def _permission_profile_key(self):
-        return {1: "locked_down", 2: "balanced", 3: "max_autonomy"}.get(self.permission_combo.currentIndex() + 1, "balanced")
+        index = self.permission_combo.currentIndex()
+        if index < 0:
+            return "custom"
+        return {1: "locked_down", 2: "balanced", 3: "max_autonomy"}.get(index + 1, "balanced")
 
     def _autonomy_profile_key(self):
         idx = max(0, min(self.autonomy_combo.currentIndex(), len(self.autonomy_options) - 1))
@@ -4726,6 +4770,32 @@ class SettingsPage(QWidget):
         self.cloud_upload_cb.setChecked(bool(profile["require_approval_for_cloud_upload"]))
         self.write_outside_dirs_approval_cb.setChecked(bool(profile["write_outside_allowed_dirs_requires_approval"]))
 
+    def _set_custom_permissions_ui(self, enabled):
+        enabled = bool(enabled)
+        if hasattr(self, "policy_field_container"):
+            self.policy_field_container.setVisible(enabled)
+        if enabled:
+            self.permission_combo.clearSelection(emit=False)
+        elif self.permission_combo.currentIndex() < 0:
+            self.permission_combo.setCurrentIndex(1, emit=False)
+
+    def on_custom_permissions_change(self):
+        if getattr(self, "_suppress_autosave", False):
+            return
+        enabled = self.custom_permissions_cb.isChecked()
+        self._suppress_autosave = True
+        try:
+            self._set_custom_permissions_ui(enabled)
+            if not enabled:
+                profile_key = self._permission_profile_key()
+                profile_keys = [key for key, _ in self.autonomy_options]
+                if profile_key in profile_keys:
+                    self.autonomy_combo.setCurrentIndex(profile_keys.index(profile_key))
+                self._apply_profile_to_widgets(profile_key)
+        finally:
+            self._suppress_autosave = False
+        self._schedule_autosave()
+
     def on_autonomy_profile_change(self):
         if getattr(self, "_suppress_autosave", False):
             return
@@ -4741,9 +4811,14 @@ class SettingsPage(QWidget):
         if getattr(self, "_suppress_autosave", False):
             return
         profile_key = self._permission_profile_key()
+        if profile_key == "custom":
+            return
         profile_keys = [key for key, _ in self.autonomy_options]
         self._suppress_autosave = True
         try:
+            if hasattr(self, "custom_permissions_cb"):
+                self.custom_permissions_cb.setChecked(False)
+                self._set_custom_permissions_ui(False)
             if profile_key in profile_keys:
                 self.autonomy_combo.setCurrentIndex(profile_keys.index(profile_key))
             self._apply_profile_to_widgets(profile_key)
@@ -4762,7 +4837,9 @@ class SettingsPage(QWidget):
         self.core.settings["api_mode"] = provider
         reasoning_effort = str(self.codex_reasoning_effort_combo.currentData() or "medium").strip().lower()
         self.core.settings["codex_reasoning_effort"] = reasoning_effort if reasoning_effort in {"low", "medium", "high", "xhigh"} else "medium"
-        self.core.settings["autonomy_mode"] = self._autonomy_profile_key()
+        custom_permissions_enabled = bool(self.custom_permissions_cb.isChecked())
+        self.core.settings["custom_permission_profile_enabled"] = custom_permissions_enabled
+        self.core.settings["autonomy_mode"] = "custom" if custom_permissions_enabled else self._autonomy_profile_key()
         self.core.settings.setdefault("ui_preferences", {})["theme_mode"] = self._theme_mode_key()
         if selected_model and selected_model != "טוען מודלים...":
             self.core.settings[f"selected_{provider}_model"] = selected_model
@@ -4813,7 +4890,7 @@ class SettingsPage(QWidget):
         self.core.settings["enable_mcp_clawhub"] = self.mcp_cb.isChecked()
         self.core.settings["enable_skills_beta"] = self.skills_beta_cb.isChecked()
         self.core.settings["enable_tool_search_catalog"] = self.tool_search_catalog_cb.isChecked()
-        self.core.settings["skills_load_watch"] = self.skills_load_watch_cb.isChecked()
+        self.core.settings["skills_load_watch"] = True
         scan_policy_index = max(0, min(self.skill_unknown_scan_combo.currentIndex(), len(self.skill_unknown_scan_options) - 1))
         self.core.settings["skill_install_unknown_scan_policy"] = self.skill_unknown_scan_options[scan_policy_index][0]
         self.core.settings["enable_visual_surfaces"] = self.web_canvas_cb.isChecked()
@@ -4832,7 +4909,14 @@ class SettingsPage(QWidget):
         self.core.settings["enable_developer_trace"] = self.developer_trace_cb.isChecked()
         self.core.settings["raw_shell_requires_approval"] = self.raw_shell_approval_cb.isChecked()
         self.core.settings["marketplace_install_requires_approval"] = self.marketplace_approval_cb.isChecked()
-        self.core.settings["permission_level"] = self.permission_combo.currentIndex() + 1
+        if custom_permissions_enabled:
+            try:
+                previous_level = int(before.get("permission_level", 2) or 2)
+            except Exception:
+                previous_level = 2
+            self.core.settings["permission_level"] = previous_level if previous_level in {1, 2, 3} else 2
+        else:
+            self.core.settings["permission_level"] = max(0, self.permission_combo.currentIndex()) + 1
         action_by_index = {0: "allow", 1: "ask", 2: "deny"}
         self.core.settings["policy_matrix"] = {cap: action_by_index.get(combo.currentIndex(), "ask") for cap, combo in self.policy_combos.items()}
         self.core.settings["require_approval_for_cloud_upload"] = self.cloud_upload_cb.isChecked()
@@ -4846,7 +4930,7 @@ class SettingsPage(QWidget):
         self.core.settings["default_output_dir"] = default_output_dir
         self.core.settings["allowed_write_dirs"] = [default_output_dir]
         self.core.settings["mcp_allowed_directories"] = self.mcp_allowed_dirs.paths() or [APP_DIR]
-        for key, widget, default in [("command_timeout_seconds", self.cmd_timeout, 60), ("tool_timeout_seconds", self.tool_timeout, 120), ("mcp_timeout_seconds", self.mcp_timeout, 60), ("max_tool_output_chars", self.max_chars_edit, 100000), ("max_total_task_seconds", self.total_timeout, 900)]:
+        for key, widget, default in [("command_timeout_seconds", self.cmd_timeout, 60), ("tool_timeout_seconds", self.tool_timeout, 120), ("mcp_timeout_seconds", self.mcp_timeout, 60), ("max_tool_output_chars", self.max_chars_edit, 100000), ("max_total_task_seconds", self.total_timeout, 3600)]:
             try: self.core.settings[key] = max(5, int(widget.text().strip()))
             except: self.core.settings[key] = default
         try:
@@ -4968,7 +5052,7 @@ class SettingsPage(QWidget):
             "agent": "Agent Log",
             "trace": "Runtime Trace",
             "audit": "Audit Log",
-            "skills": "Skills Log"
+            "skills": "יומן מיומנויות"
         }.get(getattr(self, "selected_developer_log", "agent"), "Agent Log")
 
     def clear_selected_developer_log(self):
@@ -5021,8 +5105,8 @@ class SettingsPage(QWidget):
             lines = ["=== Audit Log ==="]
             lines.extend(self._format_audit_tail(180))
         elif selected == "skills":
-            lines = ["=== Skills Log ==="]
-            lines.extend(self._tail_file(SKILL_LOG_FILE, 180) or ["אין עדיין רשומות Skills."])
+            lines = ["=== יומן מיומנויות ==="]
+            lines.extend(self._tail_file(SKILL_LOG_FILE, 180) or ["אין עדיין רשומות מיומנויות."])
         else:
             self.selected_developer_log = "agent"
             lines = ["=== Agent Log ==="]
@@ -5165,7 +5249,7 @@ class AboutPage(QWidget):
             ("קנבס חי", "יצירת תוצרים חזותיים ואינטראקטיביים מקומיים: דשבורדים, תרשימים, טפסים, מצגות קטנות וממשקי בדיקה."),
             ("אינטרנט ודפדפן", "חיפוש מידע עדכני, קריאת אתרים ואוטומציה בדפדפן ייעודי כאשר המשימה דורשת פעולה באתר."),
             ("משימות רקע ואימייל", "תזכורות, בדיקות מחזוריות, חיפוש וקריאת מיילים, טיוטות, שליחה וניהול קבצים מצורפים."),
-            ("בטיחות, זיכרון ו-Doctor", "פרופיל בטיחות, טבלת יכולות פרטנית, זיכרון RAG מקומי, נתוני שימוש ובדיקות Doctor לתקלות נפוצות."),
+            ("בטיחות, זיכרון ו-Diagnostic", "פרופיל בטיחות, טבלת יכולות פרטנית, זיכרון RAG מקומי, נתוני שימוש ובדיקות Diagnostic לתקלות נפוצות."),
         ]
         for heading, body in feature_items:
             features.addWidget(self._feature_card(heading, body))
@@ -5177,7 +5261,7 @@ class AboutPage(QWidget):
             "בנה קנבס עם תרשים, טבלת נתונים או טופס קטן מתוך מידע שנאסף בשיחה.",
             "בדוק פעם ביום תחזית, עומסי תנועה, מחיר מוצר או תיבת מייל וסכם רק כשיש שינוי חשוב.",
             "סרוק תיקייה של קבלות או מסמכים, מצא כפילויות, ארגן שמות קבצים והכן תקציר.",
-            "אבחן למה כלי, מודל, דפדפן או קנבס לא עובדים דרך Smarti Doctor לפני שמתחילים לחפש ידנית.",
+            "אבחן למה כלי, מודל, דפדפן או קנבס לא עובדים דרך Smarti Diagnostic לפני שמתחילים לחפש ידנית.",
         ]
         for example in examples:
             content_layout.addWidget(self._example_row(example))
