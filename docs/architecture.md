@@ -8,8 +8,12 @@ implementation is split into focused domain mixins under `smarti/agent/`.
 ## Agent Runtime Modules
 
 - `smarti/core.py`: compatibility facade that composes `SmartiCore`.
+- `smarti/agent/shared.py`: shared imports and integration dependencies used by
+  the domain mixins.
 - `smarti/agent/lifecycle.py`: startup, extension catalog refresh, trust state,
   basic paths, and small runtime helpers.
+- `smarti/agent/browser_runtime.py`: persistent browser process helpers used by
+  browser automation.
 - `smarti/agent/execution_policy.py`: cancellation, subprocess execution,
   sandbox and autonomy policy checks, tool observations, and schema validation.
 - `smarti/agent/tool_calls.py`: tool-call normalization, validation, batching,
