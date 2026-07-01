@@ -154,6 +154,98 @@ function Assert-ReleaseLayout {
     }
 }
 
+function Assert-PathInside {
+    param(
+        [Parameter(Mandatory = $true)][string]$Parent,
+        [Parameter(Mandatory = $true)][string]$Child,
+        [string]$Description = "path"
+    )
+    $parentFull = [System.IO.Path]::GetFullPath($Parent).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $childFull = [System.IO.Path]::GetFullPath($Child)
+    if (-not $childFull.StartsWith($parentFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to operate on $Description outside expected root. Root: $parentFull Path: $childFull"
+    }
+}
+
+function Assert-AssetSync {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceAssetsDir,
+        [Parameter(Mandatory = $true)][string]$DestinationAssetsDir
+    )
+    if (-not (Test-Path -LiteralPath $SourceAssetsDir)) {
+        throw "Missing source assets directory: $SourceAssetsDir"
+    }
+    if (-not (Test-Path -LiteralPath $DestinationAssetsDir)) {
+        throw "Missing release assets directory: $DestinationAssetsDir"
+    }
+
+    $sourceFiles = @(Get-ChildItem -LiteralPath $SourceAssetsDir -Recurse -File)
+    $destinationFiles = @(Get-ChildItem -LiteralPath $DestinationAssetsDir -Recurse -File)
+    $sourceByRelative = @{}
+    foreach ($file in $sourceFiles) {
+        $relative = Get-RelativePath -Root $SourceAssetsDir -Path $file.FullName
+        $sourceByRelative[$relative] = $file
+    }
+    $destinationByRelative = @{}
+    foreach ($file in $destinationFiles) {
+        $relative = Get-RelativePath -Root $DestinationAssetsDir -Path $file.FullName
+        $destinationByRelative[$relative] = $file
+    }
+
+    $problems = New-Object System.Collections.Generic.List[string]
+    foreach ($relative in ($sourceByRelative.Keys | Sort-Object)) {
+        if (-not $destinationByRelative.ContainsKey($relative)) {
+            $problems.Add("missing: $relative")
+            continue
+        }
+        $sourceFile = $sourceByRelative[$relative]
+        $destinationFile = $destinationByRelative[$relative]
+        if ($sourceFile.Length -ne $destinationFile.Length) {
+            $problems.Add("size mismatch: $relative")
+            continue
+        }
+        $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceFile.FullName).Hash
+        $destinationHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $destinationFile.FullName).Hash
+        if ($sourceHash -ne $destinationHash) {
+            $problems.Add("hash mismatch: $relative")
+        }
+    }
+    foreach ($relative in ($destinationByRelative.Keys | Sort-Object)) {
+        if (-not $sourceByRelative.ContainsKey($relative)) {
+            $problems.Add("extra: $relative")
+        }
+    }
+
+    if ($problems.Count -gt 0) {
+        $details = ($problems | Select-Object -First 40) -join [Environment]::NewLine
+        if ($problems.Count -gt 40) {
+            $details += [Environment]::NewLine + "... $($problems.Count - 40) more asset sync problems"
+        }
+        throw "Release assets are not synchronized with source assets.$([Environment]::NewLine)$details"
+    }
+    Write-Host "Asset sync OK: $($sourceFiles.Count) files copied to release layout."
+}
+
+function Sync-ReleaseAssets {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceAssetsDir,
+        [Parameter(Mandatory = $true)][string]$DistDir
+    )
+    $internalDir = Join-Path $DistDir "_internal"
+    $destinationAssetsDir = Join-Path $internalDir "assets"
+    Assert-PathInside -Parent $DistDir -Child $destinationAssetsDir -Description "release assets directory"
+    if (-not (Test-Path -LiteralPath $SourceAssetsDir)) {
+        throw "Missing source assets directory: $SourceAssetsDir"
+    }
+    New-Item -ItemType Directory -Force -Path $internalDir | Out-Null
+    if (Test-Path -LiteralPath $destinationAssetsDir) {
+        Remove-Item -LiteralPath $destinationAssetsDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $destinationAssetsDir | Out-Null
+    Copy-Item -Path (Join-Path $SourceAssetsDir "*") -Destination $destinationAssetsDir -Recurse -Force
+    Assert-AssetSync -SourceAssetsDir $SourceAssetsDir -DestinationAssetsDir $destinationAssetsDir
+}
+
 function Assert-InstallerPathBudget {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
@@ -232,6 +324,8 @@ try {
 if (-not (Test-Path (Join-Path $DistDir "SmartiAI.exe"))) {
     throw "PyInstaller output is missing SmartiAI.exe in $DistDir"
 }
+
+Sync-ReleaseAssets -SourceAssetsDir (Join-Path $RepoRoot "assets") -DistDir $DistDir
 
 $DistRuntime = Join-Path $DistDir "runtime"
 if (Test-Path $DistRuntime) { Remove-Item -LiteralPath $DistRuntime -Recurse -Force }

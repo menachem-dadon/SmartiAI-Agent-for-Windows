@@ -877,6 +877,14 @@ def application_stylesheet():
         QMenu::icon {{
             padding-right: 4px;
         }}
+        QMenu::indicator {{
+            width: 18px;
+            height: 18px;
+            padding-right: 4px;
+        }}
+        QMenu::indicator:checked {{
+            image: url("{CHECKMARK_SVG_PATH}");
+        }}
         QMenu::item:selected {{
             background-color: {ACCENT_TINT_STRONG};
             color: {TEXT_COLOR};
@@ -926,6 +934,8 @@ def menu_stylesheet():
         }}
         QMenu::item {{ padding: 9px 30px 9px 10px; border-radius: 0px; min-width: 118px; }}
         QMenu::icon {{ padding-right: 4px; }}
+        QMenu::indicator {{ width: 18px; height: 18px; padding-right: 4px; }}
+        QMenu::indicator:checked {{ image: url("{CHECKMARK_SVG_PATH}"); }}
         QMenu::item:selected {{ background-color: {ACCENT_TINT_STRONG}; color: {TEXT_COLOR}; }}
         QMenu::separator {{ height: 1px; background: {SOFT_LINE_COLOR}; margin: 7px 10px; }}
     """

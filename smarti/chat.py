@@ -4672,6 +4672,11 @@ class ChatWindow(QMainWindow):
             "reasoning_selected",
             "codex_reasoning_selected_icon",
             "codex_reasoning_selected",
+            CHECKMARK_SVG_PATH,
+            "checkmark_icon",
+            "checkmark",
+            "save_done_icon",
+            "save_done",
         )
 
     def _add_codex_reasoning_menu_items(self, menu):
@@ -4682,7 +4687,10 @@ class ChatWindow(QMainWindow):
         check_icon = self._reasoning_selected_icon()
         for value, label in self._codex_reasoning_options():
             action = menu.addAction(label)
-            if value == current_effort and not check_icon.isNull():
+            selected = value == current_effort
+            action.setCheckable(True)
+            action.setChecked(selected)
+            if selected and not check_icon.isNull():
                 action.setIcon(check_icon)
                 action.setIconVisibleInMenu(True)
             action.triggered.connect(lambda checked=False, effort=value: self._select_codex_reasoning_effort(effort))
@@ -5165,7 +5173,7 @@ class ChatWindow(QMainWindow):
         self._menu_actions = []
         self._add_menu_action("שיחה חדשה", self.start_new_chat, "new_chat_icon", "plus_icon")
         self._add_menu_action("היסטוריית שיחות", self.show_history_page, "chat_history_icon", "history_icon")
-        self._add_menu_action("Smarti Diagnostic", self.show_doctor_page, "doctor_icon", "policy_icon", "connection_test_icon")
+        self._add_menu_action("Smarti Diagnostic", self.show_doctor_page, "doctor_icon")
         self._add_menu_action("כלים", self.show_tools_page, "tools_icon", "toolbox_icon")
         self._add_menu_action("הגדרות", self.show_settings_page, "settings_icon")
         self._add_menu_action("מרכז משימות", self.show_task_center_page, "task_center_icon", "tasks_icon")

@@ -6,7 +6,7 @@ SmartiAI Agent for Windows is a local-first desktop AI agent for practical work 
 
 Smarti is designed to help operate the computer while keeping the user in control. Sensitive actions are visible, configurable, and can require approval before they run.
 
-Current release target: `V0.81.0`.
+Current release target: `V0.81.1`.
 
 ## Highlights
 
@@ -114,7 +114,7 @@ The repeatable release recipe lives in `scripts/` and `packaging/`. Build artifa
 For the current release:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.81.0
+.\scripts\build_release.ps1 -Version 0.81.1
 ```
 
 The build script:
@@ -125,28 +125,29 @@ The build script:
 - prepares private Python and Node runtimes;
 - runs `pip check` for the build environment and private runtime;
 - packages the app with PyInstaller;
+- force-resynchronizes `assets\` into the bundled `_internal\assets` folder and verifies the copied files by SHA-256;
 - validates the release layout and installer path lengths;
 - creates a portable ZIP and, when Inno Setup 6 is installed, a setup EXE.
 
 For a fully clean rebuild:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.81.0 -Clean -ForceRuntime
+.\scripts\build_release.ps1 -Version 0.81.1 -Clean -ForceRuntime
 ```
 
 Release outputs are written to `release\`:
 
-- `SmartiAI-Agent-for-Windows-0.81.0-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.81.0-win-x64-portable.zip`
+- `SmartiAI-Agent-for-Windows-0.81.1-Setup.exe`
+- `SmartiAI-Agent-for-Windows-0.81.1-win-x64-portable.zip`
 
 ## Automatic Updates
 
 Smarti checks GitHub Releases, compares the latest release tag against `APP_VERSION`, and downloads the correct Windows asset for the current install type.
 
-For `V0.81.0`, publish a GitHub release tagged `V0.81.0` or `0.81.0` and attach:
+For `V0.81.1`, publish a GitHub release tagged `V0.81.1` or `0.81.1` and attach:
 
-- `SmartiAI-Agent-for-Windows-0.81.0-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.81.0-win-x64-portable.zip`
+- `SmartiAI-Agent-for-Windows-0.81.1-Setup.exe`
+- `SmartiAI-Agent-for-Windows-0.81.1-win-x64-portable.zip`
 
 Installed copies prefer a setup EXE. Portable copies prefer a portable ZIP. When GitHub provides a release asset digest, Smarti uses it for SHA-256 verification.
 
@@ -207,7 +208,7 @@ SmartiAI Agent for Windows הוא סוכן AI שולחני לעבודה מעשי
 
 סמארטי נועד לעזור להפעיל את המחשב תוך שמירה על שליטה מלאה של המשתמש. פעולות רגישות מוצגות בצורה שקופה, ניתנות להגדרה, ויכולות לדרוש אישור לפני הרצה.
 
-יעד הגרסה הנוכחי: `V0.81.0`.
+יעד הגרסה הנוכחי: `V0.81.1`.
 
 ## יכולות מרכזיות
 
@@ -314,7 +315,7 @@ pythonw smarti_core.pyw
 לגרסה הנוכחית:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.81.0
+.\scripts\build_release.ps1 -Version 0.81.1
 ```
 
 סקריפט הבנייה:
@@ -331,22 +332,22 @@ pythonw smarti_core.pyw
 לבנייה נקייה לחלוטין:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.81.0 -Clean -ForceRuntime
+.\scripts\build_release.ps1 -Version 0.81.1 -Clean -ForceRuntime
 ```
 
 התוצרים נכתבים אל `release\`:
 
-- `SmartiAI-Agent-for-Windows-0.81.0-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.81.0-win-x64-portable.zip`
+- `SmartiAI-Agent-for-Windows-0.81.1-Setup.exe`
+- `SmartiAI-Agent-for-Windows-0.81.1-win-x64-portable.zip`
 
 ## עדכונים אוטומטיים
 
 סמארטי בודק את GitHub Releases, משווה את תגית הגרסה האחרונה מול `APP_VERSION`, ומוריד את קובץ Windows המתאים לסוג ההתקנה הנוכחי.
 
-עבור `V0.81.0`, יש לפרסם GitHub Release עם תגית `V0.81.0` או `0.81.0` ולצרף:
+עבור `V0.81.1`, יש לפרסם GitHub Release עם תגית `V0.81.1` או `0.81.1` ולצרף:
 
-- `SmartiAI-Agent-for-Windows-0.81.0-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.81.0-win-x64-portable.zip`
+- `SmartiAI-Agent-for-Windows-0.81.1-Setup.exe`
+- `SmartiAI-Agent-for-Windows-0.81.1-win-x64-portable.zip`
 
 עותקים מותקנים יעדיפו קובץ Setup. עותקים ניידים יעדיפו ZIP נייד. כאשר GitHub מספק digest לקובץ release, סמארטי משתמש בו לאימות SHA-256.
 

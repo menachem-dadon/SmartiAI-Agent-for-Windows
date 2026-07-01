@@ -8,6 +8,7 @@ from unittest import mock
 
 from smarti import doctor
 from smarti import core as smarti_core
+from smarti import ui_styles
 from smarti.browser_control import HELPER_RESULT_PREFIX, SmartiBrowserController, UNTRUSTED_BROWSER_PREFIX
 from smarti.codex_signin import CodexConnectionStatus
 from smarti.config import BROWSER_AUTOMATION_ACTIONS, BUILTIN_TOOL_SCHEMAS, DEFAULT_POLICY_MATRIX, DEFAULT_SETTINGS
@@ -387,6 +388,34 @@ class SmartiDiagnosticTests(unittest.TestCase):
         self.assertIn("extensions.custom_tools", result_ids)
         self.assertIn("extensions.skills", result_ids)
         self.assertNotIn("data.sqlite", result_ids)
+
+
+class ThemedDiagnosticIconTests(unittest.TestCase):
+    def setUp(self):
+        ui_styles.set_ui_theme("dark")
+
+    def test_diagnostic_icon_resolves_to_doctor_asset(self):
+        path = ui_styles.themed_asset_path("doctor_icon")
+
+        self.assertTrue(path)
+        self.assertEqual(os.path.basename(path), "doctor_icon_dark.png")
+
+    def test_codex_reasoning_check_icon_resolves_before_checkmark_fallback(self):
+        path = ui_styles.themed_asset_path(
+            "reasoning_effort_selected_icon",
+            "reasoning_effort_selected",
+            ui_styles.CHECKMARK_SVG_PATH,
+            "checkmark",
+        )
+
+        self.assertTrue(path)
+        self.assertEqual(os.path.basename(path), "reasoning_effort_selected_dark.png")
+
+    def test_menu_checked_indicator_uses_theme_checkmark(self):
+        stylesheet = ui_styles.menu_stylesheet()
+
+        self.assertIn("QMenu::indicator:checked", stylesheet)
+        self.assertIn(ui_styles.CHECKMARK_SVG_PATH, stylesheet)
 
 
 class _BrowserAutomationCore:

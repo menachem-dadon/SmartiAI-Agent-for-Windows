@@ -857,7 +857,7 @@ class SmartiDiagnosticPage(QWidget):
         self.page_icon = QLabel()
         self.page_icon.setFixedSize(38, 38)
         self.page_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        set_themed_label_icon(self.page_icon, ("doctor_icon", "policy_icon", "connection_test_icon"), "✦", 30)
+        set_themed_label_icon(self.page_icon, ("doctor_icon",), "✦", 30)
         top_bar.addWidget(self.page_icon)
 
         heading_box = QVBoxLayout()
