@@ -90,6 +90,49 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.assertNotIn("CODEX_API_KEY", environment)
         self.assertNotIn("CODEX_ACCESS_TOKEN", environment)
 
+    def test_rate_limits_are_normalized_to_remaining_five_hour_and_weekly_quota(self):
+        response = {
+            "rateLimits": {
+                "planType": "fallback",
+                "primary": {"usedPercent": 99, "windowDurationMins": 300},
+                "secondary": {"usedPercent": 99, "windowDurationMins": 10080},
+            },
+            "rateLimitsByLimitId": {
+                "codex": {
+                    "planType": "plus",
+                    "primary": {
+                        "usedPercent": 37,
+                        "windowDurationMins": 300,
+                        "resetsAt": 1900000000,
+                    },
+                    "secondary": {
+                        "usedPercent": 6,
+                        "windowDurationMins": 10080,
+                        "resetsAt": 1901000000,
+                    },
+                }
+            },
+        }
+
+        quota = self.provider.normalize_rate_limits(response)
+
+        self.assertEqual(quota["plan_type"], "plus")
+        self.assertEqual(quota["five_hour"]["remaining_percent"], 63)
+        self.assertEqual(quota["five_hour"]["window_minutes"], 300)
+        self.assertEqual(quota["weekly"]["remaining_percent"], 94)
+        self.assertEqual(quota["weekly"]["window_minutes"], 10080)
+
+    def test_rate_limit_percentages_are_clamped_and_legacy_snapshot_is_supported(self):
+        quota = self.provider.normalize_rate_limits({
+            "rateLimits": {
+                "primary": {"usedPercent": -8, "windowDurationMins": 300},
+                "secondary": {"usedPercent": 140, "windowDurationMins": 10080},
+            }
+        })
+
+        self.assertEqual(quota["five_hour"]["remaining_percent"], 100)
+        self.assertEqual(quota["weekly"]["remaining_percent"], 0)
+
     def test_smarti_codex_cli_override_is_used_verbatim(self):
         path = r"C:\Users\יהודית סיידון\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe"
         with mock.patch.dict(os.environ, {"SMARTI_CODEX_CLI": path}):

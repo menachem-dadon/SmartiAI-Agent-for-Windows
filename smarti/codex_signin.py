@@ -11,10 +11,12 @@ import json
 import logging
 import os
 from pathlib import Path
+import queue
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from typing import Iterable
 
@@ -305,6 +307,163 @@ class CodexSignInProvider:
                 process.wait(timeout=2)
             except Exception:
                 pass
+
+    def _app_server_request(self, method: str, params=None, timeout: int = 12):
+        """Send one read-only request through the official Codex App Server."""
+        command = [self._find_executable(), "app-server", "--stdio"]
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        output_queue = queue.Queue()
+        stderr_lines = []
+        process = None
+
+        def read_stdout(stream):
+            try:
+                for line in iter(stream.readline, ""):
+                    output_queue.put(line)
+            finally:
+                output_queue.put(None)
+
+        def read_stderr(stream):
+            for line in iter(stream.readline, ""):
+                stderr_lines.append(line)
+                if len(stderr_lines) > 80:
+                    del stderr_lines[:20]
+
+        def send(payload):
+            process.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            process.stdin.flush()
+
+        def wait_for_response(request_id, deadline):
+            while time.monotonic() < deadline:
+                if process.poll() is not None and output_queue.empty():
+                    break
+                wait_for = max(0.01, min(0.25, deadline - time.monotonic()))
+                try:
+                    line = output_queue.get(timeout=wait_for)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break
+                try:
+                    message = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                if message.get("id") != request_id:
+                    continue
+                if message.get("error"):
+                    error = message.get("error") or {}
+                    detail = error.get("message") if isinstance(error, dict) else str(error)
+                    raise CodexSignInError(f"Codex App Server rejected {method}: {detail}")
+                return message.get("result")
+            if process.poll() is not None:
+                detail = self._redact_cli_output("".join(stderr_lines), max_chars=600)
+                suffix = f" ({detail})" if detail else ""
+                raise CodexSignInError(f"Codex App Server stopped unexpectedly{suffix}")
+            raise CodexSignInError("קריאת מכסת Codex לא הסתיימה בזמן.")
+
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=str(self.workspace_dir),
+                env=self._environment(),
+                shell=False,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            threading.Thread(target=read_stdout, args=(process.stdout,), daemon=True).start()
+            threading.Thread(target=read_stderr, args=(process.stderr,), daemon=True).start()
+            deadline = time.monotonic() + max(2, float(timeout))
+            send({
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "clientInfo": {
+                        "name": "SmartiAI",
+                        "title": "SmartiAI Codex quota",
+                        "version": "1.0",
+                    },
+                    "capabilities": {},
+                },
+            })
+            wait_for_response(1, deadline)
+            send({"method": "initialized"})
+            send({"id": 2, "method": str(method), "params": params})
+            return wait_for_response(2, deadline)
+        except (PermissionError, OSError) as exc:
+            raise CodexSignInError(f"לא ניתן להפעיל את Codex App Server: {exc}") from exc
+        finally:
+            if process is not None:
+                try:
+                    if process.stdin:
+                        process.stdin.close()
+                except Exception:
+                    pass
+                self._terminate_process(process)
+
+    @staticmethod
+    def _normalize_rate_limit_window(window):
+        if not isinstance(window, dict):
+            return None
+        try:
+            used_percent = max(0, min(100, int(round(float(window.get("usedPercent", 0))))))
+        except (TypeError, ValueError):
+            return None
+        normalized = {
+            "used_percent": used_percent,
+            "remaining_percent": 100 - used_percent,
+        }
+        for source, target in (("windowDurationMins", "window_minutes"), ("resetsAt", "resets_at")):
+            try:
+                if window.get(source) is not None:
+                    normalized[target] = int(window[source])
+            except (TypeError, ValueError):
+                pass
+        return normalized
+
+    @classmethod
+    def normalize_rate_limits(cls, response):
+        """Normalize the Codex 5-hour and weekly windows for the chat UI."""
+        response = response if isinstance(response, dict) else {}
+        snapshots = response.get("rateLimitsByLimitId")
+        snapshot = snapshots.get("codex") if isinstance(snapshots, dict) else None
+        if not isinstance(snapshot, dict):
+            snapshot = response.get("rateLimits")
+        if not isinstance(snapshot, dict):
+            raise CodexSignInError("Codex לא החזיר נתוני מכסה זמינים.")
+
+        windows = []
+        for key in ("primary", "secondary"):
+            normalized = cls._normalize_rate_limit_window(snapshot.get(key))
+            if normalized:
+                windows.append((key, normalized))
+
+        def select_window(minutes, fallback_key):
+            for key, window in windows:
+                if window.get("window_minutes") == minutes:
+                    return window
+            return next((window for key, window in windows if key == fallback_key), None)
+
+        five_hour = select_window(300, "primary")
+        weekly = select_window(10080, "secondary")
+        if not five_hour and not weekly:
+            raise CodexSignInError("Codex לא החזיר חלונות מכסה מוכרים.")
+        return {
+            "available": True,
+            "plan_type": str(snapshot.get("planType") or ""),
+            "five_hour": five_hour,
+            "weekly": weekly,
+            "fetched_at": time.time(),
+        }
+
+    def read_rate_limits(self, timeout: int = 12):
+        response = self._app_server_request("account/rateLimits/read", params=None, timeout=timeout)
+        return self.normalize_rate_limits(response)
 
     @classmethod
     def _looks_like_auth_error(cls, output: str) -> bool:

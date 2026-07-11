@@ -7,7 +7,7 @@ from .attachments import *
 from .ui_styles import *
 from .ui_controls import *
 from .config import PUBLIC_BUILTIN_TOOLS
-from .workers import AgentWorker, VoiceWorker, TTSWorker
+from .workers import AgentWorker, VoiceWorker, TTSWorker, CodexQuotaWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, SmartiDiagnosticPage, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
 from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
@@ -15,7 +15,7 @@ from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_
 from .visual_canvas import VisualCanvasPanel, normalize_canvas_artifact, web_canvas_available
 from PyQt6.QtCore import QEvent, QEventLoop
 from PyQt6.QtGui import QTextDocument, QTransform
-from PyQt6.QtWidgets import QBoxLayout, QSplitter
+from PyQt6.QtWidgets import QBoxLayout, QSplitter, QWidgetAction
 
 _LEGACY_WELCOME_PROMPTS = [
     "היי {name}, איך אוכל לעזור לך היום? אפשר לסכם קובץ, לחפש מידע או לארגן משימה.",
@@ -721,6 +721,126 @@ def _split_technical_details(text):
     main_text = "\n".join(main_lines).strip()
     detail_text = " ".join(detail_lines).strip()
     return main_text, detail_text
+
+
+class CodexQuotaWidget(QFrame):
+    """Compact visual account-limit summary embedded in the model menu."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("CodexQuotaCard")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(304)
+        self.setStyleSheet(
+            f"QFrame#CodexQuotaCard {{ background: {GLASS_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+            "border-radius: 12px; margin: 2px 8px; }}"
+            "QLabel { background: transparent; border: none; }"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+
+        title = QLabel("מכסת Codex שנותרה")
+        title.setFont(app_font(10, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {TEXT_COLOR};")
+        layout.addWidget(title)
+
+        self.status_label = QLabel("טוען נתוני מכסה…")
+        self.status_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 12px;")
+        layout.addWidget(self.status_label)
+
+        self.rows = {}
+        for key, label in (("five_hour", "5 שעות"), ("weekly", "שבוע")):
+            row = QWidget(self)
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(0, 2, 0, 2)
+            row_layout.setSpacing(5)
+            captions = QHBoxLayout()
+            captions.setContentsMargins(0, 0, 0, 0)
+            window_label = QLabel(label)
+            window_label.setFont(app_font(9, QFont.Weight.DemiBold))
+            window_label.setStyleSheet(f"color: {TEXT_COLOR};")
+            percent_label = QLabel("—")
+            percent_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            percent_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-weight: 700;")
+            captions.addWidget(window_label)
+            captions.addStretch(1)
+            captions.addWidget(percent_label)
+            row_layout.addLayout(captions)
+            progress = QProgressBar()
+            progress.setRange(0, 100)
+            progress.setValue(0)
+            progress.setTextVisible(False)
+            progress.setFixedHeight(8)
+            row_layout.addWidget(progress)
+            reset_label = QLabel("")
+            reset_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 11px;")
+            row_layout.addWidget(reset_label)
+            layout.addWidget(row)
+            self.rows[key] = (percent_label, progress, reset_label)
+        self.set_loading()
+
+    @staticmethod
+    def _reset_text(timestamp):
+        try:
+            remaining = max(0, int(float(timestamp) - time.time()))
+        except (TypeError, ValueError):
+            return ""
+        if remaining < 60:
+            return "איפוס בקרוב"
+        minutes = max(1, remaining // 60)
+        if minutes < 60:
+            return f"איפוס בעוד {minutes} דק׳"
+        hours, minutes = divmod(minutes, 60)
+        if hours < 24:
+            suffix = f" ו-{minutes} דק׳" if minutes else ""
+            return f"איפוס בעוד {hours} שע׳{suffix}"
+        days, hours = divmod(hours, 24)
+        suffix = f" ו-{hours} שע׳" if hours else ""
+        return f"איפוס בעוד {days} ימים{suffix}"
+
+    @staticmethod
+    def _bar_color(remaining):
+        if remaining < 20:
+            return DANGER_COLOR
+        if remaining < 50:
+            return ACCENT_WARM_COLOR
+        return ACCENT_SECONDARY_COLOR
+
+    def _set_bar(self, key, window):
+        percent_label, progress, reset_label = self.rows[key]
+        if not isinstance(window, dict):
+            percent_label.setText("לא זמין")
+            progress.setValue(0)
+            reset_label.clear()
+            color = SUBTLE_TEXT_COLOR
+        else:
+            remaining = max(0, min(100, int(window.get("remaining_percent", 0))))
+            percent_label.setText(f"{remaining}% נותרו")
+            progress.setValue(remaining)
+            reset_label.setText(self._reset_text(window.get("resets_at")))
+            color = self._bar_color(remaining)
+        percent_label.setStyleSheet(f"color: {color}; font-weight: 700;")
+        progress.setStyleSheet(
+            f"QProgressBar {{ background: {PANEL_ELEVATED_COLOR}; border: none; border-radius: 4px; }}"
+            f"QProgressBar::chunk {{ background: {color}; border-radius: 4px; }}"
+        )
+
+    def set_loading(self):
+        self.status_label.setText("טוען נתוני מכסה…")
+        for key in self.rows:
+            self._set_bar(key, None)
+
+    def set_quota_data(self, data, refreshing=False):
+        plan = str((data or {}).get("plan_type") or "").strip()
+        plan_text = f"תוכנית {plan} · " if plan else ""
+        self.status_label.setText(f"{plan_text}מתעדכן…" if refreshing else f"{plan_text}מעודכן כעת")
+        self._set_bar("five_hour", (data or {}).get("five_hour"))
+        self._set_bar("weekly", (data or {}).get("weekly"))
+
+    def set_error(self, message):
+        self.status_label.setText("לא ניתן לטעון את המכסה כרגע")
+        self.status_label.setToolTip(str(message or ""))
 
 
 class WelcomeWidget(QFrame):
@@ -4076,6 +4196,10 @@ class ChatWindow(QMainWindow):
         self._open_quick_menu = None
         self._open_quick_menu_button = None
         self._suppress_quick_menu_button = None
+        self._codex_quota_cache = None
+        self._codex_quota_cache_at = 0.0
+        self._codex_quota_worker = None
+        self._codex_quota_widget = None
         self.available_update = None
         self.update_check_worker = None
         self.update_download_worker = None
@@ -4698,6 +4822,57 @@ class ChatWindow(QMainWindow):
         menu.addSeparator()
         return True
 
+    def _add_codex_quota_menu_item(self, menu):
+        if self._current_model_provider() != "openai_codex_signin":
+            return False
+        widget = CodexQuotaWidget(menu)
+        self._codex_quota_widget = widget
+        cache = self._codex_quota_cache
+        cache_age = time.monotonic() - float(self._codex_quota_cache_at or 0)
+        stale = not cache or cache_age >= 60
+        if cache:
+            widget.set_quota_data(cache, refreshing=stale)
+        else:
+            widget.set_loading()
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(widget)
+        menu.addAction(action)
+        menu.addSeparator()
+        if stale:
+            self._start_codex_quota_refresh()
+        return True
+
+    def _start_codex_quota_refresh(self):
+        worker = self._codex_quota_worker
+        if worker is not None and worker.isRunning():
+            return
+        worker = CodexQuotaWorker(self)
+        self._codex_quota_worker = worker
+        worker.finished_signal.connect(
+            lambda data, error, active_worker=worker: self._on_codex_quota_refreshed(
+                active_worker, data, error
+            )
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_codex_quota_refreshed(self, worker, data, error):
+        if self._codex_quota_worker is worker:
+            self._codex_quota_worker = None
+        if isinstance(data, dict) and data.get("available"):
+            self._codex_quota_cache = data
+            self._codex_quota_cache_at = time.monotonic()
+        widget = self._codex_quota_widget
+        if widget is None:
+            return
+        try:
+            if isinstance(data, dict) and data.get("available"):
+                widget.set_quota_data(data)
+            else:
+                widget.set_error(error)
+        except RuntimeError:
+            self._codex_quota_widget = None
+
     def _select_codex_reasoning_effort(self, effort):
         effort = str(effort or "medium").strip().lower()
         if effort not in {value for value, _ in self._codex_reasoning_options()}:
@@ -4842,6 +5017,7 @@ class ChatWindow(QMainWindow):
         menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         prepare_popup_menu(menu)
         self._add_codex_reasoning_menu_items(menu)
+        self._add_codex_quota_menu_item(menu)
         for provider, models in self._favorites_by_provider():
             sub = menu.addMenu(provider_display_name(provider))
             sub.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -6457,6 +6633,9 @@ class ChatWindow(QMainWindow):
             self.history_page.load_sessions()
         self.refresh_chat_title()
         self._schedule_scroll_chat_to_bottom(delays=(0, 80, 220), force=True)
+        if self._current_model_provider() == "openai_codex_signin":
+            self._codex_quota_cache_at = 0.0
+            self._start_codex_quota_refresh()
 
     def _clear_chat_widgets(self):
         self.core.stop_speaking()

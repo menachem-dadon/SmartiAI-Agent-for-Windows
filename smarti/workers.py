@@ -299,6 +299,22 @@ class CodexSignInWorker(QThread):
             logging.exception("Codex sign-in worker failed.")
             self.finished_signal.emit(self.action, "unavailable", str(exc))
 
+
+class CodexQuotaWorker(QThread):
+    """Read Codex account limits without ever blocking the chat GUI."""
+
+    finished_signal = pyqtSignal(object, str)
+
+    def run(self):
+        from .codex_signin import CodexSignInProvider
+
+        try:
+            quota = CodexSignInProvider(USER_DATA_DIR).read_rate_limits(timeout=12)
+            self.finished_signal.emit(quota, "")
+        except Exception as exc:
+            logging.warning("Could not refresh Codex quota: %s", exc)
+            self.finished_signal.emit({}, str(exc))
+
 def test_email_connection(config, allow_insecure_ssl=False):
     """Test IMAP and SMTP without sending, changing, or reading a message."""
     mail = None
