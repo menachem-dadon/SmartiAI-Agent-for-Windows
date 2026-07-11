@@ -4647,6 +4647,7 @@ class ChatWindow(QMainWindow):
             ("medium", "בינונית"),
             ("high", "גבוהה"),
             ("xhigh", "גבוהה מאוד"),
+            ("max", "מקסימלית"),
         ]
 
     def _current_model_provider(self):

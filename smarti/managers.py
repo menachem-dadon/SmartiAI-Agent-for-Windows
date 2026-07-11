@@ -47,6 +47,25 @@ class SettingsManager:
         settings.setdefault("settings_schema_version", SETTINGS_SCHEMA_VERSION)
         return settings
 
+    @staticmethod
+    def migrate_long_task_defaults(settings):
+        """Replace only the old shipped limits, preserving custom user values."""
+        settings = copy.deepcopy(settings or {})
+        try:
+            migration_version = int(settings.get("long_task_defaults_version", 0) or 0)
+        except Exception:
+            migration_version = 0
+        if migration_version >= 1:
+            return settings, False
+        if settings.get("max_agent_loops", 15) == 15:
+            settings["max_agent_loops"] = 0
+        if settings.get("max_total_task_seconds", 3600) == 3600:
+            settings["max_total_task_seconds"] = 0
+        if settings.get("preserve_current_task_tool_context", True) is True:
+            settings["preserve_current_task_tool_context"] = False
+        settings["long_task_defaults_version"] = 1
+        return settings, True
+
     def migrate_or_merge(self, loaded):
         loaded = self.decrypt_loaded_secrets(copy.deepcopy(loaded or {}))
         if int(loaded.get("settings_schema_version", 0) or 0) != SETTINGS_SCHEMA_VERSION:
@@ -65,7 +84,8 @@ class SettingsManager:
                 "dangerous_trust_reset": True
             }
             return self.sync_legacy_aliases(migrated), True
-        return self.sync_legacy_aliases(deep_merge_defaults(self.defaults, loaded)), False
+        loaded, long_task_changed = self.migrate_long_task_defaults(loaded)
+        return self.sync_legacy_aliases(deep_merge_defaults(self.defaults, loaded)), long_task_changed
 
 
 class SmartiMemoryManager:

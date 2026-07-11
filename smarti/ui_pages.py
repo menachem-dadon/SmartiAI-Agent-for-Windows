@@ -3610,6 +3610,7 @@ class SettingsPage(QWidget):
             ("בינונית (ברירת המחדל)", "medium"),
             ("גבוהה", "high"),
             ("גבוהה מאוד", "xhigh"),
+            ("מקסימלית", "max"),
         ):
             self.codex_reasoning_effort_combo.addItem(label, value)
         saved_reasoning_effort = str(self.core.settings.get("codex_reasoning_effort", "medium") or "medium").strip().lower()
@@ -3870,12 +3871,16 @@ class SettingsPage(QWidget):
         self.mcp_pin_cb = SmartiCheckBox("דרוש גרסה קבועה לכלי MCP")
         self.mcp_pin_cb.setChecked(self.core.settings.get("mcp_require_pinned_versions", True))
         self.mcp_pin_cb.setStyleSheet(CHECKBOX_CSS)
+        self.prevent_sleep_cb = SmartiCheckBox("מנע שינה של המחשב בזמן משימה פעילה")
+        self.prevent_sleep_cb.setChecked(self.core.settings.get("prevent_sleep_during_active_task", True))
+        self.prevent_sleep_cb.setStyleSheet(CHECKBOX_CSS)
 
         self.cmd_timeout = QLineEdit(str(self.core.settings.get("command_timeout_seconds", 60)))
         self.tool_timeout = QLineEdit(str(self.core.settings.get("tool_timeout_seconds", 120)))
         self.mcp_timeout = QLineEdit(str(self.core.settings.get("mcp_timeout_seconds", 60)))
         self.max_chars_edit = QLineEdit(str(self.core.settings.get("max_tool_output_chars", 100000)))
-        self.total_timeout = QLineEdit(str(self.core.settings.get("max_total_task_seconds", 3600)))
+        self.total_timeout = QLineEdit(str(self.core.settings.get("max_total_task_seconds", 0)))
+        self.codex_request_timeout = QLineEdit(str(self.core.settings.get("codex_request_timeout_seconds", 1800)))
         self.permission_notification_timeout = QLineEdit(str(self.core.settings.get("permission_notification_timeout_seconds", 0)))
         budgets = self.core.settings.get("budgets", {})
         self.daily_token_budget = QLineEdit(str(budgets.get("daily_token_budget", 0)))
@@ -3883,11 +3888,11 @@ class SettingsPage(QWidget):
         
         self.loops_slider = RtlFillSlider(Qt.Orientation.Horizontal)
         self.loops_slider.setRange(4, 31)
-        saved_loops = self.core.settings.get("max_agent_loops", 15)
+        saved_loops = self.core.settings.get("max_agent_loops", 0)
         try:
             saved_loops = int(saved_loops)
         except Exception:
-            saved_loops = 15
+            saved_loops = 0
         self.loops_slider.setValue(31 if saved_loops <= 0 or saved_loops > 30 else saved_loops)
         self.loops_slider.setStyleSheet(SLIDER_CSS)
         self.loops_val_lbl = QLabel(self._loop_label_text(self.loops_slider.value()))
@@ -4353,10 +4358,12 @@ class SettingsPage(QWidget):
 
         self._add_internal_back(advanced, "מתקדם ומפתחים")
         self._add_checkbox(self.insecure_ssl_cb, advanced, "הגדרת תאימות SSL שמרפה אימות תעודות עבור סביבות שבהן חיבורי HTTPS נחסמים או מוחלפים, למשל בסינוני רשת. פעיל כברירת מחדל כדי לצמצם תקלות חיבור בסביבות מסוננות.", keywords="ssl certificate verify insecure network filter proxy", advanced=True)
+        self._add_checkbox(self.prevent_sleep_cb, advanced, "משאיר את Windows ער בזמן שסמארטי מבצע משימה פעילה, ומשחרר את הבקשה מיד בסיום או בביטול. המסך עדיין יכול להיכבות.", keywords="prevent sleep keep awake long running task hours windows", advanced=True)
         self._add_field("זמן המתנה לפקודות מחשב (שניות)", self.cmd_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לפקודת מערכת לפני עצירה.", keywords="command timeout shell seconds", advanced=True)
         self._add_field("זמן המתנה לכלים מותאמים אישית (שניות)", self.tool_timeout, advanced, "משך הזמן המקסימלי להרצת כלי מותאם אישית לפני שסמארטי מפסיק אותו.", keywords="custom tool timeout seconds", advanced=True)
         self._add_field("זמן המתנה לכלי MCP (שניות)", self.mcp_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לתשובה מכלי MCP.", keywords="mcp timeout external tool seconds", advanced=True)
-        self._add_field("זמן כולל מקסימלי למשימה (שניות)", self.total_timeout, advanced, "מונע מלולאת הסוכן להיתקע זמן רב מדי בבקשה אחת.", keywords="task timeout total max seconds", advanced=True)
+        self._add_field("זמן כולל מקסימלי למשימה (שניות)", self.total_timeout, advanced, "0 פירושו ללא מגבלת זמן כוללת, כך שמשימות יכולות להימשך שעות. ערך חיובי עוצר את המשימה לאחר מספר השניות שהוגדר.", keywords="task timeout total max seconds unlimited long running hours", advanced=True)
+        self._add_field("זמן המתנה לתשובת Codex יחידה (שניות)", self.codex_request_timeout, advanced, "מתאים גם לרמות חשיבה עמוקות. ברירת המחדל היא 30 דקות; אפשר להגדיל למשימות חריגות.", keywords="codex request timeout max reasoning seconds", advanced=True)
         self._add_field("זמן הצגת התראת הרשאה (שניות)", self.permission_notification_timeout, advanced, "0 פירושו ללא הגבלה: כאשר סמארטי ברקע, חלון ההרשאה הרגיל ייפתח בסמארטי וגם תופיע התראת Windows, והם יישארו מסונכרנים עד שתאשר או תדחה. מספר חיובי מבטל רק את התראת Windows אחרי הזמן הזה; חלון ההרשאה הרגיל נשאר פתוח.", keywords="permission approval notification timeout unlimited toast dialog", advanced=True)
         self._add_field("מגבלת תווים בתוצאת כלי", self.max_chars_edit, advanced, "מגביל את אורך פלט הכלים שנשלח חזרה למודל, כדי לשמור על יציבות ועל עלויות נמוכות.", keywords="tool output chars limit context token", advanced=True)
         self._add_field("תקציב טוקנים יומי", self.daily_token_budget, advanced, "0 פירושו ללא מגבלה קשיחה כרגע; הנתון נשמר לשימוש במדיניות תקציב.", keywords="daily token budget usage cost", advanced=True)
@@ -4648,7 +4655,7 @@ class SettingsPage(QWidget):
             self.web_canvas_cb, self.web_canvas_remote_images_cb,
             self.update_auto_cb,
             self.tts_cb, self.tts_voice_cb, self.insecure_ssl_cb, self.cloud_upload_cb,
-            self.write_outside_dirs_approval_cb, self.mcp_pin_cb,
+            self.write_outside_dirs_approval_cb, self.mcp_pin_cb, self.prevent_sleep_cb,
             self.email_imap_ssl_cb, self.email_smtp_ssl_cb, self.email_smtp_starttls_cb,
             self.voice_dynamic_energy_cb, self.voice_beep_cb
         ]:
@@ -4664,7 +4671,7 @@ class SettingsPage(QWidget):
             self.email_from_name, self.email_imap_host, self.email_imap_port,
             self.email_smtp_host, self.email_smtp_port, self.email_max_attachment_mb,
             self.cmd_timeout, self.tool_timeout, self.mcp_timeout, self.max_chars_edit,
-            self.total_timeout, self.permission_notification_timeout, self.daily_token_budget, self.daily_cost_budget
+            self.total_timeout, self.codex_request_timeout, self.permission_notification_timeout, self.daily_token_budget, self.daily_cost_budget
         ]:
             edit.textEdited.connect(lambda _=None: self._schedule_autosave())
             edit.editingFinished.connect(self._schedule_autosave)
@@ -4969,7 +4976,7 @@ class SettingsPage(QWidget):
         previous_selected_model = str(before.get(f"selected_{provider}_model", "") or "")
         self.core.settings["api_mode"] = provider
         reasoning_effort = str(self.codex_reasoning_effort_combo.currentData() or "medium").strip().lower()
-        self.core.settings["codex_reasoning_effort"] = reasoning_effort if reasoning_effort in {"low", "medium", "high", "xhigh"} else "medium"
+        self.core.settings["codex_reasoning_effort"] = reasoning_effort if reasoning_effort in {"low", "medium", "high", "xhigh", "max"} else "medium"
         custom_permissions_enabled = bool(self.custom_permissions_cb.isChecked())
         self.core.settings["custom_permission_profile_enabled"] = custom_permissions_enabled
         self.core.settings["autonomy_mode"] = "custom" if custom_permissions_enabled else self._autonomy_profile_key()
@@ -5056,6 +5063,7 @@ class SettingsPage(QWidget):
         self.core.settings["write_outside_allowed_dirs_requires_approval"] = self.write_outside_dirs_approval_cb.isChecked()
         self.core.settings["mcp_require_pinned_versions"] = self.mcp_pin_cb.isChecked()
         self.core.settings["allow_insecure_ssl_compat"] = self.insecure_ssl_cb.isChecked()
+        self.core.settings["prevent_sleep_during_active_task"] = self.prevent_sleep_cb.isChecked()
         self.core.settings["sandbox_enabled"] = self.sandbox_cb.isChecked()
         self.core.settings["sandbox_root_dir"] = self.sandbox_root_picker.path() or OUTPUTS_DIR
         self.core.settings["sandbox_allow_read_outside"] = self.sandbox_read_outside_cb.isChecked()
@@ -5063,9 +5071,13 @@ class SettingsPage(QWidget):
         self.core.settings["default_output_dir"] = default_output_dir
         self.core.settings["allowed_write_dirs"] = [default_output_dir]
         self.core.settings["mcp_allowed_directories"] = self.mcp_allowed_dirs.paths() or [APP_DIR]
-        for key, widget, default in [("command_timeout_seconds", self.cmd_timeout, 60), ("tool_timeout_seconds", self.tool_timeout, 120), ("mcp_timeout_seconds", self.mcp_timeout, 60), ("max_tool_output_chars", self.max_chars_edit, 100000), ("max_total_task_seconds", self.total_timeout, 3600)]:
+        for key, widget, default in [("command_timeout_seconds", self.cmd_timeout, 60), ("tool_timeout_seconds", self.tool_timeout, 120), ("mcp_timeout_seconds", self.mcp_timeout, 60), ("max_tool_output_chars", self.max_chars_edit, 100000), ("codex_request_timeout_seconds", self.codex_request_timeout, 1800)]:
             try: self.core.settings[key] = max(5, int(widget.text().strip()))
             except: self.core.settings[key] = default
+        try:
+            self.core.settings["max_total_task_seconds"] = max(0, int(self.total_timeout.text().strip()))
+        except Exception:
+            self.core.settings["max_total_task_seconds"] = 0
         try:
             self.core.settings["permission_notification_timeout_seconds"] = max(0, int(self.permission_notification_timeout.text().strip()))
         except Exception:

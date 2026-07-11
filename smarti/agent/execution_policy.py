@@ -3,6 +3,24 @@ from .shared import *
 
 
 class ExecutionPolicyMixin:
+    @staticmethod
+    def _set_system_sleep_prevention(enabled):
+        """Keep Windows awake on the current worker thread while a task is active."""
+        if os.name != "nt":
+            return False
+        es_continuous = 0x80000000
+        es_system_required = 0x00000001
+        flags = es_continuous | (es_system_required if enabled else 0)
+        try:
+            result = ctypes.windll.kernel32.SetThreadExecutionState(flags)
+        except Exception as exc:
+            logging.warning("Could not update Windows task sleep prevention: %s", exc)
+            return False
+        if not result:
+            logging.warning("Windows rejected the task sleep-prevention request.")
+            return False
+        return bool(enabled)
+
     def _is_background_context(self):
         return bool(getattr(self._execution_context, "is_background", False))
 

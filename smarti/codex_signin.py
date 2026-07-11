@@ -15,12 +15,15 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Iterable
+
+from .common import SmartiCancelled
 
 
 CODEX_SIGNIN_PROVIDER = "openai_codex_signin"
 CODEX_SIGNIN_DEFAULT_MODEL = "codex default"
-CODEX_REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
+CODEX_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 SMARTI_TURN_OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -58,6 +61,28 @@ class CodexConnectionStatus:
 
 class CodexSignInError(RuntimeError):
     """A safe, user-facing error from the official Codex CLI integration."""
+
+
+class CodexProtocolError(CodexSignInError):
+    """A repairable schema/protocol response from an otherwise successful turn."""
+
+    def __init__(self, message: str, raw_response: str = ""):
+        super().__init__(message)
+        self.raw_response = str(raw_response or "")
+
+    def feedback_for_model(self) -> str:
+        invalid_excerpt = self.raw_response.strip()[:4000]
+        excerpt = f"\nRejected response excerpt:\n{invalid_excerpt}" if invalid_excerpt else ""
+        return (
+            "[SMARTIAI_PROTOCOL_REPAIR]\n"
+            "Your previous response could not be decoded by SmartiAI. Correct the response and continue the same task.\n"
+            f"Validation error: {self}\n"
+            "Return exactly one object matching the supplied output schema, with no prose or Markdown outside it. "
+            "For kind=tool_calls, every arguments_json value must be a string containing one valid JSON object. "
+            "For kind=final, final_answer must be a non-empty string and tool_calls/progress_report must be null."
+            f"{excerpt}\n"
+            "[/SMARTIAI_PROTOCOL_REPAIR]"
+        )
 
 
 class CodexSignInProvider:
@@ -165,6 +190,7 @@ class CodexSignInProvider:
         timeout: int = 30,
         input_text: str | None = None,
         interactive_console: bool = False,
+        cancel_event=None,
     ) -> tuple[int, str, str]:
         command = [self._find_executable(), *[str(item) for item in args]]
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -212,7 +238,42 @@ class CodexSignInProvider:
         else:
             run_kwargs["input"] = str(input_text)
         try:
-            completed = subprocess.run(command, **run_kwargs)
+            if cancel_event is None:
+                completed = subprocess.run(command, **run_kwargs)
+            else:
+                popen_kwargs = dict(run_kwargs)
+                popen_kwargs.pop("capture_output", None)
+                popen_kwargs.pop("timeout", None)
+                popen_kwargs.pop("input", None)
+                popen_kwargs.pop("stdin", None)
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    **popen_kwargs,
+                )
+                deadline = time.monotonic() + max(1, float(timeout))
+                sent_input = False
+                while True:
+                    if cancel_event.is_set():
+                        self._terminate_process(process)
+                        self._log_cli_execution(command, process.returncode, "", "Cancelled by user")
+                        raise SmartiCancelled("CANCELLED_BY_USER")
+                    if time.monotonic() >= deadline:
+                        self._terminate_process(process)
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    wait_for = max(0.01, min(0.2, deadline - time.monotonic()))
+                    try:
+                        if input_text is not None and not sent_input:
+                            sent_input = True
+                            stdout, stderr = process.communicate(input=str(input_text), timeout=wait_for)
+                        else:
+                            stdout, stderr = process.communicate(timeout=wait_for)
+                        completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
         except subprocess.TimeoutExpired:
             self._log_cli_execution(command, None, "", "Timed out")
             raise CodexSignInError("פעולת Codex לא הסתיימה בזמן. יש לנסות שוב.")
@@ -230,6 +291,20 @@ class CodexSignInProvider:
         stderr = str(completed.stderr or "")
         self._log_cli_execution(command, completed.returncode, stdout, stderr)
         return int(completed.returncode), stdout, stderr
+
+    @staticmethod
+    def _terminate_process(process):
+        if process is None or process.poll() is not None:
+            return
+        try:
+            process.terminate()
+            process.wait(timeout=2)
+        except Exception:
+            try:
+                process.kill()
+                process.wait(timeout=2)
+            except Exception:
+                pass
 
     @classmethod
     def _looks_like_auth_error(cls, output: str) -> bool:
@@ -477,30 +552,33 @@ class CodexSignInProvider:
         try:
             payload = json.loads(str(value or ""))
         except (TypeError, ValueError) as exc:
-            raise CodexSignInError("Codex החזיר תשובה שאינה תואמת לפרוטוקול המובנה של סמארטי.") from exc
+            raise CodexProtocolError(
+                "Codex החזיר תשובה שאינה תואמת לפרוטוקול המובנה של סמארטי.",
+                value,
+            ) from exc
         if not isinstance(payload, dict):
-            raise CodexSignInError("Codex החזיר תשובה שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+            raise CodexProtocolError("Codex החזיר תשובה שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
         kind = str(payload.get("kind") or "").strip().lower()
         progress_report = payload.get("progress_report")
         if progress_report is not None and not isinstance(progress_report, str):
-            raise CodexSignInError("Codex החזיר דיווח ביניים שאינו תואם לפרוטוקול המובנה של סמארטי.")
+            raise CodexProtocolError("Codex החזיר דיווח ביניים שאינו תואם לפרוטוקול המובנה של סמארטי.", value)
         progress_report = str(progress_report or "").strip()
         if kind == "tool_calls":
             raw_calls = payload.get("tool_calls")
             if not isinstance(raw_calls, list) or not raw_calls or payload.get("final_answer") is not None:
-                raise CodexSignInError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+                raise CodexProtocolError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
             calls = []
             for raw_call in raw_calls[:8]:
                 if not isinstance(raw_call, dict):
-                    raise CodexSignInError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+                    raise CodexProtocolError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
                 tool_name = str(raw_call.get("name") or "").strip()
                 raw_arguments = raw_call.get("arguments_json")
                 try:
                     tool_arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else None
                 except (TypeError, ValueError) as exc:
-                    raise CodexSignInError("Codex החזיר ארגומנטים של כלי שאינם JSON תקין.") from exc
+                    raise CodexProtocolError("Codex החזיר ארגומנטים של כלי שאינם JSON תקין.", value) from exc
                 if not tool_name or not isinstance(tool_arguments, dict):
-                    raise CodexSignInError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+                    raise CodexProtocolError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
                 calls.append({"name": tool_name, "arguments": tool_arguments})
             tool_turn = json.dumps(
                 {"tool_calls": calls},
@@ -515,9 +593,9 @@ class CodexSignInProvider:
                 or payload.get("tool_calls") is not None
                 or progress_report
             ):
-                raise CodexSignInError("Codex החזיר תשובה סופית שאינה תואמת לפרוטוקול המובנה של סמארטי.")
+                raise CodexProtocolError("Codex החזיר תשובה סופית שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
             return final_answer.strip()
-        raise CodexSignInError("Codex החזיר סוג תגובה לא מוכר בפרוטוקול המובנה של סמארטי.")
+        raise CodexProtocolError("Codex החזיר סוג תגובה לא מוכר בפרוטוקול המובנה של סמארטי.", value)
 
     def complete(
         self,
@@ -525,6 +603,7 @@ class CodexSignInProvider:
         model: str = "",
         timeout: int = 180,
         reasoning_effort: str = "medium",
+        cancel_event=None,
     ) -> tuple[str, dict]:
         """Run a single response through official, ephemeral ``codex exec``."""
         status = self.connection_status()
@@ -553,7 +632,12 @@ class CodexSignInProvider:
             # ``-`` makes stdin the full Codex prompt.  The system instructions
             # are loaded at base-instruction priority from the temporary file.
             args.append("-")
-            code, stdout, stderr = self._run(args, timeout=timeout, input_text=self._build_prompt(messages))
+            code, stdout, stderr = self._run(
+                args,
+                timeout=timeout,
+                input_text=self._build_prompt(messages),
+                cancel_event=cancel_event,
+            )
         finally:
             for path, label in ((instructions_path, "instruction"), (output_schema_path, "output-schema")):
                 if path is None:
@@ -569,5 +653,5 @@ class CodexSignInProvider:
             raise CodexSignInError("Codex לא השלים את הבקשה. יש לבדוק את החיבור, המודל ומגבלות החשבון.")
         response, usage = self._parse_jsonl_execution(stdout)
         if not response:
-            raise CodexSignInError("Codex החזיר פלט מובנה בלי תשובה סופית. יש לנסות שוב או לעדכן את Codex CLI.")
+            raise CodexProtocolError("Codex החזיר פלט מובנה בלי תשובה סופית.", stdout)
         return self._decode_structured_turn(response), usage

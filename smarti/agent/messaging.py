@@ -3,6 +3,22 @@ from .shared import *
 
 
 class MessagingMixin:
+    def _queue_codex_protocol_repair(self, current_messages, error, attempt):
+        try:
+            max_repairs = max(0, int(self.settings.get("codex_protocol_repair_attempts", 2) or 0))
+        except Exception:
+            max_repairs = 2
+        logging.warning(
+            "Codex protocol response rejected; repair attempt %s/%s: %s",
+            attempt,
+            max_repairs,
+            error,
+        )
+        if attempt > max_repairs:
+            return False
+        self._append_user_feedback_message(current_messages, error.feedback_for_model())
+        return True
+
     def _attachment_inline_max_bytes(self):
         try:
             mb = float(self.settings.get("attachment_inline_max_mb", 20) or 20)
@@ -288,6 +304,8 @@ class MessagingMixin:
         chat_turn_recorded = False
         current_model = ""
         task_state = None
+        codex_protocol_repair_streak = 0
+        sleep_prevention_active = False
         resume_checkpoint = None
         checkpoint_should_keep = False
         checkpoint_task_id = ""
@@ -297,6 +315,8 @@ class MessagingMixin:
         self._current_agent_process_started_at = time.time()
         self._pending_canvas_artifacts = []
         try:
+            if self.settings.get("prevent_sleep_during_active_task", True):
+                sleep_prevention_active = self._set_system_sleep_prevention(True)
             user_text = str(user_text or "")
             attachments = normalize_attachments(attachments or [])
             if not is_background_task and not attachments and self._is_resume_request(user_text):
@@ -352,9 +372,9 @@ class MessagingMixin:
                 self.system_prompt = self._load_system_prompt(user_text, log_memory_usage=True)
             runtime_base_system_prompt = self.system_prompt
             try:
-                configured_iterations = int(self.settings.get("max_agent_loops", 15))
+                configured_iterations = int(self.settings.get("max_agent_loops", 0))
             except Exception:
-                configured_iterations = 15
+                configured_iterations = 0
             MAX_ITERATIONS = None if configured_iterations <= 0 or configured_iterations > 30 else max(1, configured_iterations)
             tool_call_counts = {}
             similar_tool_signatures = []
@@ -364,7 +384,11 @@ class MessagingMixin:
             process_report_count = 0
             last_process_report = ""
             task_started = time.time()
-            total_timeout = self._timeout("max_total_task_seconds", 3600)
+            try:
+                configured_total_timeout = int(self.settings.get("max_total_task_seconds", 0) or 0)
+            except Exception:
+                configured_total_timeout = 0
+            total_timeout = None if configured_total_timeout <= 0 else max(5, configured_total_timeout)
             current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
             if resume_checkpoint:
                 current_model = str(resume_checkpoint.get("current_model") or current_model)
@@ -475,7 +499,7 @@ class MessagingMixin:
                 if run_cancel_event.is_set():
                     final_response = "הפעולה נעצרה לבקשת המשתמש."
                     break
-                if time.time() - task_started > total_timeout:
+                if total_timeout is not None and time.time() - task_started > total_timeout:
                     final_response = "ERROR_USER: המשימה הופסקה כי עברה את זמן הביצוע הכולל שהוגדר."
                     break
                 iteration += 1
@@ -491,10 +515,23 @@ class MessagingMixin:
                         self.agent_runtime.trace("model_request", f"iteration={iteration}, model={current_model}")
                     checkpoint("model_request")
                     ai_response_text, usage_dict = self._handle_api_request_with_retry(current_model, current_messages)
+                    codex_protocol_repair_streak = 0
                     self._log_usage(current_model, usage_dict)
                     logging.info(f"תשובת מודל גולמית:\n{ai_response_text}")
                 except Exception as e:
-                    if "TIMEOUT" in str(e):
+                    if isinstance(e, CodexProtocolError):
+                        codex_protocol_repair_streak += 1
+                        if self._queue_codex_protocol_repair(current_messages, e, codex_protocol_repair_streak):
+                            if self.status_callback:
+                                self.status_callback("Codex החזיר פלט לא תקין; מבקש תיקון…")
+                            checkpoint("codex_protocol_repair")
+                            continue
+                        final_response = (
+                            "ERROR_USER: Codex החזיר שוב פלט כלי בתבנית שגויה גם לאחר בקשות תיקון. "
+                            "סמארטי שמר נקודת המשך כדי שלא לאבד את המשימה."
+                        )
+                        checkpoint_should_keep = True
+                    elif "TIMEOUT" in str(e):
                         checkpoint_should_keep = True
                         final_response = "ERROR_USER: השרתים אינם מגיבים."
                     elif "CANCELLED_BY_USER" in str(e):
@@ -906,6 +943,8 @@ class MessagingMixin:
                 self._execution_context.cancel_event = previous_cancel_event
             if not is_background_task and self._foreground_cancel_event is run_cancel_event:
                 self._foreground_cancel_event = None
+            if sleep_prevention_active:
+                self._set_system_sleep_prevention(False)
             if lock_acquired:
                 try:
                     self._agent_lock.release()

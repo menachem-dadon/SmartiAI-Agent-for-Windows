@@ -1204,7 +1204,7 @@ class ToolCallMixin:
     def _compact_current_messages_if_needed(self, current_messages, task_state, iteration):
         if not current_messages or not task_state:
             return
-        if self.settings.get("preserve_current_task_tool_context", True):
+        if self.settings.get("preserve_current_task_tool_context", False):
             task_state["compactions_skipped"] = int(task_state.get("compactions_skipped", 0) or 0) + 1
             logging.info(
                 f"Agent inline context compaction skipped at iteration {iteration}; "

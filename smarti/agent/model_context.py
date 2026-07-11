@@ -1506,10 +1506,16 @@ CWD: {current_dir}
                         codex_provider = getattr(self, "codex_signin_provider", None)
                     if codex_provider is None:
                         raise CodexSignInError("ספק Codex לא הופעל. יש להתחבר מחדש.")
+                    try:
+                        codex_timeout = int(self.settings.get("codex_request_timeout_seconds", 1800) or 1800)
+                    except Exception:
+                        codex_timeout = 1800
                     return codex_provider.complete(
                         request_messages,
                         current_model,
+                        timeout=max(60, codex_timeout),
                         reasoning_effort=self.settings.get("codex_reasoning_effort", "medium"),
+                        cancel_event=getattr(getattr(self, "_execution_context", None), "cancel_event", None),
                     )
                 if self.mode == "gemini":
                     api_key = self._ensure_secret_loaded("gemini_api_key")
@@ -1569,6 +1575,10 @@ CWD: {current_dir}
                     return resp_data["content"][0]["text"].strip(), usage_dict
             except SmartiCancelled:
                 raise Exception("CANCELLED_BY_USER")
+            except CodexProtocolError:
+                # The agent loop returns this structured validation failure to
+                # Codex as corrective feedback. It is not an API/network error.
+                raise
             except Exception as e:
                 if self._is_budget_exception(e):
                     raise

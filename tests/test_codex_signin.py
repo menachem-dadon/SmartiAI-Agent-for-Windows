@@ -1,15 +1,20 @@
 """Focused tests for the official Codex ChatGPT sign-in provider."""
 import os
 import json
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 from pathlib import Path
 
-from smarti.codex_signin import CodexConnectionStatus, CodexSignInError, CodexSignInProvider
+from smarti.codex_signin import CodexConnectionStatus, CodexProtocolError, CodexSignInError, CodexSignInProvider
 from smarti.common import provider_fallback_models
+from smarti.common import SmartiCancelled
+from smarti.config import DEFAULT_SETTINGS
 from smarti.core import SmartiCore
-from smarti.managers import AgentRuntime
+from smarti.managers import AgentRuntime, SettingsManager
 
 
 class CodexSignInProviderTests(unittest.TestCase):
@@ -93,7 +98,15 @@ class CodexSignInProviderTests(unittest.TestCase):
     def test_codex_model_choices_are_the_supported_curated_list(self):
         self.assertEqual(
             provider_fallback_models("openai_codex_signin"),
-            ["codex default", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+            [
+                "codex default",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+            ],
         )
 
     def test_windows_apps_desktop_path_is_not_treated_as_the_cli(self):
@@ -188,6 +201,41 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.assertIn('model_reasoning_effort="xhigh"', config_values)
         self.assertEqual(args[args.index("--model") + 1], "gpt-5.5")
 
+    def test_gpt_5_6_max_reasoning_effort_is_passed_to_codex(self):
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
+        )
+        self.provider._run = mock.Mock(return_value=(0, self._codex_jsonl_response(), ""))
+
+        self.provider.complete(
+            [{"role": "user", "content": "שלום"}],
+            model="gpt-5.6-sol",
+            reasoning_effort="max",
+        )
+
+        args = self.provider._run.call_args.args[0]
+        config_values = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--config"]
+        self.assertIn('model_reasoning_effort="max"', config_values)
+        self.assertEqual(args[args.index("--model") + 1], "gpt-5.6-sol")
+
+    def test_noninteractive_codex_process_can_be_cancelled_during_a_long_request(self):
+        provider = CodexSignInProvider(self.temp.name, executable=sys.executable)
+        cancel_event = threading.Event()
+        timer = threading.Timer(0.1, cancel_event.set)
+        started = time.monotonic()
+        timer.start()
+        try:
+            with mock.patch.dict(os.environ, {"SMARTI_CODEX_CLI": ""}):
+                with self.assertRaises(SmartiCancelled):
+                    provider._run(
+                        ("-c", "import time; time.sleep(30)"),
+                        timeout=30,
+                        cancel_event=cancel_event,
+                    )
+        finally:
+            timer.cancel()
+        self.assertLess(time.monotonic() - started, 5)
+
     def test_agent_prompt_preserves_system_tools_without_authorizing_native_codex_actions(self):
         messages = [
             {"role": "system", "content": "Use TOOL_CALL syntax when a tool is needed."},
@@ -277,8 +325,58 @@ class CodexSignInProviderTests(unittest.TestCase):
             }))
 
     def test_invalid_schema_turn_is_rejected_without_text_heuristics(self):
-        with self.assertRaises(CodexSignInError):
+        with self.assertRaises(CodexProtocolError) as raised:
             self.provider._decode_structured_turn('{"kind":"final","tool_calls":null,"final_answer":null,"progress_report":null}')
+        feedback = raised.exception.feedback_for_model()
+        self.assertIn("SMARTIAI_PROTOCOL_REPAIR", feedback)
+        self.assertIn("Correct the response", feedback)
+        self.assertIn("Rejected response excerpt", feedback)
+
+    def test_agent_api_layer_preserves_protocol_errors_for_the_repair_loop(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.mode = "openai_codex_signin"
+        core.settings = {"codex_reasoning_effort": "max", "codex_request_timeout_seconds": 1234}
+        protocol_error = CodexProtocolError("invalid structured turn", "{bad json")
+        core.codex_signin_provider = mock.Mock()
+        core.codex_signin_provider.complete.side_effect = protocol_error
+        core._prepare_messages_for_budget = mock.Mock(return_value=[{"role": "user", "content": "test"}])
+        core._raise_if_cancelled = mock.Mock()
+
+        with self.assertRaises(CodexProtocolError) as raised:
+            core._handle_api_request_with_retry("gpt-5.6-sol", [{"role": "user", "content": "test"}])
+
+        self.assertIs(raised.exception, protocol_error)
+        self.assertEqual(core.codex_signin_provider.complete.call_args.kwargs["timeout"], 1234)
+        self.assertIsNone(core.codex_signin_provider.complete.call_args.kwargs["cancel_event"])
+
+    def test_agent_api_layer_uses_long_codex_timeout_default(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.mode = "openai_codex_signin"
+        core.settings = {}
+        core.codex_signin_provider = mock.Mock()
+        core.codex_signin_provider.complete.return_value = ("done", {})
+        core._prepare_messages_for_budget = mock.Mock(return_value=[{"role": "user", "content": "test"}])
+        core._raise_if_cancelled = mock.Mock()
+
+        core._handle_api_request_with_retry("gpt-5.6-terra", [{"role": "user", "content": "test"}])
+
+        self.assertEqual(core.codex_signin_provider.complete.call_args.kwargs["timeout"], 1800)
+
+    def test_protocol_error_is_queued_as_model_feedback_instead_of_stopping(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.mode = "openai_codex_signin"
+        core.settings = {"codex_protocol_repair_attempts": 2}
+        messages = [{"role": "user", "content": "original task"}]
+        error = CodexProtocolError("invalid tool arguments", '{"kind":"tool_calls"}')
+
+        queued = core._queue_codex_protocol_repair(messages, error, attempt=1)
+
+        self.assertTrue(queued)
+        self.assertEqual(messages[-1]["role"], "user")
+        self.assertIn("SMARTIAI_PROTOCOL_REPAIR", messages[-1]["content"])
+        self.assertIn("continue the same task", messages[-1]["content"])
+        self.assertFalse(core._queue_codex_protocol_repair(messages, error, attempt=3))
+        self.assertEqual(len(messages), 2)
 
     def test_login_skips_interactive_command_when_already_connected(self):
         connected = CodexConnectionStatus("connected", "מחובר", "chatgpt")
@@ -301,6 +399,99 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.assertEqual(status.state, "connected")
         self.provider._run.assert_called_once_with(
             ("login",), timeout=600, interactive_console=(os.name == "nt")
+        )
+
+
+class LongTaskSettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.manager = SettingsManager(
+            os.path.join(self.temp.name, "settings.json"),
+            DEFAULT_SETTINGS,
+        )
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_old_shipped_limits_migrate_to_long_running_defaults(self):
+        loaded = {
+            "settings_schema_version": 2,
+            "max_agent_loops": 15,
+            "max_total_task_seconds": 3600,
+            "preserve_current_task_tool_context": True,
+        }
+
+        migrated, changed = self.manager.migrate_or_merge(loaded)
+
+        self.assertTrue(changed)
+        self.assertEqual(migrated["max_agent_loops"], 0)
+        self.assertEqual(migrated["max_total_task_seconds"], 0)
+        self.assertFalse(migrated["preserve_current_task_tool_context"])
+        self.assertEqual(migrated["codex_request_timeout_seconds"], 1800)
+        self.assertEqual(migrated["long_task_defaults_version"], 1)
+
+    def test_custom_task_limits_are_preserved_during_long_task_migration(self):
+        loaded = {
+            "settings_schema_version": 2,
+            "max_agent_loops": 9,
+            "max_total_task_seconds": 7200,
+            "preserve_current_task_tool_context": False,
+        }
+
+        migrated, changed = self.manager.migrate_or_merge(loaded)
+
+        self.assertTrue(changed)
+        self.assertEqual(migrated["max_agent_loops"], 9)
+        self.assertEqual(migrated["max_total_task_seconds"], 7200)
+        self.assertFalse(migrated["preserve_current_task_tool_context"])
+
+    def test_completed_long_task_migration_is_idempotent(self):
+        loaded = {
+            "settings_schema_version": 2,
+            "long_task_defaults_version": 1,
+            "max_agent_loops": 15,
+            "max_total_task_seconds": 3600,
+            "preserve_current_task_tool_context": True,
+        }
+
+        migrated, changed = self.manager.migrate_or_merge(loaded)
+
+        self.assertFalse(changed)
+        self.assertEqual(migrated["max_agent_loops"], 15)
+        self.assertEqual(migrated["max_total_task_seconds"], 3600)
+        self.assertTrue(migrated["preserve_current_task_tool_context"])
+
+    def test_long_task_defaults_compact_accumulated_inline_context(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.mode = "openai_codex_signin"
+        core.settings = dict(DEFAULT_SETTINGS)
+        core._task_state_summary = mock.Mock(return_value="stable task summary")
+        messages = [{"role": "system", "content": "system"}]
+        messages.extend(
+            {"role": "user", "content": f"tool result {index} " + ("x" * 2500)}
+            for index in range(30)
+        )
+        task_state = {"planner_enabled": True}
+
+        core._compact_current_messages_if_needed(messages, task_state, iteration=5)
+
+        self.assertEqual(task_state["compactions"], 1)
+        self.assertLessEqual(len(messages), 12)
+        self.assertIn("SMARTI_PROGRESS_BEGIN", messages[1]["content"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows execution state is Windows-specific")
+    def test_active_task_sleep_prevention_is_scoped_and_released(self):
+        core = SmartiCore.__new__(SmartiCore)
+        with mock.patch(
+            "smarti.agent.execution_policy.ctypes.windll.kernel32.SetThreadExecutionState",
+            return_value=1,
+        ) as set_execution_state:
+            self.assertTrue(core._set_system_sleep_prevention(True))
+            self.assertFalse(core._set_system_sleep_prevention(False))
+
+        self.assertEqual(
+            [call.args[0] for call in set_execution_state.call_args_list],
+            [0x80000001, 0x80000000],
         )
 
 

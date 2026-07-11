@@ -20,7 +20,7 @@ from ..api_errors import (
     api_retry_exhausted_analysis,
     api_retry_status_message,
 )
-from ..codex_signin import CODEX_SIGNIN_PROVIDER, CodexSignInError, CodexSignInProvider
+from ..codex_signin import CODEX_SIGNIN_PROVIDER, CodexProtocolError, CodexSignInError, CodexSignInProvider
 
 # ==========================================
 # ליבת המערכת - SmartiCore
