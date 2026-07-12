@@ -4302,8 +4302,13 @@ class ChatWindow(QMainWindow):
         self.update_check_timer.setInterval(60 * 60 * 1000)
         self.update_check_timer.timeout.connect(self.maybe_check_for_updates)
         self.update_check_timer.start()
+        self.codex_quota_refresh_timer = QTimer(self)
+        self.codex_quota_refresh_timer.setInterval(60 * 1000)
+        self.codex_quota_refresh_timer.timeout.connect(self._refresh_codex_quota_if_active)
+        self.codex_quota_refresh_timer.start()
         QTimer.singleShot(1200, self.core.resume_background_tasks)
         QTimer.singleShot(2600, self.maybe_check_for_updates)
+        QTimer.singleShot(1600, self._refresh_codex_quota_if_active)
         
         app = QApplication.instance()
         if app:
@@ -4829,7 +4834,7 @@ class ChatWindow(QMainWindow):
         self._codex_quota_widget = widget
         cache = self._codex_quota_cache
         cache_age = time.monotonic() - float(self._codex_quota_cache_at or 0)
-        stale = not cache or cache_age >= 60
+        stale = not cache or cache_age >= 15
         if cache:
             widget.set_quota_data(cache, refreshing=stale)
         else:
@@ -4840,6 +4845,17 @@ class ChatWindow(QMainWindow):
         menu.addSeparator()
         if stale:
             self._start_codex_quota_refresh()
+        return True
+
+    def _refresh_codex_quota_if_active(self, min_age=0):
+        """Poll the account so usage in the separate Codex app is reflected too."""
+        if self._current_model_provider() != "openai_codex_signin":
+            return False
+        cache = getattr(self, "_codex_quota_cache", None)
+        cache_at = float(getattr(self, "_codex_quota_cache_at", 0.0) or 0.0)
+        if cache and time.monotonic() - cache_at < max(0, float(min_age)):
+            return False
+        self._start_codex_quota_refresh()
         return True
 
     def _start_codex_quota_refresh(self):
@@ -5028,7 +5044,7 @@ class ChatWindow(QMainWindow):
         if not menu.actions():
             action = menu.addAction("אין מודלים מועדפים")
             action.setEnabled(False)
-        self._popup_menu_near_button(menu, self.favorite_model_btn)
+        self._popup_menu_near_button(menu, self.favorite_model_btn, center_horizontally=True)
 
     def _select_favorite_model(self, provider, model):
         provider, model = self._favorite_model_key(provider, model)
@@ -5146,7 +5162,7 @@ class ChatWindow(QMainWindow):
             QTimer.singleShot(360, self._clear_quick_menu_reopen_guard)
         QTimer.singleShot(0, lambda m=menu: self._clear_open_quick_menu(m))
 
-    def _popup_menu_near_button(self, menu, button):
+    def _popup_menu_near_button(self, menu, button, center_horizontally=False):
         if self._suppress_quick_menu_button is button:
             self._suppress_quick_menu_button = None
             menu.deleteLater()
@@ -5172,7 +5188,9 @@ class ChatWindow(QMainWindow):
             if window_rect.isValid() and window_rect.width() > 80 and window_rect.height() > 80:
                 available = available.intersected(window_rect)
             size = menu.sizeHint()
-            if pos.x() + size.width() > available.right():
+            if center_horizontally:
+                pos.setX(self.frameGeometry().center().x() - size.width() // 2)
+            elif pos.x() + size.width() > available.right():
                 pos.setX(max(available.left(), available.right() - size.width()))
             if pos.y() + size.height() > available.bottom():
                 pos = button.mapToGlobal(QPoint(0, -size.height() - 4))
@@ -5881,6 +5899,7 @@ class ChatWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
             self._clear_taskbar_attention()
+            self._refresh_codex_quota_if_active(min_age=15)
         if event.type() in (QEvent.Type.ActivationChange, QEvent.Type.WindowStateChange):
             if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
                 QTimer.singleShot(0, self.voice_overlay.position_near_owner)
