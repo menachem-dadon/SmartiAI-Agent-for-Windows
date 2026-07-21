@@ -789,35 +789,13 @@ class ToolCallMixin:
         except Exception:
             return ""
 
-    def _inline_tool_feedback_limit(self, is_error=False):
-        key = "max_inline_tool_error_chars" if is_error else "max_inline_tool_feedback_chars"
-        default = 8000 if is_error else 16000
-        try:
-            return max(2000, int(self.settings.get(key, default) or default))
-        except Exception:
-            return default
-
     def _compact_tool_feedback_for_model(self, action, feedback_for_ai, is_error=False):
         if feedback_for_ai is None:
             return ""
-        text = str(feedback_for_ai)
-        if text.startswith("IMAGE_BASE64:"):
-            return text
-        limit = self._inline_tool_feedback_limit(is_error=is_error)
-        if action == "get_tool_info":
-            limit = max(limit, 18000)
-        if len(text) <= limit:
-            return text
-        head_len = max(1000, int(limit * 0.68))
-        tail_len = max(700, limit - head_len - 260)
-        head = text[:head_len].rstrip()
-        tail = text[-tail_len:].lstrip() if tail_len > 0 else ""
-        return (
-            f"{head}\n\n"
-            f"[SMARTI_TOOL_OUTPUT_COMPACTED: omitted {len(text) - len(head) - len(tail)} chars from the middle. "
-            "Full redacted output is retained in the internal tool transcript.]\n\n"
-            f"{tail}"
-        )
+        # Do not discard the middle of tool results at an arbitrary character
+        # count. The model-aware context compactor will summarize this message
+        # only if the complete request approaches the active model's window.
+        return str(feedback_for_ai)
 
     def _append_tool_feedback(self, current_messages, ai_response_text, action, feedback_for_ai):
         is_error = str(feedback_for_ai).startswith("ERROR:")
@@ -1199,9 +1177,6 @@ class ToolCallMixin:
             return "\n".join(text_parts)
         return str(message)
 
-    def _messages_char_budget(self, messages):
-        return sum(len(self._message_text_for_budget(msg)) for msg in messages or [])
-
     def _retained_tool_schemas_block(self, task_state):
         schemas = task_state.get("loaded_tool_schemas", {}) if isinstance(task_state, dict) else {}
         if not isinstance(schemas, dict) or not schemas:
@@ -1219,47 +1194,6 @@ class ToolCallMixin:
         )
         blocks.append("[SMARTI_RETAINED_TOOL_SCHEMAS_END]")
         return "\n".join(blocks)
-
-    def _compact_current_messages_if_needed(self, current_messages, task_state, iteration):
-        if not current_messages or not task_state:
-            return
-        if self.settings.get("preserve_current_task_tool_context", False):
-            task_state["compactions_skipped"] = int(task_state.get("compactions_skipped", 0) or 0) + 1
-            logging.info(
-                f"Agent inline context compaction skipped at iteration {iteration}; "
-                "current task tool context is preserved by settings."
-            )
-            return
-        try:
-            compact_after = int(self.settings.get("agent_context_compact_after_loops", 4) or 4)
-            max_messages = int(self.settings.get("agent_inline_history_message_limit", 24) or 24)
-            max_chars = int(self.settings.get("agent_inline_history_chars", 52000) or 52000)
-        except Exception:
-            compact_after, max_messages, max_chars = 4, 24, 52000
-        if iteration < max(2, compact_after):
-            return
-        if len(current_messages) <= max_messages and self._messages_char_budget(current_messages) <= max_chars:
-            return
-        tail_keep = 10 if task_state.get("planner_enabled") else 8
-        progress = (
-            "[SMARTI_PROGRESS_BEGIN]\n"
-            "היסטוריית הכלים הישנה קוצרה כדי לחסוך טוקנים. המשך לפי מצב המשימה והתצפיות האחרונות.\n"
-            f"{self._task_state_summary(task_state, include_guidance=True)}\n"
-            "[SMARTI_PROGRESS_END]"
-        )
-        retained_schemas = self._retained_tool_schemas_block(task_state)
-        if retained_schemas:
-            progress += f"\n\n{retained_schemas}"
-        if self.mode == "gemini":
-            tail = current_messages[-tail_keep:]
-            current_messages[:] = [{"role": "user", "parts": [{"text": progress}]}] + tail
-        else:
-            system_messages = [m for m in current_messages if m.get("role") == "system"][:1]
-            non_system = [m for m in current_messages if m.get("role") != "system"]
-            tail = non_system[-tail_keep:]
-            current_messages[:] = system_messages + [{"role": "user", "content": progress}] + tail
-        task_state["compactions"] = int(task_state.get("compactions", 0) or 0) + 1
-        logging.info(f"Agent inline context compacted at iteration {iteration}; messages={len(current_messages)}")
 
     def _decode_tool_call_entry(self, call_entry, pre_text, schemas_seen, call_index=0):
         json_str = (call_entry or {}).get("json_str", "")

@@ -2,6 +2,7 @@
 from .lifecycle import LifecycleMixin
 from .browser_runtime import BrowserRuntimeMixin
 from .execution_policy import ExecutionPolicyMixin
+from .context_compaction import ContextCompactionMixin
 from .tool_calls import ToolCallMixin
 from .runtime_services import RuntimeServicesMixin
 from .background_runtime import BackgroundRuntimeMixin
@@ -20,6 +21,7 @@ __all__ = [
     "LifecycleMixin",
     "BrowserRuntimeMixin",
     "ExecutionPolicyMixin",
+    "ContextCompactionMixin",
     "ToolCallMixin",
     "RuntimeServicesMixin",
     "BackgroundRuntimeMixin",

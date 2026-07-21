@@ -877,7 +877,8 @@ class ExecutionPolicyMixin:
             "SKILL_REQUIREMENTS_MISSING:", "tools/call", "הנחיית מערכת:",
             "UNTRUSTED_TOOL_OUTPUT", "UNTRUSTED_TOOL_ERROR",
             "[SMARTI_TASK_STATE", "[SMARTI_PROGRESS", "[SMARTI_EVALUATOR", "[SMARTI_FINAL_VERIFIER",
-            "[SMARTI_PLANNER", "[SMARTI_PARALLEL_TOOL_RESULTS", "SMARTI_TOOL_OUTPUT_COMPACTED"
+            "[SMARTI_PLANNER", "[SMARTI_PARALLEL_TOOL_RESULTS", "[SMARTI_CONTEXT_COMPACTION",
+            "SMARTI_TOOL_OUTPUT_COMPACTED"
         ]
         if any(marker in text for marker in markers):
             return True
@@ -922,7 +923,7 @@ class ExecutionPolicyMixin:
         text = html.unescape(str(text or "")).strip()
         text = re.sub(r'\[UNTRUSTED_[A-Z_]+_BEGIN[^\]]*\].*?\[UNTRUSTED_[A-Z_]+_END[^\]]*\]', '', text, flags=re.DOTALL)
         text = re.sub(r'\[SKILL_OBSERVATION_BEGIN[^\]]*\].*?\[SKILL_OBSERVATION_END[^\]]*\]', '', text, flags=re.DOTALL)
-        for marker in ("TASK_STATE", "PROGRESS", "EVALUATOR", "PLANNER", "PARALLEL_TOOL_RESULTS"):
+        for marker in ("TASK_STATE", "PROGRESS", "EVALUATOR", "PLANNER", "PARALLEL_TOOL_RESULTS", "CONTEXT_COMPACTION"):
             text = re.sub(rf'\[SMARTI_{marker}_BEGIN[^\]]*\].*?\[SMARTI_{marker}_END[^\]]*\]', '', text, flags=re.DOTALL)
         for start, end in reversed(self._internal_json_ranges(text)):
             text = text[:start] + text[end:]
@@ -939,38 +940,6 @@ class ExecutionPolicyMixin:
         if ok_lines and error_lines:
             return "בוצע חלק מהשלבים, אך אחד הכלים החזיר שגיאה. צריך להמשיך מהשלב שנכשל במקום להניח שהמשימה הושלמה."
         return "לא הצלחתי להפיק תשובה סופית נקייה מהתהליך הפנימי. כדאי לנסות שוב עם ניסוח קצר של הפעולה הרצויה."
-
-    def _compact_conversation_history(self):
-        try:
-            limit = max(6, int(self.settings.get("conversation_history_limit", 16)))
-        except Exception:
-            limit = 16
-        if self.mode == "gemini":
-            history = getattr(self, "gemini_history", [])
-            if len(history) > limit:
-                old, kept = history[:-limit], history[-limit:]
-                summary = self.settings.get("conversation_summary", "")
-                additions = []
-                for msg in old[-12:]:
-                    role = msg.get("role", "")
-                    content = re.sub(r'\s+', ' ', str(msg.get("content", ""))).strip()[:220]
-                    if content:
-                        additions.append(f"{role}: {content}")
-                self.settings["conversation_summary"] = (summary + "\n" + "\n".join(additions)).strip()[-6000:]
-                self.gemini_history = kept
-        else:
-            history = [m for m in getattr(self, "universal_history", []) if m.get("role") != "system"]
-            if len(history) > limit:
-                old, kept = history[:-limit], history[-limit:]
-                summary = self.settings.get("conversation_summary", "")
-                additions = []
-                for msg in old[-12:]:
-                    role = msg.get("role", "")
-                    content = re.sub(r'\s+', ' ', str(msg.get("content", ""))).strip()[:220]
-                    if content:
-                        additions.append(f"{role}: {content}")
-                self.settings["conversation_summary"] = (summary + "\n" + "\n".join(additions)).strip()[-6000:]
-                self.universal_history = [{"role": "system", "content": self.system_prompt}] + kept
 
     def _schema_type_ok(self, value, expected):
         if isinstance(expected, list):

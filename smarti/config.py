@@ -1132,12 +1132,16 @@ DEFAULT_SETTINGS = {
     # now prompt-only guidance for a typical complex task, not a hard quota.
     "max_agent_evaluations_per_task": 4,
     "allow_unlimited_agent_evaluations": True,
-    "agent_context_compact_after_loops": 4,
-    "agent_inline_history_message_limit": 24,
-    "agent_inline_history_chars": 52000,
+    # Context is compacted only under model-window token pressure. A value of
+    # zero lets Smarti infer the active model window; exact or provider-wide
+    # overrides can be supplied in agent_model_context_window_overrides.
+    "agent_model_context_window_tokens": 0,
+    "agent_model_context_window_overrides": {},
+    "agent_context_compaction_trigger_ratio": 0.82,
+    "agent_context_compaction_target_ratio": 0.55,
+    "agent_context_recent_fraction": 0.30,
+    "agent_context_output_reserve_tokens": 16384,
     "preserve_current_task_tool_context": False,
-    "max_inline_tool_feedback_chars": 16000,
-    "max_inline_tool_error_chars": 8000,
     "active_task_checkpoint_enabled": True,
     "network_auto_resume_enabled": True,
     "network_reconnect_wait_minutes": 180,
@@ -1216,7 +1220,6 @@ DEFAULT_SETTINGS = {
     "codex_protocol_repair_attempts": 2,
     "long_task_defaults_version": 1,
     "prevent_sleep_during_active_task": True,
-    "conversation_history_limit": 16,
     "conversation_summary": "",
     "memory": {
         "enabled": True,

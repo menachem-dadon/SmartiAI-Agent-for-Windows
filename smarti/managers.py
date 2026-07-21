@@ -5,6 +5,14 @@ from .config import *
 
 class SettingsManager:
     """Schema-v2 settings migration with a clean reset of dangerous trust state."""
+    DEPRECATED_CONTEXT_LIMIT_KEYS = {
+        "agent_context_compact_after_loops",
+        "agent_inline_history_message_limit",
+        "agent_inline_history_chars",
+        "conversation_history_limit",
+        "max_inline_tool_feedback_chars",
+        "max_inline_tool_error_chars",
+    }
     PRESERVE_ON_V2_MIGRATION = {
         "api_mode", "local_server_url", "shopping_list", "user_memory",
         "read_aloud_all", "read_aloud_voice_only", "tts_voice_id", "tts_volume",
@@ -85,7 +93,15 @@ class SettingsManager:
             }
             return self.sync_legacy_aliases(migrated), True
         loaded, long_task_changed = self.migrate_long_task_defaults(loaded)
-        return self.sync_legacy_aliases(deep_merge_defaults(self.defaults, loaded)), long_task_changed
+        context_limits_changed = False
+        for key in self.DEPRECATED_CONTEXT_LIMIT_KEYS:
+            if key in loaded:
+                loaded.pop(key, None)
+                context_limits_changed = True
+        return (
+            self.sync_legacy_aliases(deep_merge_defaults(self.defaults, loaded)),
+            bool(long_task_changed or context_limits_changed),
+        )
 
 
 class SmartiMemoryManager:

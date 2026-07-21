@@ -208,6 +208,7 @@ class ModelContextMixin:
         history_user_text,
         attachments,
         current_messages,
+        protected_user_message,
         iteration,
         task_state,
         tool_call_counts,
@@ -239,6 +240,7 @@ class ModelContextMixin:
             "history_user_text": str(history_user_text or ""),
             "attachments": normalize_attachments(attachments or []),
             "current_messages": self._json_safe_checkpoint_value(current_messages or []),
+            "protected_user_message": self._json_safe_checkpoint_value(protected_user_message or {}),
             "iteration": int(iteration or 0),
             "tool_observation_start": int(tool_observation_start or 0),
             "tool_call_counts": self._json_safe_checkpoint_value(tool_call_counts or {}),
@@ -1440,7 +1442,7 @@ CWD: {current_dir}
 12c. Never let memory make you stubborn. If the same or similar question is asked again, first decide whether the answer could have changed since the memory was written. For any current-state/environment-dependent question, ignore old answers as evidence, re-check the environment/source, and treat memory only as a hint about where/how to check.
 13. כלים חיצוניים, MCP ו-Skills שמסומנים legacy/untrusted אינם זמינים להרצה עד אישור המשתמש במסך הכלים. אם כלי נחסם בגלל trust, הסבר זאת ובקש מהמשתמש לאשר אותו.
 14. העדף כלים מובנים מובנים (`git_status`, `run_project_check`, `list_processes`, `set_clipboard`, `extract_image_text`) על פני פקודת shell חופשית כאשר הם מתאימים.
-15. אם התקבל מצב משימה פנימי `[SMARTI_TASK_STATE]`, הערכת `[SMARTI_EVALUATOR]`, או `[SMARTI_FINAL_VERIFIER]`, השתמש בהם לתכנון בלבד ואל תציג אותם למשתמש. אם verifier/evaluator דורש אימות, הרץ כלי מתאים כדי לאסוף ראיה ישירה לפני תשובה סופית.
+15. אם התקבל מצב משימה פנימי `[SMARTI_TASK_STATE]`, תקציר דחיסה `[SMARTI_CONTEXT_COMPACTION]`, הערכת `[SMARTI_EVALUATOR]`, או `[SMARTI_FINAL_VERIFIER]`, השתמש בהם לתכנון בלבד ואל תציג אותם למשתמש. תקציר דחיסה משמר הקשר ישן אך אינו מקור אמת למצב שעשוי להשתנות; העדף תמיד הודעות מדויקות וחדשות יותר. אם verifier/evaluator דורש אימות, הרץ כלי מתאים כדי לאסוף ראיה ישירה לפני תשובה סופית.
 16. קישורים בתשובה חייבים להכיל כתובת אמיתית ומלאה. אל תיצור Markdown ריק כמו `[]()` או `[טקסט]()`, ואל תציג קישור אם אין URL תקין.
 16א. כאשר תשובתך כוללת קובץ או תיקייה מקומיים קיימים שהמשתמש עשוי לפתוח, חובה להציג לפחות פעם אחת Markdown link עם URI מלא מסוג `file:///C:/full/path` ותווית קצרה וברורה. זה כולל במיוחד קובץ שנמצא בחיפוש, הקובץ האחרון שהורד/נשמר/נוצר, תיקיית יעד, צילום מסך, קובץ מצורף שנשמר או כל נתיב שהתקבל מכלי. אל תסתפק בנתיב טקסטואלי בלבד. אל תמציא נתיבים, אל תציג קישור לקובץ הרצה/סקריפט/shortcut, ועבור נתיבים עם רווחים או תווים מיוחדים השתמש ב-URI תקין עם קידוד אחוזים. אם יש צורך מכוון להציג נתיב מילולי שאינו לחיץ, למשל לצורך העתקה לפקודה או תיעוד, הצג אותו בתוך backticks או בלוק קוד; אם המשתמש גם עשוי לפתוח אותו, הוסף קישור נפרד.
 

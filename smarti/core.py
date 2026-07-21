@@ -4,6 +4,7 @@
 from .agent.shared import *
 from .agent.lifecycle import LifecycleMixin
 from .agent.browser_runtime import BrowserRuntimeMixin
+from .agent.context_compaction import ContextCompactionMixin
 from .agent.execution_policy import ExecutionPolicyMixin
 from .agent.tool_calls import ToolCallMixin
 from .agent.runtime_services import RuntimeServicesMixin
@@ -23,6 +24,7 @@ from .agent.speech import SpeechMixin
 class SmartiCore(
     LifecycleMixin,
     BrowserRuntimeMixin,
+    ContextCompactionMixin,
     ExecutionPolicyMixin,
     ToolCallMixin,
     RuntimeServicesMixin,

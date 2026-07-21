@@ -305,6 +305,7 @@ class MessagingMixin:
         current_model = ""
         task_state = None
         codex_protocol_repair_streak = 0
+        context_overflow_compaction_attempts = 0
         sleep_prevention_active = False
         resume_checkpoint = None
         checkpoint_should_keep = False
@@ -423,13 +424,21 @@ class MessagingMixin:
 
             if resume_checkpoint and isinstance(resume_checkpoint.get("current_messages"), list):
                 current_messages = copy.deepcopy(resume_checkpoint.get("current_messages") or [])
+                saved_protected_message = resume_checkpoint.get("protected_user_message")
+                protected_user_message = (
+                    copy.deepcopy(saved_protected_message)
+                    if isinstance(saved_protected_message, dict) and saved_protected_message
+                    else self._build_user_message_with_attachments(user_text, attachments)
+                )
             elif self.mode == "gemini":
                 current_messages = [{"role": msg["role"], "parts": [{"text": msg["content"]}]} for msg in getattr(self, 'gemini_history', [])]
                 current_messages.append(self._build_user_message_with_attachments(user_text, attachments))
+                protected_user_message = copy.deepcopy(current_messages[-1])
             else:
                 history_without_system = [m for m in getattr(self, 'universal_history', []) if m.get("role") != "system"]
                 current_messages = [{"role": "system", "content": self.system_prompt}] + history_without_system
                 current_messages.append(self._build_user_message_with_attachments(user_text, attachments))
+                protected_user_message = copy.deepcopy(current_messages[-1])
 
             def checkpoint(phase, status="running", reason=""):
                 return self._save_active_task_checkpoint(
@@ -437,6 +446,7 @@ class MessagingMixin:
                     history_user_text=history_user_text,
                     attachments=attachments,
                     current_messages=current_messages,
+                    protected_user_message=protected_user_message,
                     iteration=iteration,
                     task_state=task_state,
                     tool_call_counts=tool_call_counts,
@@ -511,12 +521,25 @@ class MessagingMixin:
                 self._emit_agent_process_event("thinking")
 
                 try:
+                    compacted_now = self._compact_current_messages_if_needed(
+                        current_messages,
+                        task_state,
+                        iteration=iteration,
+                        current_model=current_model,
+                        protected_user_message=protected_user_message,
+                    )
+                    if compacted_now:
+                        checkpoint("context_compacted")
+                        if self.status_callback:
+                            self.status_callback("חושב...")
                     if getattr(self, "agent_runtime", None):
                         self.agent_runtime.trace("model_request", f"iteration={iteration}, model={current_model}")
                     checkpoint("model_request")
                     ai_response_text, usage_dict = self._handle_api_request_with_retry(current_model, current_messages)
                     codex_protocol_repair_streak = 0
+                    context_overflow_compaction_attempts = 0
                     self._log_usage(current_model, usage_dict)
+                    self._record_context_token_usage(current_messages, current_model, usage_dict)
                     logging.info(f"תשובת מודל גולמית:\n{ai_response_text}")
                 except Exception as e:
                     if isinstance(e, CodexProtocolError):
@@ -536,6 +559,25 @@ class MessagingMixin:
                         final_response = "ERROR_USER: השרתים אינם מגיבים."
                     elif "CANCELLED_BY_USER" in str(e):
                         final_response = "הפעולה נעצרה לבקשת המשתמש."
+                    elif (
+                        isinstance(e, ApiRequestError)
+                        and e.analysis.category == "request_too_large"
+                        and context_overflow_compaction_attempts < 2
+                    ):
+                        compacted_after_overflow = self._compact_current_messages_if_needed(
+                            current_messages,
+                            task_state,
+                            iteration=iteration,
+                            current_model=current_model,
+                            protected_user_message=protected_user_message,
+                            force=True,
+                            reason="provider_context_limit",
+                        )
+                        if compacted_after_overflow:
+                            context_overflow_compaction_attempts += 1
+                            checkpoint("context_overflow_compacted")
+                            continue
+                        final_response = self._api_error_user_response(e.analysis)
                     elif isinstance(e, ApiRequestError):
                         checkpoint_should_keep = e.analysis.category in {"network", "timeout"}
                         if checkpoint_should_keep:
@@ -639,7 +681,6 @@ class MessagingMixin:
                                 "הנחיית מערכת: `agent_planner` הופעל. קריאות כלי נוספות מאותה תגובה לא בוצעו. "
                                 "בחר עכשיו את הפעולה הבאה לפי התוכנית."
                             )
-                        self._compact_current_messages_if_needed(current_messages, task_state, iteration)
                         checkpoint("planner_feedback")
                         continue
 
@@ -779,7 +820,6 @@ class MessagingMixin:
                         # progress needs reassessment, verification, or replanning.
                         # Do not inject an automatic evaluator call after an
                         # arbitrary number or category of tool operations.
-                        self._compact_current_messages_if_needed(current_messages, task_state, iteration)
                         checkpoint("tool_results_feedback")
                         continue
 
@@ -894,7 +934,7 @@ class MessagingMixin:
                     self.universal_history.insert(0, {"role": "system", "content": self.system_prompt})
                     self.universal_history.append({"role": "user", "content": history_user_text or user_text})
                     self.universal_history.append({"role": "assistant", "content": final_response})
-                self._compact_conversation_history()
+                self._compact_conversation_history(current_model=current_model)
 
             return final_response
         except SmartiCancelled:

@@ -1339,6 +1339,12 @@ AGENT_TOOL_STAGE_ICON_ALIASES = {
     "agent_verifier": ("agent_tool_final_verifier",),
     "final_verifier": ("agent_tool_final_verifier",),
     "smarti_final_verifier": ("agent_tool_final_verifier",),
+    # Optional theme assets supplied by the product artwork:
+    # agent_tool_context_compaction_light.png / _dark.png.
+    "context_compaction": ("agent_tool_context_compaction",),
+}
+AGENT_TOOL_STAGE_DISPLAY_NAMES = {
+    "context_compaction": "דחיסת הקשר",
 }
 
 def _agent_tool_asset_stem(name):
@@ -1392,6 +1398,9 @@ def _agent_tool_display_name(tool):
     args = tool.get("arguments") if isinstance(tool.get("arguments"), dict) else {}
     manager_action = str(args.get("action") or "").strip()
     name = action or effective or "tool"
+    display_name = AGENT_TOOL_STAGE_DISPLAY_NAMES.get(name)
+    if display_name:
+        return display_name
     if manager_action and manager_action != name:
         name = f"{name} / {manager_action}"
     elif effective and effective != action:
@@ -1639,6 +1648,8 @@ class AgentToolGroupWidget(QWidget):
         self.run_count = 0
         self.details_expanded = False
         self.running = False
+        self.standalone_activity = False
+        self.activity = {}
         self.setStyleSheet("background: transparent; border: none;")
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1715,6 +1726,8 @@ class AgentToolGroupWidget(QWidget):
 
     def eventFilter(self, obj, event):
         if obj is self.status_row and event.type() == QEvent.Type.MouseButtonPress:
+            if self.standalone_activity:
+                return True
             self.toggle_details()
             return True
         return super().eventFilter(obj, event)
@@ -1743,7 +1756,7 @@ class AgentToolGroupWidget(QWidget):
             widget.update_parent_width(max(220, self.max_w - self.TOOL_ROW_INDENT))
 
     def _fit_status_label_width(self):
-        available = max(120, self.max_w - 72)
+        available = max(120, self.max_w - (48 if self.standalone_activity else 72))
         text = str(self.status_label.text() or "")
         width = _fitted_plain_label_width(self.status_label, text, available, min_width=48, padding=22)
         self.status_label.setWordWrap(width >= available)
@@ -1752,7 +1765,9 @@ class AgentToolGroupWidget(QWidget):
 
     def _refresh_tool_icon(self):
         icon_names = AGENT_TOOL_GROUP_ICON_NAMES
-        if self.running:
+        if self.standalone_activity and self.activity:
+            icon_names = _agent_tool_icon_names(self.activity)
+        elif self.running:
             running_tools = [tool for tool in self.tools if str(tool.get("status") or "").strip().lower() in {"running", "active", "started"}]
             if len(running_tools) == 1:
                 icon_names = _agent_tool_icon_names(running_tools[0])
@@ -1783,10 +1798,17 @@ class AgentToolGroupWidget(QWidget):
 
     def _refresh_details(self):
         self.details_label.hide()
-        self.tools_container.setVisible(self.details_expanded and bool(self.tools))
+        self.tools_container.setVisible(
+            not self.standalone_activity and self.details_expanded and bool(self.tools)
+        )
         self._set_chevron_icon()
 
     def _set_chevron_icon(self):
+        if self.standalone_activity:
+            self.arrow_label.clear()
+            self.arrow_label.hide()
+            return
+        self.arrow_label.show()
         icon = _rotated_themed_icon(self.CHEVRON_ICON_NAMES, -90 if self.details_expanded else 0, 16)
         if icon.isNull():
             icon = _transparent_icon(16)
@@ -1800,7 +1822,7 @@ class AgentToolGroupWidget(QWidget):
         self._refresh_details()
 
     def toggle_details(self):
-        if not self.tools:
+        if self.standalone_activity or not self.tools:
             return
         self.details_expanded = not self.details_expanded
         if not self.details_expanded:
@@ -1814,12 +1836,52 @@ class AgentToolGroupWidget(QWidget):
         self.thinking_label.hide()
 
     def show_thinking(self):
+        if self.standalone_activity:
+            return
         if not str(self.status_label.text() or "").strip() or self.running:
             return
         self.thinking_label.setText("חושב...")
         self.thinking_label.show()
         self.thinking_label.start_shimmer()
         self.show()
+
+    def start_standalone_activity(self, activity, text=""):
+        self.hide_thinking()
+        self.standalone_activity = True
+        self.activity = dict(activity if isinstance(activity, dict) else {"action": str(activity or "")})
+        self.activity["status"] = "running"
+        self.running = True
+        self.details_expanded = False
+        self.status_row.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        self.status_row.setToolTip("")
+        self.status_label.setText(str(text or f"מריץ: {_agent_tool_display_name(self.activity)}"))
+        self._fit_status_label_width()
+        self.status_label.start_shimmer()
+        self._refresh_tool_icon()
+        self._refresh_details()
+        self.show()
+
+    def finish_standalone_activity(self, activity, text=""):
+        if isinstance(activity, dict):
+            self.activity.update(activity)
+        self.activity["status"] = str(self.activity.get("status") or "ok")
+        self.running = False
+        self.status_label.setText(str(text or _agent_tool_display_name(self.activity)))
+        self._fit_status_label_width()
+        self.status_label.stop_shimmer()
+        self._refresh_tool_icon()
+        self._refresh_details()
+        self.show()
+
+    def matches_standalone_activity(self, activity):
+        if not self.standalone_activity:
+            return False
+        activity = activity if isinstance(activity, dict) else {}
+        event_id = str(activity.get("event_id") or activity.get("call_id") or "").strip()
+        own_event_id = str(self.activity.get("event_id") or self.activity.get("call_id") or "").strip()
+        if event_id or own_event_id:
+            return bool(event_id and event_id == own_event_id)
+        return str(activity.get("action") or "") == str(self.activity.get("action") or "")
 
     def start_tools(self, tools, parallel=False):
         tools = [tool if isinstance(tool, dict) else {"action": str(tool or "")} for tool in (tools or [])]
@@ -2506,7 +2568,7 @@ class MessageBubble(QFrame):
 
     def _current_or_new_process_group(self):
         self._ensure_agent_process_started()
-        if self.current_process_group is None:
+        if self.current_process_group is None or self.current_process_group.standalone_activity:
             return self._new_agent_process_group()
         return self.current_process_group
 
@@ -2570,6 +2632,29 @@ class MessageBubble(QFrame):
         elif event_type == "tool_finish":
             group = self._current_or_new_process_group()
             group.finish_tools(event.get("results") or [])
+            self._refresh_layout()
+            return True
+        elif event_type == "tool_group_start":
+            self._ensure_agent_process_started()
+            group = self._new_agent_process_group()
+            group.start_standalone_activity(event.get("group") or {}, event.get("text", ""))
+            self.steps_text_html = "\n".join(self.process_copy_text_parts) or "agent process"
+            self._refresh_layout()
+            return True
+        elif event_type == "tool_group_finish":
+            self._ensure_agent_process_started()
+            activity = event.get("group") or {}
+            group = next(
+                (
+                    candidate for candidate in reversed(self.agent_process_groups)
+                    if candidate.matches_standalone_activity(activity)
+                ),
+                None,
+            )
+            if group is None:
+                group = self._new_agent_process_group()
+                group.start_standalone_activity(activity, event.get("text", ""))
+            group.finish_standalone_activity(activity, event.get("text", ""))
             self._refresh_layout()
             return True
         return False

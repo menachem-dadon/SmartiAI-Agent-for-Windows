@@ -256,6 +256,76 @@ class ChatHistoryRegressionTests(unittest.TestCase):
         self.assertLessEqual(abs(indicator.geometry().center().y() - menu_button.geometry().center().y()), 1)
 
 
+class ContextCompactionUiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+        cls.app.setQuitOnLastWindowClosed(False)
+
+    def test_compaction_uses_a_named_tool_row_and_theme_aware_icon_stem(self):
+        tool = {"action": "context_compaction", "arguments": {"scope": "active_task"}}
+
+        self.assertEqual(chat_module._agent_tool_display_name(tool), "דחיסת הקשר")
+        self.assertIn("agent_tool_context_compaction", chat_module._agent_tool_icon_names(tool))
+
+    def test_compaction_group_is_visible_without_expandable_tool_details(self):
+        group = chat_module.AgentToolGroupWidget(450)
+        activity = {
+            "action": "context_compaction",
+            "event_id": "compact-1",
+            "status": "running",
+        }
+
+        group.start_standalone_activity(activity, "דוחס את ההקשר…")
+
+        self.assertTrue(group.standalone_activity)
+        self.assertTrue(group.isVisible())
+        self.assertEqual(group.status_label.text(), "דוחס את ההקשר…")
+        self.assertFalse(group.arrow_label.isVisible())
+        self.assertFalse(group.tools_container.isVisible())
+        self.assertEqual(group.tool_widgets, [])
+        group.toggle_details()
+        self.assertFalse(group.details_expanded)
+
+        group.finish_standalone_activity(
+            {**activity, "status": "ok"},
+            "דחיסת ההקשר הושלמה",
+        )
+        self.assertEqual(group.status_label.text(), "דחיסת ההקשר הושלמה")
+        self.assertFalse(group.arrow_label.isVisible())
+        group.deleteLater()
+
+    def test_compaction_event_gets_its_own_group_before_later_tools(self):
+        bubble = chat_module.MessageBubble("", is_user=False, parent_width=500)
+        activity = {
+            "action": "context_compaction",
+            "event_id": "compact-2",
+            "status": "running",
+        }
+
+        bubble.handle_agent_event({
+            "type": "tool_group_start",
+            "group": activity,
+            "text": "דוחס את ההקשר…",
+        })
+        bubble.handle_agent_event({
+            "type": "tool_group_finish",
+            "group": {**activity, "status": "ok"},
+            "text": "דחיסת ההקשר הושלמה",
+        })
+        bubble.handle_agent_event({
+            "type": "tool_start",
+            "tools": [{"action": "email_manager", "event_id": "tool-1"}],
+        })
+
+        self.assertEqual(len(bubble.agent_process_groups), 2)
+        self.assertTrue(bubble.agent_process_groups[0].standalone_activity)
+        self.assertFalse(bubble.agent_process_groups[1].standalone_activity)
+        self.assertEqual(bubble.agent_process_groups[0].tool_widgets, [])
+        self.assertEqual(len(bubble.agent_process_groups[1].tool_widgets), 1)
+        bubble.deleteLater()
+
+
 class FavoriteModelRegressionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

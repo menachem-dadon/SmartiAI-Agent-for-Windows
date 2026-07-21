@@ -524,29 +524,151 @@ class LongTaskSettingsTests(unittest.TestCase):
         self.assertTrue(migrated["preserve_current_task_tool_context"])
         self.assertTrue(migrated["allow_unlimited_agent_evaluations"])
 
-    def test_long_task_defaults_compact_accumulated_inline_context(self):
+    def test_obsolete_character_and_message_compaction_limits_are_removed(self):
+        loaded = {
+            "settings_schema_version": 2,
+            "long_task_defaults_version": 1,
+            "agent_context_compact_after_loops": 4,
+            "agent_inline_history_message_limit": 24,
+            "agent_inline_history_chars": 52000,
+            "conversation_history_limit": 16,
+        }
+
+        migrated, changed = self.manager.migrate_or_merge(loaded)
+
+        self.assertTrue(changed)
+        self.assertNotIn("agent_context_compact_after_loops", migrated)
+        self.assertNotIn("agent_inline_history_message_limit", migrated)
+        self.assertNotIn("agent_inline_history_chars", migrated)
+        self.assertNotIn("conversation_history_limit", migrated)
+
+    @staticmethod
+    def _context_compaction_core(window=8192):
         core = SmartiCore.__new__(SmartiCore)
         core.mode = "openai_codex_signin"
         core.settings = dict(DEFAULT_SETTINGS)
+        core.settings["agent_model_context_window_tokens"] = window
+        core.settings["agent_context_compaction_trigger_ratio"] = 0.50
+        core.settings["agent_context_compaction_target_ratio"] = 0.30
+        core.settings["agent_context_recent_fraction"] = 0.10
+        core.system_prompt = "system"
+        core.status_callback = None
+        core.agent_runtime = None
         core._task_state_summary = mock.Mock(return_value="stable task summary")
+        core._generate_context_compaction_summary = mock.Mock(
+            return_value="USER REQUIREMENTS\n- Preserve every requested detail.\n\nREMAINING WORK\n- Continue the task."
+        )
+        core._emit_agent_process_event = mock.Mock()
+        return core
+
+    def test_default_model_window_does_not_compact_at_the_old_character_limit(self):
+        core = self._context_compaction_core(window=1_050_000)
         messages = [{"role": "system", "content": "system"}]
         messages.extend(
             {"role": "user", "content": f"tool result {index} " + ("x" * 2500)}
             for index in range(30)
         )
         task_state = {"planner_enabled": True}
+        original = list(messages)
 
-        core._compact_current_messages_if_needed(messages, task_state, iteration=5)
+        compacted = core._compact_current_messages_if_needed(messages, task_state, iteration=50)
 
+        self.assertFalse(compacted)
+        self.assertEqual(messages, original)
+        core._generate_context_compaction_summary.assert_not_called()
+
+    def test_current_openai_model_windows_are_model_aware(self):
+        core = self._context_compaction_core(window=0)
+
+        self.assertEqual(core._model_context_window_tokens("gpt-5.6-sol"), 1_050_000)
+        self.assertEqual(core._model_context_window_tokens("gpt-5.4-mini"), 400_000)
+
+    def test_tool_feedback_is_not_cut_at_an_arbitrary_character_limit(self):
+        core = self._context_compaction_core()
+        feedback = "prefix\n" + ("important-middle-detail\n" * 1500) + "suffix"
+
+        compacted = core._compact_tool_feedback_for_model("email_manager", feedback)
+
+        self.assertEqual(compacted, feedback)
+        self.assertNotIn("SMARTI_TOOL_OUTPUT_COMPACTED", compacted)
+
+    def test_oversized_summary_source_is_compacted_hierarchically(self):
+        core = self._context_compaction_core()
+        del core._generate_context_compaction_summary
+        core._handle_api_request_with_retry = mock.Mock(
+            return_value=("USER REQUIREMENTS\n- retained chunk facts", {"prompt": 1, "completion": 1, "total": 2})
+        )
+        core._log_usage = mock.Mock()
+        messages = [{"role": "user", "content": "small-detail-123\n" + ("x" * 50000)}]
+
+        summary = core._generate_context_compaction_summary(
+            messages,
+            {"planner_enabled": False},
+            "gpt-test",
+        )
+
+        self.assertIn("retained chunk facts", summary)
+        self.assertGreater(core._handle_api_request_with_retry.call_count, 1)
+
+    def test_token_pressure_compacts_and_preserves_the_current_user_message(self):
+        core = self._context_compaction_core()
+        current_user = {"role": "user", "content": "Keep this current request exactly: 123 / C:\\work\\item.txt"}
+        messages = [{"role": "system", "content": "system"}]
+        messages.extend(
+            {"role": "user", "content": f"old tool result {index} " + ("x" * 2500)}
+            for index in range(12)
+        )
+        messages.append(current_user)
+        messages.extend(
+            {"role": "user", "content": f"recent feedback {index} " + ("y" * 900)}
+            for index in range(3)
+        )
+        task_state = {"planner_enabled": True}
+
+        compacted = core._compact_current_messages_if_needed(
+            messages,
+            task_state,
+            iteration=1,
+            protected_user_message=current_user,
+        )
+
+        self.assertTrue(compacted)
         self.assertEqual(task_state["compactions"], 1)
-        self.assertLessEqual(len(messages), 12)
-        self.assertIn("SMARTI_PROGRESS_BEGIN", messages[1]["content"])
+        self.assertIn(current_user, messages)
+        self.assertEqual(
+            next(message for message in messages if message == current_user)["content"],
+            current_user["content"],
+        )
+        self.assertIn("SMARTI_CONTEXT_COMPACTION_BEGIN", messages[1]["content"])
+        event_types = [call.args[0] for call in core._emit_agent_process_event.call_args_list]
+        self.assertEqual(event_types, ["tool_group_start", "tool_group_finish"])
+        start_tool = core._emit_agent_process_event.call_args_list[0].kwargs["group"]
+        self.assertEqual(start_tool["action"], "context_compaction")
+
+    def test_provider_overflow_forces_compaction_when_local_window_estimate_is_too_large(self):
+        core = self._context_compaction_core(window=1_050_000)
+        current_user = {"role": "user", "content": "current request stays exact"}
+        messages = [{"role": "system", "content": "system"}]
+        messages.extend(
+            {"role": "user", "content": f"old result {index} " + ("x" * 2500)}
+            for index in range(20)
+        )
+        messages.append(current_user)
+
+        compacted = core._compact_current_messages_if_needed(
+            messages,
+            {"planner_enabled": True},
+            current_model="unknown-model",
+            protected_user_message=current_user,
+            force=True,
+            reason="provider_context_limit",
+        )
+
+        self.assertTrue(compacted)
+        self.assertIn(current_user, messages)
 
     def test_compaction_retains_a_loaded_tool_schema(self):
-        core = SmartiCore.__new__(SmartiCore)
-        core.mode = "openai_codex_signin"
-        core.settings = dict(DEFAULT_SETTINGS)
-        core._task_state_summary = mock.Mock(return_value="stable task summary")
+        core = self._context_compaction_core()
         messages = [{"role": "system", "content": "system"}]
         messages.extend(
             {"role": "user", "content": f"tool result {index} " + ("x" * 2500)}
@@ -559,10 +681,45 @@ class LongTaskSettingsTests(unittest.TestCase):
             },
         }
 
-        core._compact_current_messages_if_needed(messages, task_state, iteration=5)
+        compacted = core._compact_current_messages_if_needed(messages, task_state, iteration=1)
 
+        self.assertTrue(compacted)
         self.assertIn("SMARTI_RETAINED_TOOL_SCHEMAS_BEGIN", messages[1]["content"])
         self.assertIn("EMAIL SCHEMA: search, read, uids, save_attachments", messages[1]["content"])
+
+    def test_conversation_history_is_not_trimmed_by_message_count(self):
+        core = self._context_compaction_core(window=1_050_000)
+        core.universal_history = [{"role": "system", "content": "system"}] + [
+            {"role": "user" if index % 2 == 0 else "assistant", "content": f"message {index}"}
+            for index in range(40)
+        ]
+        original = list(core.universal_history)
+
+        compacted = core._compact_conversation_history(current_model="gpt-5.4")
+
+        self.assertFalse(compacted)
+        self.assertEqual(core.universal_history, original)
+        core._generate_context_compaction_summary.assert_not_called()
+
+    def test_conversation_history_compacts_under_pressure_and_keeps_latest_turn(self):
+        core = self._context_compaction_core()
+        core._save_settings = mock.Mock()
+        history = [{"role": "system", "content": "system"}]
+        history.extend(
+            {"role": "user" if index % 2 == 0 else "assistant", "content": f"old message {index} " + ("x" * 1800)}
+            for index in range(14)
+        )
+        latest_user = {"role": "user", "content": "latest user request in full"}
+        latest_assistant = {"role": "assistant", "content": "latest assistant answer in full"}
+        history.extend([latest_user, latest_assistant])
+        core.universal_history = history
+
+        compacted = core._compact_conversation_history(current_model="gpt-5.4")
+
+        self.assertTrue(compacted)
+        self.assertEqual(core.settings["conversation_summary"], core._generate_context_compaction_summary.return_value)
+        self.assertIn(latest_user, core.universal_history)
+        self.assertIn(latest_assistant, core.universal_history)
 
 
 class AgentToolLoopRegressionTests(unittest.TestCase):
