@@ -7,9 +7,13 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QMenu, QPushButton, QWidgetAction
+from PyQt6.QtCore import QPoint
+from PyQt6.QtWidgets import QApplication, QLabel, QMainWindow, QMenu, QPushButton, QStackedWidget, QWidgetAction
 
-from smarti.chat import ChatWindow
+from smarti import chat as chat_module
+from smarti.chat import ChatHistoryPage, ChatWindow, CodexQuotaWidget
+from smarti.ui_controls import SearchableModelComboBox
+from smarti.ui_pages import SettingsPage
 
 
 class _PopupHost(QMainWindow):
@@ -21,6 +25,8 @@ class _PopupHost(QMainWindow):
     _clear_quick_menu_reopen_guard = ChatWindow._clear_quick_menu_reopen_guard
     _clear_open_quick_menu = ChatWindow._clear_open_quick_menu
     _on_quick_menu_about_to_hide = ChatWindow._on_quick_menu_about_to_hide
+    _normalized_favorite_models = ChatWindow._normalized_favorite_models
+    refresh_favorite_model_controls = ChatWindow.refresh_favorite_model_controls
 
     def __init__(self, provider="openai_codex_signin"):
         super().__init__()
@@ -78,6 +84,44 @@ class CodexQuotaMenuUiTests(unittest.TestCase):
             1,
         )
 
+    def test_header_model_menu_stays_anchored_below_its_button(self):
+        button = QPushButton("gpt 5.6 sol", self.host)
+        button.setGeometry(167, 20, 236, 48)
+        self.host.show()
+        self.app.processEvents()
+        menu = QMenu(self.host)
+        menu.setMinimumWidth(398)
+        for index in range(30):
+            menu.addAction(f"model {index}")
+        expected_y = button.mapToGlobal(QPoint(0, button.height() + 4)).y()
+
+        opened = self.host._popup_menu_near_button(
+            menu,
+            button,
+            center_horizontally=True,
+            anchor_below=True,
+        )
+        self.app.processEvents()
+
+        self.assertTrue(opened)
+        self.assertEqual(menu.pos().y(), expected_y)
+        self.assertLessEqual(menu.frameGeometry().bottom(), self.host.frameGeometry().bottom() - 8)
+
+    def test_absent_five_hour_window_is_hidden(self):
+        widget = CodexQuotaWidget()
+        widget.show()
+        widget.set_quota_data({
+            "available": True,
+            "plan_type": "plus",
+            "five_hour": None,
+            "weekly": {"remaining_percent": 90, "window_minutes": 10080},
+        })
+        self.app.processEvents()
+
+        self.assertTrue(widget.row_widgets["five_hour"].isHidden())
+        self.assertFalse(widget.row_widgets["weekly"].isHidden())
+        widget.deleteLater()
+
     def test_quota_widget_is_added_only_for_the_active_codex_provider(self):
         self.host._start_codex_quota_refresh = mock.Mock()
         non_codex_menu = QMenu(self.host)
@@ -134,6 +178,119 @@ class CodexQuotaMenuUiTests(unittest.TestCase):
 
         self.assertEqual(self.host._codex_quota_widget.rows["five_hour"][0].text(), "52% נותרו")
         self.assertEqual(self.host._codex_quota_widget.rows["weekly"][0].text(), "83% נותרו")
+
+    def test_refresh_does_not_restore_an_unfavorited_current_model(self):
+        self.host.core.settings.update({
+            "api_mode": "gemini",
+            "selected_gemini_model": "gemini-current",
+            "favorite_models": [],
+        })
+        self.host.favorite_model_btn = QPushButton(self.host)
+        self.host.favorite_model_btn.setProperty("smartiModelPickerLocation", "header")
+        self.host._favorite_model_label = lambda _provider, model: model
+        self.host._fit_header_model_button = mock.Mock()
+
+        self.host.refresh_favorite_model_controls()
+
+        self.assertEqual(self.host.core.settings["favorite_models"], [])
+        self.assertTrue(self.host.favorite_model_btn.isHidden())
+
+
+class ChatHistoryRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+        cls.app.setQuitOnLastWindowClosed(False)
+
+    def setUp(self):
+        self.stack = QStackedWidget()
+        self.main_window = SimpleNamespace(stacked_widget=self.stack)
+        self.page = ChatHistoryPage(SimpleNamespace(), self.main_window)
+
+    def tearDown(self):
+        self.page.deleteLater()
+        self.stack.deleteLater()
+        self.app.processEvents()
+
+    def test_splash_labels_installer_and_portable_builds_separately(self):
+        with mock.patch.object(chat_module, "detect_installation_kind", return_value="installer"):
+            self.assertEqual(chat_module._splash_runtime_label(), "מותקן")
+        with mock.patch.object(chat_module, "detect_installation_kind", return_value="portable"):
+            self.assertEqual(chat_module._splash_runtime_label(), "נייד")
+        with mock.patch.object(chat_module, "detect_installation_kind", return_value="source"):
+            self.assertEqual(chat_module._splash_runtime_label(), "מקור")
+
+    def test_pinned_history_row_has_a_persistent_pin_indicator(self):
+        pinned = self.page._compact_session_row(
+            {
+                "id": "pinned-session",
+                "title": "שיחה מוצמדת",
+                "updated_at": "2026-07-21T12:00:00",
+                "message_count": 3,
+                "pinned": True,
+            },
+            active_id="",
+        )
+        unpinned = self.page._compact_session_row(
+            {
+                "id": "ordinary-session",
+                "title": "שיחה רגילה",
+                "updated_at": "2026-07-21T12:00:00",
+                "message_count": 1,
+                "pinned": False,
+            },
+            active_id="",
+        )
+
+        indicator = pinned.findChild(QLabel, "PinnedSessionIndicator")
+        menu_button = pinned.findChild(QPushButton, "SessionActionsButton")
+        self.assertIsNotNone(indicator)
+        self.assertIsNotNone(menu_button)
+        self.assertEqual(indicator.toolTip(), "שיחה מוצמדת")
+        self.assertTrue(indicator.text() or (indicator.pixmap() and not indicator.pixmap().isNull()))
+        self.assertIsNone(unpinned.findChild(QLabel, "PinnedSessionIndicator"))
+
+        pinned.resize(520, pinned.sizeHint().height())
+        pinned.show()
+        self.app.processEvents()
+        self.assertLessEqual(abs(indicator.geometry().center().y() - menu_button.geometry().center().y()), 1)
+
+
+class FavoriteModelRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+        cls.app.setQuitOnLastWindowClosed(False)
+
+    def test_explicit_model_commit_marks_that_model_as_favorite(self):
+        page = SimpleNamespace(
+            provider_combo=SimpleNamespace(currentText=lambda: "groq"),
+            _ensure_model_favorite=mock.Mock(),
+            _schedule_autosave=mock.Mock(),
+        )
+
+        SettingsPage._on_model_committed(page, "llama-current")
+
+        page._ensure_model_favorite.assert_called_once_with("groq", "llama-current", save=False)
+        page._schedule_autosave.assert_called_once_with()
+
+    def test_provider_selection_favorites_its_automatically_selected_model(self):
+        combo = SearchableModelComboBox()
+        page = SimpleNamespace(
+            core=SimpleNamespace(settings={"selected_groq_model": "llama-default"}),
+            model_combo=combo,
+            _suppress_autosave=False,
+            _favorite_model_on_populate_provider="groq",
+            _ensure_model_favorite=mock.Mock(),
+            _schedule_autosave=mock.Mock(),
+        )
+
+        SettingsPage.populate_models(page, ["llama-default", "llama-other"], "groq")
+
+        page._ensure_model_favorite.assert_called_once_with("groq", "llama-default", save=False)
+        self.assertIsNone(page._favorite_model_on_populate_provider)
+        page._schedule_autosave.assert_called_once_with()
+        combo.deleteLater()
 
 
 if __name__ == "__main__":

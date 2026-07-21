@@ -13,6 +13,8 @@ class VisualCanvasPersistenceTests(unittest.TestCase):
         self.assertIn("ברירת המחדל היא תשובת צ'אט רגילה", CANVAS_MANAGER_MODEL_GUIDANCE)
         self.assertIn("אינה פותחת סבב מודל", CANVAS_MANAGER_MODEL_GUIDANCE)
         self.assertIn("אל תסתפק בטבלה שטוחה", CANVAS_MANAGER_MODEL_GUIDANCE)
+        self.assertIn("screen_manager", CANVAS_MANAGER_MODEL_GUIDANCE)
+        self.assertIn("אימות חזותי", CANVAS_MANAGER_MODEL_GUIDANCE)
 
     def test_canvas_is_complete_in_model_context(self):
         artifact = new_canvas_artifact({

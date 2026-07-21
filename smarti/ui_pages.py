@@ -4447,6 +4447,8 @@ class SettingsPage(QWidget):
 
     def on_provider_change(self, text):
         text = normalize_provider_name(text)
+        current_provider = normalize_provider_name(self.core.settings.get("api_mode", "gemini"))
+        self._favorite_model_on_populate_provider = text if text != current_provider else None
         is_codex_signin = text == "openai_codex_signin"
         codex_worker = getattr(self, "codex_signin_worker", None)
         self._set_codex_signin_buttons(busy=bool(codex_worker and codex_worker.isRunning()))
@@ -4513,6 +4515,7 @@ class SettingsPage(QWidget):
         self.on_provider_change(self.provider_combo.currentText())
 
     def populate_models(self, models, provider):
+        provider = normalize_provider_name(provider)
         previous_suppress = getattr(self, "_suppress_autosave", False)
         self._suppress_autosave = True
         if models:
@@ -4531,6 +4534,10 @@ class SettingsPage(QWidget):
                 self.model_combo.clear()
                 self.model_combo.addItem(fallback)
         self._suppress_autosave = previous_suppress
+        if getattr(self, "_favorite_model_on_populate_provider", None) == provider:
+            selected_model = self.model_combo.selected_model() if hasattr(self.model_combo, "selected_model") else self.model_combo.currentText()
+            self._ensure_model_favorite(provider, selected_model, save=False)
+            self._favorite_model_on_populate_provider = None
         self._schedule_autosave()
 
     def refresh_google_drive_status(self):
@@ -4640,7 +4647,7 @@ class SettingsPage(QWidget):
         for combo in combos:
             combo.currentIndexChanged.connect(lambda _=None: self._schedule_autosave())
         if hasattr(self.model_combo, "modelCommitted"):
-            self.model_combo.modelCommitted.connect(lambda _=None: self._schedule_autosave())
+            self.model_combo.modelCommitted.connect(self._on_model_committed)
         else:
             self.model_combo.currentIndexChanged.connect(lambda _=None: self._schedule_autosave())
         self.theme_combo.currentIndexChanged.connect(self.on_theme_mode_change)
@@ -4686,6 +4693,11 @@ class SettingsPage(QWidget):
             self.voice_ambient_slider, self.background_catch_up_slider
         ]:
             slider.valueChanged.connect(lambda _=None: self._schedule_autosave())
+
+    def _on_model_committed(self, model):
+        provider = normalize_provider_name(self.provider_combo.currentText())
+        self._ensure_model_favorite(provider, model, save=False)
+        self._schedule_autosave()
 
     def _schedule_autosave(self):
         if getattr(self, "_suppress_autosave", False) or not getattr(self, "_settings_ready", False):
@@ -4972,8 +4984,6 @@ class SettingsPage(QWidget):
         before = copy.deepcopy(self.core.settings)
         provider = normalize_provider_name(self.provider_combo.currentText())
         selected_model = self.model_combo.selected_model() if hasattr(self.model_combo, "selected_model") else self.model_combo.currentText()
-        previous_provider = normalize_provider_name(before.get("api_mode", provider))
-        previous_selected_model = str(before.get(f"selected_{provider}_model", "") or "")
         self.core.settings["api_mode"] = provider
         reasoning_effort = str(self.codex_reasoning_effort_combo.currentData() or "medium").strip().lower()
         self.core.settings["codex_reasoning_effort"] = reasoning_effort if reasoning_effort in {"low", "medium", "high", "xhigh", "max"} else "medium"
@@ -4983,8 +4993,6 @@ class SettingsPage(QWidget):
         self.core.settings.setdefault("ui_preferences", {})["theme_mode"] = self._theme_mode_key()
         if selected_model and selected_model != "טוען מודלים...":
             self.core.settings[f"selected_{provider}_model"] = selected_model
-            if normalize_provider_name(provider) != previous_provider or str(selected_model) != previous_selected_model:
-                self._ensure_model_favorite(provider, selected_model, save=False)
         if provider != "local":
             secret_key = provider_secret_key(provider)
             candidate_key = sanitize_secret_value(self.api_key_edit.secret())

@@ -985,6 +985,7 @@ class ToolCallMixin:
             "current_step_idx": 0,
             "completed_steps": [],
             "observations": [],
+            "loaded_tool_schemas": {},
             "failures": [],
             "evaluations": 0,
             "last_evaluation": "",
@@ -1201,6 +1202,24 @@ class ToolCallMixin:
     def _messages_char_budget(self, messages):
         return sum(len(self._message_text_for_budget(msg)) for msg in messages or [])
 
+    def _retained_tool_schemas_block(self, task_state):
+        schemas = task_state.get("loaded_tool_schemas", {}) if isinstance(task_state, dict) else {}
+        if not isinstance(schemas, dict) or not schemas:
+            return ""
+        blocks = ["[SMARTI_RETAINED_TOOL_SCHEMAS_BEGIN]"]
+        # Keep the latest schemas available after compaction without letting
+        # retained metadata consume most of the next model context window.
+        for name, schema_text in list(schemas.items())[-2:]:
+            blocks.append(f'<tool_schema name="{html.escape(str(name))}">')
+            blocks.append(str(schema_text or "")[:12000])
+            blocks.append("</tool_schema>")
+        blocks.append(
+            "These schemas were loaded successfully earlier in this task and remain valid after context compaction. "
+            "Use them directly; do not call get_tool_info again unless a later schema-validation error proves they are stale."
+        )
+        blocks.append("[SMARTI_RETAINED_TOOL_SCHEMAS_END]")
+        return "\n".join(blocks)
+
     def _compact_current_messages_if_needed(self, current_messages, task_state, iteration):
         if not current_messages or not task_state:
             return
@@ -1228,6 +1247,9 @@ class ToolCallMixin:
             f"{self._task_state_summary(task_state, include_guidance=True)}\n"
             "[SMARTI_PROGRESS_END]"
         )
+        retained_schemas = self._retained_tool_schemas_block(task_state)
+        if retained_schemas:
+            progress += f"\n\n{retained_schemas}"
         if self.mode == "gemini":
             tail = current_messages[-tail_keep:]
             current_messages[:] = [{"role": "user", "parts": [{"text": progress}]}] + tail
@@ -1317,15 +1339,21 @@ class ToolCallMixin:
     def _reserve_tool_call(self, call, tool_call_counts, similar_tool_signatures, allow_similar_repeat=False):
         action = call.get("action", "")
         args_dict = call.get("arguments", {}) or {}
+        safe_to_repeat = not self._tool_is_mutating_or_control(action, args_dict)
         if getattr(self, "agent_runtime", None):
             similar_sig = self.agent_runtime.similarity_signature(action, args_dict)
-            if not allow_similar_repeat and self.agent_runtime.is_similar_repeat(similar_tool_signatures, similar_sig):
-                return f"ERROR: Similar repeated tool call blocked for '{action}'. שנה אסטרטגיה או סיים עם הסבר ברור."
+            if not (allow_similar_repeat or safe_to_repeat) and self.agent_runtime.is_similar_repeat(similar_tool_signatures, similar_sig):
+                return f"ERROR: Abnormal repeated side-effecting tool-call loop blocked for '{action}'. בדוק את התוצאה הקודמת לפני ניסיון נוסף."
             similar_tool_signatures.append(similar_sig)
         call_sig = hashlib.sha256(f"{action}\0{json.dumps(args_dict, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
         tool_call_counts[call_sig] = tool_call_counts.get(call_sig, 0) + 1
-        if tool_call_counts[call_sig] > 2:
-            return f"ERROR: Repeated identical tool call blocked for '{action}'. בחר אסטרטגיה אחרת או סיים עם הסבר."
+        # Read-only/idempotent calls may legitimately need several identical
+        # retries. Eight identical attempts is treated as an emergency loop,
+        # not as ordinary control flow. Calls with side effects remain strict
+        # so a model cannot repeatedly send, delete, write, or launch by mistake.
+        identical_limit = 8 if safe_to_repeat else 2
+        if tool_call_counts[call_sig] > identical_limit:
+            return f"ERROR: Abnormal repeated identical tool-call loop blocked for '{action}'. בחן את התוצאות שכבר התקבלו ושנה אסטרטגיה."
         return None
 
     def _effective_tool_action(self, action, args_dict):
@@ -1356,10 +1384,13 @@ class ToolCallMixin:
 
     def _tool_is_mutating_or_control(self, action, args_dict):
         effective, _ = self._effective_tool_action(action, args_dict or {})
+        if effective == "email_manager":
+            operation = str((args_dict or {}).get("action", "") or "").strip().lower()
+            return operation not in {"list_folders", "search", "read"}
         return effective in {
             "system_command", "run_project_check", "create_python_tool", "install_mcp",
             "run_mcp", "install_skill", "install_skill_requirements", "run_skill",
-            "save_text_file", "save_screenshot_to_disk", "email_manager",
+            "save_text_file", "save_screenshot_to_disk",
             "browser_automation_manager", "computer_automation_manager",
             "schedule_background_task", "cancel_background_task", "retry_background_task",
             "open_software", "open_file_or_folder", "open_in_browser", "set_clipboard",
@@ -1564,12 +1595,29 @@ class ToolCallMixin:
             if preview:
                 line += f" | {preview}"
             task_state.setdefault("observations", []).append(line[:900])
-            task_state["observations"] = task_state["observations"][-18:]
+            # The final verifier audits the whole task, not merely the final
+            # handful of tool calls. Keep a bounded but substantially complete
+            # per-task ledger; inline compaction still shows only a small tail.
+            task_state["observations"] = task_state["observations"][-60:]
+            if action == "get_tool_info" and status != "error":
+                arguments = item.get("arguments", {}) if isinstance(item.get("arguments"), dict) else {}
+                schema_name = str(arguments.get("tool_name", "") or "").strip(" []'\"")
+                if schema_name:
+                    retained = task_state.setdefault("loaded_tool_schemas", {})
+                    retained[schema_name] = str(item.get("output", "") or "")[:12000]
+                    while len(retained) > 2:
+                        retained.pop(next(iter(retained)))
             if status == "error":
                 task_state.setdefault("failures", []).append(line[:700])
-                task_state["failures"] = task_state["failures"][-8:]
+                task_state["failures"] = task_state["failures"][-20:]
 
-    def _maybe_evaluate_task_progress(self, task_state, results, current_model, iteration):
+    def _maybe_evaluate_task_progress(self, task_state, results, current_model, iteration, requested_by_model=False):
+        # Progress assessment belongs to the main model. Keep this compatibility
+        # hook dormant unless a future explicit model request invokes it; the
+        # normal tool loop never schedules evaluator calls automatically.
+        if not requested_by_model:
+            self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=model_directed")
+            return ""
         if not task_state or not task_state.get("planner_enabled") or not results:
             self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=no_planner_or_results")
             return ""
@@ -1577,7 +1625,7 @@ class ToolCallMixin:
             max_evals = int(self.settings.get("max_agent_evaluations_per_task", 4) or 4)
         except Exception:
             max_evals = 4
-        unlimited_evals = bool(self.settings.get("allow_unlimited_agent_evaluations", True)) or max_evals <= 0
+        unlimited_evals = bool(self.settings.get("allow_unlimited_agent_evaluations", False)) or max_evals <= 0
         if not unlimited_evals and int(task_state.get("evaluations", 0) or 0) >= max(0, max_evals):
             self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=max_evaluations count={task_state.get('evaluations', 0)}")
             return ""
@@ -1671,14 +1719,9 @@ class ToolCallMixin:
     def _should_run_final_verifier_for_task(self, task_state, final_response, tool_call_counts, iteration):
         if not final_response or str(final_response).startswith("ERROR_USER") or self._is_background_context():
             return False
-        text = str(final_response).strip()
-        if self._looks_like_internal_artifact(text):
-            return True
-        if tool_call_counts:
-            return True
-        if task_state and task_state.get("planner_enabled"):
-            return True
-        return False
+        # Final verification is comprehensive and independent of whether the
+        # main model happened to use a tool or planner for this response.
+        return True
 
     def _static_code_safety_check(self, code, capability):
         banned_calls = {"eval", "exec", "compile", "__import__", "open", "input", "globals", "locals", "vars", "dir", "getattr", "setattr", "delattr"}

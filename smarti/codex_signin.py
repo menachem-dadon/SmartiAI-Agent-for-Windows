@@ -428,7 +428,7 @@ class CodexSignInProvider:
 
     @classmethod
     def normalize_rate_limits(cls, response):
-        """Normalize the Codex 5-hour and weekly windows for the chat UI."""
+        """Normalize only quota windows explicitly identified by the Codex CLI."""
         response = response if isinstance(response, dict) else {}
         snapshots = response.get("rateLimitsByLimitId")
         snapshot = snapshots.get("codex") if isinstance(snapshots, dict) else None
@@ -443,14 +443,14 @@ class CodexSignInProvider:
             if normalized:
                 windows.append((key, normalized))
 
-        def select_window(minutes, fallback_key):
-            for key, window in windows:
+        def select_window(minutes):
+            for _key, window in windows:
                 if window.get("window_minutes") == minutes:
                     return window
-            return next((window for key, window in windows if key == fallback_key), None)
+            return None
 
-        five_hour = select_window(300, "primary")
-        weekly = select_window(10080, "secondary")
+        five_hour = select_window(300)
+        weekly = select_window(10080)
         if not five_hour and not weekly:
             raise CodexSignInError("Codex לא החזיר חלונות מכסה מוכרים.")
         return {

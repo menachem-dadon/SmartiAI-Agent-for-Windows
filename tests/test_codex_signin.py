@@ -133,6 +133,23 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.assertEqual(quota["five_hour"]["remaining_percent"], 100)
         self.assertEqual(quota["weekly"]["remaining_percent"], 0)
 
+    def test_weekly_primary_window_is_not_mislabeled_as_five_hours(self):
+        quota = self.provider.normalize_rate_limits({
+            "rateLimits": {
+                "planType": "plus",
+                "primary": {
+                    "usedPercent": 10,
+                    "windowDurationMins": 10080,
+                    "resetsAt": 1901000000,
+                },
+                "secondary": None,
+            }
+        })
+
+        self.assertIsNone(quota["five_hour"])
+        self.assertEqual(quota["weekly"]["remaining_percent"], 90)
+        self.assertEqual(quota["weekly"]["window_minutes"], 10080)
+
     def test_smarti_codex_cli_override_is_used_verbatim(self):
         path = r"C:\Users\יהודית סיידון\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe"
         with mock.patch.dict(os.environ, {"SMARTI_CODEX_CLI": path}):
@@ -471,6 +488,7 @@ class LongTaskSettingsTests(unittest.TestCase):
         self.assertEqual(migrated["max_total_task_seconds"], 0)
         self.assertFalse(migrated["preserve_current_task_tool_context"])
         self.assertEqual(migrated["codex_request_timeout_seconds"], 1800)
+        self.assertTrue(migrated["allow_unlimited_agent_evaluations"])
         self.assertEqual(migrated["long_task_defaults_version"], 1)
 
     def test_custom_task_limits_are_preserved_during_long_task_migration(self):
@@ -495,6 +513,7 @@ class LongTaskSettingsTests(unittest.TestCase):
             "max_agent_loops": 15,
             "max_total_task_seconds": 3600,
             "preserve_current_task_tool_context": True,
+            "allow_unlimited_agent_evaluations": True,
         }
 
         migrated, changed = self.manager.migrate_or_merge(loaded)
@@ -503,6 +522,7 @@ class LongTaskSettingsTests(unittest.TestCase):
         self.assertEqual(migrated["max_agent_loops"], 15)
         self.assertEqual(migrated["max_total_task_seconds"], 3600)
         self.assertTrue(migrated["preserve_current_task_tool_context"])
+        self.assertTrue(migrated["allow_unlimited_agent_evaluations"])
 
     def test_long_task_defaults_compact_accumulated_inline_context(self):
         core = SmartiCore.__new__(SmartiCore)
@@ -521,6 +541,173 @@ class LongTaskSettingsTests(unittest.TestCase):
         self.assertEqual(task_state["compactions"], 1)
         self.assertLessEqual(len(messages), 12)
         self.assertIn("SMARTI_PROGRESS_BEGIN", messages[1]["content"])
+
+    def test_compaction_retains_a_loaded_tool_schema(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.mode = "openai_codex_signin"
+        core.settings = dict(DEFAULT_SETTINGS)
+        core._task_state_summary = mock.Mock(return_value="stable task summary")
+        messages = [{"role": "system", "content": "system"}]
+        messages.extend(
+            {"role": "user", "content": f"tool result {index} " + ("x" * 2500)}
+            for index in range(30)
+        )
+        task_state = {
+            "planner_enabled": True,
+            "loaded_tool_schemas": {
+                "email_manager": "EMAIL SCHEMA: search, read, uids, save_attachments",
+            },
+        }
+
+        core._compact_current_messages_if_needed(messages, task_state, iteration=5)
+
+        self.assertIn("SMARTI_RETAINED_TOOL_SCHEMAS_BEGIN", messages[1]["content"])
+        self.assertIn("EMAIL SCHEMA: search, read, uids, save_attachments", messages[1]["content"])
+
+
+class AgentToolLoopRegressionTests(unittest.TestCase):
+    def setUp(self):
+        self.core = SmartiCore.__new__(SmartiCore)
+        self.core.settings = {}
+        self.core.agent_runtime = AgentRuntime(self.core)
+
+    def test_distinct_email_uids_are_not_blocked_as_similar_repeats(self):
+        counts = {}
+        signatures = []
+
+        feedback = [
+            self.core._reserve_tool_call(
+                {"action": "email_manager", "arguments": {"action": "read", "mailbox": "INBOX", "uid": uid}},
+                counts,
+                signatures,
+            )
+            for uid in ("10568", "10566", "10565", "10561")
+        ]
+
+        self.assertEqual(feedback, [None, None, None, None])
+
+    def test_identical_safe_read_is_blocked_only_as_an_emergency_loop(self):
+        counts = {}
+        signatures = []
+        call = {"action": "email_manager", "arguments": {"action": "read", "mailbox": "INBOX", "uid": "10568"}}
+
+        feedback = [self.core._reserve_tool_call(call, counts, signatures) for _ in range(9)]
+
+        self.assertEqual(feedback[:8], [None] * 8)
+        self.assertIn("Abnormal repeated identical", feedback[8])
+
+    def test_identical_side_effecting_call_remains_strictly_bounded(self):
+        counts = {}
+        signatures = []
+        call = {"action": "email_manager", "arguments": {"action": "send", "to": "a@example.com", "subject": "x", "body": "y"}}
+
+        self.assertIsNone(self.core._reserve_tool_call(call, counts, signatures))
+        self.assertIsNone(self.core._reserve_tool_call(call, counts, signatures))
+        self.assertIn("Abnormal repeated", self.core._reserve_tool_call(call, counts, signatures))
+
+    def test_schema_can_be_reloaded_after_context_compaction(self):
+        counts = {}
+        signatures = []
+        call = {"action": "get_tool_info", "arguments": {"tool_name": "email_manager"}}
+
+        feedback = [self.core._reserve_tool_call(call, counts, signatures) for _ in range(3)]
+
+        self.assertEqual(feedback, [None, None, None])
+
+    def test_read_only_email_calls_are_safe_for_model_directed_retries(self):
+        self.assertFalse(self.core._tool_is_mutating_or_control("email_manager", {"action": "search"}))
+        self.assertFalse(self.core._tool_is_mutating_or_control("email_manager", {"action": "read"}))
+        self.assertTrue(self.core._tool_is_mutating_or_control("email_manager", {"action": "send"}))
+        self.assertTrue(self.core._tool_is_mutating_or_control("email_manager", {"action": "save_attachments"}))
+
+    def test_progress_evaluator_is_not_scheduled_without_model_request(self):
+        self.core._trace_agent_phase = mock.Mock()
+        self.core._handle_api_request_with_retry = mock.Mock(side_effect=AssertionError("must not run"))
+
+        result = self.core._maybe_evaluate_task_progress(
+            {"planner_enabled": True},
+            [{"action": "email_manager", "status": "ok", "arguments": {"action": "read"}}],
+            "model",
+            4,
+        )
+
+        self.assertEqual(result, "")
+        self.core._handle_api_request_with_retry.assert_not_called()
+
+    def test_successful_schema_result_is_retained_in_task_state(self):
+        task_state = {"observations": [], "loaded_tool_schemas": {}}
+
+        self.core._record_results_in_task_state(task_state, [{
+            "action": "get_tool_info",
+            "arguments": {"tool_name": "email_manager"},
+            "status": "ok",
+            "output": "EMAIL SCHEMA BODY",
+        }])
+
+        self.assertEqual(task_state["loaded_tool_schemas"]["email_manager"], "EMAIL SCHEMA BODY")
+
+    def test_final_verifier_receives_retained_task_evidence(self):
+        self.core.mode = "openai_codex_signin"
+        self.core.settings = {"enable_final_verifier": True, "selected_openai_codex_signin_model": "gpt-5.6-sol"}
+        self.core.recent_tool_observations = ["- list_folders | ok"]
+        self.core._is_background_context = mock.Mock(return_value=False)
+        self.core._emit_agent_phase = mock.Mock()
+        self.core._trace_agent_phase = mock.Mock()
+        self.core._log_usage = mock.Mock()
+        captured = {}
+
+        def verify(_model, messages):
+            captured["prompt"] = messages[-1]["content"]
+            return '{"status":"ok","reason":"evidence present"}', {}
+
+        self.core._handle_api_request_with_retry = verify
+
+        task_observations = [f"- evidence {index}" for index in range(30)]
+        task_observations[0] = "- email_manager | ok | read 7 selected messages and one PDF"
+        result = self.core._verify_final_response(
+            "build news canvas",
+            "done",
+            force=True,
+            task_state={"observations": task_observations},
+        )
+
+        self.assertEqual(result, "done")
+        self.assertIn("read 7 selected messages and one PDF", captured["prompt"])
+        self.assertIn("evidence 29", captured["prompt"])
+
+    def test_final_verifier_runs_for_direct_answers_and_audits_failures(self):
+        self.core._is_background_context = mock.Mock(return_value=False)
+
+        self.assertTrue(self.core._should_run_final_verifier_for_task({}, "direct answer", {}, 1))
+
+        self.core.mode = "openai_codex_signin"
+        self.core.settings = {"enable_final_verifier": True, "selected_openai_codex_signin_model": "gpt-5.6-sol"}
+        self.core.recent_tool_observations = []
+        self.core._emit_agent_phase = mock.Mock()
+        self.core._trace_agent_phase = mock.Mock()
+        self.core._log_usage = mock.Mock()
+        captured = {}
+
+        def verify(_model, messages):
+            captured["prompt"] = messages[-1]["content"]
+            return '{"status":"ok","reason":"complete"}', {}
+
+        self.core._handle_api_request_with_retry = verify
+        self.core._verify_final_response(
+            "complete every requested item",
+            "done",
+            task_state={
+                "plan_steps": ["collect", "create"],
+                "completed_steps": ["collect"],
+                "verification_points": ["confirm every requested item"],
+                "failures": ["one attachment failed"],
+                "observations": ["- first evidence", "- final evidence"],
+            },
+        )
+
+        self.assertIn("confirm every requested item", captured["prompt"])
+        self.assertIn("one attachment failed", captured["prompt"])
+        self.assertIn("first evidence", captured["prompt"])
 
     @unittest.skipUnless(os.name == "nt", "Windows execution state is Windows-specific")
     def test_active_task_sleep_prevention_is_scoped_and_released(self):

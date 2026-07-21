@@ -11,11 +11,24 @@ from .workers import AgentWorker, VoiceWorker, TTSWorker, CodexQuotaWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, SmartiDiagnosticPage, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
 from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
-from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, human_size, launch_update_installer
+from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, detect_installation_kind, human_size, launch_update_installer
 from .visual_canvas import VisualCanvasPanel, normalize_canvas_artifact, web_canvas_available
 from PyQt6.QtCore import QEvent, QEventLoop
 from PyQt6.QtGui import QTextDocument, QTransform
 from PyQt6.QtWidgets import QBoxLayout, QSplitter, QWidgetAction
+
+
+def _splash_runtime_label():
+    """Return the release-channel label shown on the startup splash."""
+    try:
+        installation_kind = detect_installation_kind()
+    except Exception:
+        installation_kind = "packaged" if getattr(SMARTI_RUNTIME, "is_frozen", False) else "source"
+    return {
+        "source": "מקור",
+        "installer": "מותקן",
+        "portable": "נייד",
+    }.get(installation_kind, "ארוז")
 
 _LEGACY_WELCOME_PROMPTS = [
     "היי {name}, איך אוכל לעזור לך היום? אפשר לסכם קובץ, לחפש מידע או לארגן משימה.",
@@ -750,6 +763,7 @@ class CodexQuotaWidget(QFrame):
         layout.addWidget(self.status_label)
 
         self.rows = {}
+        self.row_widgets = {}
         for key, label in (("five_hour", "5 שעות"), ("weekly", "שבוע")):
             row = QWidget(self)
             row_layout = QVBoxLayout(row)
@@ -777,6 +791,7 @@ class CodexQuotaWidget(QFrame):
             reset_label.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 11px;")
             row_layout.addWidget(reset_label)
             layout.addWidget(row)
+            self.row_widgets[key] = row
             self.rows[key] = (percent_label, progress, reset_label)
         self.set_loading()
 
@@ -808,8 +823,10 @@ class CodexQuotaWidget(QFrame):
         return ACCENT_SECONDARY_COLOR
 
     def _set_bar(self, key, window):
+        available = isinstance(window, dict)
+        self.row_widgets[key].setVisible(available)
         percent_label, progress, reset_label = self.rows[key]
-        if not isinstance(window, dict):
+        if not available:
             percent_label.setText("לא זמין")
             progress.setValue(0)
             reset_label.clear()
@@ -3399,7 +3416,24 @@ class ChatHistoryPage(QWidget):
         content_layout.addWidget(meta)
         row_layout.addLayout(content_layout, 1)
 
+        if record.get("pinned"):
+            pinned_indicator = QLabel("📌")
+            pinned_indicator.setObjectName("PinnedSessionIndicator")
+            pinned_indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            pinned_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pinned_indicator.setFixedSize(20, 20)
+            pinned_indicator.setToolTip("שיחה מוצמדת")
+            pinned_icon = themed_icon("pin_icon")
+            if not pinned_icon.isNull():
+                pinned_indicator.setText("")
+                pinned_indicator.setPixmap(pinned_icon.pixmap(16, 16))
+            pinned_indicator.setStyleSheet(
+                f"color: {ACCENT_COLOR}; background: transparent; border: none; font-size: 14px;"
+            )
+            row_layout.addWidget(pinned_indicator, 0, Qt.AlignmentFlag.AlignVCenter)
+
         menu_btn = self._icon_button("פעולות", ("menu_icon",), fallback_text="⋮")
+        menu_btn.setObjectName("SessionActionsButton")
         menu_btn.setFixedSize(28, 28)
         menu_btn.pressed.connect(lambda rec=record, btn=menu_btn: self.show_session_menu(rec, btn))
         row_layout.addWidget(menu_btn, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -5000,7 +5034,6 @@ class ChatWindow(QMainWindow):
     def refresh_favorite_model_controls(self):
         if not hasattr(self, "favorite_model_btn"):
             return
-        self._ensure_current_model_favorite(save=False)
         favorites = self._normalized_favorite_models()
         current_provider = normalize_provider_name(self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini")) or "gemini")
         current_model = str(self.core.settings.get(f"selected_{current_provider}_model") or provider_default_model(current_provider) or "").strip()
@@ -5044,7 +5077,12 @@ class ChatWindow(QMainWindow):
         if not menu.actions():
             action = menu.addAction("אין מודלים מועדפים")
             action.setEnabled(False)
-        self._popup_menu_near_button(menu, self.favorite_model_btn, center_horizontally=True)
+        self._popup_menu_near_button(
+            menu,
+            self.favorite_model_btn,
+            center_horizontally=True,
+            anchor_below=True,
+        )
 
     def _select_favorite_model(self, provider, model):
         provider, model = self._favorite_model_key(provider, model)
@@ -5162,7 +5200,7 @@ class ChatWindow(QMainWindow):
             QTimer.singleShot(360, self._clear_quick_menu_reopen_guard)
         QTimer.singleShot(0, lambda m=menu: self._clear_open_quick_menu(m))
 
-    def _popup_menu_near_button(self, menu, button, center_horizontally=False):
+    def _popup_menu_near_button(self, menu, button, center_horizontally=False, anchor_below=False):
         if self._suppress_quick_menu_button is button:
             self._suppress_quick_menu_button = None
             menu.deleteLater()
@@ -5192,14 +5230,26 @@ class ChatWindow(QMainWindow):
                 pos.setX(self.frameGeometry().center().x() - size.width() // 2)
             elif pos.x() + size.width() > available.right():
                 pos.setX(max(available.left(), available.right() - size.width()))
-            if pos.y() + size.height() > available.bottom():
+            if anchor_below:
+                available_height = max(1, available.bottom() - pos.y() + 1)
+                if size.height() > available_height:
+                    menu.setMaximumHeight(available_height)
+                    menu.resize(size.width(), available_height)
+                    size = menu.size()
+            elif pos.y() + size.height() > available.bottom():
                 pos = button.mapToGlobal(QPoint(0, -size.height() - 4))
             pos.setX(max(available.left(), min(pos.x(), available.right() - size.width())))
-            pos.setY(max(available.top(), min(pos.y(), available.bottom() - size.height())))
+            if not anchor_below:
+                pos.setY(max(available.top(), min(pos.y(), available.bottom() - size.height())))
         self._open_quick_menu = menu
         self._open_quick_menu_button = button
         menu.aboutToHide.connect(lambda m=menu: self._on_quick_menu_about_to_hide(m))
         menu.popup(pos)
+        if anchor_below:
+            # QMenu may still flip a tall popup above the requested point even
+            # after it has been height-constrained. Keep header menus attached
+            # to the control that opened them.
+            menu.move(pos)
         return True
 
     def refresh_themed_icons(self):
@@ -6854,13 +6904,7 @@ class AnimatedSplash(QWidget):
         self._progress_timer.start(90)
 
     def _meta_text(self):
-        runtime_label = "מקור"
-        try:
-            if SMARTI_RUNTIME.is_frozen:
-                runtime_label = "נייד" if os.path.exists(os.path.join(SMARTI_RUNTIME.install_dir, "release_manifest.json")) else "מותקן"
-        except Exception:
-            runtime_label = "ארוז" if getattr(SMARTI_RUNTIME, "is_frozen", False) else "מקור"
-        return f"גרסה {APP_VERSION} • {runtime_label} • Windows"
+        return f"גרסה {APP_VERSION} • {_splash_runtime_label()} • Windows"
 
     def set_status(self, text):
         text = str(text or "").strip()

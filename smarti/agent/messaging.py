@@ -680,7 +680,25 @@ class MessagingMixin:
                         if reserve_feedback:
                             break
                     if reserve_feedback:
-                        self._append_tool_feedback(current_messages, tool_turn_text, selected_calls[0].get("action", "tool"), reserve_feedback)
+                        blocked_call = selected_calls[0]
+                        blocked_action = blocked_call.get("action", "tool")
+                        blocked_args = blocked_call.get("arguments", {}) or {}
+                        logging.warning(
+                            "TOOL GUARD | action=%s | feedback=%s",
+                            blocked_action,
+                            reserve_feedback,
+                        )
+                        if getattr(self, "agent_runtime", None):
+                            self.agent_runtime.trace("tool_guard", f"{blocked_action}: {reserve_feedback}")
+                        self._record_results_in_task_state(task_state, [{
+                            "action": blocked_action,
+                            "arguments": blocked_args,
+                            "status": "error",
+                            "output": reserve_feedback,
+                            "feedback": reserve_feedback,
+                            "step_text": blocked_call.get("step_text", ""),
+                        }])
+                        self._append_tool_feedback(current_messages, tool_turn_text, blocked_action, reserve_feedback)
                         checkpoint("tool_reserve_feedback")
                         continue
                     tool_call_counts = candidate_tool_call_counts
@@ -757,9 +775,10 @@ class MessagingMixin:
                                 "המערכת מריצה במקביל רק פעולות עצמאיות לקריאה בלבד שאינן דורשות אישור. "
                                 "אם נדרש שלב נוסף, הפעל אותו עכשיו לפי התוצאות שכבר התקבלו."
                             )
-                        evaluator_feedback = self._maybe_evaluate_task_progress(task_state, results, current_model, iteration)
-                        if evaluator_feedback:
-                            self._append_user_feedback_message(current_messages, evaluator_feedback)
+                        # The main model sees every tool result and decides when
+                        # progress needs reassessment, verification, or replanning.
+                        # Do not inject an automatic evaluator call after an
+                        # arbitrary number or category of tool operations.
                         self._compact_current_messages_if_needed(current_messages, task_state, iteration)
                         checkpoint("tool_results_feedback")
                         continue
@@ -810,6 +829,7 @@ class MessagingMixin:
                                 force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))),
                                 return_continue_feedback=True,
                                 allow_tool_request=allow_verification_tool,
+                                task_state=task_state,
                             )
                         except SmartiCancelled:
                             final_response = "הפעולה נעצרה לבקשת המשתמש."
@@ -834,7 +854,12 @@ class MessagingMixin:
             should_verify_final = (not final_response_verified) and self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration)
             if should_verify_final and not run_cancel_event.is_set():
                 try:
-                    final_response = self._verify_final_response(history_user_text or user_text, final_response, force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))))
+                    final_response = self._verify_final_response(
+                        history_user_text or user_text,
+                        final_response,
+                        force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))),
+                        task_state=task_state,
+                    )
                 except SmartiCancelled:
                     final_response = "הפעולה נעצרה לבקשת המשתמש."
                 final_response = self._strip_internal_artifacts(final_response)

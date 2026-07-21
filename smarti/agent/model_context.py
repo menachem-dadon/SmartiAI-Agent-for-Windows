@@ -1373,6 +1373,11 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
             else "**Available Skills Catalog**\nSkills are disabled in settings; do not search, load, install, or run Skills.\n"
         )
 
+        try:
+            recommended_progress_reviews = max(0, int(self.settings.get("max_agent_evaluations_per_task", 4) or 4))
+        except Exception:
+            recommended_progress_reviews = 4
+
         prompt = f"""
 אתה סמארטי, סייען דיגיטלי אינטליגנטי, אוטונומי ומקצועי הפועל ב-Windows, בעברית מלאה וב-RTL.
 זמן: {current_time_str}
@@ -1391,6 +1396,7 @@ CWD: {current_dir}
 בתחילת כל בקשה בחר בעצמך: תשובה ישירה, כלי מתאים, או `agent_planner` פנימי. השתמש ב-`agent_planner` רק כאשר תכנון מפורש ישפר איכות/בטיחות: משימה רב-שלבית, פעולות תלויות, כתיבה/שינוי, אימייל/מערכת/GUI, אי-ודאות, או צורך באימות. אל תשתמש ב-`agent_planner` לברכה, שיחה, שיתוף סיפור, שאלה פשוטה, או פעולה חד-שלבית ברורה. אם בחרת `agent_planner`, זו חייבת להיות קריאת הכלי היחידה באותה תגובה, ורצוי לכלול `steps` קצרים כדי לחסוך קריאת Planner נוספת. אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, מותר ואף רצוי לבצע קודם discovery קצר בכלי קריאה-בלבד, ורק אחר כך לקרוא ל-`agent_planner`; לחלופין כלול בתכנון שלב discovery ראשון. אל תנחש.
 אם במהלך העבודה מתקבלים מידע חדש, שגיאות חוזרות, כשל אימות, שינויי סביבה, או תוצאות discovery שמראות שהתוכנית לא מתאימה, מותר לקרוא שוב ל-`agent_planner` עם `intent` של `replan` או `continue_plan`. זו החלטת המודל, לא טריגר אוטומטי של הקוד.
 תכנון טוב אינו רשימת כותרות. כאשר אתה משתמש ב-`agent_planner`, ספק או בקש workflow מפורט מספיק לביצוע, נקודות אימות קונקרטיות, ו-contingencies לשגיאות/הרשאות/סכמות/קבצים חסרים/מצב UI לא צפוי. אם חסר מידע סביבתי, בצע discovery בטוח בכלים לפני התכנון או כלול אותו כשלב הראשון. אל תאשר סיום רק כי כלי רץ; אשר לפי תוצאה נצפית.
+הערכת התקדמות במהלך משימה היא שיקול דעת שלך, לא מכסה ולא טקס אוטומטי. במשימה פשוטה אפשר שלא לבצע הערכת ביניים כלל; במשימה מורכבת טיפוסית כ-{recommended_progress_reviews} הערכות בנקודות משמעותיות הן המלצה כללית בלבד; ובמשימה גדולה, מסוכנת או משתנה מותר לבצע יותר ככל שנדרש. הערך כאשר הושלם milestone משמעותי, התקבלה שגיאה או ראיה סותרת, חל שינוי בתוכנית, או לפני פעולה שקשה לתקן. אל תבצע הערכה רק כדי להגיע למספר כלשהו. בכל הערכה בדוק את הראיות שכבר התקבלו והחלט בעצמך אם להמשיך, לאמת, לנסות שוב, לשנות אסטרטגיה, לקרוא ל-`agent_planner` מחדש או לבקש מידע מהמשתמש.
 כאשר מצב משימה פנימי כבר קיים, פעל היררכית לפיו: שמור את המטרה, התקדם שלב-שלב, שנה אסטרטגיה אחרי כשל, ואל תדלג לאישור סופי לפני שבדקת שהתוצאה מתאימה לבקשה.
 חובת דיווח ראשון: כל לולאת סוכן שמפעילה כלים חייבת להתחיל בדיווח ראשוני למשתמש לפני קריאת הכלי הראשונה. אם התשובה אינה מיידית ואתה עומד להפעיל כלי ראשון בתהליך סוכני, כתוב לפני בלוק ה-JSON דיווח מצב קצר, טבעי ומועיל למשתמש. אל תתחיל תהליך סוכני ישר ב-JSON. הכלל של דילוג על דיווחים חוזרים אינו מבטל את הדיווח הראשון.
 כשצריך כלי, אל תכתוב שורת שלב טכנית לכל לולאה. במקום זאת כתוב דיווח מצב למשתמש רק כשיש ערך אמיתי: בתחילת תהליך סוכני, אחרי ממצא משמעותי, אחרי כשל/שינוי אסטרטגיה, לפני פעולה מסוכנת/משנה מצב, או כשברור שהמשתמש ירוויח מהקשר נוסף. הדיווח צריך להיות טבעי, בעברית, בגודל של משפט קצר עד שניים, מעט יותר מפורט מפקודת הכלי, ולהסביר בקצרה מה המצב ומה אתה עומד לבדוק או לבצע עכשיו. דיווח טוב מתייחס לבקשת המשתמש ולתוצאה הרצויה, לא לשם הכלי, נתיב הקובץ, פקודת shell, JSON, או פרט טכני פנימי. למשל: "אני בודק את הקובץ הקיים כדי לשנות רק את אזור התצוגה שביקשת" עדיף על "קורא C:\\Users\\...\\chat.py". אם אתה ממשיך לנסות וריאציות של אותה פעולה, מריץ כלי נוסף כחלק מאותו צעד, או מבצע בדיקת המשך טכנית צפויה, אל תוסיף דיווח חדש; החזר רק בלוק JSON. בלי ברכות, בלי "סטטוס:", בלי התנצלות, בלי רשימות ארוכות, ובלי טקסט אחרי הבלוק:
@@ -1640,7 +1646,15 @@ CWD: {current_dir}
                     raise ApiRequestError(analysis)
         raise ApiRequestError(api_retry_exhausted_analysis(analyze_api_error(self.mode, current_model, error=Exception("retry attempts exhausted"))))
 
-    def _verify_final_response(self, objective, final_response, force=False, return_continue_feedback=False, allow_tool_request=False):
+    def _verify_final_response(
+        self,
+        objective,
+        final_response,
+        force=False,
+        return_continue_feedback=False,
+        allow_tool_request=False,
+        task_state=None,
+    ):
         def _pack(response, continue_feedback=""):
             if return_continue_feedback:
                 return response, continue_feedback
@@ -1650,21 +1664,40 @@ CWD: {current_dir}
             self._trace_agent_phase("verifier", "skipped reason=disabled_or_background")
             return _pack(final_response)
         try:
-            observations = "\n".join(self.recent_tool_observations[-8:])
+            task_observations = task_state.get("observations", []) if isinstance(task_state, dict) else []
+            combined_observations = []
+            recent_observations = list(getattr(self, "recent_tool_observations", []) or [])
+            for observation in list(task_observations)[-60:] + recent_observations[-12:]:
+                observation = str(observation or "").strip()
+                if observation and observation not in combined_observations:
+                    combined_observations.append(observation)
+            observations = "\n".join(combined_observations[-60:]) or "No tool evidence was collected for this response."
+            task_audit_context = "No structured task plan was used."
+            if isinstance(task_state, dict):
+                task_audit_context = json.dumps({
+                    "plan_steps": list(task_state.get("plan_steps", []) or []),
+                    "completed_steps": list(task_state.get("completed_steps", []) or []),
+                    "verification_points": list(task_state.get("verification_points", []) or []),
+                    "failures": list(task_state.get("failures", []) or []),
+                    "risk": task_state.get("risk", ""),
+                    "planner_source": task_state.get("planner_source", ""),
+                }, ensure_ascii=False, indent=2)[:18000]
             self._emit_agent_phase(
                 "verifier",
-                f"start force={bool(force)} response_chars={len(str(final_response or ''))} observations={len(self.recent_tool_observations[-8:])}",
+                f"start force={bool(force)} response_chars={len(str(final_response or ''))} observations={len(combined_observations[-60:])}",
                 status_text="מאמת תשובה סופית...",
             )
             verifier_text = (
                 "You are Smarti's final verifier. Do not answer the user and do not call tools directly.\n"
-                "Verify the answer against actual evidence, not against the fact that tools were executed.\n"
+                "Audit the entire request from the user's point of view, not just the most recent tool call. Check every explicit deliverable and constraint, completeness, correctness, consistency, unresolved failures, and whether the proposed final answer honestly reflects what was actually achieved. Verify claims against actual evidence, never merely against the fact that a tool ran.\n"
+                "Review every planned verification point and every recorded failure. Do not accept a partial result because one part succeeded. A result is satisfactory only when all reasonably obtainable requirements are fulfilled and the response is useful, clear, and candid about any remaining limitation.\n"
+                "For a canvas created in the current turn, inspect only the available raw-source/content evidence: the Open Canvas button and rendered view do not exist until after the final response. Never request a same-turn screenshot or visual canvas check.\n"
                 "Return JSON only:\n"
                 "{\"status\":\"ok|revise|needs_verification_tool|needs_user\",\"reason\":\"...\",\"revision_guidance\":\"...\",\"tool_guidance\":\"...\"}\n"
                 "Use needs_verification_tool when the final answer cannot be confirmed from the observations and a safe tool check should be run before answering. tool_guidance must describe the exact evidence to collect.\n"
                 "Use revise only when the answer can be corrected using existing observations. Use needs_user only when safe tools cannot obtain the missing information or permission.\n"
                 f"Tool-request allowed now: {bool(allow_tool_request)}\n\n"
-                f"מטרה:\n{objective}\n\nתצפיות:\n{observations}\n\nתשובה:\n{final_response}"
+                f"מטרת המשתמש המלאה:\n{objective}\n\nמצב משימה, דרישות אימות וכשלים:\n{task_audit_context}\n\nכל ראיות הכלים שנשמרו למשימה:\n{observations}\n\nהתשובה המוצעת למשתמש:\n{final_response}"
             )
             current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
             if self.mode == "gemini":
@@ -1716,6 +1749,7 @@ CWD: {current_dir}
                     "תקן את התשובה הסופית לפי בדיקת האמינות. אל תזכיר את בדיקת האמינות, אל תוסיף כותרת, "
                     "ואל תטען שבוצעה פעולה שלא נתמכת בתצפיות. אם חסר מידע מהותי, אמור זאת בפשטות למשתמש.\n\n"
                     f"בקשת המשתמש:\n{objective}\n\n"
+                    f"מצב המשימה ודרישות האימות:\n{task_audit_context}\n\n"
                     f"תצפיות כלים:\n{observations}\n\n"
                     f"התשובה המקורית:\n{final_response}\n\n"
                     f"הערת בדיקה פנימית:\n{note}"

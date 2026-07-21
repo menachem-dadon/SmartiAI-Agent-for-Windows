@@ -288,7 +288,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "email_manager": {
-        "description": "Full IMAP/SMTP email tool: list folders, search, read, send, draft, reply, forward, mark, star, archive, move, copy, trash, delete, manage folders, and save attachments.",
+        "description": "Full IMAP/SMTP email tool: list folders, search, read, send, draft, reply, forward, mark, star, archive, move, copy, trash, delete, manage folders, and save attachments. For multi-message research, search metadata first and then read all selected UIDs in one bulk call; do not read many UIDs one by one.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -300,7 +300,7 @@ BUILTIN_TOOL_SCHEMAS = {
                 "folder": {"type": "string", "description": "Folder name for create/delete/rename."},
                 "new_folder": {"type": "string", "description": "New folder name for rename_folder."},
                 "uid": {"type": ["string", "integer"], "description": "Stable IMAP UID of one message."},
-                "uids": {"type": "array", "items": {"type": ["string", "integer"]}, "description": "Stable IMAP UIDs for bulk operations."},
+                "uids": {"type": "array", "items": {"type": ["string", "integer"]}, "description": "Stable IMAP UIDs for bulk operations. Prefer one read call with this field over serial read calls for each UID."},
                 "query": {"type": "string", "description": "Search text or Gmail raw search query."},
                 "from": {"type": "string", "description": "Optional sender search filter."},
                 "to_filter": {"type": "string", "description": "Optional recipient search filter."},
@@ -315,10 +315,10 @@ BUILTIN_TOOL_SCHEMAS = {
                 "search_mode": {"type": "string", "enum": ["auto", "gmail", "imap", "scan"], "description": "auto uses Gmail/IMAP first and falls back to local header scanning when needed."},
                 "scan_bodies": {"type": "boolean", "description": "When search_mode=scan, also inspect message bodies. Slower but deepest."},
                 "scan_limit": {"type": "integer", "description": "Maximum messages to scan locally. 0 means no scan limit."},
-                "include_body": {"type": "boolean", "description": "Include body text in search results."},
+                "include_body": {"type": "boolean", "description": "Include body text in search results. Keep false for broad discovery; fetch bodies afterward with a bulk read call to avoid oversized, truncated results."},
                 "include_headers": {"type": "boolean", "description": "Include selected headers when reading."},
                 "include_attachments": {"type": "boolean", "description": "Include attachment metadata."},
-                "max_body_chars": {"type": "integer", "description": "Maximum body characters per message."},
+                "max_body_chars": {"type": "integer", "description": "Maximum body characters per message. For bulk reading, normally use 2000-4000; very large per-message limits create slow, truncated context and should be reserved for one specific message."},
                 "to": {"type": ["string", "array"], "items": {"type": "string"}, "description": "Recipient(s) for send/reply/forward."},
                 "cc": {"type": ["string", "array"], "items": {"type": "string"}, "description": "CC recipient(s)."},
                 "bcc": {"type": ["string", "array"], "items": {"type": "string"}, "description": "BCC recipient(s)."},
@@ -796,14 +796,15 @@ CANVAS_MANAGER_MODEL_GUIDANCE = """
 6. השתמש בגילוי הדרגתי ובפקדים רק כשהם משרתים את התוכן: טאבים, מסננים, אקורדיונים, תפריטי בחירה, מתגים, סליידרים, timeline או תצוגת־פרטים. כל פקד חייב לשנות מצב או תוכן בפועל; אל תייצר פקדי־דמה. שמור על נגישות, RTL כשהתוכן עברי, וניווט מקלדת בסיסי.
 7. אם המשתמש לא ביקש קנבס אך למשימה יש ערך חזותי או אינטראקטיבי גבוה וברור, מותר להציע פעם אחת ובמשפט קצר הדגמה חזותית. הצע רק כשיש תועלת קונקרטית מעבר לצ'אט, יש מספיק תוכן להדגמה, וההצעה טבעית להמשך השיחה. אל תציע עבור הודעות שגרתיות, תשובות קצרות, או אחרי שהמשתמש כבר סירב; אל תחזור על אותה הצעה באותה משימה. צור קנבס במקרה זה רק אחרי הסכמה מפורשת של המשתמש.
 8. HTML/CSS/JavaScript מקומיים ועצמאיים בלבד: אין CDN, הורדות, חלונות חדשים או גישה למערכת. לתמונות השתמש ב-SVG מקומי בתוך HTML או ב-`images` עם `data_url` מסוג `data:image/...`, שאליו מפנים כ-`smarti-image://<id>`. URL של תמונת רשת מותר רק אם ההנחיה הפעילה מאשרת זאת במפורש. פעולת משתמש בתוך הקנבס נשלחת רק מ-event אמיתי באמצעות `window.SmartiCanvas.send(action, data)`.
-9. בתשובה הסופית תאר בקצרה מה נבנה, בלי להדפיס HTML או JavaScript.
+9. גבול אימות מחייב: עד שהתשובה הסופית נשלחת, כפתור פתיחת הקנבס עדיין לא נוסף והקנבס אינו מוצג. לכן אל תנסה לפתוח אותו, לצלם אותו, או לאמת אותו חזותית באמצעות `screen_manager`, `browser_automation_manager`, `computer_automation_manager` או כלי צילום/מסך אחר. לפני הקריאה ל-`canvas_manager`, בדוק את ה-HTML/CSS/JavaScript הגולמיים, מבנה התוכן, RTL, נגישות בסיסית והפקדים. אחרי תשובת SUCCESS של create/update, התייחס לקבלת המקור ולשמירתו כהשלמת האימות האפשרי בשלב זה וסיים בתשובה סופית. אימות חזותי אפשרי רק בסבב מאוחר יותר, אחרי שהמשתמש פתח את הקנבס וביקש במפורש לבדוק אותו.
+10. בתשובה הסופית תאר בקצרה מה נבנה, בלי להדפיס HTML או JavaScript.
 """.strip()
 
 BUILTIN_TOOL_SCHEMAS["canvas_manager"] = {
     "description": (
         "Creates or updates the optional local Live Visual Canvas shown beside chat. Default to normal chat; use only for an explicit visual/interactive request or when chat cannot express the interaction. "
         "The HTML/CSS/JavaScript runs in an isolated local canvas with network, files, downloads, popups, and media permissions blocked. "
-        "A successful create adds an Open Canvas button that only opens the already-created artifact and never calls the model. "
+        "A successful create adds an Open Canvas button only after the final assistant response; before then the rendered canvas is unavailable, so validate the raw source and never request a screenshot or visual UI check in the same turn. The button only opens the already-created artifact and never calls the model. "
         "For a user form/button, JavaScript may call window.SmartiCanvas.send(action, data); this submits plain user data back through the normal agent run."
     ),
     "inputSchema": {
@@ -1127,6 +1128,8 @@ DEFAULT_SETTINGS = {
     "enable_canvas_remote_images": False,
     "max_agent_loops": 0,
     "enable_hierarchical_agent": True,
+    # Kept under its historical key for settings compatibility. This value is
+    # now prompt-only guidance for a typical complex task, not a hard quota.
     "max_agent_evaluations_per_task": 4,
     "allow_unlimited_agent_evaluations": True,
     "agent_context_compact_after_loops": 4,
