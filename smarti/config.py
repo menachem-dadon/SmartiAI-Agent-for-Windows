@@ -272,7 +272,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "agent_planner": {
-        "description": "כלי פנימי לבקשת תכנון משימה, תכנון המשכי או תכנון מחדש. השתמש בו רק כאשר התכנון ישפר איכות/בטיחות; אל תשתמש בו לברכה, שיחה פשוטה, או פעולה חד-שלבית ברורה. אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, התוכנית חייבת להתחיל בשלב discovery קצר ללמידת הסביבה לפני פעולה משנה. ניתן לקרוא שוב לכלי זה כאשר מידע חדש, שגיאות חוזרות, כשלי אימות או שינויי סביבה מצביעים שהתוכנית הקודמת כבר לא מתאימה.",
+        "description": "כלי פנימי לבקשת תכנון משימה, תכנון המשכי או תכנון מחדש. השתמש בו לפי שיקול דעתך רק כאשר תכנון מפורש ישפר איכות או בטיחות. אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, התוכנית חייבת להתחיל ב-discovery קצר לפני פעולה משנה. ניתן לקרוא שוב לכלי כאשר מידע חדש, שגיאות חוזרות, כשלי אימות או שינויי סביבה מראים שהתוכנית הקודמת כבר אינה מתאימה.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -285,6 +285,28 @@ BUILTIN_TOOL_SCHEMAS = {
                 "mode": {"type": "string", "enum": ["auto", "use_provided_steps", "ask_planner"], "description": "auto ברירת מחדל; use_provided_steps אם סיפקת צעדים טובים; ask_planner אם צריך Planner פנימי נוסף."}
             },
             "required": ["reason"]
+        }
+    },
+    "agent_verifier": {
+        "description": "מאמת סוכני עצמאי לפי שיקול דעת המודל. השתמש בו כאשר נדרשת ביקורת איכות, בטיחות, שלמות או התאמה לראיות לפני תשובה סופית. הכלי בודק הצעת תשובה מול הבקשה, ההקשר ותוצאות הכלים, ומחזיר הסבר והנחיית תיקון או איסוף ראיות אם האימות נכשל. הוא אינו מופעל אוטומטית.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "candidate_answer": {
+                    "type": "string",
+                    "description": "התשובה הסופית המוצעת שאותה יש לבדוק."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "למה אימות עצמאי מועיל במקרה הזה."
+                },
+                "focus": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "נקודות בדיקה מיוחדות, אילוצים או טענות שדורשים ביקורת."
+                }
+            },
+            "required": ["candidate_answer", "reason"]
         }
     },
     "email_manager": {
@@ -800,6 +822,19 @@ CANVAS_MANAGER_MODEL_GUIDANCE = """
 10. בתשובה הסופית תאר בקצרה מה נבנה, בלי להדפיס HTML או JavaScript.
 """.strip()
 
+CANVAS_MANAGER_COMPACT_GUIDANCE = """
+קנבס הוא תוצר חזותי/אינטראקטיבי אופציונלי, לא ברירת מחדל. צור אותו לבקשה מפורשת
+לקנבס/לוח/דשבורד/טופס/תרשים/ממשק, או רק כשבועת צ'אט אינה יכולה לבטא היטב את
+האינטראקציה; אחרת ענה בצ'אט. אם רק נראה שעשוי להועיל, הצע פעם אחת וצור רק אחרי
+הסכמה. הקריאה הישירה היא `canvas_manager` עם action create/update/close ושדות עליונים
+title/html/css/javascript/buttons/images; אין צורך ב-get_tool_info לשימוש רגיל.
+בנה HTML/CSS/JS מקומיים, נגישים, רספונסיביים ו-RTL לפי הצורך, עם היררכיה ופקדים
+אמיתיים—not פקדי דמה. אין CDN, הורדות, חלונות חדשים או גישת מערכת; תמונות לפי מדיניות
+התמונות הפעילה. אמת את המקור, התוכן והפקדים לפני הקריאה. באותו סבב אין עדיין תצוגה
+או כפתור פתיחה, ולכן אסור לבקש צילום מסך/אימות חזותי; SUCCESS מאשר שמירת המקור.
+התשובה הסופית מתארת בקצרה מה נבנה ואינה מדפיסה קוד.
+""".strip()
+
 BUILTIN_TOOL_SCHEMAS["canvas_manager"] = {
     "description": (
         "Creates or updates the optional local Live Visual Canvas shown beside chat. Default to normal chat; use only for an explicit visual/interactive request or when chat cannot express the interaction. "
@@ -1022,6 +1057,7 @@ TOOL_CATEGORY_LABELS = {
 
 TOOL_CATEGORIES = {
     "agent_planner": "schema",
+    "agent_verifier": "schema",
     "get_tool_info": "schema",
     "search_tools": "schema",
     "system_manager": "system",
@@ -1218,6 +1254,7 @@ DEFAULT_SETTINGS = {
     "max_total_task_seconds": 0,
     "codex_request_timeout_seconds": 1800,
     "codex_protocol_repair_attempts": 2,
+    "anthropic_prompt_cache_mode": "auto",
     "long_task_defaults_version": 1,
     "prevent_sleep_during_active_task": True,
     "conversation_summary": "",

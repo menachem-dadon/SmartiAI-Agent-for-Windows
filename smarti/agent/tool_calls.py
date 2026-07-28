@@ -660,20 +660,12 @@ class ToolCallMixin:
         settings = getattr(self, "settings", {}) or {}
         inline_schema_tools = {
             "agent_planner",
+            "agent_verifier",
             "get_tool_info",
             "search_tools",
-            "load_skill",
             "system_manager",
-            "software_manager",
             "file_manager",
             "web_manager",
-            "screen_manager",
-            "background_task_manager",
-            "notification_manager",
-            "memory_manager",
-            "browser_automation_manager",
-            "computer_automation_manager",
-            "extension_manager",
         }
         if not settings.get("enable_tool_search_catalog", True):
             inline_schema_tools.discard("search_tools")
@@ -1138,6 +1130,19 @@ class ToolCallMixin:
             current_messages.append({"role": "assistant", "content": tool_turn_text})
             current_messages.append({"role": "user", "content": payload})
 
+    def _append_internal_verifier_feedback(self, current_messages, tool_turn_text, verifier_feedback):
+        payload = (
+            f"{str(verifier_feedback or '').strip()}\n\n"
+            "This is trusted internal verifier feedback requested by you. Do not quote its tags or "
+            "describe hidden verification machinery to the user. Act on the verdict and explanation."
+        )
+        if self.mode == "gemini":
+            current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
+            current_messages.append({"role": "user", "parts": [{"text": payload}]})
+        else:
+            current_messages.append({"role": "assistant", "content": tool_turn_text})
+            current_messages.append({"role": "user", "content": payload})
+
     def _append_task_state_message(self, current_messages, task_state, include_guidance=True):
         summary = self._task_state_summary(task_state, include_guidance=include_guidance)
         if summary:
@@ -1529,8 +1534,8 @@ class ToolCallMixin:
             if preview:
                 line += f" | {preview}"
             task_state.setdefault("observations", []).append(line[:900])
-            # The final verifier audits the whole task, not merely the final
-            # handful of tool calls. Keep a bounded but substantially complete
+            # A model-requested verifier may audit the whole task, not merely
+            # the last tool call. Keep a bounded but substantially complete
             # per-task ledger; inline compaction still shows only a small tail.
             task_state["observations"] = task_state["observations"][-60:]
             if action == "get_tool_info" and status != "error":
@@ -1651,11 +1656,9 @@ class ToolCallMixin:
         return ""
 
     def _should_run_final_verifier_for_task(self, task_state, final_response, tool_call_counts, iteration):
-        if not final_response or str(final_response).startswith("ERROR_USER") or self._is_background_context():
-            return False
-        # Final verification is comprehensive and independent of whether the
-        # main model happened to use a tool or planner for this response.
-        return True
+        # Compatibility hook only. Verification is now an explicit visible
+        # agent_verifier tool selected by the main model.
+        return False
 
     def _static_code_safety_check(self, code, capability):
         banned_calls = {"eval", "exec", "compile", "__import__", "open", "input", "globals", "locals", "vars", "dir", "getattr", "setattr", "delattr"}

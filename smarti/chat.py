@@ -1333,7 +1333,7 @@ AGENT_TOOL_DEFAULT_ICON_NAMES = ("agent_tool_row_status",)
 AGENT_TOOL_GROUP_ICON_NAMES = ("agent_tool_status", "agent_tool_icon", "tools_icon")
 AGENT_TOOL_MCP_ACTIONS = {"search_mcp", "install_mcp", "run_mcp"}
 AGENT_TOOL_SKILL_ACTIONS = {"list_skills", "search_skills", "install_skill", "install_skill_requirements", "load_skill", "run_skill"}
-AGENT_TOOL_MAIN_ACTIONS = set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner"}
+AGENT_TOOL_MAIN_ACTIONS = set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner", "agent_verifier"}
 AGENT_TOOL_STAGE_ICON_ALIASES = {
     "agent_planner": ("agent_tool_agent_planner",),
     "agent_verifier": ("agent_tool_final_verifier",),
@@ -4432,6 +4432,7 @@ class ChatWindow(QMainWindow):
         app = QApplication.instance()
         if app:
             app.aboutToQuit.connect(self.unregister_voice_hotkey)
+            app.aboutToQuit.connect(self.core.shutdown_title_generation)
 
         if SPEECH_INSTALLED and KEYBOARD_INSTALLED:
             QTimer.singleShot(1500, self.register_voice_hotkey)
@@ -6075,6 +6076,13 @@ class ChatWindow(QMainWindow):
 
     def handle_core_notification(self, kind, payload):
         payload = payload or {}
+        if kind == "chat_title_updated":
+            active = self.core.active_chat_session()
+            if str(active.get("id") or "") == str(payload.get("session_id") or ""):
+                self.refresh_chat_title()
+            if self.history_page is not None:
+                self.history_page.load_sessions()
+            return
         if not hasattr(self, "notifications"):
             return
         if kind == "toast":

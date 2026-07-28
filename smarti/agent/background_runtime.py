@@ -296,7 +296,7 @@ class BackgroundRuntimeMixin:
                         exists = False
                         if target_session_id:
                             with self.chat_store._lock:
-                                exists = any(s.get("id") == target_session_id for s in self.chat_store.data.get("sessions", []))
+                                exists = self.chat_store.has_session(target_session_id)
                         if not exists:
                             session = self.chat_store.create_session(set_active=False)
                             target_session_id = session.get("id")

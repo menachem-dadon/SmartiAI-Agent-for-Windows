@@ -1410,10 +1410,18 @@ class UsageStatsLoadWorker(QThread):
                         memory_usage["completion"] += int(stats.get("completion", 0) or 0)
                         memory_usage["total"] += int(stats.get("total", 0) or 0)
                         continue
-                    bucket = aggregated.setdefault(str(model_name), {"prompt": 0, "completion": 0, "total": 0})
+                    bucket = aggregated.setdefault(str(model_name), {
+                        "prompt": 0,
+                        "completion": 0,
+                        "total": 0,
+                        "cached_prompt": 0,
+                        "cache_write_prompt": 0,
+                    })
                     bucket["prompt"] += int(stats.get("prompt", 0) or 0)
                     bucket["completion"] += int(stats.get("completion", 0) or 0)
                     bucket["total"] += int(stats.get("total", 0) or 0)
+                    bucket["cached_prompt"] += int(stats.get("cached_prompt", 0) or 0)
+                    bucket["cache_write_prompt"] += int(stats.get("cache_write_prompt", 0) or 0)
             except Exception:
                 continue
 
@@ -1424,6 +1432,8 @@ class UsageStatsLoadWorker(QThread):
                 "prompt": int(stats.get("prompt", 0) or 0),
                 "completion": int(stats.get("completion", 0) or 0),
                 "total": int(stats.get("total", 0) or 0),
+                "cached_prompt": int(stats.get("cached_prompt", 0) or 0),
+                "cache_write_prompt": int(stats.get("cache_write_prompt", 0) or 0),
                 "cost_suffix": self._cost_suffix(model_name, stats),
             })
         return rows, memory_usage
@@ -1444,7 +1454,25 @@ class UsageStatsLoadWorker(QThread):
                 litellm_model = f"anthropic/{litellm_model}"
             prompt_tokens = int(stats.get("prompt", 0) or 0)
             completion_tokens = int(stats.get("completion", 0) or 0)
-            cache_key = (litellm_model, prompt_tokens, completion_tokens)
+            cached_prompt_tokens = min(
+                prompt_tokens,
+                max(0, int(stats.get("cached_prompt", 0) or 0)),
+            )
+            cache_write_tokens = min(
+                max(0, prompt_tokens - cached_prompt_tokens),
+                max(0, int(stats.get("cache_write_prompt", 0) or 0)),
+            )
+            uncached_prompt_tokens = max(
+                0,
+                prompt_tokens - cached_prompt_tokens - cache_write_tokens,
+            )
+            cache_key = (
+                litellm_model,
+                prompt_tokens,
+                completion_tokens,
+                cached_prompt_tokens,
+                cache_write_tokens,
+            )
             if cache_key in self._cost_suffix_cache:
                 return self._cost_suffix_cache[cache_key]
             cost = None
@@ -1456,7 +1484,17 @@ class UsageStatsLoadWorker(QThread):
                 input_rate = info.get("input_cost_per_token")
                 output_rate = info.get("output_cost_per_token")
                 if input_rate is not None or output_rate is not None:
-                    cost = prompt_tokens * float(input_rate or 0) + completion_tokens * float(output_rate or 0)
+                    cache_read_rate = info.get(
+                        "cache_read_input_token_cost",
+                        info.get("input_cost_per_token_cache_hit", input_rate),
+                    )
+                    cache_write_rate = info.get("cache_creation_input_token_cost", input_rate)
+                    cost = (
+                        uncached_prompt_tokens * float(input_rate or 0)
+                        + cached_prompt_tokens * float(cache_read_rate or input_rate or 0)
+                        + cache_write_tokens * float(cache_write_rate or input_rate or 0)
+                        + completion_tokens * float(output_rate or 0)
+                    )
             if cost is None:
                 cost = litellm.cost_calculator.cost_per_token(
                     model=litellm_model,
@@ -1648,12 +1686,19 @@ class UsageStatsPage(QWidget):
         total = int(row.get("total", 0) or 0)
         prompt = int(row.get("prompt", 0) or 0)
         completion = int(row.get("completion", 0) or 0)
+        cached_prompt = int(row.get("cached_prompt", 0) or 0)
+        cache_write_prompt = int(row.get("cache_write_prompt", 0) or 0)
         total_lbl = QLabel(f"סה\"כ טוקנים: {total:,}{row.get('cost_suffix') or ''}")
         total_lbl.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 700; border: none;")
         total_lbl.setWordWrap(True)
         card_layout.addWidget(total_lbl)
 
-        details_lbl = QLabel(f"קלט: {prompt:,}  |  פלט: {completion:,}")
+        cache_suffix = ""
+        if cached_prompt or cache_write_prompt:
+            cache_suffix = f"  |  מטמון: {cached_prompt:,}"
+            if cache_write_prompt:
+                cache_suffix += f"  |  כתיבת מטמון: {cache_write_prompt:,}"
+        details_lbl = QLabel(f"קלט: {prompt:,}  |  פלט: {completion:,}{cache_suffix}")
         details_lbl.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 13px; border: none;")
         card_layout.addWidget(details_lbl)
         self.content_layout.addWidget(card)

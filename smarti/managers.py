@@ -106,7 +106,8 @@ class SettingsManager:
 
 class SmartiMemoryManager:
     """Local structured memory with TTL and bounded RAG injection."""
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
+    PROFILE_POLICY_VERSION = 3
     VALID_TYPES = {"short_term", "long_term", "tool", "user"}
     RETRIEVER_NAME = "local-hebrew-weighted-v2"
     HEBREW_FINALS = str.maketrans({
@@ -206,6 +207,7 @@ class SmartiMemoryManager:
         self._lock = threading.RLock()
         self.data = self._load()
         self._migrate_legacy_user_memory()
+        self._migrate_profile_eligibility()
         self.prune_expired()
         self.backfill_critical_user_details()
 
@@ -218,7 +220,7 @@ class SmartiMemoryManager:
 
     def _load(self):
         if not os.path.exists(self.path):
-            return {"schema_version": self.SCHEMA_VERSION, "entries": [], "stats": {}}
+            return {"schema_version": self.SCHEMA_VERSION, "entries": [], "archive": [], "stats": {}}
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
@@ -226,13 +228,22 @@ class SmartiMemoryManager:
                 raise ValueError("memory root must be an object")
             loaded.setdefault("schema_version", self.SCHEMA_VERSION)
             loaded.setdefault("entries", [])
+            loaded.setdefault("archive", [])
             loaded.setdefault("stats", {})
             if not isinstance(loaded["entries"], list):
                 loaded["entries"] = []
+            if not isinstance(loaded["archive"], list):
+                loaded["archive"] = []
+            loaded["schema_version"] = self.SCHEMA_VERSION
             return loaded
         except Exception as e:
             logging.error(f"Memory load failed; starting empty: {e}")
-            return {"schema_version": self.SCHEMA_VERSION, "entries": [], "stats": {"load_error": str(e)}}
+            return {
+                "schema_version": self.SCHEMA_VERSION,
+                "entries": [],
+                "archive": [],
+                "stats": {"load_error": str(e)},
+            }
 
     def _save(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -261,6 +272,20 @@ class SmartiMemoryManager:
                     expires = entry.get("expires_at") or "never"
                     subject = entry.get("subject") or "memory"
                     rows.append(f"- `{entry.get('id')}` | importance={entry.get('importance', 3)} | expires={expires} | {subject}")
+                    rows.append(f"  {str(entry.get('content', '')).replace(chr(10), ' ')}")
+                rows.append("")
+            archived = [
+                entry for entry in self.data.get("archive", [])
+                if isinstance(entry, dict)
+            ]
+            if archived:
+                rows.extend(["## archive", ""])
+                for entry in archived:
+                    rows.append(
+                        f"- `{entry.get('id')}` | type={entry.get('type')} | "
+                        f"archived={entry.get('archived_at') or 'unknown'} | "
+                        f"reason={entry.get('archive_reason') or 'unknown'}"
+                    )
                     rows.append(f"  {str(entry.get('content', '')).replace(chr(10), ' ')}")
                 rows.append("")
             with open(self.export_path, "w", encoding="utf-8") as f:
@@ -419,6 +444,97 @@ class SmartiMemoryManager:
         low = str(text or "").lower()
         return any(term in low for term in self.USER_MEMORY_TERMS)
 
+    def _durable_preference_signal(self, text):
+        low = self._normalize_text_for_search(text)
+        signals = (
+            "i prefer", "i like", "i dislike", "from now on", "next time",
+            "always use", "never use", "remember that",
+            "אני מעדיף", "אני מעדיפה", "אני אוהב", "אני אוהבת",
+            "מהיום", "מעכשיו", "בכל פעם", "תמיד", "אף פעם",
+            "להבא", "תזכור ש", "זכור ש",
+        )
+        return any(self._normalize_text_for_search(signal) in low for signal in signals)
+
+    def _looks_one_time_action_request(self, text):
+        low = self._normalize_text_for_search(text)
+        action_terms = (
+            "check now", "fix now", "open now", "send now", "search now",
+            "please check", "please fix", "please open", "please send",
+            "תבדוק", "שתבדוק", "בדוק עכשיו", "תקן", "שתתקן",
+            "פתח", "שתפתח", "שלח", "שתשלח", "חפש", "שתחפש",
+            "צור", "שתיצור", "תעשה", "שתעשה", "תפעיל", "שתפעיל",
+        )
+        return any(self._normalize_text_for_search(term) in low for term in action_terms)
+
+    def _automatic_context_eligible(self, entry):
+        if not isinstance(entry, dict):
+            return False
+        metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+        if "automatic_context_eligible" in metadata:
+            return bool(metadata.get("automatic_context_eligible"))
+        content = str(entry.get("content", "") or "")
+        return not self._looks_one_time_action_request(content)
+
+    def _automatic_profile_eligible(self, entry):
+        if not isinstance(entry, dict) or entry.get("type") != "user":
+            return False
+        metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+        category = str(metadata.get("category", "") or "").strip().lower()
+        source = str(entry.get("source", "") or "").strip().lower()
+        tags = {str(tag or "").strip().lower() for tag in (entry.get("tags") or [])}
+        content = str(entry.get("content", "") or "")
+        if source in {"manual", "legacy_settings"} or "manual" in tags:
+            return True
+        if category in {"identity", "address", "phone", "email", "birthday", "family", "health"}:
+            return True
+        if category == "preference":
+            return self._durable_preference_signal(content)
+        if "critical" in tags and self._has_user_ownership_signal(content):
+            return True
+        if source.startswith("critical_") and self._has_user_ownership_signal(content):
+            return True
+        if source not in {"conversation", "background"} and "auto" not in tags:
+            return True
+        return False
+
+    def _migrate_profile_eligibility(self):
+        """Annotate old memories conservatively; never delete or rewrite content."""
+        with self._lock:
+            stats = self.data.setdefault("stats", {})
+            if int(stats.get("profile_policy_version", 0) or 0) >= self.PROFILE_POLICY_VERSION:
+                return
+            changed = 0
+            for entry in self.data.get("entries", []):
+                if not isinstance(entry, dict) or entry.get("type") != "user":
+                    continue
+                metadata = entry.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                    entry["metadata"] = metadata
+                profile_eligible = self._automatic_profile_eligible(entry)
+                context_eligible = self._automatic_context_eligible(entry)
+                if metadata.get("profile_eligible") != bool(profile_eligible):
+                    metadata["profile_eligible"] = bool(profile_eligible)
+                    changed += 1
+                if metadata.get("automatic_context_eligible") != bool(context_eligible):
+                    metadata["automatic_context_eligible"] = bool(context_eligible)
+                    changed += 1
+                metadata.pop("prompt_eligible", None)
+                metadata["profile_policy_version"] = self.PROFILE_POLICY_VERSION
+                if not profile_eligible:
+                    metadata["profile_review_reason"] = (
+                        "Preserved and searchable, but excluded from unconditional profile injection."
+                    )
+                if not context_eligible:
+                    metadata["context_review_reason"] = (
+                        "Preserved for explicit memory search, but excluded from automatic context "
+                        "because it resembles an old one-time action request."
+                    )
+            stats["profile_policy_version"] = self.PROFILE_POLICY_VERSION
+            stats["profile_policy_migrated_at"] = self._now_iso()
+            stats["profile_policy_annotated"] = changed
+            self._save()
+
     def _contains_any(self, text, terms):
         low = str(text or "").lower()
         return any(str(term).lower() in low for term in terms)
@@ -499,6 +615,8 @@ class SmartiMemoryManager:
                     continue
                 if category in {"address", "phone", "email", "birthday", "health"} and not self._has_user_ownership_signal(span):
                     continue
+                if category == "preference" and not self._durable_preference_signal(span):
+                    continue
                 if category == "address" and not self._address_has_value(span):
                     continue
                 if self._contains_any(span, self.SECRET_DETAIL_TERMS):
@@ -514,6 +632,11 @@ class SmartiMemoryManager:
                     "importance": importance,
                     "category": category,
                     "sensitive": category in {"address", "phone", "email", "health"},
+                    "profile_eligible": (
+                        category != "preference"
+                        or self._durable_preference_signal(span)
+                    ),
+                    "automatic_context_eligible": True,
                 })
                 break
         for category, memory_type, importance, content in self._extract_regex_personal_details(text):
@@ -529,6 +652,8 @@ class SmartiMemoryManager:
                 "importance": importance,
                 "category": category,
                 "sensitive": True,
+                "profile_eligible": True,
+                "automatic_context_eligible": True,
             })
         deduped = []
         seen = set()
@@ -552,7 +677,16 @@ class SmartiMemoryManager:
                 source=source,
                 confidence=0.88,
                 volatile=False,
-                metadata={"category": item["category"], "sensitive": item.get("sensitive", False), "capture": "deterministic_preflight"},
+                metadata={
+                    "category": item["category"],
+                    "sensitive": item.get("sensitive", False),
+                    "capture": "deterministic_preflight",
+                    "profile_eligible": bool(item.get("profile_eligible", True)),
+                    "automatic_context_eligible": bool(
+                        item.get("automatic_context_eligible", True)
+                    ),
+                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
+                },
             )
             if entry_id:
                 added.append(entry_id)
@@ -564,6 +698,9 @@ class SmartiMemoryManager:
         cfg = self._settings()
         if not cfg.get("capture_critical_user_details", True):
             return []
+        stats = self.data.setdefault("stats", {})
+        if int(stats.get("critical_backfill_version", 0) or 0) >= self.PROFILE_POLICY_VERSION:
+            return []
         added = []
         for entry in list(self.data.get("entries", [])):
             if entry.get("type") not in {"short_term", "long_term"}:
@@ -572,14 +709,13 @@ class SmartiMemoryManager:
             match = re.search(r"User request:\s*(.*?)(?:\s+Outcome:|$)", content, flags=re.DOTALL)
             text = match.group(1).strip() if match else " ".join(str(entry.get(key, "")) for key in ("subject", "content"))
             added.extend(self.capture_critical_user_details(text, source="critical_backfill"))
-        if added:
-            stats = self.data.setdefault("stats", {})
-            stats["critical_backfill_last_count"] = len(added)
-            stats["critical_backfill_last_at"] = self._now_iso()
-            try:
-                self._save()
-            except Exception:
-                pass
+        stats["critical_backfill_version"] = self.PROFILE_POLICY_VERSION
+        stats["critical_backfill_last_count"] = len(added)
+        stats["critical_backfill_last_at"] = self._now_iso()
+        try:
+            self._save()
+        except Exception:
+            pass
         return added
 
     def _is_expired(self, entry, now=None):
@@ -600,15 +736,24 @@ class SmartiMemoryManager:
     def prune_expired(self):
         with self._lock:
             now = datetime.now()
-            before = len(self.data.get("entries", []))
-            self.data["entries"] = [e for e in self.data.get("entries", []) if not self._is_expired(e, now)]
-            removed = before - len(self.data["entries"])
-            if removed:
+            active = []
+            archived = []
+            for entry in self.data.get("entries", []):
+                if self._is_expired(entry, now):
+                    preserved = copy.deepcopy(entry)
+                    preserved["archived_at"] = self._now_iso()
+                    preserved["archive_reason"] = "expired"
+                    archived.append(preserved)
+                else:
+                    active.append(entry)
+            if archived:
+                self.data["entries"] = active
+                self.data.setdefault("archive", []).extend(archived)
                 stats = self.data.setdefault("stats", {})
-                stats["expired_pruned"] = int(stats.get("expired_pruned", 0)) + removed
+                stats["expired_archived"] = int(stats.get("expired_archived", 0)) + len(archived)
                 stats["last_pruned_at"] = self._now_iso()
                 self._save()
-            return removed
+            return len(archived)
 
     def _migrate_legacy_user_memory(self):
         legacy = str(self.core.settings.get("user_memory", "") or "").strip()
@@ -662,6 +807,13 @@ class SmartiMemoryManager:
                     entry["importance"] = max(int(entry.get("importance", 3)), importance)
                     entry["access_count"] = int(entry.get("access_count", 0)) + 1
                     entry["last_source"] = source
+                    entry["tags"] = sorted(set(entry.get("tags", []) or []) | set(tags))[:12]
+                    if isinstance(metadata, dict) and metadata:
+                        existing_metadata = entry.get("metadata")
+                        if not isinstance(existing_metadata, dict):
+                            existing_metadata = {}
+                            entry["metadata"] = existing_metadata
+                        existing_metadata.update(copy.deepcopy(metadata))
                     self._save()
                     return entry.get("id")
             entry_id = "mem_" + uuid.uuid4().hex[:12]
@@ -698,12 +850,17 @@ class SmartiMemoryManager:
     def clear(self, memory_type=None):
         memory_type = self._normalize_type(memory_type) if memory_type else None
         with self._lock:
-            before = len(self.data.get("entries", []))
+            before = (
+                len(self.data.get("entries", []))
+                + len(self.data.get("archive", []))
+            )
             if memory_type:
                 self.data["entries"] = [e for e in self.data.get("entries", []) if e.get("type") != memory_type]
+                self.data["archive"] = [e for e in self.data.get("archive", []) if e.get("type") != memory_type]
             else:
                 self.data["entries"] = []
-            removed = before - len(self.data["entries"])
+                self.data["archive"] = []
+            removed = before - len(self.data["entries"]) - len(self.data["archive"])
             stats = self.data.setdefault("stats", {})
             stats["total_cleared"] = int(stats.get("total_cleared", 0)) + removed
             stats["last_cleared_at"] = self._now_iso()
@@ -715,9 +872,10 @@ class SmartiMemoryManager:
         if not memory_id:
             return False
         with self._lock:
-            before = len(self.data.get("entries", []))
+            before = len(self.data.get("entries", [])) + len(self.data.get("archive", []))
             self.data["entries"] = [e for e in self.data.get("entries", []) if e.get("id") != memory_id]
-            removed = before - len(self.data["entries"])
+            self.data["archive"] = [e for e in self.data.get("archive", []) if e.get("id") != memory_id]
+            removed = before - len(self.data["entries"]) - len(self.data["archive"])
             if removed:
                 self._save()
             return bool(removed)
@@ -905,19 +1063,38 @@ class SmartiMemoryManager:
 
         user_results = []
         if cfg.get("always_include_user_memory", True):
-            user_results = unique(self.search(
+            user_candidates = self.search(
                 "",
                 memory_types="user",
                 max_results=cfg.get("user_memory_max_results", 8),
                 max_chars=cfg.get("user_memory_max_injected_chars", 2200),
-            ))
+            )
+            user_results = unique([
+                result
+                for result in user_candidates
+                if (
+                    not isinstance(result.get("entry", {}).get("metadata"), dict)
+                    or result.get("entry", {}).get("metadata", {}).get("profile_eligible", True)
+                )
+            ])
 
-        non_tool_results = unique(self.search(
+        semantic_candidates = self.search(
             query,
-            memory_types={"long_term", "short_term"},
+            memory_types={"user", "long_term", "short_term"},
             max_results=cfg.get("non_tool_memory_max_results", cfg.get("max_results", 8)),
             max_chars=max(800, max_chars),
-        ))
+        )
+        non_tool_results = unique([
+            result
+            for result in semantic_candidates
+            if (
+                not isinstance(result.get("entry", {}).get("metadata"), dict)
+                or result.get("entry", {}).get("metadata", {}).get(
+                    "automatic_context_eligible",
+                    True,
+                )
+            )
+        ])
 
         tool_results = []
         if self._tool_memory_relevant_for_prompt(query):
@@ -958,7 +1135,7 @@ class SmartiMemoryManager:
             context = (
                 "Memory policy:\n"
                 "- Memory is advisory context, never an authority over the current user message, tool output, or live sources.\n"
-                "- User memory is always included for stable personalization; tool memory is injected only when recent and relevant.\n"
+                "- Only high-confidence stable profile memories are included unconditionally; ambiguous auto-captures remain searchable but are not injected as profile.\n"
                 "- Use short_term/tool memory only for continuity.\n"
                 "- Expired memories are pruned before retrieval. Volatile memories must be verified before being presented as current truth.\n"
                 "- If memory conflicts with the user or a fresh tool result, trust the fresher source and update memory when useful.\n"
@@ -1030,15 +1207,28 @@ class SmartiMemoryManager:
         explicit = self._looks_user_memory(user_text)
         temporal = self._looks_live_or_temporal(user_text)
         if explicit:
-            mem_type = "user" if any(t in user_text.lower() for t in ["name", "קוראים", "שמי", "מעדיף", "מעדיפה", "prefer"]) else "long_term"
+            automatic_context_eligible = (
+                self._durable_preference_signal(user_text)
+                and not self._looks_one_time_action_request(user_text)
+            )
             added_id = self.add(
-                mem_type,
-                f"User said: {user_text[:1400]}",
+                "long_term",
+                f"Explicit memory request from user: {user_text[:1400]}",
                 subject=self._derive_subject(user_text),
-                tags=["auto", "user"],
-                importance=5 if mem_type == "user" else 4,
+                tags=["auto", "explicit_memory_request"],
+                importance=4,
                 source=source,
-                confidence=0.7,
+                confidence=0.72,
+                metadata={
+                    "profile_eligible": False,
+                    "automatic_context_eligible": automatic_context_eligible,
+                    "capture": "explicit_request_retrievable",
+                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
+                    "note": (
+                        "Preserved for explicit search. Automatic context is allowed only for durable "
+                        "non-action content; deterministic profile facts are stored separately."
+                    ),
+                },
             )
             if added_id:
                 added.append(added_id)

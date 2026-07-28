@@ -15,6 +15,9 @@ tests/*
 !tests/test_doctor.py
 !tests/test_codex_signin.py
 !tests/test_codex_quota_ui.py
+!tests/test_context_efficiency.py
+!tests/test_history_sqlite.py
+!tests/test_memory_profile_policy.py
 
 
 # Virtual environments and build artifacts

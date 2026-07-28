@@ -12,11 +12,13 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import threading
 import time
 import zipfile
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Callable, Optional
@@ -26,6 +28,7 @@ from .common import (
     APP_DIR,
     ATTACHMENTS_DIR,
     AUDIT_LOG_FILE,
+    CHAT_HISTORY_DB_FILE,
     CHAT_HISTORY_FILE,
     EDGE_TTS_INSTALLED,
     GTTS_INSTALLED,
@@ -301,7 +304,6 @@ class SmartiDiagnostic:
         expected = {
             SETTINGS_FILE: dict,
             MEMORY_FILE: dict,
-            CHAT_HISTORY_FILE: dict,
             USAGE_FILE: dict,
             ACTIVE_TASK_CHECKPOINT_FILE: dict,
             MCP_CONFIG_FILE: dict,
@@ -320,6 +322,34 @@ class SmartiDiagnostic:
                 valid.append(label)
             except Exception as exc:
                 invalid.append(f"{label}: {type(exc).__name__}")
+
+        chat_db = CHAT_HISTORY_DB_FILE
+        if os.path.exists(chat_db):
+            try:
+                with closing(sqlite3.connect(chat_db, timeout=5.0)) as connection:
+                    quick_check = connection.execute("PRAGMA quick_check").fetchone()
+                    tables = {
+                        row[0]
+                        for row in connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        ).fetchall()
+                    }
+                if not quick_check or quick_check[0] != "ok" or not {"sessions", "messages"} <= tables:
+                    raise ValueError("SQLite chat store failed integrity/schema validation")
+                valid.append(os.path.basename(chat_db))
+            except Exception as exc:
+                invalid.append(f"{os.path.basename(chat_db)}: {type(exc).__name__}")
+        elif os.path.exists(CHAT_HISTORY_FILE):
+            try:
+                with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as handle:
+                    legacy_history = json.load(handle)
+                if not isinstance(legacy_history, dict):
+                    raise ValueError("legacy chat root is not an object")
+                valid.append(os.path.basename(CHAT_HISTORY_FILE))
+            except Exception as exc:
+                invalid.append(f"{os.path.basename(CHAT_HISTORY_FILE)}: {type(exc).__name__}")
+        else:
+            missing.append(os.path.basename(chat_db))
 
         backups = sorted(glob.glob(os.path.join(USER_DATA_DIR, "smarti_settings.backup.*.json")), reverse=True)
         if invalid:
@@ -1567,16 +1597,44 @@ class SmartiDiagnostic:
     def _create_backup(self):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         archive = os.path.join(USER_DATA_DIR, f"smarti_diagnostic_backup.{stamp}.zip")
+        chat_db = CHAT_HISTORY_DB_FILE
         candidates = [
             SETTINGS_FILE, MEMORY_FILE, CHAT_HISTORY_FILE, USAGE_FILE,
             ACTIVE_TASK_CHECKPOINT_FILE, MCP_CONFIG_FILE,
         ]
         written = []
+        sqlite_snapshot = ""
+        if os.path.isfile(chat_db):
+            handle = tempfile.NamedTemporaryFile(
+                prefix="smarti-chat-backup-",
+                suffix=".sqlite3",
+                delete=False,
+            )
+            sqlite_snapshot = handle.name
+            handle.close()
+            try:
+                with closing(sqlite3.connect(chat_db, timeout=15.0)) as source:
+                    with closing(sqlite3.connect(sqlite_snapshot)) as destination:
+                        source.backup(destination)
+            except Exception:
+                try:
+                    os.remove(sqlite_snapshot)
+                except OSError:
+                    pass
+                sqlite_snapshot = ""
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
             for path in candidates:
                 if os.path.isfile(path):
                     bundle.write(path, arcname=os.path.basename(path))
                     written.append(os.path.basename(path))
+            if sqlite_snapshot:
+                bundle.write(sqlite_snapshot, arcname=os.path.basename(chat_db))
+                written.append(os.path.basename(chat_db))
+        if sqlite_snapshot:
+            try:
+                os.remove(sqlite_snapshot)
+            except OSError:
+                pass
         if not written:
             os.remove(archive)
             raise RuntimeError("No Smarti data files were available to back up")

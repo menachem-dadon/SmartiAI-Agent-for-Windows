@@ -591,7 +591,7 @@ class CodexSignInProvider:
         """Return a TOML-safe basic string without hand-escaping Windows paths."""
         return json.dumps(str(value), ensure_ascii=False)
 
-    def _build_model_instructions(self, messages) -> str:
+    def _build_model_instructions(self, messages, purpose: str = "agent") -> str:
         """Build the per-turn base instructions that replace Codex's agent prompt."""
         system_instructions = []
         for message in messages or []:
@@ -602,6 +602,8 @@ class CodexSignInProvider:
             content = self._message_text(message.get("content"))
             if content:
                 system_instructions.append(content)
+        if str(purpose or "agent").strip().lower() != "agent":
+            return "\n\n".join(system_instructions).strip()
         return (
             "You are the reasoning model inside SmartiAI. The SmartiAI system instructions below are binding.\n\n"
             "SMARTIAI AGENT CONTRACT:\n"
@@ -629,7 +631,7 @@ class CodexSignInProvider:
             + "\n[/SMARTIAI SYSTEM INSTRUCTIONS]\n"
         )
 
-    def _build_prompt(self, messages) -> str:
+    def _build_prompt(self, messages, purpose: str = "agent") -> str:
         conversation = []
         for message in messages or []:
             if not isinstance(message, dict):
@@ -639,7 +641,12 @@ class CodexSignInProvider:
                 continue
             content = self._message_text(message.get("content"))
             if content:
+                if str(purpose or "agent").strip().lower() != "agent":
+                    conversation.append(content)
+                    continue
                 conversation.append(f"[{role}]\n{content}")
+        if str(purpose or "agent").strip().lower() != "agent":
+            return "\n\n".join(conversation)
         return (
             "Continue the SmartiAI conversation using the loaded SmartiAI system instructions.\n\n"
             + "\n\n".join(conversation)
@@ -695,6 +702,7 @@ class CodexSignInProvider:
                 raw_usage = event.get("usage") or {}
                 if isinstance(raw_usage, dict):
                     input_tokens = int(raw_usage.get("input_tokens") or 0)
+                    cached_input_tokens = int(raw_usage.get("cached_input_tokens") or 0)
                     output_tokens = int(raw_usage.get("output_tokens") or 0)
                     reasoning_tokens = int(raw_usage.get("reasoning_output_tokens") or 0)
                     completion_tokens = output_tokens + reasoning_tokens
@@ -703,6 +711,8 @@ class CodexSignInProvider:
                         "completion": completion_tokens,
                         "total": input_tokens + completion_tokens,
                     }
+                    if cached_input_tokens:
+                        usage["cached_prompt"] = cached_input_tokens
         return (messages[-1] if messages else ""), usage
 
     @staticmethod
@@ -763,6 +773,7 @@ class CodexSignInProvider:
         timeout: int = 180,
         reasoning_effort: str = "medium",
         cancel_event=None,
+        purpose: str = "agent",
     ) -> tuple[str, dict]:
         """Run a single response through official, ephemeral ``codex exec``."""
         status = self.connection_status()
@@ -772,10 +783,12 @@ class CodexSignInProvider:
         selected_reasoning_effort = str(reasoning_effort or "medium").strip().lower()
         if selected_reasoning_effort not in CODEX_REASONING_EFFORTS:
             selected_reasoning_effort = "medium"
-        instructions_path = self._write_temporary_model_instructions(self._build_model_instructions(messages))
+        purpose = str(purpose or "agent").strip().lower()
+        instructions_path = self._write_temporary_model_instructions(
+            self._build_model_instructions(messages, purpose=purpose)
+        )
         output_schema_path = None
         try:
-            output_schema_path = self._write_temporary_output_schema()
             args = [
                 # Keep ChatGPT sign-in from CODEX_HOME, but never inherit the
                 # user's Desktop/CLI tools, MCP servers, hooks, or instructions.
@@ -784,8 +797,10 @@ class CodexSignInProvider:
                 "--config", 'web_search="disabled"',
                 "--config", f'model_reasoning_effort="{selected_reasoning_effort}"',
                 "--config", f"model_instructions_file={self._toml_string(instructions_path)}",
-                "--output-schema", str(output_schema_path),
             ]
+            if purpose == "agent":
+                output_schema_path = self._write_temporary_output_schema()
+                args.extend(("--output-schema", str(output_schema_path)))
             if selected_model and selected_model.lower() not in {"codex default", "default"}:
                 args.extend(("--model", selected_model))
             # ``-`` makes stdin the full Codex prompt.  The system instructions
@@ -794,7 +809,7 @@ class CodexSignInProvider:
             code, stdout, stderr = self._run(
                 args,
                 timeout=timeout,
-                input_text=self._build_prompt(messages),
+                input_text=self._build_prompt(messages, purpose=purpose),
                 cancel_event=cancel_event,
             )
         finally:
@@ -813,4 +828,6 @@ class CodexSignInProvider:
         response, usage = self._parse_jsonl_execution(stdout)
         if not response:
             raise CodexProtocolError("Codex החזיר פלט מובנה בלי תשובה סופית.", stdout)
-        return self._decode_structured_turn(response), usage
+        if purpose == "agent":
+            return self._decode_structured_turn(response), usage
+        return str(response or "").strip(), usage

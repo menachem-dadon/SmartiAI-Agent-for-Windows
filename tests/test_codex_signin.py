@@ -832,10 +832,10 @@ class AgentToolLoopRegressionTests(unittest.TestCase):
         self.assertIn("read 7 selected messages and one PDF", captured["prompt"])
         self.assertIn("evidence 29", captured["prompt"])
 
-    def test_final_verifier_runs_for_direct_answers_and_audits_failures(self):
+    def test_final_verifier_is_never_forced_for_direct_answers(self):
         self.core._is_background_context = mock.Mock(return_value=False)
 
-        self.assertTrue(self.core._should_run_final_verifier_for_task({}, "direct answer", {}, 1))
+        self.assertFalse(self.core._should_run_final_verifier_for_task({}, "direct answer", {}, 1))
 
         self.core.mode = "openai_codex_signin"
         self.core.settings = {"enable_final_verifier": True, "selected_openai_codex_signin_model": "gpt-5.6-sol"}

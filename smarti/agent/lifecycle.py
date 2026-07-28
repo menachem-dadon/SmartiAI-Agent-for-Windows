@@ -30,6 +30,13 @@ class LifecycleMixin:
         self._active_process_lock = threading.RLock()
         self._tool_context_lock = threading.RLock()
         self._task_checkpoint_lock = threading.RLock()
+        self._title_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="smarti-title",
+        )
+        self._pending_title_sessions = set()
+        self._pending_title_lock = threading.RLock()
+        self._usage_lock = threading.RLock()
         self._active_processes = set()
         self._foreground_cancel_event = None
         self.cancel_event = threading.Event()
@@ -93,6 +100,16 @@ class LifecycleMixin:
         except Exception:
             logging.exception("Notification callback failed.")
             return False
+
+    def shutdown_title_generation(self):
+        executor = getattr(self, "_title_executor", None)
+        if executor is None:
+            return
+        self._title_executor = None
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            logging.exception("Could not stop the conversation-title executor cleanly.")
 
     def _ensure_tools_dir(self):
         if not os.path.exists(TOOLS_DIR): os.makedirs(TOOLS_DIR)

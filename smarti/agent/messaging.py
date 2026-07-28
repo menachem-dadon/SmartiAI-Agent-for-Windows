@@ -299,8 +299,6 @@ class MessagingMixin:
         run_cancel_event = cancel_event if cancel_event is not None else threading.Event()
         iteration = 0
         final_response = ""
-        final_response_verified = False
-        final_verification_tool_requests = 0
         chat_turn_recorded = False
         current_model = ""
         task_state = None
@@ -684,6 +682,68 @@ class MessagingMixin:
                         checkpoint("planner_feedback")
                         continue
 
+                    if first_call.get("action") == "agent_verifier":
+                        verifier_args = first_call.get("arguments", {}) or {}
+                        verifier_event_id = uuid.uuid4().hex
+                        emit_tool_process_report(pre_text, [first_call], source="model")
+                        self._emit_agent_process_event(
+                            "tool_start",
+                            tools=[self._agent_tool_event_item(
+                                "agent_verifier",
+                                verifier_args,
+                                event_id=verifier_event_id,
+                            )],
+                            parallel=False,
+                        )
+                        if self.status_callback:
+                            self.status_callback("מאמת את התוצאה...")
+                        if getattr(self, "agent_runtime", None):
+                            self.agent_runtime.trace(
+                                "select_tool",
+                                f"agent_verifier {json.dumps(verifier_args, ensure_ascii=False)[:1200]}",
+                            )
+                        verifier_feedback, verifier_passed = self._run_agent_verifier(
+                            verifier_args,
+                            task_state,
+                            current_messages,
+                            current_model,
+                        )
+                        verifier_result = {
+                            "action": "agent_verifier",
+                            "effective_action": "agent_verifier",
+                            "arguments": verifier_args,
+                            "event_id": verifier_event_id,
+                            "feedback": verifier_feedback,
+                            "message": None,
+                            "status": "ok" if verifier_passed else "error",
+                            "output": verifier_feedback,
+                        }
+                        self._emit_agent_process_event(
+                            "tool_finish",
+                            results=[self._agent_tool_event_item(
+                                "agent_verifier",
+                                verifier_args,
+                                status=verifier_result["status"],
+                                output=verifier_feedback,
+                                feedback=verifier_feedback,
+                                event_id=verifier_event_id,
+                            )],
+                        )
+                        self._record_results_in_task_state(task_state, [verifier_result])
+                        self._append_internal_verifier_feedback(
+                            current_messages,
+                            tool_turn_text,
+                            verifier_feedback,
+                        )
+                        if len(raw_tool_calls) > 1:
+                            self._append_user_feedback_message(
+                                current_messages,
+                                "הנחיית מערכת: `agent_verifier` הופעל. קריאות כלי נוספות מאותה תגובה לא בוצעו. "
+                                "פעל עכשיו לפי תוצאת האימות."
+                            )
+                        checkpoint("verifier_feedback")
+                        continue
+
                     selected_calls = [first_call]
                     parallel = False
                     skipped_extra_calls = max(0, len(raw_tool_calls) - 1)
@@ -856,58 +916,13 @@ class MessagingMixin:
                         checkpoint("internal_artifact_feedback")
                         continue
                     final_response = ai_response_text.replace("##", "").strip()
-                    should_verify_candidate = self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration)
-                    if should_verify_candidate and not run_cancel_event.is_set():
-                        allow_verification_tool = (
-                            final_verification_tool_requests < 2
-                            and (MAX_ITERATIONS is None or iteration < MAX_ITERATIONS)
-                        )
-                        try:
-                            verified_response, verifier_feedback = self._verify_final_response(
-                                history_user_text or user_text,
-                                final_response,
-                                force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))),
-                                return_continue_feedback=True,
-                                allow_tool_request=allow_verification_tool,
-                                task_state=task_state,
-                            )
-                        except SmartiCancelled:
-                            final_response = "הפעולה נעצרה לבקשת המשתמש."
-                            break
-                        if verifier_feedback and allow_verification_tool:
-                            final_verification_tool_requests += 1
-                            final_response = ""
-                            self._append_user_feedback_message(current_messages, verifier_feedback)
-                            checkpoint("final_verifier_requested_tool")
-                            continue
-                        final_response = self._strip_internal_artifacts(verified_response)
-                        final_response = re.sub(r'\n+\s*בדיקת אמינות\s*:.*$', '', final_response, flags=re.DOTALL).strip()
-                        if not final_response or self._looks_like_internal_artifact(final_response):
-                            final_response = self._fallback_final_response(user_text)
-                        final_response_verified = True
                     logging.info("לא זוהה אובייקט JSON תקין לקריאת כלי, מסיים לולאה (טקסט חופשי).")
                     break
 
             if MAX_ITERATIONS is not None and iteration >= MAX_ITERATIONS and not final_response:
                 final_response = "ERROR_USER: סמארטי ביצע יותר מדי פעולות ברצף והופסק."
 
-            should_verify_final = (not final_response_verified) and self._should_run_final_verifier_for_task(task_state, final_response, tool_call_counts, iteration)
-            if should_verify_final and not run_cancel_event.is_set():
-                try:
-                    final_response = self._verify_final_response(
-                        history_user_text or user_text,
-                        final_response,
-                        force=bool(tool_call_counts or (task_state and task_state.get("planner_enabled"))),
-                        task_state=task_state,
-                    )
-                except SmartiCancelled:
-                    final_response = "הפעולה נעצרה לבקשת המשתמש."
-                final_response = self._strip_internal_artifacts(final_response)
-                final_response = re.sub(r'\n+\s*בדיקת אמינות\s*:.*$', '', final_response, flags=re.DOTALL).strip()
-                if not final_response or self._looks_like_internal_artifact(final_response):
-                    final_response = self._fallback_final_response(user_text)
-            elif not should_verify_final:
-                self._trace_agent_phase("verifier", "skipped reason=not_needed_for_final_response")
+            self._trace_agent_phase("verifier", "automatic_verification=disabled model_discretion")
 
             if loaded_skill_contexts:
                 self._apply_loaded_skill_system_context(current_messages, {}, runtime_base_system_prompt)
