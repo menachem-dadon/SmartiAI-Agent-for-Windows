@@ -448,13 +448,7 @@ class WindowsNotificationCenter(QObject):
         return self._native_ready
 
     def _plain_text(self, text, limit=360):
-        cleaned = html.unescape(str(text or ""))
-        cleaned = re.sub(r"```.*?```", "קטע קוד", cleaned, flags=re.DOTALL)
-        cleaned = re.sub(r"<[^>]+>", " ", cleaned)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if len(cleaned) > limit:
-            cleaned = cleaned[: max(0, limit - 3)].rstrip() + "..."
-        return cleaned
+        return markdown_to_plain_text(text, limit=limit)
 
     def _logo_image(self):
         if not self._api:

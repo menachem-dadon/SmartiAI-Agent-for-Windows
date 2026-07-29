@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from smarti.codex_signin import CodexSignInProvider
+from smarti.common import markdown_to_plain_text
 from smarti.config import DEFAULT_SETTINGS, PUBLIC_BUILTIN_TOOLS
 from smarti.core import SmartiCore
 from smarti.history import ChatSessionStore
@@ -41,7 +42,6 @@ def _prompt_core(active_tools):
     core.settings["enable_browser_automation"] = True
     core.settings["enable_computer_control"] = True
     core.settings["enable_hierarchical_agent"] = "agent_planner" in active_tools
-    core.settings["enable_final_verifier"] = "agent_verifier" in active_tools
     core.settings["tools_config"] = {
         name: name in active_tools
         for name in PUBLIC_BUILTIN_TOOLS
@@ -203,57 +203,26 @@ class ContextEfficiencyTests(unittest.TestCase):
         )
         self.assertLess(estimate, 30)
 
-    def test_verifier_failure_returns_actionable_explanation_to_the_loop(self):
-        core = SmartiCore.__new__(SmartiCore)
-        core.mode = "local"
-        core.settings = copy.deepcopy(DEFAULT_SETTINGS)
-        core.recent_tool_observations = ["file_manager: output file exists"]
-        core._log_usage = lambda *args: None
-        core._trace_agent_phase = lambda *args, **kwargs: None
-        captured = {}
+    def test_verification_is_main_loop_policy_with_enabled_tools(self):
+        core = _prompt_core({
+            "get_tool_info",
+            "system_manager",
+            "file_manager",
+            "web_manager",
+        })
 
-        def verify(model, messages, request_options=None, **kwargs):
-            captured["messages"] = messages
-            captured["options"] = request_options
-            return json.dumps({
-                "status": "needs_evidence",
-                "reason": "לא נבדק תוכן הקובץ.",
-                "guidance": "קרא את הקובץ והשווה לדרישות.",
-                "evidence_needed": ["תוכן הקובץ הסופי"],
-            }, ensure_ascii=False), {"prompt": 50, "completion": 10, "total": 60}
-
-        core._handle_api_request_with_retry = verify
-        task_state = {
-            "objective": "צור קובץ מדויק",
-            "observations": ["הקובץ נשמר"],
-            "failures": [],
-            "verification_points": ["בדוק תוכן"],
+        prompt = core._load_system_prompt("צור קובץ")
+        native_names = {
+            item["name"]
+            for item in core._native_tool_specs_for_request()
         }
-        feedback, passed = core._run_agent_verifier(
-            {
-                "candidate_answer": "הקובץ מוכן ומדויק.",
-                "reason": "נדרשת בדיקת תוצר",
-                "focus": ["דיוק התוכן"],
-            },
-            task_state,
-            [
-                {"role": "system", "content": "large permanent system prompt"},
-                {"role": "user", "content": "צור קובץ מדויק"},
-                {"role": "user", "content": "UNTRUSTED_TOOL_OUTPUT: file saved"},
-            ],
-            "test-model",
-        )
 
-        self.assertFalse(passed)
-        self.assertIn("VERIFICATION_FAILED", feedback)
-        self.assertIn("לא נבדק תוכן הקובץ", feedback)
-        self.assertIn("קרא את הקובץ", feedback)
-        request_payload = json.loads(captured["messages"][-1]["content"])
-        self.assertEqual(request_payload["candidate_answer"], "הקובץ מוכן ומדויק.")
-        self.assertIn("UNTRUSTED_TOOL_OUTPUT", json.dumps(request_payload, ensure_ascii=False))
-        self.assertNotIn("large permanent system prompt", json.dumps(request_payload, ensure_ascii=False))
-        self.assertEqual(captured["options"]["purpose"], "verifier")
-        self.assertFalse(core._should_run_final_verifier_for_task({}, "תשובה", {}, 1))
+        self.assertIn("אימות הוא מדיניות בתוך לולאת העבודה", prompt)
+        self.assertIn("אחרי יצירת קובץ קרא או אתר אותו", prompt)
+        self.assertIn("אם בדיקה נכשלת", prompt)
+        self.assertNotIn("agent_verifier", prompt)
+        self.assertNotIn("agent_verifier", native_names)
+        self.assertTrue({"system_manager", "file_manager", "web_manager"}.issubset(native_names))
 
     def test_native_calls_are_canonicalized_for_the_existing_loop(self):
         core = SmartiCore.__new__(SmartiCore)
@@ -407,6 +376,68 @@ class ContextEfficiencyTests(unittest.TestCase):
         self.assertEqual(text, "title")
         self.assertIn("prompt_cache_options", cache_fallback_attempts[0])
         self.assertNotIn("prompt_cache_options", cache_fallback_attempts[1])
+
+    def test_generic_compatible_provider_never_receives_cache_controls(self):
+        core = _request_core("openrouter")
+        calls = []
+
+        def create(**kwargs):
+            calls.append(copy.deepcopy(kwargs))
+            return SimpleNamespace(
+                usage=None,
+                choices=[SimpleNamespace(message=SimpleNamespace(
+                    content="done",
+                    tool_calls=[],
+                ))],
+            )
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        core._openai_compatible_client_for_request = lambda _mode: client
+
+        text, _usage = core._handle_api_request_with_retry(
+            "gpt-5.6",
+            [
+                {"role": "system", "content": "stable"},
+                {"role": "user", "content": "UNTRUSTED_TOOL_OUTPUT one"},
+                {"role": "user", "content": "SMARTI_PARALLEL_TOOL_RESULTS two"},
+            ],
+            retry_wait_times=[],
+            request_options={"provider_mode": "openrouter"},
+        )
+
+        self.assertEqual(text, "done")
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(core._prompt_cache_controls_allowed("openrouter"))
+        self.assertFalse(core._prompt_cache_controls_allowed("openai_codex_signin"))
+        self.assertTrue(core._prompt_cache_controls_allowed("openai"))
+        for key in ("prompt_cache_options", "prompt_cache_key", "cache_control"):
+            self.assertNotIn(key, calls[0])
+
+    def test_notification_markdown_is_removed_without_losing_content(self):
+        source = (
+            "# הושלם\n"
+            "- **הקובץ** נשמר ב-[שולחן העבודה](file:///C:/Users/Test/Desktop/result.md).\n"
+            "> אפשר לפתוח את `result.md` כעת.\n"
+            "![תצוגה](https://example.test/image.png)\n"
+            "```python\nprint('hidden')\n```"
+        )
+
+        plain = markdown_to_plain_text(source)
+
+        self.assertIn("הושלם", plain)
+        self.assertIn("הקובץ", plain)
+        self.assertIn("שולחן העבודה", plain)
+        self.assertIn("result.md", plain)
+        self.assertIn("תצוגה", plain)
+        self.assertIn("קטע קוד", plain)
+        for marker in ("#", "**", "[שולחן", "](", "`", "![", "```", ">"):
+            self.assertNotIn(marker, plain)
+        self.assertEqual(markdown_to_plain_text("", fallback="מוכן"), "מוכן")
+        shortened = markdown_to_plain_text("**" + ("א" * 100) + "**", limit=20)
+        self.assertEqual(len(shortened), 20)
+        self.assertTrue(shortened.endswith("..."))
 
     def test_gemini_and_anthropic_native_tool_blocks_are_canonicalized(self):
         gemini = _request_core("gemini")

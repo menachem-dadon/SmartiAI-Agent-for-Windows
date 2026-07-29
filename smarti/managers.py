@@ -107,7 +107,7 @@ class SettingsManager:
 class SmartiMemoryManager:
     """Local structured memory with TTL and bounded RAG injection."""
     SCHEMA_VERSION = 2
-    PROFILE_POLICY_VERSION = 3
+    PROFILE_POLICY_VERSION = 4
     VALID_TYPES = {"short_term", "long_term", "tool", "user"}
     RETRIEVER_NAME = "local-hebrew-weighted-v2"
     HEBREW_FINALS = str.maketrans({
@@ -460,9 +460,13 @@ class SmartiMemoryManager:
         action_terms = (
             "check now", "fix now", "open now", "send now", "search now",
             "please check", "please fix", "please open", "please send",
+            "write", "create", "save", "generate", "download", "install", "run", "build",
             "תבדוק", "שתבדוק", "בדוק עכשיו", "תקן", "שתתקן",
             "פתח", "שתפתח", "שלח", "שתשלח", "חפש", "שתחפש",
-            "צור", "שתיצור", "תעשה", "שתעשה", "תפעיל", "שתפעיל",
+            "צור", "שתיצור", "כתוב", "שתכתוב", "שמור", "שתשמור",
+            "הורד", "שתוריד", "התקן", "שתתקין", "הרץ", "שתריץ",
+            "בנה", "שתבנה", "עדכן", "שתעדכן",
+            "תעשה", "שתעשה", "תפעיל", "שתפעיל",
         )
         return any(self._normalize_text_for_search(term) in low for term in action_terms)
 
@@ -505,30 +509,54 @@ class SmartiMemoryManager:
                 return
             changed = 0
             for entry in self.data.get("entries", []):
-                if not isinstance(entry, dict) or entry.get("type") != "user":
+                if not isinstance(entry, dict):
                     continue
                 metadata = entry.get("metadata")
                 if not isinstance(metadata, dict):
                     metadata = {}
                     entry["metadata"] = metadata
-                profile_eligible = self._automatic_profile_eligible(entry)
-                context_eligible = self._automatic_context_eligible(entry)
-                if metadata.get("profile_eligible") != bool(profile_eligible):
-                    metadata["profile_eligible"] = bool(profile_eligible)
-                    changed += 1
+                memory_type = str(entry.get("type", "") or "")
+                source = str(entry.get("source", "") or "").strip().lower()
+                tags = {str(tag or "").strip().lower() for tag in (entry.get("tags") or [])}
+                content = str(entry.get("content", "") or "")
+                auto_generated = (
+                    source in {"conversation", "background", "tool_observation"}
+                    or "auto" in tags
+                    or memory_type == "tool"
+                )
+                continuity_only = bool(
+                    auto_generated
+                    and (
+                        memory_type == "tool"
+                        or "temporal" in tags
+                        or bool(entry.get("volatile"))
+                        or self._looks_one_time_action_request(content)
+                    )
+                )
+                context_eligible = not continuity_only
+                if metadata.get("automatic_context_eligible") is False:
+                    context_eligible = False
+                if memory_type == "user":
+                    profile_eligible = self._automatic_profile_eligible(entry)
+                    if metadata.get("profile_eligible") != bool(profile_eligible):
+                        metadata["profile_eligible"] = bool(profile_eligible)
+                        changed += 1
+                    if not profile_eligible:
+                        metadata["profile_review_reason"] = (
+                            "Preserved and searchable, but excluded from unconditional profile injection."
+                        )
                 if metadata.get("automatic_context_eligible") != bool(context_eligible):
                     metadata["automatic_context_eligible"] = bool(context_eligible)
                     changed += 1
+                if metadata.get("continuity_only") != continuity_only:
+                    metadata["continuity_only"] = continuity_only
+                    changed += 1
                 metadata.pop("prompt_eligible", None)
                 metadata["profile_policy_version"] = self.PROFILE_POLICY_VERSION
-                if not profile_eligible:
-                    metadata["profile_review_reason"] = (
-                        "Preserved and searchable, but excluded from unconditional profile injection."
-                    )
                 if not context_eligible:
                     metadata["context_review_reason"] = (
-                        "Preserved for explicit memory search, but excluded from automatic context "
-                        "because it resembles an old one-time action request."
+                        "Preserved for explicit search and continuity requests, but excluded from "
+                        "unconditional context because it is an old action or conversation trace."
                     )
             stats["profile_policy_version"] = self.PROFILE_POLICY_VERSION
             stats["profile_policy_migrated_at"] = self._now_iso()
@@ -1012,7 +1040,7 @@ class SmartiMemoryManager:
         if not cfg.get("tool_memory_requires_relevance", True):
             return True
         intent = self._query_intent(query)
-        if intent.get("continuity") or intent.get("project"):
+        if intent.get("continuity") or intent.get("tool"):
             return True
         q = str(query or "").lower()
         continuity_terms = [
@@ -1047,6 +1075,8 @@ class SmartiMemoryManager:
         if not cfg.get("rag_enabled", True):
             return "Memory RAG is disabled. Use search_memory if the user explicitly asks to inspect memory."
         query = str(query or "")
+        query_intent = self._query_intent(query)
+        explicit_continuity = bool(query_intent.get("continuity"))
         max_chars = int(cfg.get("max_injected_chars", 4200) or 4200)
         seen_ids = set()
 
@@ -1088,10 +1118,17 @@ class SmartiMemoryManager:
             result
             for result in semantic_candidates
             if (
-                not isinstance(result.get("entry", {}).get("metadata"), dict)
-                or result.get("entry", {}).get("metadata", {}).get(
-                    "automatic_context_eligible",
-                    True,
+                (
+                    isinstance(result.get("entry", {}).get("metadata"), dict)
+                    and result.get("entry", {}).get("metadata", {}).get("continuity_only")
+                    and explicit_continuity
+                )
+                or (
+                    not isinstance(result.get("entry", {}).get("metadata"), dict)
+                    or result.get("entry", {}).get("metadata", {}).get(
+                        "automatic_context_eligible",
+                        True,
+                    )
                 )
             )
         ])
@@ -1244,6 +1281,12 @@ class SmartiMemoryManager:
                 source=source,
                 confidence=0.55,
                 volatile=True,
+                metadata={
+                    "automatic_context_eligible": False,
+                    "continuity_only": True,
+                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
+                    "capture": "temporal_continuity_retrievable",
+                },
             )
             if added_id:
                 added.append(added_id)
@@ -1252,6 +1295,9 @@ class SmartiMemoryManager:
             content = f"Recent exchange. User request: {user_text[:1000]}"
             if outcome and not outcome.startswith("ERROR_USER"):
                 content += f" Outcome: {outcome}"
+            continuity_only = bool(
+                temporal or self._looks_one_time_action_request(user_text)
+            )
             added_id = self.add(
                 "short_term",
                 content,
@@ -1262,6 +1308,12 @@ class SmartiMemoryManager:
                 source=source,
                 confidence=0.55,
                 volatile=temporal,
+                metadata={
+                    "automatic_context_eligible": not continuity_only,
+                    "continuity_only": continuity_only,
+                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
+                    "capture": "conversation_context_retrievable",
+                },
             )
             if added_id:
                 added.append(added_id)
@@ -1284,6 +1336,12 @@ class SmartiMemoryManager:
                 confidence=0.8 if status != "error" else 0.65,
                 tool_name=action,
                 volatile=volatile_tool,
+                metadata={
+                    "automatic_context_eligible": False,
+                    "continuity_only": True,
+                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
+                    "capture": "tool_continuity_retrievable",
+                },
             )
             if added_id:
                 added.append(added_id)

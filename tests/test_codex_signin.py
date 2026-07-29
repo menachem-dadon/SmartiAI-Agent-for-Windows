@@ -29,6 +29,7 @@ class CodexSignInProviderTests(unittest.TestCase):
     def _codex_jsonl_response(
         text="תשובה",
         input_tokens=10,
+        cached_input_tokens=0,
         output_tokens=4,
         reasoning_tokens=0,
         tool_name=None,
@@ -64,6 +65,7 @@ class CodexSignInProviderTests(unittest.TestCase):
                         "type": "turn.completed",
                         "usage": {
                             "input_tokens": input_tokens,
+                            "cached_input_tokens": cached_input_tokens,
                             "output_tokens": output_tokens,
                             "reasoning_output_tokens": reasoning_tokens,
                         },
@@ -210,7 +212,17 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.provider.connection_status = mock.Mock(
             return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
         )
-        self.provider._run = mock.Mock(return_value=(0, self._codex_jsonl_response("תשובה", 12, 5, 3), ""))
+        self.provider._run = mock.Mock(return_value=(
+            0,
+            self._codex_jsonl_response(
+                "תשובה",
+                input_tokens=12,
+                cached_input_tokens=7,
+                output_tokens=5,
+                reasoning_tokens=3,
+            ),
+            "",
+        ))
 
         response, usage = self.provider.complete(
             [
@@ -221,11 +233,15 @@ class CodexSignInProviderTests(unittest.TestCase):
         )
 
         self.assertEqual(response, "תשובה")
-        self.assertEqual(usage, {"prompt": 12, "completion": 8, "total": 20})
+        self.assertEqual(
+            usage,
+            {"prompt": 12, "completion": 8, "total": 20, "cached_prompt": 7},
+        )
         args = self.provider._run.call_args.args[0]
         self.assertEqual(args[:2], ["exec", "--json"])
         self.assertIn("--json", args)
         self.assertIn("--ignore-user-config", args)
+        self.assertIn("--ephemeral", args)
         self.assertIn("read-only", args)
         self.assertIn("--skip-git-repo-check", args)
         self.assertIn("--model", args)
@@ -802,69 +818,6 @@ class AgentToolLoopRegressionTests(unittest.TestCase):
         }])
 
         self.assertEqual(task_state["loaded_tool_schemas"]["email_manager"], "EMAIL SCHEMA BODY")
-
-    def test_final_verifier_receives_retained_task_evidence(self):
-        self.core.mode = "openai_codex_signin"
-        self.core.settings = {"enable_final_verifier": True, "selected_openai_codex_signin_model": "gpt-5.6-sol"}
-        self.core.recent_tool_observations = ["- list_folders | ok"]
-        self.core._is_background_context = mock.Mock(return_value=False)
-        self.core._emit_agent_phase = mock.Mock()
-        self.core._trace_agent_phase = mock.Mock()
-        self.core._log_usage = mock.Mock()
-        captured = {}
-
-        def verify(_model, messages):
-            captured["prompt"] = messages[-1]["content"]
-            return '{"status":"ok","reason":"evidence present"}', {}
-
-        self.core._handle_api_request_with_retry = verify
-
-        task_observations = [f"- evidence {index}" for index in range(30)]
-        task_observations[0] = "- email_manager | ok | read 7 selected messages and one PDF"
-        result = self.core._verify_final_response(
-            "build news canvas",
-            "done",
-            force=True,
-            task_state={"observations": task_observations},
-        )
-
-        self.assertEqual(result, "done")
-        self.assertIn("read 7 selected messages and one PDF", captured["prompt"])
-        self.assertIn("evidence 29", captured["prompt"])
-
-    def test_final_verifier_is_never_forced_for_direct_answers(self):
-        self.core._is_background_context = mock.Mock(return_value=False)
-
-        self.assertFalse(self.core._should_run_final_verifier_for_task({}, "direct answer", {}, 1))
-
-        self.core.mode = "openai_codex_signin"
-        self.core.settings = {"enable_final_verifier": True, "selected_openai_codex_signin_model": "gpt-5.6-sol"}
-        self.core.recent_tool_observations = []
-        self.core._emit_agent_phase = mock.Mock()
-        self.core._trace_agent_phase = mock.Mock()
-        self.core._log_usage = mock.Mock()
-        captured = {}
-
-        def verify(_model, messages):
-            captured["prompt"] = messages[-1]["content"]
-            return '{"status":"ok","reason":"complete"}', {}
-
-        self.core._handle_api_request_with_retry = verify
-        self.core._verify_final_response(
-            "complete every requested item",
-            "done",
-            task_state={
-                "plan_steps": ["collect", "create"],
-                "completed_steps": ["collect"],
-                "verification_points": ["confirm every requested item"],
-                "failures": ["one attachment failed"],
-                "observations": ["- first evidence", "- final evidence"],
-            },
-        )
-
-        self.assertIn("confirm every requested item", captured["prompt"])
-        self.assertIn("one attachment failed", captured["prompt"])
-        self.assertIn("first evidence", captured["prompt"])
 
     @unittest.skipUnless(os.name == "nt", "Windows execution state is Windows-specific")
     def test_active_task_sleep_prevention_is_scoped_and_released(self):

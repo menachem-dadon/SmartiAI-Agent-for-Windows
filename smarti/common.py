@@ -1030,5 +1030,40 @@ def estimate_text_tokens(text):
     return max(1, int(len(text) / 4))
 
 
+def markdown_to_plain_text(text, limit=None, fallback=""):
+    """Convert common Markdown to readable plain text for native OS surfaces."""
+    cleaned = html.unescape(str(text or ""))
+    cleaned = re.sub(r"```[\s\S]*?```", " קטע קוד ", cleaned)
+    cleaned = re.sub(r"~~~[\s\S]*?~~~", " קטע קוד ", cleaned)
+    cleaned = re.sub(
+        r"!\[([^\]]*)\]\([^)]+\)",
+        lambda match: match.group(1).strip() or "תמונה",
+        cleaned,
+    )
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"\[([^\]]+)\]\[[^\]]*\]", r"\1", cleaned)
+    cleaned = re.sub(r"<((?:https?|mailto):[^>\s]+)>", r"\1", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(?m)^\s{0,3}(?:#{1,6}|>+)\s*", "", cleaned)
+    cleaned = re.sub(r"(?m)^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?", "", cleaned)
+    cleaned = re.sub(r"(?m)^\s*(?:[-*_]\s*){3,}$", " ", cleaned)
+    cleaned = re.sub(r"`([^`\n]+)`", r"\1", cleaned)
+    cleaned = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__([^_\n]+)__", r"\1", cleaned)
+    cleaned = re.sub(r"~~([^~\n]+)~~", r"\1", cleaned)
+    cleaned = re.sub(r"(?<!\w)\*([^*\n]+)\*(?!\w)", r"\1", cleaned)
+    cleaned = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"\1", cleaned)
+    cleaned = re.sub(r"\\([\\`*_{}\[\]()#+\-.!>])", r"\1", cleaned)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = cleaned.replace("|", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    try:
+        max_length = int(limit) if limit is not None else 0
+    except (TypeError, ValueError):
+        max_length = 0
+    if max_length > 0 and len(cleaned) > max_length:
+        cleaned = cleaned[:max(0, max_length - 3)].rstrip() + "..."
+    return cleaned or str(fallback or "")
+
+
 
 __all__ = [name for name in globals() if not name.startswith("__")]

@@ -660,7 +660,6 @@ class ToolCallMixin:
         settings = getattr(self, "settings", {}) or {}
         inline_schema_tools = {
             "agent_planner",
-            "agent_verifier",
             "get_tool_info",
             "search_tools",
             "system_manager",
@@ -1122,19 +1121,6 @@ class ToolCallMixin:
             "המשך כעת לפי מצב המשימה. אל תציג את מצב המשימה או את הודעת ה-Planner למשתמש.\n"
             "[SMARTI_PLANNER_END]\n\n"
             f"{self._task_state_summary(task_state, include_guidance=True)}"
-        )
-        if self.mode == "gemini":
-            current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
-            current_messages.append({"role": "user", "parts": [{"text": payload}]})
-        else:
-            current_messages.append({"role": "assistant", "content": tool_turn_text})
-            current_messages.append({"role": "user", "content": payload})
-
-    def _append_internal_verifier_feedback(self, current_messages, tool_turn_text, verifier_feedback):
-        payload = (
-            f"{str(verifier_feedback or '').strip()}\n\n"
-            "This is trusted internal verifier feedback requested by you. Do not quote its tags or "
-            "describe hidden verification machinery to the user. Act on the verdict and explanation."
         )
         if self.mode == "gemini":
             current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
@@ -1654,11 +1640,6 @@ class ToolCallMixin:
             self._trace_agent_phase("evaluator", f"skipped iteration={iteration} error={redact_sensitive_text(str(e), self.settings)[:300]}")
             logging.warning(f"Task evaluator skipped: {e}")
         return ""
-
-    def _should_run_final_verifier_for_task(self, task_state, final_response, tool_call_counts, iteration):
-        # Compatibility hook only. Verification is now an explicit visible
-        # agent_verifier tool selected by the main model.
-        return False
 
     def _static_code_safety_check(self, code, capability):
         banned_calls = {"eval", "exec", "compile", "__import__", "open", "input", "globals", "locals", "vars", "dir", "getattr", "setattr", "delattr"}

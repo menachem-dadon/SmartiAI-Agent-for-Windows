@@ -1333,9 +1333,10 @@ AGENT_TOOL_DEFAULT_ICON_NAMES = ("agent_tool_row_status",)
 AGENT_TOOL_GROUP_ICON_NAMES = ("agent_tool_status", "agent_tool_icon", "tools_icon")
 AGENT_TOOL_MCP_ACTIONS = {"search_mcp", "install_mcp", "run_mcp"}
 AGENT_TOOL_SKILL_ACTIONS = {"list_skills", "search_skills", "install_skill", "install_skill_requirements", "load_skill", "run_skill"}
-AGENT_TOOL_MAIN_ACTIONS = set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner", "agent_verifier"}
+AGENT_TOOL_MAIN_ACTIONS = set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner"}
 AGENT_TOOL_STAGE_ICON_ALIASES = {
     "agent_planner": ("agent_tool_agent_planner",),
+    # Render old persisted traces only; agent_verifier is no longer an active tool.
     "agent_verifier": ("agent_tool_final_verifier",),
     "final_verifier": ("agent_tool_final_verifier",),
     "smarti_final_verifier": ("agent_tool_final_verifier",),
@@ -4268,6 +4269,8 @@ class ChatWindow(QMainWindow):
     tts_status_signal = pyqtSignal(bool)
     core_notification_signal = pyqtSignal(str, object)
     INITIAL_THINKING_DELAY_MS = 1200
+    HISTORY_INITIAL_MESSAGE_LIMIT = 32
+    HISTORY_OLDER_MESSAGE_LIMIT = 24
     voice_hotkey_signal = pyqtSignal()
     background_task_start_signal = pyqtSignal(str, str, str)
     background_task_step_signal = pyqtSignal(str, object)
@@ -4279,9 +4282,17 @@ class ChatWindow(QMainWindow):
 
     def active_chat_title(self):
         try:
-            session = self.core.active_chat_session()
+            metadata_loader = getattr(self.core, "active_chat_session_metadata", None)
+            session = (
+                metadata_loader()
+                if callable(metadata_loader)
+                else self.core.active_chat_session()
+            )
             title = str(session.get("title", "") or "").strip()
-            if session.get("messages") and title and title != DEFAULT_CHAT_TITLE:
+            has_messages = bool(
+                session.get("message_count", len(session.get("messages", []) or []))
+            )
+            if has_messages and title and title != DEFAULT_CHAT_TITLE:
                 return title
         except Exception:
             pass
@@ -6055,13 +6066,7 @@ class ChatWindow(QMainWindow):
             QTimer.singleShot(0, self.voice_overlay.position_near_owner)
 
     def _plain_notification_text(self, text, limit=520):
-        cleaned = html.unescape(str(text or ""))
-        cleaned = re.sub(r"```.*?```", "קטע קוד", cleaned, flags=re.DOTALL)
-        cleaned = re.sub(r"<[^>]+>", " ", cleaned)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if len(cleaned) > limit:
-            cleaned = cleaned[:max(0, limit - 3)].rstrip() + "..."
-        return cleaned or "סמארטי השיב."
+        return markdown_to_plain_text(text, limit=limit, fallback="סמארטי השיב.")
 
     def show_response_notification(self, response):
         tray_preview = self._plain_notification_text(response, 240)
@@ -6497,7 +6502,7 @@ class ChatWindow(QMainWindow):
         self.update_action_btn_visuals()
         QTimer.singleShot(0, self._update_chat_bottom_padding)
 
-    def add_message(self, text, is_user, show_actions=True, attachments=None, canvases=None, anchor_user=False, is_background_task=False, animate=True, defer_actions=False):
+    def add_message(self, text, is_user, show_actions=True, attachments=None, canvases=None, anchor_user=False, is_background_task=False, animate=True, defer_actions=False, layout_index=None):
         attachments = normalize_attachments(attachments or [])
         if not text and is_user and not attachments: return
         self._set_welcome_visible(False)
@@ -6514,7 +6519,10 @@ class ChatWindow(QMainWindow):
             parent=self.chat_widget,
         )
         self._wire_message_container(container)
-        self.chat_layout.addWidget(container)
+        if layout_index is None:
+            self.chat_layout.addWidget(container)
+        else:
+            self.chat_layout.insertWidget(max(0, int(layout_index)), container)
         if animate:
             QTimer.singleShot(0, container.start_entry_animation)
         else:
@@ -6804,6 +6812,8 @@ class ChatWindow(QMainWindow):
         self.tts_active = False
         self.active_tts_container = None
         self._last_user_anchor_container = None
+        self._history_older_button = None
+        self._history_page_loading = False
         while self.chat_layout.count():
             item = self.chat_layout.takeAt(0)
             widget = item.widget()
@@ -6824,13 +6834,9 @@ class ChatWindow(QMainWindow):
         metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
         return metadata.get("kind") == "welcome" or metadata.get("ui_only") is True
 
-    def load_active_chat_session(self):
-        self._chat_load_generation = int(getattr(self, "_chat_load_generation", 0) or 0) + 1
-        generation = self._chat_load_generation
-        self._clear_chat_widgets()
-        messages = self.core.active_chat_messages()
-        visible_messages = []
-        for message in messages:
+    def _visible_history_messages(self, messages):
+        visible = []
+        for message in messages or []:
             role = message.get("role")
             content = str(message.get("content", "") or "")
             metadata = message.get("metadata", {}) if isinstance(message.get("metadata", {}), dict) else {}
@@ -6839,7 +6845,122 @@ class ChatWindow(QMainWindow):
                 continue
             if not content.strip() and not attachments:
                 continue
-            visible_messages.append((role, content, metadata, attachments))
+            visible.append((role, content, metadata, attachments))
+        return visible
+
+    def _update_history_older_button(self):
+        button = getattr(self, "_history_older_button", None)
+        has_older = bool(getattr(self, "_history_has_older", False))
+        older_count = max(0, int(getattr(self, "_history_older_count", 0) or 0))
+        if not has_older:
+            if button is not None:
+                self.chat_layout.removeWidget(button)
+                button.deleteLater()
+                self._history_older_button = None
+            return
+        if button is None:
+            button = QPushButton()
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setMinimumHeight(34)
+            button.setStyleSheet(
+                f"QPushButton {{ color: {MUTED_TEXT_COLOR}; background: {GLASS_COLOR}; "
+                f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 17px; padding: 6px 14px; }}"
+                f"QPushButton:hover {{ color: {TEXT_COLOR}; background: {HOVER_TINT}; }}"
+                f"QPushButton:disabled {{ color: {SUBTLE_TEXT_COLOR}; }}"
+            )
+            button.clicked.connect(self._load_older_history_messages)
+            self.chat_layout.insertWidget(0, button, 0, Qt.AlignmentFlag.AlignHCenter)
+            self._history_older_button = button
+        button.setText(f"טען הודעות קודמות ({older_count})")
+        button.setEnabled(not bool(getattr(self, "_history_page_loading", False)))
+
+    def _restore_history_scroll_position(self, old_maximum, old_value):
+        bar = self.scroll.verticalScrollBar()
+        added_height = max(0, bar.maximum() - int(old_maximum))
+        bar.setValue(min(bar.maximum(), int(old_value) + added_height))
+
+    def _load_older_history_messages(self):
+        if getattr(self, "_history_page_loading", False) or not getattr(self, "_history_has_older", False):
+            return
+        generation = getattr(self, "_chat_load_generation", 0)
+        self._history_page_loading = True
+        self._update_history_older_button()
+        button = getattr(self, "_history_older_button", None)
+        if button is not None:
+            button.setText("טוען הודעות קודמות...")
+        page = self.core.active_chat_messages_page(
+            before_ordinal=getattr(self, "_history_before_ordinal", None),
+            limit=self.HISTORY_OLDER_MESSAGE_LIMIT,
+        )
+        visible_messages = self._visible_history_messages(page.get("messages", []))
+        old_bar = self.scroll.verticalScrollBar()
+        old_maximum = old_bar.maximum()
+        old_value = old_bar.value()
+        history_containers = []
+        base_index = 1 if getattr(self, "_history_older_button", None) is not None else 0
+
+        def add_batch(index=0, batch_size=6):
+            if generation != getattr(self, "_chat_load_generation", None):
+                return
+            for offset, (role, content, metadata, attachments) in enumerate(
+                visible_messages[index:index + batch_size]
+            ):
+                is_bg = bool(metadata.get("triggered_by_background"))
+                container = self.add_message(
+                    content,
+                    is_user=(role == "user"),
+                    attachments=attachments,
+                    canvases=metadata.get("canvases", []) if role == "assistant" else None,
+                    is_background_task=is_bg,
+                    animate=False,
+                    defer_actions=True,
+                    layout_index=base_index + index + offset,
+                )
+                if container is not None:
+                    history_containers.append(container)
+                if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
+                    container.bubble.restore_agent_process(metadata.get("agent_process"))
+            next_index = index + batch_size
+            if next_index < len(visible_messages):
+                QTimer.singleShot(5, lambda: add_batch(next_index, batch_size))
+                return
+            self._history_before_ordinal = page.get("next_before_ordinal")
+            self._history_has_older = bool(page.get("has_older"))
+            self._history_older_count = int(page.get("older_count", 0) or 0)
+            self._history_page_loading = False
+            self._update_history_older_button()
+
+            def finish():
+                if generation != getattr(self, "_chat_load_generation", None):
+                    return
+                self._restore_history_scroll_position(old_maximum, old_value)
+                for container in history_containers:
+                    container.reveal_deferred_actions()
+
+            QTimer.singleShot(0, lambda: QTimer.singleShot(0, finish))
+
+        QTimer.singleShot(0, add_batch)
+
+    def load_active_chat_session(self):
+        self._chat_load_generation = int(getattr(self, "_chat_load_generation", 0) or 0) + 1
+        generation = self._chat_load_generation
+        self._clear_chat_widgets()
+        page_loader = getattr(self.core, "active_chat_messages_page", None)
+        if callable(page_loader):
+            page = page_loader(limit=self.HISTORY_INITIAL_MESSAGE_LIMIT)
+        else:
+            messages = self.core.active_chat_messages()
+            page = {
+                "messages": messages[-self.HISTORY_INITIAL_MESSAGE_LIMIT:],
+                "total_count": len(messages),
+                "has_older": len(messages) > self.HISTORY_INITIAL_MESSAGE_LIMIT,
+                "older_count": max(0, len(messages) - self.HISTORY_INITIAL_MESSAGE_LIMIT),
+                "next_before_ordinal": max(0, len(messages) - self.HISTORY_INITIAL_MESSAGE_LIMIT),
+            }
+        visible_messages = self._visible_history_messages(page.get("messages", []))
+        self._history_before_ordinal = page.get("next_before_ordinal")
+        self._history_has_older = bool(page.get("has_older"))
+        self._history_older_count = int(page.get("older_count", 0) or 0)
 
         if not visible_messages:
             self._set_welcome_visible(True, refresh_text=True)
@@ -6848,6 +6969,7 @@ class ChatWindow(QMainWindow):
 
         self._set_welcome_visible(False)
         self.refresh_chat_title()
+        self._update_history_older_button()
         history_containers = []
 
         def add_batch(index=0, batch_size=8):

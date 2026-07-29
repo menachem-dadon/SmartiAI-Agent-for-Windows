@@ -104,6 +104,37 @@ class ChatHistorySqliteTests(unittest.TestCase):
             self.assertFalse(store.apply_generated_title(session_id, "אסור לדרוס"))
             self.assertEqual(store.active_session()["title"], "כותרת המשתמש")
 
+    def test_message_pages_return_latest_then_older_without_data_loss(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "chats.json"))
+            session_id = store.active_session()["id"]
+            for index in range(60):
+                store.add_turn(
+                    f"user-{index:03d}",
+                    f"assistant-{index:03d}",
+                    session_id=session_id,
+                )
+
+            metadata = store.active_session_metadata()
+            latest = store.messages_page(session_id, limit=32)
+            older = store.messages_page(
+                session_id,
+                before_ordinal=latest["next_before_ordinal"],
+                limit=24,
+            )
+
+            self.assertEqual(metadata["message_count"], 120)
+            self.assertEqual(len(metadata["messages"]), 0)
+            self.assertEqual(len(latest["messages"]), 32)
+            self.assertEqual(latest["messages"][0]["content"], "user-044")
+            self.assertEqual(latest["messages"][-1]["content"], "assistant-059")
+            self.assertTrue(latest["has_older"])
+            self.assertEqual(latest["older_count"], 88)
+            self.assertEqual(len(older["messages"]), 24)
+            self.assertEqual(older["messages"][0]["content"], "user-032")
+            self.assertEqual(older["messages"][-1]["content"], "assistant-043")
+            self.assertEqual(len(store.messages(session_id)), 120)
+
 
 if __name__ == "__main__":
     unittest.main()

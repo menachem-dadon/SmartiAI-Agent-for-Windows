@@ -146,6 +146,109 @@ class MemoryProfilePolicyTests(unittest.TestCase):
                 for entry in manager.data["entries"]
             ))
 
+    def test_previous_one_time_exchange_requires_explicit_continuity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = SmartiMemoryManager(
+                _MemoryCore(),
+                str(Path(directory) / "memory.json"),
+            )
+            manager.auto_capture_turn(
+                "מה מזג האוויר מחר באלעד? כתוב את התוצאה בקובץ בשולחן העבודה",
+                "בדקתי את התחזית ושמרתי weather.txt בשולחן העבודה.",
+                tool_records=[{
+                    "tool": "web_manager",
+                    "status": "ok",
+                    "preview": "Weather for Elad tomorrow",
+                }],
+            )
+
+            unrelated = manager.build_prompt_context(
+                "צור תיקייה בשולחן העבודה ובנה בה אתר HTML של Windows 11"
+            )
+            continued = manager.build_prompt_context(
+                "המשך את בקשת מזג האוויר הקודמת באלעד"
+            )
+
+            self.assertNotIn("מזג האוויר מחר באלעד", unrelated)
+            self.assertNotIn("Weather for Elad", unrelated)
+            self.assertIn("מזג האוויר מחר באלעד", continued)
+            self.assertTrue(any(
+                entry.get("metadata", {}).get("continuity_only")
+                for entry in manager.data["entries"]
+                if entry.get("type") in {"short_term", "tool"}
+            ))
+
+    def test_version_three_conversation_trace_is_reclassified_without_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "memory.json"
+            payload = {
+                "schema_version": 2,
+                "entries": [{
+                    "id": "mem_weather_v3",
+                    "type": "short_term",
+                    "scope": "global",
+                    "subject": "מזג אוויר באלעד",
+                    "content": (
+                        "Recent exchange. User request: מה מזג האוויר מחר באלעד? "
+                        "כתוב את התוצאה בקובץ בשולחן העבודה"
+                    ),
+                    "tags": ["auto", "conversation"],
+                    "importance": 2,
+                    "confidence": 0.55,
+                    "source": "conversation",
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                    "expires_at": None,
+                    "fingerprint": "weather-v3",
+                    "metadata": {
+                        "automatic_context_eligible": True,
+                        "profile_policy_version": 3,
+                    },
+                }],
+                "archive": [],
+                "stats": {"profile_policy_version": 3},
+            }
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+            manager = SmartiMemoryManager(_MemoryCore(), str(path))
+
+            self.assertNotIn(
+                "מזג האוויר מחר באלעד",
+                manager.build_prompt_context("צור אתר HTML בשולחן העבודה"),
+            )
+            self.assertIn(
+                "מזג האוויר מחר באלעד",
+                manager.build_prompt_context("המשך את בקשת מזג האוויר הקודמת באלעד"),
+            )
+            migrated = next(
+                entry for entry in manager.data["entries"]
+                if entry.get("id") == "mem_weather_v3"
+            )
+            self.assertFalse(migrated["metadata"]["automatic_context_eligible"])
+            self.assertTrue(migrated["metadata"]["continuity_only"])
+            self.assertEqual(migrated["content"], payload["entries"][0]["content"])
+
+    def test_durable_project_context_remains_automatically_retrievable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = SmartiMemoryManager(
+                _MemoryCore(),
+                str(Path(directory) / "memory.json"),
+            )
+            manager.auto_capture_turn(
+                "הפרויקט Atlas מבוסס FastAPI והחלטת הארכיטקטורה היא מסד נתונים מקומי",
+                "הבנתי את מבנה הפרויקט והארכיטקטורה.",
+            )
+
+            context = manager.build_prompt_context("מהי הארכיטקטורה של פרויקט Atlas?")
+
+            self.assertIn("FastAPI", context)
+            project_entry = next(
+                entry for entry in manager.data["entries"]
+                if "FastAPI" in entry.get("content", "")
+            )
+            self.assertTrue(project_entry["metadata"]["automatic_context_eligible"])
+            self.assertFalse(project_entry["metadata"]["continuity_only"])
+
 
 if __name__ == "__main__":
     unittest.main()

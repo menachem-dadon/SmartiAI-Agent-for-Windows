@@ -399,6 +399,27 @@ class ChatSessionStore:
     def active_session(self):
         return self.ensure_active_session()
 
+    def session_metadata(self, session_id=None):
+        """Return session fields and message count without materializing message bodies."""
+        with self._lock, self._connect() as db:
+            target = str(session_id or self._active_id(db))
+            session = self._session(db, target, include_messages=False)
+            if not session:
+                return None
+            count = db.execute(
+                "SELECT COUNT(*) AS count FROM messages WHERE session_id=?",
+                (target,),
+            ).fetchone()["count"]
+            session["message_count"] = int(count or 0)
+            return session
+
+    def active_session_metadata(self):
+        metadata = self.session_metadata()
+        if metadata:
+            return metadata
+        self.ensure_active_session()
+        return self.session_metadata()
+
     def create_session(self, set_active=True):
         with self._lock, self._connect() as db:
             active_id = self._active_id(db)
@@ -435,6 +456,63 @@ class ChatSessionStore:
             target = str(session_id or self._active_id(db))
             session = self._session(db, target)
             return session.get("messages", []) if session else []
+
+    def messages_page(self, session_id=None, before_ordinal=None, limit=32):
+        """Read one chronological page, newest first when no cursor is supplied."""
+        try:
+            page_limit = max(1, min(500, int(limit or 32)))
+        except (TypeError, ValueError):
+            page_limit = 32
+        with self._lock, self._connect() as db:
+            target = str(session_id or self._active_id(db))
+            if not target or not db.execute(
+                "SELECT 1 FROM sessions WHERE id=?",
+                (target,),
+            ).fetchone():
+                return {
+                    "session_id": target,
+                    "messages": [],
+                    "total_count": 0,
+                    "has_older": False,
+                    "older_count": 0,
+                    "next_before_ordinal": None,
+                }
+            params = [target]
+            where = "session_id=?"
+            if before_ordinal is not None:
+                try:
+                    cursor = int(before_ordinal)
+                except (TypeError, ValueError):
+                    cursor = None
+                if cursor is not None:
+                    where += " AND ordinal<?"
+                    params.append(cursor)
+            params.append(page_limit)
+            rows = db.execute(
+                f"SELECT * FROM messages WHERE {where} ORDER BY ordinal DESC LIMIT ?",
+                tuple(params),
+            ).fetchall()
+            rows = list(reversed(rows))
+            messages = [self._row_message(row) for row in rows]
+            next_cursor = int(rows[0]["ordinal"]) if rows else None
+            older_count = 0
+            if next_cursor is not None:
+                older_count = int(db.execute(
+                    "SELECT COUNT(*) AS count FROM messages WHERE session_id=? AND ordinal<?",
+                    (target, next_cursor),
+                ).fetchone()["count"] or 0)
+            total_count = int(db.execute(
+                "SELECT COUNT(*) AS count FROM messages WHERE session_id=?",
+                (target,),
+            ).fetchone()["count"] or 0)
+            return {
+                "session_id": target,
+                "messages": messages,
+                "total_count": total_count,
+                "has_older": older_count > 0,
+                "older_count": older_count,
+                "next_before_ordinal": next_cursor,
+            }
 
     def _summary_for_session(self, session, query=""):
         messages = session.get("messages", []) or []

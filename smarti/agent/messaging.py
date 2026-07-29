@@ -682,68 +682,6 @@ class MessagingMixin:
                         checkpoint("planner_feedback")
                         continue
 
-                    if first_call.get("action") == "agent_verifier":
-                        verifier_args = first_call.get("arguments", {}) or {}
-                        verifier_event_id = uuid.uuid4().hex
-                        emit_tool_process_report(pre_text, [first_call], source="model")
-                        self._emit_agent_process_event(
-                            "tool_start",
-                            tools=[self._agent_tool_event_item(
-                                "agent_verifier",
-                                verifier_args,
-                                event_id=verifier_event_id,
-                            )],
-                            parallel=False,
-                        )
-                        if self.status_callback:
-                            self.status_callback("מאמת את התוצאה...")
-                        if getattr(self, "agent_runtime", None):
-                            self.agent_runtime.trace(
-                                "select_tool",
-                                f"agent_verifier {json.dumps(verifier_args, ensure_ascii=False)[:1200]}",
-                            )
-                        verifier_feedback, verifier_passed = self._run_agent_verifier(
-                            verifier_args,
-                            task_state,
-                            current_messages,
-                            current_model,
-                        )
-                        verifier_result = {
-                            "action": "agent_verifier",
-                            "effective_action": "agent_verifier",
-                            "arguments": verifier_args,
-                            "event_id": verifier_event_id,
-                            "feedback": verifier_feedback,
-                            "message": None,
-                            "status": "ok" if verifier_passed else "error",
-                            "output": verifier_feedback,
-                        }
-                        self._emit_agent_process_event(
-                            "tool_finish",
-                            results=[self._agent_tool_event_item(
-                                "agent_verifier",
-                                verifier_args,
-                                status=verifier_result["status"],
-                                output=verifier_feedback,
-                                feedback=verifier_feedback,
-                                event_id=verifier_event_id,
-                            )],
-                        )
-                        self._record_results_in_task_state(task_state, [verifier_result])
-                        self._append_internal_verifier_feedback(
-                            current_messages,
-                            tool_turn_text,
-                            verifier_feedback,
-                        )
-                        if len(raw_tool_calls) > 1:
-                            self._append_user_feedback_message(
-                                current_messages,
-                                "הנחיית מערכת: `agent_verifier` הופעל. קריאות כלי נוספות מאותה תגובה לא בוצעו. "
-                                "פעל עכשיו לפי תוצאת האימות."
-                            )
-                        checkpoint("verifier_feedback")
-                        continue
-
                     selected_calls = [first_call]
                     parallel = False
                     skipped_extra_calls = max(0, len(raw_tool_calls) - 1)
@@ -922,7 +860,7 @@ class MessagingMixin:
             if MAX_ITERATIONS is not None and iteration >= MAX_ITERATIONS and not final_response:
                 final_response = "ERROR_USER: סמארטי ביצע יותר מדי פעולות ברצף והופסק."
 
-            self._trace_agent_phase("verifier", "automatic_verification=disabled model_discretion")
+            self._trace_agent_phase("verification_policy", "main_loop_model_discretion")
 
             if loaded_skill_contexts:
                 self._apply_loaded_skill_system_context(current_messages, {}, runtime_base_system_prompt)

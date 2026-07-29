@@ -287,28 +287,6 @@ BUILTIN_TOOL_SCHEMAS = {
             "required": ["reason"]
         }
     },
-    "agent_verifier": {
-        "description": "מאמת סוכני עצמאי לפי שיקול דעת המודל. השתמש בו כאשר נדרשת ביקורת איכות, בטיחות, שלמות או התאמה לראיות לפני תשובה סופית. הכלי בודק הצעת תשובה מול הבקשה, ההקשר ותוצאות הכלים, ומחזיר הסבר והנחיית תיקון או איסוף ראיות אם האימות נכשל. הוא אינו מופעל אוטומטית.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "candidate_answer": {
-                    "type": "string",
-                    "description": "התשובה הסופית המוצעת שאותה יש לבדוק."
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "למה אימות עצמאי מועיל במקרה הזה."
-                },
-                "focus": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "נקודות בדיקה מיוחדות, אילוצים או טענות שדורשים ביקורת."
-                }
-            },
-            "required": ["candidate_answer", "reason"]
-        }
-    },
     "email_manager": {
         "description": "Full IMAP/SMTP email tool: list folders, search, read, send, draft, reply, forward, mark, star, archive, move, copy, trash, delete, manage folders, and save attachments. For multi-message research, search metadata first and then read all selected UIDs in one bulk call; do not read many UIDs one by one.",
         "inputSchema": {
@@ -1057,7 +1035,6 @@ TOOL_CATEGORY_LABELS = {
 
 TOOL_CATEGORIES = {
     "agent_planner": "schema",
-    "agent_verifier": "schema",
     "get_tool_info": "schema",
     "search_tools": "schema",
     "system_manager": "system",
@@ -1288,7 +1265,6 @@ DEFAULT_SETTINGS = {
     "mcp_protocol_version": "2025-11-25",
     "mcp_package_configs": {},
     "mcp_package_aliases": {},
-    "enable_final_verifier": True,
     "max_concurrent_agents": 1,
     "allow_insecure_ssl_compat": True,
     "command_timeout_seconds": 60,
