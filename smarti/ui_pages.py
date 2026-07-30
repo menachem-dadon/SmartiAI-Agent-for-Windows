@@ -5405,6 +5405,12 @@ class SettingsPage(QWidget):
 
     def _on_model_committed(self, model):
         provider = normalize_provider_name(self.provider_combo.currentText())
+        self.core.settings.setdefault("selected_model_source", {})[provider] = (
+            MODEL_SELECTION_SOURCE_USER
+        )
+        self.core.settings["model_selection_provenance_version"] = (
+            MODEL_SELECTION_PROVENANCE_VERSION
+        )
         self._ensure_model_favorite(provider, model, save=False)
         self._schedule_autosave()
 

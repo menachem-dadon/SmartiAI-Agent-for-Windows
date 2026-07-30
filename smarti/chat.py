@@ -5191,6 +5191,12 @@ class ChatWindow(QMainWindow):
             return
         self.core.settings["api_mode"] = provider
         self.core.settings[f"selected_{provider}_model"] = model
+        self.core.settings.setdefault("selected_model_source", {})[provider] = (
+            MODEL_SELECTION_SOURCE_USER
+        )
+        self.core.settings["model_selection_provenance_version"] = (
+            MODEL_SELECTION_PROVENANCE_VERSION
+        )
         self._ensure_current_model_favorite(save=False)
         self.core._save_settings()
         self.core.system_prompt = self.core._load_system_prompt()

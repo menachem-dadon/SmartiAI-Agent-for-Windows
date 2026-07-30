@@ -334,6 +334,7 @@ class FavoriteModelRegressionTests(unittest.TestCase):
 
     def test_explicit_model_commit_marks_that_model_as_favorite(self):
         page = SimpleNamespace(
+            core=SimpleNamespace(settings={}),
             provider_combo=SimpleNamespace(currentText=lambda: "groq"),
             _ensure_model_favorite=mock.Mock(),
             _schedule_autosave=mock.Mock(),
@@ -361,6 +362,35 @@ class FavoriteModelRegressionTests(unittest.TestCase):
         self.assertIsNone(page._favorite_model_on_populate_provider)
         page._schedule_autosave.assert_called_once_with()
         combo.deleteLater()
+
+    def test_favorite_model_commit_marks_selection_as_user_owned(self):
+        host = SimpleNamespace(
+            core=SimpleNamespace(
+                settings={
+                    "api_mode": "gemini",
+                    "selected_gemini_model": "gemini-old",
+                },
+                _save_settings=mock.Mock(),
+                _load_system_prompt=mock.Mock(return_value="prompt"),
+                setup_model=mock.Mock(),
+            ),
+            _favorite_model_key=lambda provider, model: (
+                str(provider or "").strip().lower(),
+                str(model or "").strip(),
+            ),
+            _ensure_current_model_favorite=mock.Mock(),
+            format_model_name=lambda model: model,
+            refresh_favorite_model_controls=mock.Mock(),
+            settings_page=None,
+        )
+
+        ChatWindow._select_favorite_model(host, "gemini", "gemini-3.6-flash")
+
+        self.assertEqual(
+            host.core.settings["selected_model_source"]["gemini"],
+            "user",
+        )
+        host.core._save_settings.assert_called_once_with()
 
 
 if __name__ == "__main__":

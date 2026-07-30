@@ -533,6 +533,10 @@ class LongTaskSettingsTests(unittest.TestCase):
             "max_total_task_seconds": 3600,
             "preserve_current_task_tool_context": True,
             "allow_unlimited_agent_evaluations": True,
+            "model_selection_provenance_version": DEFAULT_SETTINGS[
+                "model_selection_provenance_version"
+            ],
+            "selected_model_source": dict(DEFAULT_SETTINGS["selected_model_source"]),
         }
 
         migrated, changed = self.manager.migrate_or_merge(loaded)

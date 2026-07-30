@@ -1196,6 +1196,7 @@ class ToolCallMixin:
             action = tool_call.get("params", {}).get("name", "")
             args_dict = tool_call.get("params", {}).get("arguments", {})
             args_dict = self._normalize_tool_call_args(action, args_dict)
+            provider_call_id = str(tool_call.get("provider_call_id", "") or "").strip()
         except json.JSONDecodeError as e:
             return None, f"ERROR: Invalid JSON Tool Call. Details: {e}. You MUST output exactly valid JSON objects representing tools/call requests."
         except Exception as e:
@@ -1221,6 +1222,7 @@ class ToolCallMixin:
         return {
             "action": action,
             "arguments": args_dict,
+            "provider_call_id": provider_call_id,
             "step_text": step_text,
             "tool_turn_text": tool_turn_text,
             "index": call_index,
@@ -1360,6 +1362,7 @@ class ToolCallMixin:
             "action": action,
             "effective_action": effective_action,
             "arguments": args_dict,
+            "provider_call_id": str(call.get("provider_call_id", "") or ""),
             "event_id": str(call.get("_agent_process_event_id") or ""),
             "feedback": feedback_for_ai,
             "message": message_for_user,

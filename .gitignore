@@ -19,6 +19,7 @@ tests/*
 !tests/test_history_sqlite.py
 !tests/test_memory_profile_policy.py
 !tests/test_ssl_trust.py
+!tests/test_model_defaults.py
 
 
 # Virtual environments and build artifacts

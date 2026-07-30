@@ -499,6 +499,7 @@ class ModelContextMixin:
                     "system_prompt": title_system_prompt,
                     "temperature": 0.2,
                     "reasoning_effort": "low",
+                    "max_output_tokens": 128,
                     "native_tools": False,
                     "silent": True,
                 },
@@ -1761,10 +1762,16 @@ CWD: {current_dir}
                 except Exception:
                     arguments = {}
             if name and isinstance(arguments, dict):
-                normalized.append({
+                normalized_call = {
                     "method": "tools/call",
                     "params": {"name": name, "arguments": arguments},
-                })
+                }
+                provider_call_id = str(
+                    call.get("provider_call_id", call.get("id", "")) or ""
+                ).strip()
+                if provider_call_id:
+                    normalized_call["provider_call_id"] = provider_call_id
+                normalized.append(normalized_call)
         body = "\n".join(json.dumps(item, ensure_ascii=False) for item in normalized)
         prefix = str(pre_text or "").strip()
         return f"{prefix}\n{body}".strip() if prefix else body
@@ -1864,6 +1871,62 @@ CWD: {current_dir}
         """Only providers with a native, tested cache contract receive cache controls."""
         return normalize_provider_name(provider_mode) in cls.PROMPT_CACHE_PROVIDER_MODES
 
+    @staticmethod
+    def _normalized_exact_model_effort(provider_mode, current_model, requested_effort):
+        requested = str(requested_effort or "").strip().lower()
+        if not requested:
+            return ""
+        capabilities = exact_model_request_capabilities(provider_mode, current_model)
+        supported = tuple(capabilities.get("reasoning_efforts") or ())
+        if not supported:
+            return ""
+        provider_mode = normalize_provider_name(provider_mode)
+        if requested in {"off", "minimal"}:
+            requested = "none" if provider_mode == "openai" else "low"
+        if requested == "none" and provider_mode == "anthropic":
+            requested = "low"
+        return requested if requested in supported else ""
+
+    def _model_output_token_limit(
+        self,
+        provider_mode,
+        current_model,
+        request_messages,
+        request_options,
+        system_prompt="",
+        fallback=4096,
+    ):
+        capabilities = exact_model_request_capabilities(provider_mode, current_model)
+        capability_limit = int(capabilities.get("max_output_tokens", fallback) or fallback)
+        default_limit = int(
+            capabilities.get("default_output_tokens", capability_limit) or capability_limit
+        )
+        try:
+            requested_limit = int(request_options.get("max_output_tokens", 0) or 0)
+        except Exception:
+            requested_limit = 0
+        limit = min(capability_limit, requested_limit or default_limit)
+        budgets = self.settings.get("budgets", {})
+        try:
+            daily_budget = int(budgets.get("daily_token_budget", 0) or 0)
+        except Exception:
+            daily_budget = 0
+        if daily_budget > 0:
+            used = self._daily_token_usage()
+            prompt_tokens = self._estimate_request_tokens(
+                request_messages,
+                provider_mode=provider_mode,
+                system_prompt=system_prompt,
+            )
+            remaining = daily_budget - used - prompt_tokens
+            if remaining <= 0:
+                raise Exception(
+                    "DAILY_TOKEN_BUDGET_WOULD_EXCEED: "
+                    f"used={used} estimated_prompt={prompt_tokens} budget={daily_budget}"
+                )
+            limit = min(limit, remaining)
+        return max(1, int(limit))
+
     def _raise_for_model_api_error(self, response, current_model, provider_mode=None):
         status_code = getattr(response, "status_code", None)
         try:
@@ -1955,9 +2018,30 @@ CWD: {current_dir}
                         "contents": request_messages,
                         "generationConfig": {}
                     }
-                    if request_temperature is not None and not str(current_model).lower().startswith("gemini-3"):
+                    exact_capabilities = exact_model_request_capabilities(
+                        request_mode,
+                        current_model,
+                    )
+                    sampling_allowed = exact_capabilities.get(
+                        "sampling_parameters",
+                        not str(current_model).lower().startswith("gemini-3"),
+                    )
+                    if request_temperature is not None and sampling_allowed:
                         payload["generationConfig"]["temperature"] = request_temperature
-                    if request_reasoning in {"low", "minimal", "none", "off"}:
+                    supported_thinking = tuple(
+                        exact_capabilities.get("thinking_levels") or ()
+                    )
+                    if supported_thinking and request_reasoning:
+                        thinking_level = request_reasoning
+                        if thinking_level in {"none", "off"}:
+                            thinking_level = "minimal"
+                        elif thinking_level in {"xhigh", "max"}:
+                            thinking_level = "high"
+                        if thinking_level in supported_thinking:
+                            payload["generationConfig"]["thinkingConfig"] = {
+                                "thinkingLevel": thinking_level
+                            }
+                    elif request_reasoning in {"low", "minimal", "none", "off"}:
                         model_name = str(current_model or "").lower()
                         if re.search(r"gemini-(?:3|4)", model_name):
                             payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "minimal"}
@@ -2023,6 +2107,7 @@ CWD: {current_dir}
                             native_calls.append({
                                 "name": function_call.get("name", ""),
                                 "arguments": function_call.get("args", {}) or {},
+                                "provider_call_id": function_call.get("id", ""),
                             })
                         elif not part.get('thought', False):
                             ai_response_text += part.get('text', '')
@@ -2050,8 +2135,18 @@ CWD: {current_dir}
                         openai_reasoning_model
                         and request_reasoning
                     ):
+                        exact_effort = self._normalized_exact_model_effort(
+                            request_mode,
+                            current_model,
+                            request_reasoning,
+                        )
                         completion_kwargs["reasoning_effort"] = (
-                            "low" if request_reasoning in {"minimal", "none", "off"} else request_reasoning
+                            exact_effort
+                            or (
+                                "low"
+                                if request_reasoning in {"minimal", "none", "off"}
+                                else request_reasoning
+                            )
                         )
                     openai_paid_cache_writes = str(current_model or "").lower().startswith(
                         "gpt-5.6"
@@ -2154,6 +2249,7 @@ CWD: {current_dir}
                             native_calls.append({
                                 "name": getattr(function, "name", ""),
                                 "arguments": getattr(function, "arguments", "{}"),
+                                "provider_call_id": getattr(tool_call, "id", ""),
                             })
                     response_text = str(getattr(response_message, "content", "") or "").strip()
                     if native_calls:
@@ -2169,14 +2265,34 @@ CWD: {current_dir}
                         if m.get("role") == "system" and m.get("content") != request_system_prompt
                     ])
                     system_text = request_system_prompt + (f"\n\n{extra_system}" if extra_system else "")
+                    exact_capabilities = exact_model_request_capabilities(
+                        request_mode,
+                        current_model,
+                    )
                     payload = {
                         "model": current_model,
                         "system": system_text,
                         "messages": [m for m in request_messages if m["role"] != "system"],
-                        "max_tokens": 4096,
+                        "max_tokens": self._model_output_token_limit(
+                            request_mode,
+                            current_model,
+                            request_messages,
+                            request_options,
+                            system_prompt=system_text,
+                        ),
                     }
-                    if request_temperature is not None:
+                    if request_temperature is not None and exact_capabilities.get(
+                        "sampling_parameters",
+                        True,
+                    ):
                         payload["temperature"] = request_temperature
+                    exact_effort = self._normalized_exact_model_effort(
+                        request_mode,
+                        current_model,
+                        request_reasoning,
+                    )
+                    if exact_effort:
+                        payload["output_config"] = {"effort": exact_effort}
                     if native_specs:
                         payload["tools"] = [
                             {
@@ -2262,6 +2378,7 @@ CWD: {current_dir}
                             native_calls.append({
                                 "name": block.get("name", ""),
                                 "arguments": block.get("input", {}) or {},
+                                "provider_call_id": block.get("id", ""),
                             })
                         elif block.get("type") == "text":
                             text_parts.append(str(block.get("text", "") or ""))

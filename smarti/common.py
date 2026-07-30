@@ -126,7 +126,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "gemini_api_key",
         "help_url": "https://aistudio.google.com/apikey",
         "key_instructions": "התחבר ל-Google AI Studio, לחץ Create API key, בחר או צור פרויקט והעתק את המפתח.",
-        "default_model": "gemini-3.1-flash-lite",
+        "default_model": "gemini-3.6-flash",
     },
     "openai": {
         "label": "OpenAI",
@@ -134,7 +134,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "openai_api_key",
         "help_url": "https://platform.openai.com/api-keys",
         "key_instructions": "התחבר ל-OpenAI Platform, לחץ Create new secret key והעתק את המפתח שנוצר.",
-        "default_model": "gpt-5.4",
+        "default_model": "gpt-5.6-sol",
         "base_url": None,
     },
     "openai_codex_signin": {
@@ -159,8 +159,8 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "anthropic_api_key",
         "help_url": "https://console.anthropic.com/settings/keys",
         "key_instructions": "התחבר ל-Anthropic Console, בחר Workspace מתאים, לחץ Create Key והעתק את המפתח.",
-        "default_model": "claude-opus-4-7",
-        "fallback_models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+        "default_model": "claude-opus-5",
+        "fallback_models": ["claude-opus-5", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
     },
     "openrouter": {
         "label": "OpenRouter",
@@ -308,6 +308,33 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "local",
         "secret_key": None,
         "default_model": "",
+    },
+}
+
+MODEL_SELECTION_SOURCE_DEFAULT = "default"
+MODEL_SELECTION_SOURCE_USER = "user"
+MODEL_SELECTION_PROVENANCE_VERSION = 1
+
+# Point 2 intentionally keeps this registry narrow. Point 8 can expand it into
+# the complete provider adapter/capability layer without changing these exact
+# default-model contracts.
+EXACT_MODEL_REQUEST_CAPABILITIES = {
+    ("gemini", "gemini-3.6-flash"): {
+        "max_output_tokens": 65_536,
+        "sampling_parameters": False,
+        "thinking_levels": ("minimal", "low", "medium", "high"),
+    },
+    ("openai", "gpt-5.6-sol"): {
+        "max_output_tokens": 128_000,
+        "sampling_parameters": False,
+        "reasoning_efforts": ("none", "low", "medium", "high", "xhigh", "max"),
+    },
+    ("anthropic", "claude-opus-5"): {
+        "max_output_tokens": 128_000,
+        "default_output_tokens": 64_000,
+        "sampling_parameters": False,
+        "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"),
+        "thinking_mode": "adaptive_default",
     },
 }
 
@@ -678,6 +705,13 @@ def provider_key_instructions(provider=None, secret_key=None):
 
 def provider_default_model(provider):
     return provider_config(provider).get("default_model", "")
+
+def exact_model_request_capabilities(provider, model):
+    key = (
+        normalize_provider_name(provider),
+        str(model or "").strip().lower(),
+    )
+    return copy.deepcopy(EXACT_MODEL_REQUEST_CAPABILITIES.get(key, {}))
 
 def provider_fallback_models(provider):
     config = provider_config(provider)

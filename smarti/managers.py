@@ -82,6 +82,39 @@ class SettingsManager:
         return settings, True
 
     @staticmethod
+    def migrate_model_selection_provenance(settings, prior_settings=None):
+        """Record conservative provenance without guessing about legacy choices."""
+        settings = copy.deepcopy(settings or {})
+        prior_settings = prior_settings if isinstance(prior_settings, dict) else settings
+        before = copy.deepcopy(settings)
+        current_sources = settings.get("selected_model_source", {})
+        prior_sources = prior_settings.get("selected_model_source", {})
+        if not isinstance(current_sources, dict):
+            current_sources = {}
+        if not isinstance(prior_sources, dict):
+            prior_sources = {}
+        sources = {}
+        valid_sources = {
+            MODEL_SELECTION_SOURCE_DEFAULT,
+            MODEL_SELECTION_SOURCE_USER,
+        }
+        for provider in MODEL_PROVIDER_ORDER:
+            source = str(prior_sources.get(provider, "") or "").strip().lower()
+            if source not in valid_sources:
+                source = str(current_sources.get(provider, "") or "").strip().lower()
+            if source not in valid_sources:
+                selected_key = f"selected_{provider}_model"
+                source = (
+                    MODEL_SELECTION_SOURCE_USER
+                    if str(prior_settings.get(selected_key, "") or "").strip()
+                    else MODEL_SELECTION_SOURCE_DEFAULT
+                )
+            sources[provider] = source
+        settings["selected_model_source"] = sources
+        settings["model_selection_provenance_version"] = MODEL_SELECTION_PROVENANCE_VERSION
+        return settings, settings != before
+
+    @staticmethod
     def migrate_ssl_trust(settings):
         """Migrate the old global bypass to verified Windows trust.
 
@@ -125,6 +158,7 @@ class SettingsManager:
 
     def migrate_or_merge(self, loaded):
         loaded = self.decrypt_loaded_secrets(copy.deepcopy(loaded or {}))
+        prior_loaded = copy.deepcopy(loaded)
         if int(loaded.get("settings_schema_version", 0) or 0) != SETTINGS_SCHEMA_VERSION:
             backup_path = self.backup_existing()
             migrated = copy.deepcopy(self.defaults)
@@ -140,9 +174,17 @@ class SettingsManager:
                 "backup_path": backup_path,
                 "dangerous_trust_reset": True
             }
+            migrated, _ = self.migrate_model_selection_provenance(
+                migrated,
+                prior_settings=prior_loaded,
+            )
             return self.sync_legacy_aliases(migrated), True
         loaded, ssl_trust_changed = self.migrate_ssl_trust(loaded)
         loaded, long_task_changed = self.migrate_long_task_defaults(loaded)
+        loaded, model_provenance_changed = self.migrate_model_selection_provenance(
+            loaded,
+            prior_settings=prior_loaded,
+        )
         context_limits_changed = False
         for key in self.DEPRECATED_CONTEXT_LIMIT_KEYS:
             if key in loaded:
@@ -150,7 +192,12 @@ class SettingsManager:
                 context_limits_changed = True
         return (
             self.sync_legacy_aliases(deep_merge_defaults(self.defaults, loaded)),
-            bool(ssl_trust_changed or long_task_changed or context_limits_changed),
+            bool(
+                ssl_trust_changed
+                or long_task_changed
+                or model_provenance_changed
+                or context_limits_changed
+            ),
         )
 
 

@@ -1091,10 +1091,10 @@ DEFAULT_SETTINGS = {
     "email_archive_mailbox": "",
     "email_trash_mailbox": "",
     "email_max_attachment_mb": 20,
-    "selected_gemini_model": "gemini-3.1-flash-lite",
-    "selected_openai_model": "gpt-5.4",
+    "selected_gemini_model": "gemini-3.6-flash",
+    "selected_openai_model": "gpt-5.6-sol",
     "selected_openai_codex_signin_model": "Codex default",
-    "selected_anthropic_model": "claude-opus-4-7",
+    "selected_anthropic_model": "claude-opus-5",
     "selected_local_model": "",
     "selected_openrouter_model": "openai/gpt-5.4",
     "selected_groq_model": "openai/gpt-oss-120b",
@@ -1109,6 +1109,11 @@ DEFAULT_SETTINGS = {
     "selected_together_model": "openai/gpt-oss-20b",
     "selected_perplexity_model": "sonar-pro",
     "selected_xai_model": "grok-4",
+    "selected_model_source": {
+        provider: MODEL_SELECTION_SOURCE_DEFAULT
+        for provider in MODEL_PROVIDER_ORDER
+    },
+    "model_selection_provenance_version": MODEL_SELECTION_PROVENANCE_VERSION,
     "local_server_url": "http://localhost:1234/v1",
     "shopping_list": [],
     "user_memory": "",
