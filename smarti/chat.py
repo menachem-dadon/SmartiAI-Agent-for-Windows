@@ -4902,20 +4902,19 @@ class ChatWindow(QMainWindow):
         return self.format_model_name(model)
 
     def _codex_reasoning_options(self):
-        return [
-            ("low", "נמוכה"),
-            ("medium", "בינונית"),
-            ("high", "גבוהה"),
-            ("xhigh", "גבוהה מאוד"),
-            ("max", "מקסימלית"),
-        ]
+        return model_reasoning_options("openai_codex_signin", "Codex default")
 
     def _current_model_provider(self):
         return normalize_provider_name(self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini")) or "gemini")
 
     def _current_codex_reasoning_effort(self):
-        effort = str(self.core.settings.get("codex_reasoning_effort", "medium") or "medium").strip().lower()
-        return effort if effort in {value for value, _ in self._codex_reasoning_options()} else "medium"
+        provider = self._current_model_provider()
+        model = str(
+            self.core.settings.get(f"selected_{provider}_model")
+            or provider_default_model(provider)
+            or ""
+        ).strip()
+        return model_reasoning_setting(self.core.settings, provider, model)
 
     def _add_menu_header(self, menu, text):
         action = menu.addAction(str(text or ""))
@@ -4940,13 +4939,20 @@ class ChatWindow(QMainWindow):
             "save_done",
         )
 
-    def _add_codex_reasoning_menu_items(self, menu):
-        if self._current_model_provider() != "openai_codex_signin":
+    def _add_model_reasoning_menu_items(self, menu):
+        provider = self._current_model_provider()
+        model = str(
+            self.core.settings.get(f"selected_{provider}_model")
+            or provider_default_model(provider)
+            or ""
+        ).strip()
+        options = model_reasoning_options(provider, model)
+        if not options:
             return False
         self._add_menu_header(menu, "עוצמת חשיבה")
         current_effort = self._current_codex_reasoning_effort()
         check_icon = self._reasoning_selected_icon()
-        for value, label in self._codex_reasoning_options():
+        for value, label in options:
             action = menu.addAction(label)
             selected = value == current_effort
             action.setCheckable(True)
@@ -4954,9 +4960,13 @@ class ChatWindow(QMainWindow):
             if selected and not check_icon.isNull():
                 action.setIcon(check_icon)
                 action.setIconVisibleInMenu(True)
-            action.triggered.connect(lambda checked=False, effort=value: self._select_codex_reasoning_effort(effort))
+            action.triggered.connect(lambda checked=False, effort=value: self._select_model_reasoning_effort(effort))
         menu.addSeparator()
         return True
+
+    def _add_codex_reasoning_menu_items(self, menu):
+        """Compatibility wrapper for the former Codex-only menu helper."""
+        return self._add_model_reasoning_menu_items(menu)
 
     def _add_codex_quota_menu_item(self, menu):
         if self._current_model_provider() != "openai_codex_signin":
@@ -5020,21 +5030,30 @@ class ChatWindow(QMainWindow):
         except RuntimeError:
             self._codex_quota_widget = None
 
-    def _select_codex_reasoning_effort(self, effort):
-        effort = str(effort or "medium").strip().lower()
-        if effort not in {value for value, _ in self._codex_reasoning_options()}:
-            effort = "medium"
+    def _select_model_reasoning_effort(self, effort):
+        provider = self._current_model_provider()
+        model = str(
+            self.core.settings.get(f"selected_{provider}_model")
+            or provider_default_model(provider)
+            or ""
+        ).strip()
+        effort = normalize_model_reasoning_level(provider, model, effort)
         if effort == self._current_codex_reasoning_effort():
             return
-        self.core.settings["codex_reasoning_effort"] = effort
+        set_model_reasoning_setting(self.core.settings, provider, model, effort)
         self.core._save_settings()
         if getattr(self, "settings_page", None) is not None and hasattr(self.settings_page, "codex_reasoning_effort_combo"):
+            self.settings_page._refresh_reasoning_effort_control(provider)
             combo = self.settings_page.codex_reasoning_effort_combo
             index = combo.findData(effort)
             if index >= 0:
                 previous = combo.blockSignals(True)
                 combo.setCurrentIndex(index)
                 combo.blockSignals(previous)
+
+    def _select_codex_reasoning_effort(self, effort):
+        """Compatibility wrapper for the former Codex-only selection helper."""
+        return self._select_model_reasoning_effort(effort)
 
     def _fit_quick_input_button(self, button, text, base_width=150, max_width=320, min_width=92):
         try:
@@ -5162,7 +5181,7 @@ class ChatWindow(QMainWindow):
         menu = QMenu(self)
         menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         prepare_popup_menu(menu)
-        self._add_codex_reasoning_menu_items(menu)
+        self._add_model_reasoning_menu_items(menu)
         self._add_codex_quota_menu_item(menu)
         for provider, models in self._favorites_by_provider():
             sub = menu.addMenu(provider_display_name(provider))

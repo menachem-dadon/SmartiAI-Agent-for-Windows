@@ -473,7 +473,7 @@ class ContextEfficiencyTests(unittest.TestCase):
         self.assertIn("tools", gemini_payloads[0])
         self.assertEqual(
             gemini_payloads[0]["generationConfig"]["thinkingConfig"]["thinkingBudget"],
-            0,
+            1_024,
         )
         self.assertEqual(usage["cached_prompt"], 8)
         self.assertEqual(usage["reasoning"], 3)

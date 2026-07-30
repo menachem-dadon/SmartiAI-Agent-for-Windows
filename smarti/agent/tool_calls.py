@@ -174,6 +174,12 @@ class ToolCallMixin:
                     args["action"] = "open_windows_app"
                 else:
                     args["action"] = "send_toast"
+            raw_action = str(args.get("action") or "").strip().lower()
+            if raw_action in NOTIFICATION_TARGET_BY_ACTION and not str(args.get("target") or "").strip():
+                args["target"] = NOTIFICATION_TARGET_BY_ACTION[raw_action]
+            args["action"] = NOTIFICATION_ACTION_ALIASES.get(raw_action, raw_action)
+            if args["action"] == "open_windows_app":
+                args["target"] = str(args.get("target") or "").strip().lower()
             if "message" not in args and "prompt" in args:
                 args["message"] = args.get("prompt")
             if "body" not in args and "message" in args and args.get("action") == "send_toast":
@@ -1314,6 +1320,10 @@ class ToolCallMixin:
         if effective == "email_manager":
             operation = str((args_dict or {}).get("action", "") or "").strip().lower()
             return operation not in {"list_folders", "search", "read"}
+        if effective == "notification_manager":
+            operation = str((args_dict or {}).get("action") or "send_toast").strip().lower()
+            operation = NOTIFICATION_ACTION_ALIASES.get(operation, operation)
+            return operation != "list_reminders"
         return effective in {
             "system_command", "run_project_check", "create_python_tool", "install_mcp",
             "run_mcp", "install_skill", "install_skill_requirements", "run_skill",

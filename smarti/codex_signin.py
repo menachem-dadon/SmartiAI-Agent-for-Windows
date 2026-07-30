@@ -771,7 +771,7 @@ class CodexSignInProvider:
         messages,
         model: str = "",
         timeout: int = 180,
-        reasoning_effort: str = "medium",
+        reasoning_effort: str = "auto",
         cancel_event=None,
         purpose: str = "agent",
     ) -> tuple[str, dict]:
@@ -780,9 +780,12 @@ class CodexSignInProvider:
         if status.state != "connected":
             raise CodexSignInError(status.message)
         selected_model = str(model or CODEX_SIGNIN_DEFAULT_MODEL).strip()
-        selected_reasoning_effort = str(reasoning_effort or "medium").strip().lower()
-        if selected_reasoning_effort not in CODEX_REASONING_EFFORTS:
-            selected_reasoning_effort = "medium"
+        selected_reasoning_effort = str(reasoning_effort or "auto").strip().lower()
+        if (
+            selected_reasoning_effort != "auto"
+            and selected_reasoning_effort not in CODEX_REASONING_EFFORTS
+        ):
+            selected_reasoning_effort = "auto"
         purpose = str(purpose or "agent").strip().lower()
         instructions_path = self._write_temporary_model_instructions(
             self._build_model_instructions(messages, purpose=purpose)
@@ -795,9 +798,13 @@ class CodexSignInProvider:
                 "exec", "--json", "--ignore-user-config", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
                 "--disable", "shell_tool",
                 "--config", 'web_search="disabled"',
-                "--config", f'model_reasoning_effort="{selected_reasoning_effort}"',
                 "--config", f"model_instructions_file={self._toml_string(instructions_path)}",
             ]
+            if selected_reasoning_effort != "auto":
+                args.extend((
+                    "--config",
+                    f'model_reasoning_effort="{selected_reasoning_effort}"',
+                ))
             if purpose == "agent":
                 output_schema_path = self._write_temporary_output_schema()
                 args.extend(("--output-schema", str(output_schema_path)))

@@ -277,6 +277,29 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.assertIn('model_reasoning_effort="xhigh"', config_values)
         self.assertEqual(args[args.index("--model") + 1], "gpt-5.5")
 
+    def test_automatic_reasoning_omits_the_cli_config_override(self):
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
+        )
+        self.provider._run = mock.Mock(return_value=(0, self._codex_jsonl_response(), ""))
+
+        self.provider.complete(
+            [{"role": "user", "content": "שלום"}],
+            model="codex default",
+            reasoning_effort="auto",
+        )
+
+        args = self.provider._run.call_args.args[0]
+        config_values = [
+            args[index + 1]
+            for index, value in enumerate(args[:-1])
+            if value == "--config"
+        ]
+        self.assertFalse(
+            any(value.startswith("model_reasoning_effort=") for value in config_values)
+        )
+        self.assertNotIn("--model", args)
+
     def test_gpt_5_6_max_reasoning_effort_is_passed_to_codex(self):
         self.provider.connection_status = mock.Mock(
             return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")

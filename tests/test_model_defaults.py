@@ -8,11 +8,18 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtWidgets import QApplication, QComboBox
+
 from smarti.common import (
     MODEL_SELECTION_PROVENANCE_VERSION,
     MODEL_SELECTION_SOURCE_DEFAULT,
     MODEL_SELECTION_SOURCE_USER,
+    model_reasoning_api_parameters,
+    model_reasoning_contract,
+    model_reasoning_options,
+    model_reasoning_setting,
     provider_default_model,
+    set_model_reasoning_setting,
 )
 from smarti.config import DEFAULT_SETTINGS
 from smarti.core import SmartiCore
@@ -135,6 +142,187 @@ class ModelDefaultAndProvenanceTests(unittest.TestCase):
         page._schedule_autosave.assert_called_once_with()
 
 
+class ProviderFamilyReasoningContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_gemini_active_families_resolve_to_native_contracts(self):
+        expected = {
+            "gemini-2.5-pro": "gemini_25_pro",
+            "gemini-2.5-flash": "gemini_25_flash",
+            "gemini-2.5-flash-lite": "gemini_25_flash_lite",
+            "gemini-3-flash-preview": "gemini_3_flash",
+            "gemini-3.1-flash-image": "gemini_current_flash_image",
+            "gemini-3.1-pro-preview": "gemini_current_pro",
+            "gemini-3.5-flash-lite": "gemini_current_flash_lite",
+            "gemini-3.6-flash": "gemini_current_flash",
+        }
+        for model, contract_id in expected.items():
+            with self.subTest(model=model):
+                self.assertEqual(
+                    model_reasoning_contract("gemini", model)["contract_id"],
+                    contract_id,
+                )
+
+    def test_anthropic_active_families_resolve_to_native_contracts(self):
+        expected = {
+            "claude-haiku-4-5-20251001": "anthropic_manual_45",
+            "claude-sonnet-4-5-20250929": "anthropic_manual_45",
+            "claude-opus-4-5-20251101": "anthropic_manual_opus_45",
+            "claude-sonnet-4-6": "anthropic_adaptive_46",
+            "claude-opus-4-7": "anthropic_adaptive_47_48",
+            "claude-opus-4-8": "anthropic_adaptive_47_48",
+            "claude-opus-5": "anthropic_current_default_on",
+            "claude-sonnet-5": "anthropic_current_default_on",
+            "claude-fable-5": "anthropic_current_always_on",
+        }
+        for model, contract_id in expected.items():
+            with self.subTest(model=model):
+                self.assertEqual(
+                    model_reasoning_contract("anthropic", model)["contract_id"],
+                    contract_id,
+                )
+
+    def test_openai_active_families_resolve_to_native_contracts(self):
+        expected = {
+            "gpt-5": "openai_5",
+            "gpt-5-pro": "openai_5_pro",
+            "gpt-5.1": "openai_51",
+            "gpt-5.2": "openai_54_52",
+            "gpt-5.2-pro": "openai_52_pro",
+            "gpt-5.3-codex": "openai_codex_53",
+            "gpt-5.4-mini": "openai_54_52",
+            "gpt-5.4-pro": "openai_54_pro",
+            "gpt-5.5": "openai_55",
+            "gpt-5.5-pro": "openai_55_pro",
+            "gpt-5.6-terra": "openai_current",
+            "o3": "openai_o3",
+            "o3-pro": "openai_o3_pro",
+        }
+        for model, contract_id in expected.items():
+            with self.subTest(model=model):
+                self.assertEqual(
+                    model_reasoning_contract("openai", model)["contract_id"],
+                    contract_id,
+                )
+        self.assertEqual(model_reasoning_contract("openai", "gpt-4.1"), {})
+
+    def test_unknown_future_models_inherit_each_provider_current_contract(self):
+        self.assertEqual(
+            model_reasoning_contract("gemini", "gemini-4.2-flash")["contract_id"],
+            "gemini_current_flash",
+        )
+        self.assertEqual(
+            model_reasoning_contract("anthropic", "claude-next-2027")["contract_id"],
+            "anthropic_current_default_on",
+        )
+        self.assertEqual(
+            model_reasoning_contract("openai", "gpt-5.9-sol")["contract_id"],
+            "openai_current",
+        )
+
+    def test_none_and_minimal_follow_the_resolved_family(self):
+        self.assertNotIn(
+            "none",
+            model_reasoning_contract("gemini", "gemini-2.5-pro")["supported_levels"],
+        )
+        self.assertIn(
+            "none",
+            model_reasoning_contract("gemini", "gemini-2.5-flash")["supported_levels"],
+        )
+        self.assertIn(
+            "minimal",
+            model_reasoning_contract("gemini", "gemini-3.6-flash")["supported_levels"],
+        )
+        self.assertEqual(
+            model_reasoning_contract("openai", "gpt-5")["supported_levels"][0],
+            "minimal",
+        )
+        self.assertEqual(
+            model_reasoning_contract("openai", "gpt-5.1")["supported_levels"][0],
+            "none",
+        )
+        self.assertNotIn(
+            "none",
+            model_reasoning_contract("anthropic", "claude-fable-5")["supported_levels"],
+        )
+
+    def test_reasoning_preference_is_saved_per_provider_and_model(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        set_model_reasoning_setting(settings, "gemini", "gemini-2.5-flash", "none")
+        set_model_reasoning_setting(settings, "gemini", "gemini-3.6-flash", "high")
+
+        self.assertEqual(
+            model_reasoning_setting(settings, "gemini", "gemini-2.5-flash"),
+            "none",
+        )
+        self.assertEqual(
+            model_reasoning_setting(settings, "gemini", "gemini-3.6-flash"),
+            "high",
+        )
+        self.assertEqual(
+            model_reasoning_setting(settings, "openai", "gpt-5.6-sol"),
+            "auto",
+        )
+
+    def test_auto_is_a_ui_choice_but_never_an_api_value(self):
+        options = dict(model_reasoning_options("openai", "gpt-5.6-sol"))
+        self.assertIn("auto", options)
+        self.assertEqual(
+            model_reasoning_api_parameters("openai", "gpt-5.6-sol", "auto"),
+            {},
+        )
+        codex_options = dict(
+            model_reasoning_options("openai_codex_signin", "Codex default")
+        )
+        self.assertIn("auto", codex_options)
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.assertEqual(
+            model_reasoning_setting(
+                settings,
+                "openai_codex_signin",
+                "Codex default",
+            ),
+            "auto",
+        )
+        self.assertEqual(
+            set_model_reasoning_setting(
+                settings,
+                "openai_codex_signin",
+                "Codex default",
+                "auto",
+            ),
+            "auto",
+        )
+        self.assertEqual(settings["codex_reasoning_effort"], "auto")
+
+    def test_settings_control_rebuilds_options_for_the_selected_family(self):
+        settings = copy.deepcopy(DEFAULT_SETTINGS)
+        state = {"model": "gemini-2.5-flash"}
+        visibility = []
+        page = SimpleNamespace(
+            core=SimpleNamespace(settings=settings),
+            provider_combo=SimpleNamespace(currentText=lambda: "gemini"),
+            reasoning_effort_combo=QComboBox(),
+            codex_reasoning_effort_field_container=SimpleNamespace(
+                setVisible=lambda value: visibility.append(bool(value))
+            ),
+        )
+        page._reasoning_model_for_ui = lambda _provider=None: state["model"]
+
+        SettingsPage._refresh_reasoning_effort_control(page, "gemini")
+        self.assertGreaterEqual(page.reasoning_effort_combo.findData("none"), 0)
+        self.assertEqual(page.reasoning_effort_combo.findData("minimal"), -1)
+
+        state["model"] = "gemini-3.6-flash"
+        SettingsPage._refresh_reasoning_effort_control(page, "gemini")
+        self.assertEqual(page.reasoning_effort_combo.findData("none"), -1)
+        self.assertGreaterEqual(page.reasoning_effort_combo.findData("minimal"), 0)
+        self.assertEqual(page.reasoning_effort_combo.currentData(), "auto")
+        self.assertTrue(all(visibility))
+
+
 class ExactProviderPayloadTests(unittest.TestCase):
     @staticmethod
     def _anthropic_response():
@@ -172,6 +360,10 @@ class ExactProviderPayloadTests(unittest.TestCase):
             retry_wait_times=[],
             request_options={
                 "provider_mode": "anthropic",
+                "temperature": 0.2,
+                "top_p": 0.8,
+                "top_k": 20,
+                "seed": 42,
                 "reasoning_effort": "xhigh",
             },
         )
@@ -237,18 +429,52 @@ class ExactProviderPayloadTests(unittest.TestCase):
             retry_wait_times=[],
             request_options={
                 "provider_mode": "gemini",
+                "temperature": 0.2,
+                "top_p": 0.8,
+                "top_k": 20,
+                "seed": 42,
                 "reasoning_effort": "high",
             },
         )
 
         payload = payloads[0]
-        self.assertNotIn("temperature", payload["generationConfig"])
+        for field in ("temperature", "topP", "topK", "seed"):
+            self.assertNotIn(field, payload["generationConfig"])
         self.assertEqual(
             payload["generationConfig"]["thinkingConfig"],
             {"thinkingLevel": "high"},
         )
         self.assertIn("tools", payload)
         self.assertIn("gemini_call_1", text)
+
+    def test_gemini_25_uses_budget_contract_and_never_temperature(self):
+        core = _request_core("gemini")
+        payloads = []
+        core._request_post = lambda _url, json=None, **_kwargs: (
+            payloads.append(copy.deepcopy(json))
+            or _JsonResponse({
+                "usageMetadata": {},
+                "candidates": [{"content": {"parts": [{"text": "done"}]}}],
+            })
+        )
+
+        core._handle_api_request_with_retry(
+            "gemini-2.5-pro",
+            [{"role": "user", "parts": [{"text": "work"}]}],
+            retry_wait_times=[],
+            request_options={
+                "provider_mode": "gemini",
+                "temperature": 0.2,
+                "reasoning_effort": "high",
+            },
+        )
+
+        generation = payloads[0]["generationConfig"]
+        self.assertNotIn("temperature", generation)
+        self.assertEqual(
+            generation["thinkingConfig"],
+            {"thinkingBudget": 32_768},
+        )
 
     def test_gpt_5_6_sol_keeps_reasoning_cache_and_native_tools_without_temperature(self):
         core = _request_core("openai")
@@ -293,12 +519,17 @@ class ExactProviderPayloadTests(unittest.TestCase):
             retry_wait_times=[],
             request_options={
                 "provider_mode": "openai",
+                "temperature": 0.2,
+                "top_p": 0.8,
+                "top_k": 20,
+                "seed": 42,
                 "reasoning_effort": "high",
             },
         )
 
         payload = calls[0]
-        self.assertNotIn("temperature", payload)
+        for field in ("temperature", "top_p", "top_k", "seed"):
+            self.assertNotIn(field, payload)
         self.assertEqual(payload["reasoning_effort"], "high")
         self.assertEqual(payload["prompt_cache_options"], {"mode": "explicit"})
         self.assertEqual(payload["prompt_cache_key"], "smarti:task-5-6")
@@ -307,8 +538,14 @@ class ExactProviderPayloadTests(unittest.TestCase):
         self.assertEqual(usage["cached_prompt"], 50)
         self.assertEqual(usage["cache_write_prompt"], 10)
 
-    def test_generic_compatible_provider_gets_no_first_party_openai_fields(self):
-        core = _request_core("openrouter")
+    def test_future_openai_model_uses_current_contract_and_saved_chat_setting(self):
+        core = _request_core("openai")
+        set_model_reasoning_setting(
+            core.settings,
+            "openai",
+            "gpt-5.9-sol",
+            "max",
+        )
         calls = []
 
         def create(**kwargs):
@@ -321,26 +558,123 @@ class ExactProviderPayloadTests(unittest.TestCase):
                 ))],
             )
 
-        client = SimpleNamespace(
+        core.universal_client = SimpleNamespace(
             chat=SimpleNamespace(completions=SimpleNamespace(create=create))
         )
-        core._openai_compatible_client_for_request = lambda _mode: client
         core._handle_api_request_with_retry(
-            "gpt-5.6-sol",
+            "gpt-5.9-sol",
             [{"role": "user", "content": "work"}],
             retry_wait_times=[],
-            request_options={
-                "provider_mode": "openrouter",
-                "reasoning_effort": "max",
-            },
+            request_options={"provider_mode": "openai"},
         )
 
-        for field in (
-            "reasoning_effort",
-            "prompt_cache_options",
-            "prompt_cache_key",
-        ):
-            self.assertNotIn(field, calls[0])
+        self.assertEqual(calls[0]["reasoning_effort"], "max")
+        self.assertNotIn("temperature", calls[0])
+
+    def test_anthropic_manual_and_adaptive_families_build_different_payloads(self):
+        cases = (
+            (
+                "claude-sonnet-4-5-20250929",
+                "high",
+                {
+                    "thinking": {
+                        "type": "enabled",
+                        "budget_tokens": 16_384,
+                        "display": "omitted",
+                    },
+                },
+            ),
+            (
+                "claude-opus-4-8",
+                "xhigh",
+                {
+                    "thinking": {"type": "adaptive", "display": "omitted"},
+                    "output_config": {"effort": "xhigh"},
+                },
+            ),
+            (
+                "claude-sonnet-6",
+                "low",
+                {"output_config": {"effort": "low"}},
+            ),
+        )
+        for model, level, expected_fields in cases:
+            with self.subTest(model=model):
+                core = _request_core("anthropic")
+                payloads = []
+                core._request_post = lambda _url, json=None, **_kwargs: (
+                    payloads.append(copy.deepcopy(json))
+                    or self._anthropic_response()
+                )
+                core._handle_api_request_with_retry(
+                    model,
+                    [{"role": "user", "content": "work"}],
+                    retry_wait_times=[],
+                    request_options={
+                        "provider_mode": "anthropic",
+                        "temperature": 0.2,
+                        "reasoning_effort": level,
+                    },
+                )
+                payload = payloads[0]
+                self.assertNotIn("temperature", payload)
+                for field, value in expected_fields.items():
+                    self.assertEqual(payload[field], value)
+
+    def test_all_compatible_providers_omit_sampling_and_first_party_fields(self):
+        for provider in ("local", "openrouter"):
+            with self.subTest(provider=provider):
+                core = _request_core(provider)
+                calls = []
+
+                def create(**kwargs):
+                    calls.append(copy.deepcopy(kwargs))
+                    return SimpleNamespace(
+                        usage=None,
+                        choices=[SimpleNamespace(message=SimpleNamespace(
+                            content="done",
+                            tool_calls=[],
+                        ))],
+                    )
+
+                client = SimpleNamespace(
+                    chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+                )
+                core._openai_compatible_client_for_request = lambda _mode: client
+                core._handle_api_request_with_retry(
+                    "gpt-5.6-sol",
+                    [{"role": "user", "content": "work"}],
+                    retry_wait_times=[],
+                    request_options={
+                        "provider_mode": provider,
+                        "temperature": 0.2,
+                        "top_p": 0.8,
+                        "top_k": 20,
+                        "min_p": 0.1,
+                        "typical_p": 0.9,
+                        "frequency_penalty": 0.5,
+                        "presence_penalty": 0.5,
+                        "repetition_penalty": 1.1,
+                        "seed": 42,
+                        "reasoning_effort": "max",
+                    },
+                )
+
+                for field in (
+                    "temperature",
+                    "top_p",
+                    "top_k",
+                    "min_p",
+                    "typical_p",
+                    "frequency_penalty",
+                    "presence_penalty",
+                    "repetition_penalty",
+                    "seed",
+                    "reasoning_effort",
+                    "prompt_cache_options",
+                    "prompt_cache_key",
+                ):
+                    self.assertNotIn(field, calls[0])
 
     def test_unsupported_cache_parameter_fallback_does_not_change_manual_model(self):
         core = _request_core("openai")

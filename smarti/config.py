@@ -718,6 +718,77 @@ BUILTIN_TOOL_SCHEMAS["background_task_manager"] = {
     }
 }
 
+NOTIFICATION_ACTION_ALIASES = {
+    "notify": "send_toast",
+    "send_notification": "send_toast",
+    "remind": "schedule_reminder",
+    "list": "list_reminders",
+    "cancel": "cancel_reminder",
+    "calendar_event": "create_calendar_event",
+    "open_calendar": "open_windows_app",
+    "open_clock": "open_windows_app",
+    "open_alarms": "open_windows_app",
+    "open_notification_settings": "open_windows_app",
+    "open_focus_settings": "open_windows_app",
+}
+
+NOTIFICATION_TARGET_BY_ACTION = {
+    "open_calendar": "calendar",
+    "open_clock": "clock",
+    "open_alarms": "alarms",
+    "open_notification_settings": "notification_settings",
+    "open_focus_settings": "focus_settings",
+}
+
+NOTIFICATION_TARGET_URIS = {
+    "calendar": ("outlookcal:", "ms-calendar:"),
+    "clock": ("ms-clock:",),
+    "alarms": ("ms-clock:",),
+    "notification_settings": ("ms-settings:notifications",),
+    "focus_settings": (
+        "ms-settings:quiethours",
+        "ms-settings:quietmomentsscheduled",
+        "ms-settings:notifications",
+    ),
+}
+
+# This is the authoritative action-level policy map for notification_manager.
+# Optional capabilities are added only when their matching side effect is requested.
+NOTIFICATION_ACTION_POLICY = {
+    "list_reminders": {
+        "capabilities": (),
+        "audit_capability": "safe_read",
+        "risk": "low",
+    },
+    "send_toast": {
+        "capabilities": ("notification_send",),
+        "risk": "low",
+    },
+    "schedule_reminder": {
+        "capabilities": ("background_task",),
+        "risk": "medium",
+    },
+    "cancel_reminder": {
+        "capabilities": ("background_task_cancel",),
+        "risk": "medium",
+    },
+    "create_calendar_event": {
+        "capabilities": ("calendar_write",),
+        "optional_capabilities": {"open": "file_open"},
+        "risk": "medium",
+    },
+    "open_windows_app": {
+        "target_capabilities": {
+            "calendar": "app_open",
+            "clock": "app_open",
+            "alarms": "app_open",
+            "notification_settings": "settings_open",
+            "focus_settings": "settings_open",
+        },
+        "risk": "low",
+    },
+}
+
 BUILTIN_TOOL_SCHEMAS["notification_manager"] = {
     "description": "Unified Windows notifications, reminders, calendar-event, and Windows Calendar/Clock opening tool. Use for attention-grabbing reminders and user-visible Windows toasts; chat messages should still be sent normally.",
     "inputSchema": {
@@ -1094,6 +1165,7 @@ DEFAULT_SETTINGS = {
     "selected_gemini_model": "gemini-3.6-flash",
     "selected_openai_model": "gpt-5.6-sol",
     "selected_openai_codex_signin_model": "Codex default",
+    "codex_reasoning_effort": "auto",
     "selected_anthropic_model": "claude-opus-5",
     "selected_local_model": "",
     "selected_openrouter_model": "openai/gpt-5.4",
@@ -1114,6 +1186,11 @@ DEFAULT_SETTINGS = {
         for provider in MODEL_PROVIDER_ORDER
     },
     "model_selection_provenance_version": MODEL_SELECTION_PROVENANCE_VERSION,
+    "model_reasoning_efforts": {
+        "gemini": {},
+        "openai": {},
+        "anthropic": {},
+    },
     "local_server_url": "http://localhost:1234/v1",
     "shopping_list": [],
     "user_memory": "",

@@ -325,20 +325,22 @@ class ProductivityToolsMixin:
             dt = dt.astimezone().replace(tzinfo=None)
         return dt
 
-    def create_calendar_event_file(self, args):
+    def _prepare_calendar_event_file(self, args):
         try:
             title = str(args.get("title") or args.get("summary") or "אירוע מסמארטי").strip()
             start = self._parse_event_datetime(args.get("start") or args.get("start_time"))
             if not start:
-                return "ERROR: Missing event start time. Use ISO format like 2026-06-03T15:30:00."
+                return None, "ERROR: Missing event start time. Use ISO format like 2026-06-03T15:30:00."
             end = self._parse_event_datetime(args.get("end") or args.get("end_time"))
             if not end:
                 duration = float(args.get("duration_minutes") or 30)
                 end = start + timedelta(minutes=max(1, duration))
+            if end <= start:
+                return None, "ERROR: Event end time must be after its start time."
             location = str(args.get("location") or "").strip()
             notes = str(args.get("notes") or args.get("description") or "").strip()
             uid = f"{uuid.uuid4()}@smartiai"
-            stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             fmt = lambda dt: dt.strftime("%Y%m%dT%H%M%S")
             ics = "\r\n".join([
                 "BEGIN:VCALENDAR",
@@ -358,73 +360,238 @@ class ProductivityToolsMixin:
                 "END:VCALENDAR",
                 ""
             ])
-            os.makedirs(OUTPUTS_DIR, exist_ok=True)
             path = os.path.join(OUTPUTS_DIR, f"{safe_filename(title, 'smartiai_event')}.ics")
             suffix = 1
             base, ext = os.path.splitext(path)
             while os.path.exists(path):
                 suffix += 1
                 path = f"{base}_{suffix}{ext}"
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(ics)
-            if normalize_bool_text(args.get("open", True)):
+            return {
+                "title": title,
+                "start": start,
+                "end": end,
+                "location": location,
+                "notes": notes,
+                "path": os.path.abspath(path),
+                "content": ics,
+            }, None
+        except Exception as e:
+            return None, f"ERROR: {e}"
+
+    def _write_calendar_event_file(self, prepared, *, open_file=True):
+        path = str(prepared.get("path") or "")
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "x", encoding="utf-8", newline="") as f:
+                f.write(str(prepared.get("content") or ""))
+            open_error = ""
+            if open_file:
                 try:
                     os.startfile(path)
-                except Exception:
-                    pass
-            return f"SUCCESS: נוצר קובץ אירוע ליומן: {path}"
+                except Exception as e:
+                    open_error = str(e)
+            result = f"SUCCESS: נוצר קובץ אירוע ליומן: {path}"
+            if open_error:
+                result += f"\nWARNING: הקובץ נוצר, אך לא ניתן היה לפתוח אותו: {open_error}"
+            return result
+        except FileExistsError:
+            return f"ERROR: Calendar event path changed before creation; no file was overwritten: {path}"
         except Exception as e:
             return f"ERROR: {e}"
 
+    def create_calendar_event_file(self, args):
+        prepared, error = self._prepare_calendar_event_file(args or {})
+        if error:
+            return error
+        return self._write_calendar_event_file(
+            prepared,
+            open_file=normalize_bool_text((args or {}).get("open", True)),
+        )
+
+    def _canonicalize_notification_request(self, args):
+        if not isinstance(args, dict):
+            return None, None, "ERROR: notification_manager arguments must be an object."
+        normalized = copy.deepcopy(args)
+        raw_action = str(normalized.get("action") or "send_toast").strip().lower()
+        if raw_action in NOTIFICATION_TARGET_BY_ACTION and not str(normalized.get("target") or "").strip():
+            normalized["target"] = NOTIFICATION_TARGET_BY_ACTION[raw_action]
+        action = NOTIFICATION_ACTION_ALIASES.get(raw_action, raw_action)
+        if action not in NOTIFICATION_ACTION_POLICY:
+            return None, None, f"ERROR: Unsupported notification_manager action: {raw_action or '(empty)'}."
+        normalized["action"] = action
+
+        prepared = None
+        if action == "send_toast":
+            normalized["title"] = str(normalized.get("title") or SMARTI_APP_DISPLAY_NAME).strip()
+            normalized["body"] = str(normalized.get("body") or normalized.get("message") or "").strip()
+            normalized["kind"] = str(normalized.get("kind") or "default").strip().lower()
+            if normalized["kind"] not in {"default", "reminder", "alarm", "important"}:
+                return None, None, f"ERROR: Unsupported notification kind: {normalized['kind']}."
+            normalized["open_button"] = normalize_bool_text(normalized.get("open_button", True))
+        elif action == "schedule_reminder":
+            normalized["title"] = str(normalized.get("title") or "תזכורת מסמארטי").strip()
+            normalized["message"] = str(normalized.get("message") or normalized.get("prompt") or "").strip()
+            if not normalized["message"]:
+                return None, None, "ERROR: Missing reminder message."
+            try:
+                normalized["delay_minutes"] = float(normalized.get("delay_minutes") or 0)
+            except Exception:
+                return None, None, "ERROR: Reminder delay must be a number."
+            if normalized["delay_minutes"] < 0:
+                return None, None, "ERROR: Delay must be positive."
+            normalized["repeat"] = str(normalized.get("repeat") or "once").strip().lower()
+            if normalized["repeat"] not in {"once", "interval"}:
+                return None, None, f"ERROR: Unsupported reminder repeat mode: {normalized['repeat']}."
+            interval_raw = normalized.get("interval_minutes")
+            try:
+                normalized["interval_minutes"] = (
+                    float(interval_raw)
+                    if str(interval_raw or "").strip()
+                    else normalized["delay_minutes"]
+                )
+            except Exception:
+                return None, None, "ERROR: Reminder interval must be a number."
+            if normalized["repeat"] == "interval" and normalized["interval_minutes"] < 1:
+                return None, None, "ERROR: Interval must be at least 1 minute."
+        elif action == "cancel_reminder":
+            normalized["id"] = str(normalized.get("id") or "").strip()
+            if not normalized["id"]:
+                return None, None, "ERROR: Missing reminder id."
+            task = self._get_background_task(normalized["id"])
+            if not task:
+                return None, None, f"ERROR: Reminder not found: {normalized['id']}"
+            if task.get("kind") != "reminder":
+                return None, None, f"ERROR: Task is not a reminder: {normalized['id']}"
+            prepared = {"task": task}
+        elif action == "create_calendar_event":
+            normalized["open"] = normalize_bool_text(normalized.get("open", True))
+            prepared, error = self._prepare_calendar_event_file(normalized)
+            if error:
+                return None, None, error
+        elif action == "open_windows_app":
+            normalized["target"] = str(normalized.get("target") or "").strip().lower()
+            if normalized["target"] not in NOTIFICATION_TARGET_URIS:
+                return None, None, f"ERROR: Unsupported Windows notification target: {normalized['target'] or '(empty)'}."
+        return normalized, prepared, None
+
+    def _notification_policy_requirements(self, args):
+        action = args["action"]
+        policy = NOTIFICATION_ACTION_POLICY[action]
+        capabilities = list(policy.get("capabilities") or ())
+        for field, capability in (policy.get("optional_capabilities") or {}).items():
+            if args.get(field):
+                capabilities.append(capability)
+        target_capabilities = policy.get("target_capabilities") or {}
+        if target_capabilities:
+            capabilities.append(target_capabilities[args["target"]])
+        return capabilities, str(policy.get("risk") or "medium")
+
+    def _notification_approval_details(self, args, prepared):
+        action = args["action"]
+        if action == "send_toast":
+            return (
+                f"כותרת: {args['title']}\n"
+                f"תוכן: {args['body'][:800] or '(ריק)'}\n"
+                f"סוג: {args['kind']}"
+            )
+        if action == "schedule_reminder":
+            interval = (
+                f"\nמרווח חזרה: {args['interval_minutes']} דקות"
+                if args["repeat"] == "interval"
+                else ""
+            )
+            return (
+                f"כותרת: {args['title']}\n"
+                f"דחייה: {args['delay_minutes']} דקות\n"
+                f"חזרה: {args['repeat']}{interval}\n"
+                f"הודעה: {args['message'][:800]}"
+            )
+        if action == "cancel_reminder":
+            task = prepared["task"]
+            return (
+                f"מזהה: {args['id']}\n"
+                f"זמן מתוכנן: {task.get('run_at', '')}\n"
+                f"חזרה: {task.get('repeat', 'once')}\n"
+                f"הודעה: {str(task.get('message') or '')[:800]}"
+            )
+        if action == "create_calendar_event":
+            return (
+                f"כותרת: {prepared['title']}\n"
+                f"התחלה: {prepared['start'].isoformat(timespec='seconds')}\n"
+                f"סיום: {prepared['end'].isoformat(timespec='seconds')}\n"
+                f"נתיב: {prepared['path']}\n"
+                f"פתיחה לאחר יצירה: {'כן' if args['open'] else 'לא'}"
+            )
+        uris = ", ".join(NOTIFICATION_TARGET_URIS[args["target"]])
+        return f"יעד: {args['target']}\nכתובות Windows מדויקות: {uris}"
+
+    def _audit_notification_safe_read(self):
+        if getattr(self, "audit_logger", None):
+            self.audit_logger.record(
+                "policy_decision",
+                {
+                    "manager": "notification_manager",
+                    "sub_action": "list_reminders",
+                    "capability": NOTIFICATION_ACTION_POLICY["list_reminders"]["audit_capability"],
+                    "decision": "allow",
+                    "risk": "low",
+                    "outcome": "allowed",
+                },
+                self.settings,
+            )
+
     def notification_manager(self, args):
-        args = args or {}
-        action = str(args.get("action") or "send_toast").strip().lower()
-        if action in {"send_toast", "notify", "send_notification"}:
-            title = str(args.get("title") or SMARTI_APP_DISPLAY_NAME)
-            body = str(args.get("body") or args.get("message") or "")
-            kind = str(args.get("kind") or "default").strip().lower()
+        args, prepared, error = self._canonicalize_notification_request(args or {})
+        if error:
+            return error
+        action = args["action"]
+        if action == "list_reminders":
+            self._audit_notification_safe_read()
+            return self.list_reminders()
+
+        capabilities, risk = self._notification_policy_requirements(args)
+        approval_titles = {
+            "send_toast": "אישור שליחת התראת Windows",
+            "schedule_reminder": "אישור תזמון תזכורת",
+            "cancel_reminder": "אישור ביטול תזכורת",
+            "create_calendar_event": "אישור יצירת אירוע יומן",
+            "open_windows_app": "אישור פתיחת יעד ב-Windows",
+        }
+        allowed, error = self._ensure_capabilities_allowed(
+            capabilities,
+            approval_titles[action],
+            self._notification_approval_details(args, prepared),
+            risk=risk,
+            audit_context={
+                "manager": "notification_manager",
+                "sub_action": action,
+            },
+        )
+        if not allowed:
+            return error
+
+        if action == "send_toast":
             if self._emit_notification("toast", {
-                "title": title,
-                "body": body,
-                "kind": kind,
-                "open_button": args.get("open_button", True),
+                "title": args["title"],
+                "body": args["body"],
+                "kind": args["kind"],
+                "open_button": args["open_button"],
             }):
                 return "SUCCESS: התראת Windows נשלחה."
             return "ERROR: ערוץ ההתראות של הממשק אינו זמין כרגע."
-        if action in {"schedule_reminder", "remind"}:
-            allowed, err = self._ensure_capability_allowed(
-                "background_task",
-                "אישור תזמון תזכורת",
-                f"דחייה: {args.get('delay_minutes', 0)} דקות\n\n{args.get('message') or args.get('prompt') or ''}",
-                risk="medium",
-            )
-            if not allowed:
-                return err
+        if action == "schedule_reminder":
             return self.schedule_reminder(
-                args.get("delay_minutes", 0),
-                args.get("message") or args.get("prompt") or "",
-                args.get("title") or "תזכורת מסמארטי",
-                args.get("repeat", "once"),
-                args.get("interval_minutes", ""),
+                args["delay_minutes"],
+                args["message"],
+                args["title"],
+                args["repeat"],
+                args["interval_minutes"],
             )
-        if action in {"list_reminders", "list"}:
-            return self.list_reminders()
-        if action in {"cancel_reminder", "cancel"}:
-            return self.cancel_background_task(str(args.get("id") or ""))
-        if action in {"create_calendar_event", "calendar_event"}:
-            return self.create_calendar_event_file(args)
-        if action in {"open_windows_app", "open_calendar", "open_clock", "open_alarms", "open_notification_settings", "open_focus_settings"}:
-            target = str(args.get("target") or action.replace("open_", "")).strip().lower()
-            uri_map = {
-                "calendar": ("outlookcal:", "ms-calendar:"),
-                "windows_app": ("ms-clock:",),
-                "clock": ("ms-clock:",),
-                "alarms": ("ms-clock:",),
-                "notification_settings": ("ms-settings:notifications",),
-                "focus_settings": ("ms-settings:quiethours", "ms-settings:quietmomentsscheduled", "ms-settings:notifications"),
-            }
-            return self._open_windows_uri(*uri_map.get(target, (target,)))
-        return "ERROR: Unsupported notification_manager action."
+        if action == "cancel_reminder":
+            return self.cancel_background_task(args["id"])
+        if action == "create_calendar_event":
+            return self._write_calendar_event_file(prepared, open_file=args["open"])
+        return self._open_windows_uri(*NOTIFICATION_TARGET_URIS[args["target"]])
 
     def list_background_tasks(self):
         tasks = [

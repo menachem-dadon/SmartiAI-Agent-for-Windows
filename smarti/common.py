@@ -45,7 +45,7 @@ import tempfile
 import uuid
 import ctypes
 import ssl
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import urllib3
 
@@ -315,27 +315,241 @@ MODEL_SELECTION_SOURCE_DEFAULT = "default"
 MODEL_SELECTION_SOURCE_USER = "user"
 MODEL_SELECTION_PROVENANCE_VERSION = 1
 
-# Point 2 intentionally keeps this registry narrow. Point 8 can expand it into
-# the complete provider adapter/capability layer without changing these exact
-# default-model contracts.
-EXACT_MODEL_REQUEST_CAPABILITIES = {
-    ("gemini", "gemini-3.6-flash"): {
+# Reasoning controls are provider contracts, not a per-model registry. Resolvers
+# below attach active model families to the native contract they implement. An
+# unknown future model intentionally inherits the provider's current contract.
+MODEL_REASONING_CONTRACTS = {
+    # Google generateContent contracts.
+    "gemini_current_flash": {
+        "api_field": "generationConfig.thinkingConfig.thinkingLevel",
+        "supported_levels": ("minimal", "low", "medium", "high"),
+        "provider_default": "medium",
+        "control_kind": "thinking_level",
         "max_output_tokens": 65_536,
-        "sampling_parameters": False,
-        "thinking_levels": ("minimal", "low", "medium", "high"),
     },
-    ("openai", "gpt-5.6-sol"): {
+    "gemini_current_pro": {
+        "api_field": "generationConfig.thinkingConfig.thinkingLevel",
+        "supported_levels": ("low", "medium", "high"),
+        "provider_default": "high",
+        "control_kind": "thinking_level",
+        "max_output_tokens": 65_536,
+    },
+    "gemini_current_flash_lite": {
+        "api_field": "generationConfig.thinkingConfig.thinkingLevel",
+        "supported_levels": ("minimal", "low", "medium", "high"),
+        "provider_default": "minimal",
+        "control_kind": "thinking_level",
+        "max_output_tokens": 65_536,
+    },
+    "gemini_current_flash_image": {
+        "api_field": "generationConfig.thinkingConfig.thinkingLevel",
+        "supported_levels": ("minimal", "high"),
+        "provider_default": "minimal",
+        "control_kind": "thinking_level",
+        "max_output_tokens": 65_536,
+    },
+    "gemini_3_flash": {
+        "api_field": "generationConfig.thinkingConfig.thinkingLevel",
+        "supported_levels": ("minimal", "low", "medium", "high"),
+        "provider_default": "high",
+        "control_kind": "thinking_level",
+        "max_output_tokens": 65_536,
+    },
+    "gemini_25_pro": {
+        "api_field": "generationConfig.thinkingConfig.thinkingBudget",
+        "supported_levels": ("low", "medium", "high"),
+        "provider_default": "dynamic",
+        "control_kind": "thinking_budget",
+        "budget_by_level": {"low": 1_024, "medium": 8_192, "high": 32_768},
+        "max_output_tokens": 65_536,
+    },
+    "gemini_25_flash": {
+        "api_field": "generationConfig.thinkingConfig.thinkingBudget",
+        "supported_levels": ("none", "low", "medium", "high"),
+        "provider_default": "dynamic",
+        "control_kind": "thinking_budget",
+        "budget_by_level": {
+            "none": 0,
+            "low": 1_024,
+            "medium": 8_192,
+            "high": 24_576,
+        },
+        "max_output_tokens": 65_536,
+    },
+    "gemini_25_flash_lite": {
+        "api_field": "generationConfig.thinkingConfig.thinkingBudget",
+        "supported_levels": ("none", "low", "medium", "high"),
+        "provider_default": "none",
+        "control_kind": "thinking_budget",
+        "budget_by_level": {
+            "none": 0,
+            "low": 1_024,
+            "medium": 8_192,
+            "high": 24_576,
+        },
+        "max_output_tokens": 65_536,
+    },
+
+    # OpenAI Chat Completions contracts. The UI keeps "auto" separate so
+    # omitting reasoning_effort always preserves the provider default.
+    "openai_current": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("none", "low", "medium", "high", "xhigh", "max"),
+        "provider_default": "medium",
+        "control_kind": "reasoning_effort",
         "max_output_tokens": 128_000,
-        "sampling_parameters": False,
-        "reasoning_efforts": ("none", "low", "medium", "high", "xhigh", "max"),
     },
-    ("anthropic", "claude-opus-5"): {
+    "openai_55": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("none", "low", "medium", "high", "xhigh"),
+        "provider_default": "medium",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 128_000,
+    },
+    "openai_55_pro": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("medium", "high", "xhigh"),
+        "provider_default": "high",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 128_000,
+    },
+    "openai_54_52": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("none", "low", "medium", "high", "xhigh"),
+        "provider_default": "none",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 128_000,
+    },
+    "openai_54_pro": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("medium", "high", "xhigh"),
+        "provider_default": "medium",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 128_000,
+    },
+    "openai_52_pro": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("medium", "high", "xhigh"),
+        "provider_default": "provider",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 128_000,
+    },
+    "openai_51": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("none", "low", "medium", "high"),
+        "provider_default": "none",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 128_000,
+    },
+    "openai_5": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("minimal", "low", "medium", "high"),
+        "provider_default": "medium",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 128_000,
+    },
+    "openai_5_pro": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("high",),
+        "provider_default": "high",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 272_000,
+    },
+    "openai_codex_53": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("low", "medium", "high", "xhigh"),
+        "provider_default": "medium",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 128_000,
+    },
+    "openai_o3": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("low", "medium", "high"),
+        "provider_default": "medium",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 100_000,
+    },
+    "openai_o3_pro": {
+        "api_field": "reasoning_effort",
+        "supported_levels": ("high",),
+        "provider_default": "high",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 100_000,
+    },
+
+    # Anthropic Messages contracts.
+    "anthropic_current_default_on": {
+        "api_field": "thinking.type + output_config.effort",
+        "supported_levels": ("none", "low", "medium", "high", "xhigh", "max"),
+        "provider_default": "high",
+        "control_kind": "adaptive_default_on",
         "max_output_tokens": 128_000,
         "default_output_tokens": 64_000,
-        "sampling_parameters": False,
-        "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"),
-        "thinking_mode": "adaptive_default",
     },
+    "anthropic_current_always_on": {
+        "api_field": "output_config.effort",
+        "supported_levels": ("low", "medium", "high", "xhigh", "max"),
+        "provider_default": "high",
+        "control_kind": "adaptive_always_on",
+        "max_output_tokens": 128_000,
+        "default_output_tokens": 64_000,
+    },
+    "anthropic_adaptive_47_48": {
+        "api_field": "thinking.type + output_config.effort",
+        "supported_levels": ("none", "low", "medium", "high", "xhigh", "max"),
+        "provider_default": "none",
+        "control_kind": "adaptive_opt_in",
+        "max_output_tokens": 128_000,
+        "default_output_tokens": 64_000,
+    },
+    "anthropic_adaptive_46": {
+        "api_field": "thinking.type + output_config.effort",
+        "supported_levels": ("none", "low", "medium", "high", "max"),
+        "provider_default": "none",
+        "control_kind": "adaptive_opt_in",
+        "max_output_tokens": 128_000,
+        "default_output_tokens": 64_000,
+    },
+    "anthropic_manual_opus_45": {
+        "api_field": "thinking.budget_tokens + output_config.effort",
+        "supported_levels": ("none", "low", "medium", "high"),
+        "provider_default": "none",
+        "control_kind": "manual_budget_with_effort",
+        "budget_by_level": {"low": 1_024, "medium": 8_192, "high": 32_768},
+        "max_output_tokens": 64_000,
+        "default_output_tokens": 64_000,
+    },
+    "anthropic_manual_45": {
+        "api_field": "thinking.budget_tokens",
+        "supported_levels": ("none", "low", "medium", "high", "max"),
+        "provider_default": "none",
+        "control_kind": "manual_budget",
+        "budget_by_level": {
+            "low": 1_024,
+            "medium": 8_192,
+            "high": 16_384,
+            "max": 32_768,
+        },
+        "max_output_tokens": 64_000,
+        "default_output_tokens": 64_000,
+    },
+    "codex_signin": {
+        "api_field": "model_reasoning_effort",
+        "supported_levels": ("low", "medium", "high", "xhigh", "max"),
+        "provider_default": "provider",
+        "control_kind": "codex",
+    },
+}
+
+MODEL_REASONING_LEVEL_LABELS = {
+    "auto": "אוטומטית — ברירת הספק",
+    "none": "ללא חשיבה",
+    "minimal": "מינימלית",
+    "low": "נמוכה",
+    "medium": "בינונית",
+    "high": "גבוהה",
+    "xhigh": "גבוהה מאוד",
+    "max": "מקסימלית",
 }
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources is deprecated.*")
@@ -593,6 +807,11 @@ CAPABILITY_LABELS = {
     "screenshot": "צילום מסך",
     "software_open": "פתיחת תוכנות",
     "background_task": "משימות רקע",
+    "background_task_cancel": "ביטול משימות רקע",
+    "notification_send": "שליחת התראות Windows",
+    "calendar_write": "יצירת אירועי יומן",
+    "app_open": "פתיחת יישומי Windows",
+    "settings_open": "פתיחת הגדרות Windows",
     "audio": "שמע והקראה"
 }
 
@@ -619,6 +838,11 @@ DEFAULT_POLICY_MATRIX = {
     "screenshot": "ask",
     "software_open": "allow",
     "background_task": "ask",
+    "background_task_cancel": "ask",
+    "notification_send": "allow",
+    "calendar_write": "ask",
+    "app_open": "allow",
+    "settings_open": "ask",
     "audio": "allow"
 }
 
@@ -706,12 +930,192 @@ def provider_key_instructions(provider=None, secret_key=None):
 def provider_default_model(provider):
     return provider_config(provider).get("default_model", "")
 
-def exact_model_request_capabilities(provider, model):
-    key = (
-        normalize_provider_name(provider),
-        str(model or "").strip().lower(),
-    )
-    return copy.deepcopy(EXACT_MODEL_REQUEST_CAPABILITIES.get(key, {}))
+def _reasoning_contract(contract_id):
+    contract = copy.deepcopy(MODEL_REASONING_CONTRACTS.get(contract_id, {}))
+    if contract:
+        contract["contract_id"] = contract_id
+        contract["sampling_parameters"] = False
+        contract["reasoning_efforts"] = tuple(contract.get("supported_levels") or ())
+        if contract.get("control_kind") == "thinking_level":
+            contract["thinking_levels"] = tuple(contract.get("supported_levels") or ())
+    return contract
+
+def model_reasoning_contract(provider, model):
+    """Resolve an active model family to its native reasoning API contract.
+
+    Deliberately unknown/future model names inherit the provider's current
+    contract. Known non-reasoning OpenAI models return no contract.
+    """
+    provider = normalize_provider_name(provider)
+    name = str(model or "").strip().lower()
+    if provider == "openai_codex_signin":
+        return _reasoning_contract("codex_signin")
+    if provider == "gemini":
+        if re.match(r"^(?:text-embedding|embedding|imagen|veo|aqa)", name):
+            return {}
+        if name.startswith("gemini-2.5"):
+            if "flash-lite" in name:
+                return _reasoning_contract("gemini_25_flash_lite")
+            if "pro" in name:
+                return _reasoning_contract("gemini_25_pro")
+            return _reasoning_contract("gemini_25_flash")
+        if "flash-image" in name or ("flash-lite" in name and "image" in name):
+            return _reasoning_contract("gemini_current_flash_image")
+        if "flash-lite" in name:
+            return _reasoning_contract("gemini_current_flash_lite")
+        if "pro" in name:
+            return _reasoning_contract("gemini_current_pro")
+        if re.match(r"^gemini-3(?:\.0)?-flash(?:-|$)", name):
+            return _reasoning_contract("gemini_3_flash")
+        return _reasoning_contract("gemini_current_flash")
+    if provider == "anthropic":
+        if any(token in name for token in ("embedding", "moderation")):
+            return {}
+        if re.search(r"claude-(?:fable|mythos)(?:-|$)", name):
+            return _reasoning_contract("anthropic_current_always_on")
+        if re.search(r"claude-(?:opus|sonnet)-5(?:-|$)", name):
+            return _reasoning_contract("anthropic_current_default_on")
+        if re.search(r"claude-opus-4-(?:8|7)(?:-|$)", name):
+            return _reasoning_contract("anthropic_adaptive_47_48")
+        if re.search(r"claude-(?:opus|sonnet)-4-6(?:-|$)", name):
+            return _reasoning_contract("anthropic_adaptive_46")
+        if re.search(r"claude-opus-4-5(?:-|$)", name):
+            return _reasoning_contract("anthropic_manual_opus_45")
+        if re.search(r"claude-(?:sonnet|haiku)-4-5(?:-|$)", name):
+            return _reasoning_contract("anthropic_manual_45")
+        return _reasoning_contract("anthropic_current_default_on")
+    if provider == "openai":
+        if re.match(
+            r"^(?:gpt-4(?:\.1|o)|chatgpt|chat-latest|text-embedding|"
+            r"omni-moderation|gpt-image|dall-e|sora|whisper|tts|"
+            r"gpt-audio|gpt-realtime|computer-use)",
+            name,
+        ):
+            return {}
+        if name.startswith("gpt-5.6"):
+            return _reasoning_contract("openai_current")
+        if name.startswith("gpt-5.5-pro"):
+            return _reasoning_contract("openai_55_pro")
+        if name.startswith("gpt-5.5"):
+            return _reasoning_contract("openai_55")
+        if name.startswith("gpt-5.4-pro"):
+            return _reasoning_contract("openai_54_pro")
+        if name.startswith("gpt-5.4"):
+            return _reasoning_contract("openai_54_52")
+        if re.match(r"^gpt-5\.3-codex(?:-|$)", name):
+            return _reasoning_contract("openai_codex_53")
+        if name.startswith("gpt-5.2-pro"):
+            return _reasoning_contract("openai_52_pro")
+        if name.startswith("gpt-5.2"):
+            return _reasoning_contract("openai_54_52")
+        if name.startswith("gpt-5.1"):
+            return _reasoning_contract("openai_51")
+        if name.startswith("gpt-5-pro"):
+            return _reasoning_contract("openai_5_pro")
+        if re.match(r"^gpt-5(?:-|$)", name):
+            return _reasoning_contract("openai_5")
+        if name.startswith("o3-pro"):
+            return _reasoning_contract("openai_o3_pro")
+        if re.match(r"^o3(?:-|$)", name):
+            return _reasoning_contract("openai_o3")
+        return _reasoning_contract("openai_current")
+    return {}
+
+def normalize_model_reasoning_level(provider, model, level, fallback="auto"):
+    contract = model_reasoning_contract(provider, model)
+    supported = tuple(contract.get("supported_levels") or ())
+    value = str(level or "").strip().lower()
+    aliases = {"off": "none"}
+    value = aliases.get(value, value)
+    if value == "auto":
+        return "auto"
+    return value if value in supported else fallback
+
+def model_reasoning_setting(settings, provider, model):
+    provider = normalize_provider_name(provider)
+    if provider == "openai_codex_signin":
+        return normalize_model_reasoning_level(
+            provider,
+            model,
+            (settings or {}).get("codex_reasoning_effort", "auto"),
+            fallback="auto",
+        )
+    provider_values = (settings or {}).get("model_reasoning_efforts", {})
+    if not isinstance(provider_values, dict):
+        provider_values = {}
+    model_values = provider_values.get(provider, {})
+    if not isinstance(model_values, dict):
+        model_values = {}
+    value = model_values.get(str(model or "").strip().lower(), "auto")
+    return normalize_model_reasoning_level(provider, model, value)
+
+def set_model_reasoning_setting(settings, provider, model, level):
+    provider = normalize_provider_name(provider)
+    normalized = normalize_model_reasoning_level(provider, model, level)
+    if provider == "openai_codex_signin":
+        settings["codex_reasoning_effort"] = normalized
+        return settings["codex_reasoning_effort"]
+    all_values = settings.setdefault("model_reasoning_efforts", {})
+    model_values = all_values.setdefault(provider, {})
+    model_values[str(model or "").strip().lower()] = normalized
+    return normalized
+
+def model_reasoning_options(provider, model):
+    contract = model_reasoning_contract(provider, model)
+    if not contract:
+        return []
+    values = list(contract.get("supported_levels") or ())
+    values.insert(0, "auto")
+    return [
+        (value, MODEL_REASONING_LEVEL_LABELS.get(value, value))
+        for value in values
+    ]
+
+def model_reasoning_api_parameters(provider, model, level):
+    provider = normalize_provider_name(provider)
+    contract = model_reasoning_contract(provider, model)
+    normalized = normalize_model_reasoning_level(provider, model, level)
+    if not contract or normalized == "auto":
+        return {}
+    kind = contract.get("control_kind")
+    if provider == "openai":
+        return {"reasoning_effort": normalized}
+    if provider == "gemini":
+        if kind == "thinking_level":
+            return {
+                "generationConfig": {
+                    "thinkingConfig": {"thinkingLevel": normalized}
+                }
+            }
+        budget = (contract.get("budget_by_level") or {}).get(normalized)
+        if budget is not None:
+            return {
+                "generationConfig": {
+                    "thinkingConfig": {"thinkingBudget": int(budget)}
+                }
+            }
+        return {}
+    if provider == "anthropic":
+        if normalized == "none":
+            return {"thinking": {"type": "disabled"}}
+        result = {}
+        if kind == "adaptive_opt_in":
+            result["thinking"] = {"type": "adaptive", "display": "omitted"}
+            result["output_config"] = {"effort": normalized}
+        elif kind in {"adaptive_default_on", "adaptive_always_on"}:
+            result["output_config"] = {"effort": normalized}
+        elif kind in {"manual_budget", "manual_budget_with_effort"}:
+            budget = (contract.get("budget_by_level") or {}).get(normalized)
+            if budget is not None:
+                result["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": int(budget),
+                    "display": "omitted",
+                }
+            if kind == "manual_budget_with_effort":
+                result["output_config"] = {"effort": normalized}
+        return result
+    return {}
 
 def provider_fallback_models(provider):
     config = provider_config(provider)

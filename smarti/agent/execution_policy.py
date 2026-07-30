@@ -300,21 +300,61 @@ class ExecutionPolicyMixin:
             level = 1
         return self.settings.get("autonomy_mode") == "max_autonomy" or level == 3
 
-    def _ensure_capability_allowed(self, capability, title, details="", *, risk="medium"):
-        decision = self._policy_decision(capability)
-        if getattr(self, "policy_engine", None) and self.policy_engine.force_approval_for(capability, risk):
-            decision = "ask"
-        logging.info(f"POLICY | capability={capability} | decision={decision} | risk={risk}")
+    def _ensure_capabilities_allowed(self, capabilities, title, details="", *, risk="medium", audit_context=None):
+        ordered_capabilities = []
+        for capability in capabilities or ():
+            capability = str(capability or "").strip()
+            if capability and capability not in ordered_capabilities:
+                ordered_capabilities.append(capability)
+        if not ordered_capabilities:
+            return True, None
+
+        evaluated = []
+        for capability in ordered_capabilities:
+            decision = self._policy_decision(capability)
+            if getattr(self, "policy_engine", None) and self.policy_engine.force_approval_for(capability, risk):
+                decision = "ask"
+            evaluated.append((capability, decision))
+            logging.info(f"POLICY | capability={capability} | decision={decision} | risk={risk}")
+
+        denied_capability = next((capability for capability, decision in evaluated if decision == "deny"), None)
+        approval_required = any(decision == "ask" for _, decision in evaluated)
+        if denied_capability:
+            outcome = "denied_policy"
+            allowed = False
+            error = f"ERROR: Capability '{denied_capability}' is denied by policy."
+        elif approval_required:
+            labels = [CAPABILITY_LABELS.get(capability, capability) for capability, decision in evaluated if decision == "ask"]
+            msg = f"יכולות: {', '.join(labels)}\n\n{details or 'לא סופקו פרטים.'}"
+            allowed = bool(self._request_user_approval(title, msg, risk=risk))
+            outcome = "allowed" if allowed else "denied_user"
+            error = None if allowed else "ERROR: User denied action by policy."
+        else:
+            allowed = True
+            outcome = "allowed"
+            error = None
+
         if getattr(self, "audit_logger", None):
-            self.audit_logger.record("policy_decision", {"capability": capability, "decision": decision, "risk": risk}, self.settings)
-        if decision == "deny":
-            return False, f"ERROR: Capability '{capability}' is denied by policy."
-        if decision == "ask":
-            label = CAPABILITY_LABELS.get(capability, capability)
-            msg = f"יכולת: {label}\n\n{details or 'לא סופקו פרטים.'}"
-            if not self._request_user_approval(title, msg, risk=risk):
-                return False, "ERROR: User denied action by policy."
-        return True, None
+            context = dict(audit_context or {})
+            for capability, decision in evaluated:
+                payload = {
+                    **context,
+                    "capability": capability,
+                    "decision": decision,
+                    "risk": risk,
+                    "outcome": outcome,
+                }
+                self.audit_logger.record("policy_decision", payload, self.settings)
+        return allowed, error
+
+    def _ensure_capability_allowed(self, capability, title, details="", *, risk="medium", audit_context=None):
+        return self._ensure_capabilities_allowed(
+            (capability,),
+            title,
+            details,
+            risk=risk,
+            audit_context=audit_context,
+        )
 
     def _ensure_write_allowed(self, target_path, explanation=""):
         sandbox_ok, sandbox_err = self._ensure_sandbox_path_allowed(target_path, "write")

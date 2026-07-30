@@ -4295,19 +4295,10 @@ class SettingsPage(QWidget):
         self.model_combo = SearchableModelComboBox()
         self.model_combo.setStyleSheet(COMBOBOX_CSS)
         self.model_picker_row = self._make_model_picker_row()
-        self.codex_reasoning_effort_combo = NoScrollComboBox()
-        for label, value in (
-            ("נמוכה", "low"),
-            ("בינונית (ברירת המחדל)", "medium"),
-            ("גבוהה", "high"),
-            ("גבוהה מאוד", "xhigh"),
-            ("מקסימלית", "max"),
-        ):
-            self.codex_reasoning_effort_combo.addItem(label, value)
-        saved_reasoning_effort = str(self.core.settings.get("codex_reasoning_effort", "medium") or "medium").strip().lower()
-        saved_reasoning_index = self.codex_reasoning_effort_combo.findData(saved_reasoning_effort)
-        self.codex_reasoning_effort_combo.setCurrentIndex(saved_reasoning_index if saved_reasoning_index >= 0 else 1)
-        self.codex_reasoning_effort_combo.setStyleSheet(COMBOBOX_CSS)
+        self.reasoning_effort_combo = NoScrollComboBox()
+        # Compatibility alias for existing integrations and tests.
+        self.codex_reasoning_effort_combo = self.reasoning_effort_combo
+        self.reasoning_effort_combo.setStyleSheet(COMBOBOX_CSS)
         
         self.api_key_edit = MaskedSecretLineEdit()
         self.api_key_edit.setPlaceholderText("מפתח גישה לספק המודל")
@@ -4944,10 +4935,10 @@ class SettingsPage(QWidget):
         self._add_field("מודל", self.model_picker_row, ai, "בחירת המודל הפעיל לשיחה. בחירה נשמרת גם כמועדף כדי שאפשר יהיה להחליף אליו במהירות מהצ'אט.", keywords="favorite favourite star quick switch chat model picker spinner llm")
         self.codex_reasoning_effort_field_container = self._add_field(
             "עוצמת חשיבה",
-            self.codex_reasoning_effort_combo,
+            self.reasoning_effort_combo,
             ai,
-            "קובעת כמה מאמץ חשיבה Codex ישקיע בכל בקשה. עוצמה גבוהה יותר עשויה להיות איטית יותר ולצרוך יותר מהמכסה.",
-            keywords="codex reasoning effort low medium high extra high thinking",
+            "קובעת את עוצמת החשיבה של המודל הפעיל. האפשרויות מותאמות אוטומטית לחוזה של משפחת המודל; בחירה באוטומטית משאירה את השדה ריק ומשתמשת בברירת הספק.",
+            keywords="codex openai gemini anthropic reasoning effort thinking level budget",
         )
         self.codex_reasoning_effort_field_container.setVisible(False)
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.", keywords="local server url lm studio ollama localhost endpoint base url")
@@ -5162,8 +5153,8 @@ class SettingsPage(QWidget):
             self.api_key_status.setVisible(False)
             self.codex_signin_field_container.setVisible(True)
             self.codex_signin_warning.setVisible(True)
-            self.codex_reasoning_effort_field_container.setVisible(True)
             self.populate_models(provider_fallback_models(text), text)
+            self._refresh_reasoning_effort_control(text)
             self._schedule_autosave()
             self._start_codex_signin_action("status")
             return
@@ -5172,7 +5163,7 @@ class SettingsPage(QWidget):
         self.api_key_status.setVisible(True)
         self.codex_signin_field_container.setVisible(False)
         self.codex_signin_warning.setVisible(False)
-        self.codex_reasoning_effort_field_container.setVisible(False)
+        self._refresh_reasoning_effort_control(text)
         if text == "local":
             self.api_key_edit.set_secret("")
             self.api_key_edit.setPlaceholderText("לא נדרש מפתח למודל מקומי")
@@ -5236,7 +5227,56 @@ class SettingsPage(QWidget):
             selected_model = self.model_combo.selected_model() if hasattr(self.model_combo, "selected_model") else self.model_combo.currentText()
             self._ensure_model_favorite(provider, selected_model, save=False)
             self._favorite_model_on_populate_provider = None
+        if hasattr(self, "_refresh_reasoning_effort_control"):
+            self._refresh_reasoning_effort_control(provider)
         self._schedule_autosave()
+
+    def _reasoning_model_for_ui(self, provider=None):
+        provider = normalize_provider_name(provider or self.provider_combo.currentText())
+        selected = (
+            self.model_combo.selected_model()
+            if hasattr(self.model_combo, "selected_model")
+            else self.model_combo.currentText()
+        )
+        selected = str(selected or "").strip()
+        if not selected or "..." in selected:
+            selected = str(
+                self.core.settings.get(f"selected_{provider}_model")
+                or provider_default_model(provider)
+                or ""
+            ).strip()
+        return selected
+
+    def _refresh_reasoning_effort_control(self, provider=None):
+        if not hasattr(self, "reasoning_effort_combo"):
+            return
+        provider = normalize_provider_name(provider or self.provider_combo.currentText())
+        model = self._reasoning_model_for_ui(provider)
+        contract = model_reasoning_contract(provider, model)
+        options = model_reasoning_options(provider, model)
+        previous = self.reasoning_effort_combo.blockSignals(True)
+        try:
+            self.reasoning_effort_combo.clear()
+            provider_default = str(contract.get("provider_default", "") or "")
+            for value, label in options:
+                if value == "auto":
+                    if provider_default == "dynamic":
+                        label = "אוטומטית — חשיבה דינמית של הספק"
+                    elif provider_default == "provider":
+                        label = "אוטומטית — ברירת הספק"
+                    elif provider_default in MODEL_REASONING_LEVEL_LABELS:
+                        default_label = MODEL_REASONING_LEVEL_LABELS[provider_default]
+                        label = f"אוטומטית — ברירת הספק ({default_label})"
+                self.reasoning_effort_combo.addItem(label, value)
+            saved = model_reasoning_setting(self.core.settings, provider, model)
+            index = self.reasoning_effort_combo.findData(saved)
+            if index < 0 and self.reasoning_effort_combo.count():
+                index = 0
+            self.reasoning_effort_combo.setCurrentIndex(index)
+        finally:
+            self.reasoning_effort_combo.blockSignals(previous)
+        if hasattr(self, "codex_reasoning_effort_field_container"):
+            self.codex_reasoning_effort_field_container.setVisible(bool(options))
 
     def refresh_google_drive_status(self):
         # Google Drive settings UI is parked until OAuth sign-in is reworked.
@@ -5412,6 +5452,8 @@ class SettingsPage(QWidget):
             MODEL_SELECTION_PROVENANCE_VERSION
         )
         self._ensure_model_favorite(provider, model, save=False)
+        if hasattr(self, "_refresh_reasoning_effort_control"):
+            self._refresh_reasoning_effort_control(provider)
         self._schedule_autosave()
 
     def _schedule_autosave(self):
@@ -5702,8 +5744,20 @@ class SettingsPage(QWidget):
         provider = normalize_provider_name(self.provider_combo.currentText())
         selected_model = self.model_combo.selected_model() if hasattr(self.model_combo, "selected_model") else self.model_combo.currentText()
         self.core.settings["api_mode"] = provider
-        reasoning_effort = str(self.codex_reasoning_effort_combo.currentData() or "medium").strip().lower()
-        self.core.settings["codex_reasoning_effort"] = reasoning_effort if reasoning_effort in {"low", "medium", "high", "xhigh", "max"} else "medium"
+        reasoning_model = str(selected_model or "").strip()
+        if not reasoning_model or "..." in reasoning_model:
+            reasoning_model = str(
+                self.core.settings.get(f"selected_{provider}_model")
+                or provider_default_model(provider)
+                or ""
+            ).strip()
+        if model_reasoning_contract(provider, reasoning_model):
+            set_model_reasoning_setting(
+                self.core.settings,
+                provider,
+                reasoning_model,
+                self.reasoning_effort_combo.currentData(),
+            )
         custom_permissions_enabled = bool(self.custom_permissions_cb.isChecked())
         self.core.settings["custom_permission_profile_enabled"] = custom_permissions_enabled
         self.core.settings["autonomy_mode"] = "custom" if custom_permissions_enabled else self._autonomy_profile_key()

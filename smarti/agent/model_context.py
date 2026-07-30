@@ -497,7 +497,6 @@ class ModelContextMixin:
                     "purpose": "title",
                     "provider_mode": request_mode,
                     "system_prompt": title_system_prompt,
-                    "temperature": 0.2,
                     "reasoning_effort": "low",
                     "max_output_tokens": 128,
                     "native_tools": False,
@@ -1871,22 +1870,6 @@ CWD: {current_dir}
         """Only providers with a native, tested cache contract receive cache controls."""
         return normalize_provider_name(provider_mode) in cls.PROMPT_CACHE_PROVIDER_MODES
 
-    @staticmethod
-    def _normalized_exact_model_effort(provider_mode, current_model, requested_effort):
-        requested = str(requested_effort or "").strip().lower()
-        if not requested:
-            return ""
-        capabilities = exact_model_request_capabilities(provider_mode, current_model)
-        supported = tuple(capabilities.get("reasoning_efforts") or ())
-        if not supported:
-            return ""
-        provider_mode = normalize_provider_name(provider_mode)
-        if requested in {"off", "minimal"}:
-            requested = "none" if provider_mode == "openai" else "low"
-        if requested == "none" and provider_mode == "anthropic":
-            requested = "low"
-        return requested if requested in supported else ""
-
     def _model_output_token_limit(
         self,
         provider_mode,
@@ -1896,7 +1879,7 @@ CWD: {current_dir}
         system_prompt="",
         fallback=4096,
     ):
-        capabilities = exact_model_request_capabilities(provider_mode, current_model)
+        capabilities = model_reasoning_contract(provider_mode, current_model)
         capability_limit = int(capabilities.get("max_output_tokens", fallback) or fallback)
         default_limit = int(
             capabilities.get("default_output_tokens", capability_limit) or capability_limit
@@ -1958,8 +1941,18 @@ CWD: {current_dir}
         request_system_prompt = str(
             request_options.get("system_prompt", getattr(self, "system_prompt", "")) or ""
         )
-        request_temperature = request_options.get("temperature", 0.7)
-        request_reasoning = str(request_options.get("reasoning_effort", "") or "").strip().lower()
+        if "reasoning_effort" in request_options:
+            request_reasoning = normalize_model_reasoning_level(
+                request_mode,
+                current_model,
+                request_options.get("reasoning_effort"),
+            )
+        else:
+            request_reasoning = model_reasoning_setting(
+                self.settings,
+                request_mode,
+                current_model,
+            )
         report_status = None if request_options.get("silent") else getattr(self, "status_callback", None)
         request_purpose = str(request_options.get("purpose", "agent") or "agent").strip().lower()
         native_specs = (
@@ -2004,7 +1997,7 @@ CWD: {current_dir}
                         timeout=max(60, codex_timeout),
                         reasoning_effort=(
                             request_reasoning
-                            or self.settings.get("codex_reasoning_effort", "medium")
+                            or self.settings.get("codex_reasoning_effort", "auto")
                         ),
                         cancel_event=getattr(getattr(self, "_execution_context", None), "cancel_event", None),
                         purpose=request_purpose,
@@ -2018,36 +2011,14 @@ CWD: {current_dir}
                         "contents": request_messages,
                         "generationConfig": {}
                     }
-                    exact_capabilities = exact_model_request_capabilities(
+                    reasoning_parameters = model_reasoning_api_parameters(
                         request_mode,
                         current_model,
+                        request_reasoning,
                     )
-                    sampling_allowed = exact_capabilities.get(
-                        "sampling_parameters",
-                        not str(current_model).lower().startswith("gemini-3"),
+                    payload["generationConfig"].update(
+                        reasoning_parameters.get("generationConfig", {})
                     )
-                    if request_temperature is not None and sampling_allowed:
-                        payload["generationConfig"]["temperature"] = request_temperature
-                    supported_thinking = tuple(
-                        exact_capabilities.get("thinking_levels") or ()
-                    )
-                    if supported_thinking and request_reasoning:
-                        thinking_level = request_reasoning
-                        if thinking_level in {"none", "off"}:
-                            thinking_level = "minimal"
-                        elif thinking_level in {"xhigh", "max"}:
-                            thinking_level = "high"
-                        if thinking_level in supported_thinking:
-                            payload["generationConfig"]["thinkingConfig"] = {
-                                "thinkingLevel": thinking_level
-                            }
-                    elif request_reasoning in {"low", "minimal", "none", "off"}:
-                        model_name = str(current_model or "").lower()
-                        if re.search(r"gemini-(?:3|4)", model_name):
-                            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "minimal"}
-                        elif "gemini-2.5" in model_name:
-                            budget = 128 if "pro" in model_name else 0
-                            payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": budget}
                     if native_specs:
                         payload["tools"] = [{
                             "functionDeclarations": [
@@ -2124,30 +2095,14 @@ CWD: {current_dir}
                     }
                     openai_reasoning_model = (
                         request_mode == "openai"
-                        and bool(re.match(
-                            r"^(?:gpt-5|gpt-6|o[1-9])",
-                            str(current_model or "").lower(),
-                        ))
+                        and bool(model_reasoning_contract(request_mode, current_model))
                     )
-                    if request_temperature is not None and not openai_reasoning_model:
-                        completion_kwargs["temperature"] = request_temperature
-                    if (
-                        openai_reasoning_model
-                        and request_reasoning
-                    ):
-                        exact_effort = self._normalized_exact_model_effort(
+                    if openai_reasoning_model:
+                        completion_kwargs.update(model_reasoning_api_parameters(
                             request_mode,
                             current_model,
                             request_reasoning,
-                        )
-                        completion_kwargs["reasoning_effort"] = (
-                            exact_effort
-                            or (
-                                "low"
-                                if request_reasoning in {"minimal", "none", "off"}
-                                else request_reasoning
-                            )
-                        )
+                        ))
                     openai_paid_cache_writes = str(current_model or "").lower().startswith(
                         "gpt-5.6"
                     )
@@ -2265,10 +2220,6 @@ CWD: {current_dir}
                         if m.get("role") == "system" and m.get("content") != request_system_prompt
                     ])
                     system_text = request_system_prompt + (f"\n\n{extra_system}" if extra_system else "")
-                    exact_capabilities = exact_model_request_capabilities(
-                        request_mode,
-                        current_model,
-                    )
                     payload = {
                         "model": current_model,
                         "system": system_text,
@@ -2281,18 +2232,11 @@ CWD: {current_dir}
                             system_prompt=system_text,
                         ),
                     }
-                    if request_temperature is not None and exact_capabilities.get(
-                        "sampling_parameters",
-                        True,
-                    ):
-                        payload["temperature"] = request_temperature
-                    exact_effort = self._normalized_exact_model_effort(
+                    payload.update(model_reasoning_api_parameters(
                         request_mode,
                         current_model,
                         request_reasoning,
-                    )
-                    if exact_effort:
-                        payload["output_config"] = {"effort": exact_effort}
+                    ))
                     if native_specs:
                         payload["tools"] = [
                             {
