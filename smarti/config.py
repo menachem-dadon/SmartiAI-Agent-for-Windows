@@ -630,20 +630,318 @@ BUILTIN_TOOL_SCHEMAS["software_manager"] = {
     }
 }
 
+FILE_MANAGER_ACTIONS = [
+    "open", "save_text", "read_document", "search_files", "search_content",
+    "extract_image_text", "attach", "list_directory", "tree", "stat", "exists",
+    "hash", "compare", "diff_text", "read_chunk", "disk_usage", "mkdir", "copy",
+    "move", "rename", "atomic_write_text", "append_text", "touch", "batch",
+    "trash", "restore_from_trash", "zip", "unzip",
+]
+
+FILE_MANAGER_MUTATING_ACTIONS = {
+    "mkdir", "copy", "move", "rename", "atomic_write_text", "append_text",
+    "touch", "trash", "restore_from_trash", "zip", "unzip",
+}
+
+FILE_MANAGER_OPERATION_PROPERTIES = {
+    "action": {
+        "type": "string",
+        "enum": FILE_MANAGER_ACTIONS,
+        "description": (
+            "Filesystem operation. trash is the only public deletion operation and moves items "
+            "to the Windows Recycle Bin; permanent delete is not exposed."
+        ),
+    },
+    "path": {
+        "type": "string",
+        "description": (
+            "Exact primary file/folder path. Required as the search root for search_files "
+            "and as the root directory for tree."
+        ),
+    },
+    "source": {"type": "string", "description": "Source path for copy, move, rename, compare, diff_text, zip, or unzip."},
+    "destination": {"type": "string", "description": "Destination path for copy, move, rename, restore, zip, or unzip."},
+    "other_path": {"type": "string", "description": "Second path alias for compare or diff_text."},
+    "paths": {"type": "array", "items": {"type": "string"}, "description": "Multiple paths for multi-read or zip operations."},
+    "content": {"type": "string", "description": "Text content for save_text, atomic_write_text, or append_text."},
+    "query": {
+        "type": "string",
+        "description": (
+            "For search_files/tree: filename query. In match_mode=auto (default), wildcard "
+            "queries use glob semantics (*, ?, [], and ** path segments); plain text is a substring."
+        ),
+    },
+    "glob": {
+        "type": "string",
+        "description": "One include glob for search_files/tree, such as *.docx or reports/**/*.pdf.",
+    },
+    "globs": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Include entries matching any of these glob patterns.",
+    },
+    "exclude_globs": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Exclude matching entries and prune matching directories, for example [\".git\", \"node_modules/**\"].",
+    },
+    "extensions": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Allowed file extensions, with or without a leading dot, for example [\"docx\", \".doc\"].",
+    },
+    "match_mode": {
+        "type": "string",
+        "enum": ["auto", "glob", "substring", "exact"],
+        "description": "How query is matched. Default auto; glob/globs are always glob patterns.",
+    },
+    "match_path": {
+        "type": "boolean",
+        "description": "Match query and separator-free globs against the relative path instead of only the basename.",
+    },
+    "case_sensitive": {
+        "type": "boolean",
+        "description": "Use case-sensitive filename matching. Default false for predictable Windows searches.",
+    },
+    "entry_type": {
+        "type": "string",
+        "enum": ["any", "file", "directory", "symlink", "other"],
+        "description": "Filter result type. Default file for search_files and any for tree.",
+    },
+    "min_size": {
+        "type": "string",
+        "description": "Minimum file size as a string containing bytes or a unit, for example \"1024\", \"10MB\", or \"4KiB\".",
+    },
+    "max_size": {
+        "type": "string",
+        "description": "Maximum file size as a string containing bytes or a unit, for example \"500000\", \"2GB\", or \"500KiB\".",
+    },
+    "date_field": {
+        "type": "string",
+        "enum": ["created", "modified", "accessed"],
+        "description": "Timestamp used by date_from/date_to. Default modified.",
+    },
+    "date_from": {
+        "type": "string",
+        "description": "Inclusive ISO-8601 lower date bound on date_field. A YYYY-MM-DD value starts at local midnight.",
+    },
+    "date_to": {
+        "type": "string",
+        "description": "Inclusive ISO-8601 upper date bound on date_field. A YYYY-MM-DD value includes the whole local day.",
+    },
+    "created_after": {"type": "string", "description": "Inclusive ISO-8601 creation-time lower bound."},
+    "created_before": {"type": "string", "description": "Inclusive ISO-8601 creation-time upper bound."},
+    "modified_after": {"type": "string", "description": "Inclusive ISO-8601 modification-time lower bound."},
+    "modified_before": {"type": "string", "description": "Inclusive ISO-8601 modification-time upper bound."},
+    "accessed_after": {"type": "string", "description": "Inclusive ISO-8601 access-time lower bound."},
+    "accessed_before": {"type": "string", "description": "Inclusive ISO-8601 access-time upper bound."},
+    "directory": {"type": "string", "description": "Directory for search_content."},
+    "text": {"type": "string", "description": "Text to search for in search_content."},
+    "recursive": {
+        "type": "boolean",
+        "description": (
+            "For search_files, recurse below the root (default true). False restricts results to direct "
+            "children. Choose from user intent: direct-folder wording can justify false, while requests "
+            "for all matching files may reasonably include subfolders; this is guidance, not a forced rule."
+        ),
+    },
+    "search_backend": {
+        "type": "string",
+        "enum": ["auto", "windows_search", "filesystem"],
+        "description": (
+            "search_files engine. auto prefers the Microsoft Windows Search indexing service (WSearch) "
+            "and falls back when possible; windows_search explicitly queries its SystemIndex; filesystem "
+            "performs an exact candidate-first directory scan and is not limited by index coverage."
+        ),
+    },
+    "fallback_to_filesystem": {
+        "type": "boolean",
+        "description": (
+            "If Windows Search is unavailable, fall back to the exact candidate-first filesystem engine. "
+            "Default true for search_backend=auto and false for an explicit windows_search request. "
+            "Windows-only content/property filters cannot be preserved by the fallback."
+        ),
+    },
+    "verify_index_results": {
+        "type": "boolean",
+        "description": (
+            "For Windows Search, stat and re-filter each indexed candidate against the live filesystem. "
+            "Default true. This rejects stale hits but cannot discover files missing from the Windows index."
+        ),
+    },
+    "content_query": {
+        "type": "string",
+        "description": (
+            "Indexed full-text query for Microsoft Windows Search. Supports Office and other formats for "
+            "which Windows has an installed content filter. Requires auto/windows_search."
+        ),
+    },
+    "content_mode": {
+        "type": "string",
+        "enum": ["freetext", "contains", "phrase", "prefix"],
+        "description": (
+            "Windows indexed-content semantics. freetext (default) uses linguistic matching; contains "
+            "accepts Windows Search CONTAINS grammar; phrase is exact phrase matching; prefix matches a phrase prefix."
+        ),
+    },
+    "windows_kinds": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "Filter System.Kind in the Microsoft Windows Search index, for example document, picture, "
+            "music, video, email, folder, program, contact, calendar, task, note, link, or recordedtv."
+        ),
+    },
+    "mime_types": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Filter indexed System.MIMEType values in Microsoft Windows Search.",
+    },
+    "windows_property_filters": {
+        "type": "array",
+        "description": (
+            "Additional safe structured Windows Search SystemIndex predicates. Supported aliases: "
+            "name, extension, size, created, modified, accessed, kind, mime_type, title, author, "
+            "tags, subject, owner, content."
+        ),
+        "items": {
+            "type": "object",
+            "properties": {
+                "property": {
+                    "type": "string",
+                    "enum": [
+                        "name", "extension", "size", "created", "modified", "accessed",
+                        "kind", "mime_type", "title", "author", "tags", "subject", "owner", "content",
+                    ],
+                },
+                "operator": {
+                    "type": "string",
+                    "enum": ["eq", "ne", "gt", "gte", "lt", "lte", "contains", "freetext", "prefix"],
+                },
+                "value": {"type": "string"},
+            },
+            "required": ["property", "value"],
+        },
+    },
+    "include_search_diagnostics": {
+        "type": "boolean",
+        "description": (
+            "Include the generated read-only Windows Search SQL for diagnostics. Default false to save tokens."
+        ),
+    },
+    "dry_run": {"type": "boolean", "description": "Resolve, validate, and preview a mutation without changing files."},
+    "conflict": {"type": "string", "enum": ["fail", "rename", "overwrite"], "description": "Destination conflict policy. Default fail. overwrite must be explicit and approved."},
+    "create_parents": {"type": "boolean", "description": "Create missing destination parent directories."},
+    "expected_hash": {"type": "string", "description": "Expected SHA-256 of the source/current file or tree before mutation."},
+    "algorithm": {"type": "string", "enum": ["sha256", "sha512", "blake2b"], "description": "Hash algorithm. Default sha256."},
+    "encoding": {"type": "string", "description": "Safe text encoding. Default utf-8."},
+    "mode": {"type": "string", "enum": ["text", "binary"], "description": "read_chunk output mode. Binary chunks are returned as base64."},
+    "offset": {
+        "type": "integer",
+        "description": "Byte offset for read_chunk; result offset for paged search_files/tree output.",
+    },
+    "limit": {
+        "type": "integer",
+        "description": "Bounded result/chunk/item limit. search_files defaults to 100; tree defaults to 200; maximum 10000.",
+    },
+    "scan_limit": {
+        "type": "integer",
+        "description": "Maximum filesystem entries inspected by search_files/tree. Default 50000, maximum 1000000.",
+    },
+    "max_output_chars": {
+        "type": "integer",
+        "description": (
+            "Hard character budget for search_files/tree output before paging. Defaults to 60000 "
+            "for search_files and 40000 for tree; may be raised explicitly when full output is necessary."
+        ),
+    },
+    "max_depth": {
+        "type": "integer",
+        "description": "Maximum directory recursion depth: 0 returns direct children only. Default 64 for search_files and 4 for tree.",
+    },
+    "min_depth": {
+        "type": "integer",
+        "description": "Minimum returned depth below the root. Direct children are depth 1.",
+    },
+    "sort_by": {
+        "type": "string",
+        "enum": [
+            "path", "name", "type", "size", "created_at",
+            "modified_at", "accessed_at", "search_rank",
+        ],
+        "description": (
+            "Sort search_files/tree matches. Default path; indexed content_query defaults to search_rank."
+        ),
+    },
+    "sort_order": {
+        "type": "string",
+        "enum": ["asc", "desc"],
+        "description": "Sort direction. Default asc.",
+    },
+    "directories_first": {
+        "type": "boolean",
+        "description": "Keep directories before other result types after sorting.",
+    },
+    "detail": {
+        "type": "string",
+        "enum": ["minimal", "standard", "full"],
+        "description": (
+            "Metadata preset for record output. minimal is path/type, standard adds size/modified time, "
+            "full preserves complete stat metadata. Default minimal."
+        ),
+    },
+    "fields": {
+        "type": "array",
+        "items": {
+            "type": "string",
+            "enum": [
+                "path", "name", "relative_path", "extension", "depth", "exists",
+                "type", "size", "created_at", "modified_at", "accessed_at", "hidden",
+                "read_only", "is_symlink", "is_reparse_point", "link_target",
+                "windows_kind", "mime_type", "title", "authors", "tags", "search_rank",
+            ],
+        },
+        "description": "Exact record fields to return; overrides detail and implies output_format=records unless a format is explicit.",
+    },
+    "output_format": {
+        "type": "string",
+        "enum": ["paths", "records", "text"],
+        "description": (
+            "search_files/tree output shape. paths (default) is the lowest-token structured list; "
+            "records returns selected metadata; text returns one compact line per result."
+        ),
+    },
+    "include_hidden": {"type": "boolean", "description": "Include hidden files in directory results."},
+    "follow_symlinks": {"type": "boolean", "description": "Follow symlinks/reparse points only after explicit review. Default false."},
+    "idempotency_key": {"type": "string", "description": "Task-stable key that prevents repeating the same mutation in the current runtime."},
+    "preserve_timestamps": {"type": "boolean", "description": "Preserve supported file timestamps during copy/move. Default false."},
+    "preserve_acl": {"type": "boolean", "description": "Reserved. ACL preservation is rejected until explicitly supported and tested."},
+    "recycle_id": {"type": "string", "description": "Opaque recycle identifier returned by trash; use it to disambiguate restore_from_trash."},
+}
+
 BUILTIN_TOOL_SCHEMAS["file_manager"] = {
-    "description": "Unified file tool for safe open, text save, document read, filename search, content search, OCR, attaching local files to model context, and moving files/folders to the recycle bin.",
+    "description": (
+        "Complete safe filesystem manager: inspect/list/tree/stat/exists/hash/compare/diff/read chunks/disk usage; "
+        "mkdir/copy/move/rename/atomic text write/append/touch/batch; safe zip/unzip; attach/open/read/search/OCR; "
+        "and reversible trash/restore. Mutations resolve exact paths, default to conflict=fail, are cancelable, "
+        "and return observed per-item metadata. Permanent delete is not available."
+    ),
     "inputSchema": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["open", "save_text", "read_document", "search_files", "search_content", "extract_image_text", "attach", "trash"], "description": "File operation. Use attach to send a local file into the next model turn when the active provider supports it. Use trash for delete requests; it moves to Recycle Bin."},
-            "path": {"type": "string", "description": "File/folder path for open, save_text, read_document, extract_image_text, attach, or trash."},
-            "content": {"type": "string", "description": "Text content for save_text."},
-            "query": {"type": "string", "description": "Filename query for search_files."},
-            "directory": {"type": "string", "description": "Directory for search_content."},
-            "text": {"type": "string", "description": "Text to search for in search_content."}
+            **FILE_MANAGER_OPERATION_PROPERTIES,
+            "operations": {
+                "type": "array",
+                "description": "For action=batch: up to 100 explicit mutation objects with per-item results.",
+                "items": {
+                    "type": "object",
+                    "properties": FILE_MANAGER_OPERATION_PROPERTIES,
+                    "required": ["action"],
+                },
+            },
         },
-        "required": ["action"]
-    }
+        "required": ["action"],
+    },
 }
 
 BUILTIN_TOOL_SCHEMAS["web_manager"] = {
@@ -1045,7 +1343,7 @@ BUILTIN_TOOL_SCHEMAS["browser_automation_manager"] = {
 BUILTIN_DYNAMIC_TOOLS.update({
     "system_manager": "Unified system: run_command, git_status, run_project_check, list_processes, set_clipboard, set_volume.",
     "software_manager": "Unified software launcher: list/find/open/refresh installed apps with cached discovery.",
-    "file_manager": "Unified files: open, save_text, read_document, search_files, search_content, extract_image_text, attach local files to context, trash-to-Recycle-Bin.",
+    "file_manager": "Complete safe filesystem manager: inspect/list/tree/stat/hash/compare/diff/chunks/disk usage; mkdir/copy/move/rename/atomic write/append/touch/batch; zip/unzip; open/read/search/OCR/attach; reversible trash/restore. No permanent delete.",
     "web_manager": "Unified web: search, page/site read/crawl, open, weather.",
     "screen_manager": "Unified screen/image context: capture, save_screenshot, analyze_image.",
     "background_task_manager": "Unified background tasks: schedule, list, cancel, retry.",

@@ -100,7 +100,41 @@ class ToolCallMixin:
                 args["content"] = args.get("body")
             if "text" not in args and "search_text" in args:
                 args["text"] = args.get("search_text")
-            return {k: v for k, v in args.items() if k in {"action", "path", "content", "query", "directory", "text"}}
+            if "source" not in args:
+                for alias in ("source_path", "src", "from_path"):
+                    if alias in args:
+                        args["source"] = args.get(alias)
+                        break
+            if "destination" not in args:
+                for alias in ("destination_path", "dest", "dst", "to_path"):
+                    if alias in args:
+                        args["destination"] = args.get(alias)
+                        break
+            if "destination" not in args and "other_path" in args:
+                args["destination"] = args.get("other_path")
+            operation = str(args.get("action", "") or "").strip().lower()
+            if operation in {"search_files", "tree"}:
+                if "path" not in args and args.get("directory"):
+                    args["path"] = args.get("directory")
+                if "glob" not in args and args.get("pattern") is not None:
+                    args["glob"] = args.get("pattern")
+                if "extensions" not in args and args.get("extension") is not None:
+                    extension = args.get("extension")
+                    args["extensions"] = extension if isinstance(extension, list) else [extension]
+                if "output_format" not in args and args.get("format") is not None:
+                    args["output_format"] = args.get("format")
+                for size_key in ("min_size", "max_size"):
+                    if isinstance(args.get(size_key), (int, float)) and not isinstance(args.get(size_key), bool):
+                        args[size_key] = str(args[size_key])
+            allowed = set(FILE_MANAGER_OPERATION_PROPERTIES) | {"operations"}
+            normalized = {k: v for k, v in args.items() if k in allowed}
+            if isinstance(normalized.get("operations"), list):
+                normalized["operations"] = [
+                    self._normalize_tool_call_args("file_manager", item)
+                    if isinstance(item, dict) else item
+                    for item in normalized["operations"]
+                ]
+            return normalized
 
         # google_drive_manager argument normalization is parked with the Drive integration.
 
@@ -518,8 +552,8 @@ class ToolCallMixin:
                 self._require_unified_fields(op, args, ["path"])
                 return "read_local_document", {"path": args.get("path")}
             if op == "search_files":
-                self._require_unified_fields(op, args, ["query"])
-                return "smart_file_search", {"query": args.get("query")}
+                self._require_unified_fields(op, args, ["path"])
+                return "filesystem_operation", args
             if op == "search_content":
                 self._require_unified_fields(op, args, ["directory", "text"])
                 return "deep_content_search", {"directory": args.get("directory"), "text": args.get("text")}
@@ -531,7 +565,36 @@ class ToolCallMixin:
                 return "attach_local_file", {"path": args.get("path")}
             if op in {"trash", "recycle", "delete", "remove"}:
                 self._require_unified_fields(op, args, ["path"])
-                return "trash_file_or_folder", {"path": args.get("path")}
+                return "filesystem_operation", {**args, "action": "trash"}
+            if op in {"stat", "exists", "hash", "disk_usage"}:
+                if not args.get("path") and not args.get("paths"):
+                    raise ValueError(f"{op} requires path or paths.")
+                return "filesystem_operation", args
+            if op in {
+                "list_directory", "tree", "read_chunk", "mkdir",
+                "atomic_write_text", "append_text", "touch",
+            }:
+                self._require_unified_fields(op, args, ["path"])
+                if op in {"atomic_write_text", "append_text"}:
+                    self._require_unified_fields(op, args, ["content"], allow_empty={"content"})
+                return "filesystem_operation", args
+            if op in {"compare", "diff_text"}:
+                self._require_unified_fields(op, args, ["source", "destination"])
+                return "filesystem_operation", args
+            if op in {"copy", "move", "rename", "unzip"}:
+                self._require_unified_fields(op, args, ["source", "destination"])
+                return "filesystem_operation", args
+            if op == "zip":
+                if not args.get("source") and not args.get("path") and not args.get("paths"):
+                    raise ValueError("zip requires source, path, or paths.")
+                return "filesystem_operation", args
+            if op == "restore_from_trash":
+                if not args.get("recycle_id") and not args.get("path"):
+                    raise ValueError("restore_from_trash requires recycle_id or original path.")
+                return "filesystem_operation", args
+            if op == "batch":
+                self._require_unified_fields(op, args, ["operations"])
+                return "filesystem_operation", args
             raise ValueError("Unsupported file_manager action.")
 
         if action == "web_manager":
@@ -728,6 +791,8 @@ class ToolCallMixin:
                 routed_action, routed_args = self._route_unified_tool(action, args_dict)
             except ValueError as e:
                 return False, str(e)
+            if action == "file_manager" and routed_action == "filesystem_operation":
+                return True, None
             return self._validate_tool_call(routed_action, self._normalize_tool_call_args(routed_action, routed_args))
         if action == "run_mcp":
             ok, err = self._validate_json_schema(BUILTIN_TOOL_SCHEMAS[action].get("inputSchema", {}), args_dict)
@@ -1316,7 +1381,14 @@ class ToolCallMixin:
         return True
 
     def _tool_is_mutating_or_control(self, action, args_dict):
+        if action == "file_manager":
+            operation = str((args_dict or {}).get("action") or "").strip().lower()
+            if operation in FILE_MANAGER_MUTATING_ACTIONS or operation == "batch":
+                return True
         effective, _ = self._effective_tool_action(action, args_dict or {})
+        if effective == "filesystem_operation":
+            operation = str((args_dict or {}).get("action") or "").strip().lower()
+            return operation in FILE_MANAGER_MUTATING_ACTIONS or operation == "batch"
         if effective == "email_manager":
             operation = str((args_dict or {}).get("action", "") or "").strip().lower()
             return operation not in {"list_folders", "search", "read"}
@@ -1327,7 +1399,7 @@ class ToolCallMixin:
         return effective in {
             "system_command", "run_project_check", "create_python_tool", "install_mcp",
             "run_mcp", "install_skill", "install_skill_requirements", "run_skill",
-            "save_text_file", "save_screenshot_to_disk",
+            "save_text_file", "trash_file_or_folder", "save_screenshot_to_disk",
             "browser_automation_manager", "computer_automation_manager",
             "schedule_background_task", "cancel_background_task", "retry_background_task",
             "open_software", "open_file_or_folder", "open_in_browser", "set_clipboard",

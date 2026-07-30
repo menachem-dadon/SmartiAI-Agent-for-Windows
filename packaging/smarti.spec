@@ -43,6 +43,7 @@ for package in (
     "truststore",
     "uiautomation",
     "windows_toasts",
+    "win32com",
     "winrt",
 ):
     try:

@@ -1469,6 +1469,22 @@ class ModelContextMixin:
                     active_tools.append(
                         f"- `{name}`: {data['description']} (הסכמה נמסרת בפרוטוקול הכלים של הספק)."
                     )
+                elif name == "file_manager":
+                    active_tools.append(
+                        f"- `file_manager`: {BUILTIN_DYNAMIC_TOOLS[name]} "
+                        "| Compact search/tree contract: action + path; filter with query/glob/globs/"
+                        "exclude_globs/extensions/entry_type, date_field+date_from/date_to or explicit "
+                        "*_after/*_before timestamps, min_size/max_size, recursive/max_depth/min_depth; "
+                        "search_files supports search_backend=auto|windows_search|filesystem. "
+                        "windows_search is the Microsoft Windows Search (WSearch) indexed service: fast, "
+                        "full-text/property capable, and optionally verifies returned candidates, but index "
+                        "coverage can be stale/incomplete. filesystem is exact and filters names/globs/extensions "
+                        "before metadata reads. Choose recursive from the user's intent: direct-folder wording "
+                        "may justify false, while 'all files' may include subfolders; retain judgment. "
+                        "control cost with limit/offset/scan_limit/max_output_chars, sort_by/sort_order, and "
+                        "output_format=paths|records|text plus detail=minimal|standard|full or exact fields. "
+                        "Use `get_tool_info` for the complete schema."
+                    )
                 else:
                     schema_str = json.dumps(data["inputSchema"], ensure_ascii=False)
                     active_tools.append(f"- `{name}`: {data['description']} | Schema: {schema_str}")
@@ -1605,9 +1621,9 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
         file_policy = ""
         if self._builtin_tool_context_enabled("file_manager"):
             file_policy = (
-                "לקובץ טקסט השתמש ב-file_manager; אם לא צוין מיקום, שם קובץ בלבד נשמר בתיקיית "
-                "ברירת המחדל. מחיקת קובצי משתמש היא רק action=trash לסל המחזור; מחיקה קבועה מותרת "
-                "רק לקבצים זמניים מזוהים. אל תשתמש בהקלדה עיוורת לעברית."
+                "לפעולות קבצים השתמש ב-file_manager ולא ב-shell. ברירת המחדל היא conflict=fail; "
+                "לפני שינוי רחב השתמש ב-dry_run. מחיקה היא רק trash לסל המחזור; permanent delete אינו זמין. "
+                "לשם קובץ יחסי כתיבה משתמשת בתיקיית ברירת המחדל. אל תשתמש בהקלדה עיוורת לעברית."
             )
         computer_policy = ""
         if self._builtin_tool_context_enabled("computer_automation_manager"):

@@ -384,6 +384,15 @@ class RuntimeServicesMixin:
                 return "מחלץ טקסט מתמונה"
             if manager_op == "open":
                 return f"פותח {target}" if target else "פותח קובץ"
+            if manager_op in {"list_directory", "tree", "stat", "exists", "disk_usage"}:
+                return f"בודק את {target}" if target else "בודק קבצים ותיקיות"
+            if manager_op in {"hash", "compare", "diff_text", "read_chunk"}:
+                return f"קורא ומאמת את {target}" if target else "קורא ומאמת קבצים"
+            if manager_op in {
+                "mkdir", "copy", "move", "rename", "atomic_write_text",
+                "append_text", "touch", "batch", "zip", "unzip", "restore_from_trash",
+            }:
+                return f"מבצע פעולת קבצים: {manager_op}"
             if manager_op in {"trash", "recycle", "delete", "remove"}:
                 return f"מעביר לסל המחזור {target}" if target else "מעביר לסל המחזור"
             return "מפעיל כלי קבצים"

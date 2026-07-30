@@ -80,6 +80,8 @@ class ToolDispatchMixin:
         sandbox_blocked, sandbox_err = self._sandbox_blocks_unconstrained_tool(action)
         if sandbox_blocked:
             return (sandbox_err, None)
+        if action == "filesystem_operation":
+            return (self.file_manager_operation(args_dict), None)
         if action == "attach_local_file":
             return (self.attach_local_file_tool(args_dict.get("path", "")), None)
         if action in {"search_mcp", "install_mcp", "run_mcp"} and not self.settings.get("enable_mcp_clawhub", False):

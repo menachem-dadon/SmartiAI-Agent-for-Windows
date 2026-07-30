@@ -274,6 +274,7 @@ class ExecutionPolicyMixin:
             "system_manager": "shell",
             "software_manager": "software_open",
             "file_manager": "file_search",
+            "filesystem_operation": "file_search",
             "web_manager": "network",
             "screen_manager": "screenshot",
             "background_task_manager": "background_task",
@@ -883,7 +884,10 @@ class ExecutionPolicyMixin:
             return "אני בודק את מזג האוויר העדכני כדי לענות לפי נתונים טריים."
         if key in {"internet_search", "read_website"}:
             return "אני בודק מידע עדכני ברשת כדי לא להסתמך על זיכרון ישן."
-        if key in {"smart_file_search", "deep_content_search", "read_local_document", "analyze_local_image", "extract_image_text"}:
+        if key in {
+            "smart_file_search", "deep_content_search", "read_local_document",
+            "analyze_local_image", "extract_image_text", "filesystem_operation",
+        }:
             return "אני בודק את הקבצים הרלוונטיים כדי להתבסס על מה שקיים בפועל."
         if key in {"save_text_file", "trash_file_or_folder", "save_screenshot_to_disk"}:
             return "אני עומד לבצע שינוי בקובץ ואוודא שהתוצאה נשמרת כמו שביקשת."
