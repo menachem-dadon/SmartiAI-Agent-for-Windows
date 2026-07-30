@@ -76,10 +76,8 @@ class EmailToolsMixin:
             raise ValueError("Credentials missing. Set email address and app password in Smarti settings.")
         return cfg
 
-    def _email_ssl_context(self):
-        if self._allow_insecure_ssl():
-            return ssl._create_unverified_context()
-        return None
+    def _email_ssl_context(self, host, port):
+        return self._ssl_context(f"https://{host}:{port}")
 
     def _email_mailbox_arg(self, mailbox):
         mailbox = str(mailbox or "INBOX").strip() or "INBOX"
@@ -90,12 +88,14 @@ class EmailToolsMixin:
     def _email_connect_imap(self):
         cfg = self._email_require_credentials()
         self._raise_if_cancelled()
-        context = self._email_ssl_context()
+        context = self._email_ssl_context(cfg["imap_host"], cfg["imap_port"])
         if cfg["imap_ssl"]:
-            if context:
-                mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30, ssl_context=context)
-            else:
-                mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30)
+            mail = imaplib.IMAP4_SSL(
+                cfg["imap_host"],
+                cfg["imap_port"],
+                timeout=30,
+                ssl_context=context,
+            )
         else:
             mail = imaplib.IMAP4(cfg["imap_host"], cfg["imap_port"], timeout=30)
         mail.login(cfg["user"], cfg["password"])
@@ -721,20 +721,19 @@ class EmailToolsMixin:
         if not recipients:
             raise ValueError("No recipients resolved.")
         self._raise_if_cancelled()
-        context = self._email_ssl_context()
+        context = self._email_ssl_context(cfg["smtp_host"], cfg["smtp_port"])
         if cfg["smtp_ssl"]:
-            if context:
-                server = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30, context=context)
-            else:
-                server = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
+            server = smtplib.SMTP_SSL(
+                cfg["smtp_host"],
+                cfg["smtp_port"],
+                timeout=30,
+                context=context,
+            )
         else:
             server = smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
         try:
             if cfg["smtp_starttls"] and not cfg["smtp_ssl"]:
-                if context:
-                    server.starttls(context=context)
-                else:
-                    server.starttls()
+                server.starttls(context=context)
             server.login(cfg["user"], cfg["password"])
             server.send_message(msg, from_addr=cfg["user"], to_addrs=recipients)
         finally:

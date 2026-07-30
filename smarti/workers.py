@@ -231,42 +231,44 @@ class TTSWorker(QThread):
 
 class FetchModelsWorker(QThread):
     finished_signal = pyqtSignal(list)
-    def __init__(self, provider, api_key, url, allow_insecure_ssl=False):
+
+    def __init__(self, provider, api_key, url, ssl_settings=None):
         super().__init__()
         self.provider = provider
         self.api_key = api_key
         self.url = url
-        self.allow_insecure_ssl = bool(allow_insecure_ssl)
+        self.ssl_settings = copy.deepcopy(ssl_settings or {})
 
     def _request_kwargs(self):
-        return ssl_request_kwargs(self.allow_insecure_ssl)
+        return ssl_request_kwargs(self.ssl_settings, url=self.url)
 
     def run(self):
         models, _, _ = fetch_text_models_for_provider(
             self.provider,
             self.api_key,
             self.url,
-            self.allow_insecure_ssl,
+            self.ssl_settings,
             validate_key=False,
         )
         self.finished_signal.emit(models)
 
+
 class ApiKeyValidationWorker(QThread):
     finished_signal = pyqtSignal(str, str, bool, str, list)
 
-    def __init__(self, provider, api_key, url, allow_insecure_ssl=False):
+    def __init__(self, provider, api_key, url, ssl_settings=None):
         super().__init__()
         self.provider = normalize_provider_name(provider)
         self.api_key = sanitize_secret_value(api_key)
         self.url = url
-        self.allow_insecure_ssl = bool(allow_insecure_ssl)
+        self.ssl_settings = copy.deepcopy(ssl_settings or {})
 
     def run(self):
         models, ok, message = fetch_text_models_for_provider(
             self.provider,
             self.api_key,
             self.url,
-            self.allow_insecure_ssl,
+            self.ssl_settings,
             validate_key=True,
         )
         self.finished_signal.emit(self.provider, self.api_key, bool(ok), str(message or ""), models)
@@ -315,7 +317,7 @@ class CodexQuotaWorker(QThread):
             logging.warning("Could not refresh Codex quota: %s", exc)
             self.finished_signal.emit({}, str(exc))
 
-def test_email_connection(config, allow_insecure_ssl=False):
+def test_email_connection(config, ssl_settings=None):
     """Test IMAP and SMTP without sending, changing, or reading a message."""
     mail = None
     smtp = None
@@ -323,12 +325,22 @@ def test_email_connection(config, allow_insecure_ssl=False):
         cfg = copy.deepcopy(config or {})
         if not cfg.get("user") or not cfg.get("password"):
             raise ValueError("חסרים כתובת אימייל או סיסמת אפליקציה.")
-        context = ssl._create_unverified_context() if allow_insecure_ssl else None
+        ssl_settings = copy.deepcopy(ssl_settings or {})
+        imap_context = create_ssl_context(
+            ssl_settings,
+            url=f"https://{cfg['imap_host']}:{cfg['imap_port']}",
+        )
+        smtp_context = create_ssl_context(
+            ssl_settings,
+            url=f"https://{cfg['smtp_host']}:{cfg['smtp_port']}",
+        )
         if cfg.get("imap_ssl", True):
-            if context:
-                mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30, ssl_context=context)
-            else:
-                mail = imaplib.IMAP4_SSL(cfg["imap_host"], cfg["imap_port"], timeout=30)
+            mail = imaplib.IMAP4_SSL(
+                cfg["imap_host"],
+                cfg["imap_port"],
+                timeout=30,
+                ssl_context=imap_context,
+            )
         else:
             mail = imaplib.IMAP4(cfg["imap_host"], cfg["imap_port"], timeout=30)
         mail.login(cfg["user"], cfg["password"])
@@ -342,18 +354,17 @@ def test_email_connection(config, allow_insecure_ssl=False):
         mail = None
 
         if cfg["smtp_ssl"]:
-            if context is not None:
-                smtp = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30, context=context)
-            else:
-                smtp = smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
+            smtp = smtplib.SMTP_SSL(
+                cfg["smtp_host"],
+                cfg["smtp_port"],
+                timeout=30,
+                context=smtp_context,
+            )
         else:
             smtp = smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30)
             smtp.ehlo()
             if cfg["smtp_starttls"]:
-                if context is not None:
-                    smtp.starttls(context=context)
-                else:
-                    smtp.starttls()
+                smtp.starttls(context=smtp_context)
                 smtp.ehlo()
         smtp.login(cfg["user"], cfg["password"])
         return True, "חיבור האימייל תקין: IMAP ו-SMTP זמינים."
@@ -375,14 +386,32 @@ def test_email_connection(config, allow_insecure_ssl=False):
 class EmailConnectionTestWorker(QThread):
     finished_signal = pyqtSignal(bool, str)
 
-    def __init__(self, config, allow_insecure_ssl=False):
+    def __init__(self, config, ssl_settings=None):
         super().__init__()
         self.config = copy.deepcopy(config or {})
-        self.allow_insecure_ssl = bool(allow_insecure_ssl)
+        self.ssl_settings = copy.deepcopy(ssl_settings or {})
 
     def run(self):
-        ok, message = test_email_connection(self.config, self.allow_insecure_ssl)
+        ok, message = test_email_connection(self.config, self.ssl_settings)
         self.finished_signal.emit(ok, message)
+
+
+class SSLTrustTestWorker(QThread):
+    """Test the selected trust path without blocking the settings UI."""
+
+    finished_signal = pyqtSignal(bool, object, str)
+
+    def __init__(self, ssl_settings, url, parent=None):
+        super().__init__(parent)
+        self.ssl_settings = copy.deepcopy(ssl_settings or {})
+        self.url = str(url or "")
+
+    def run(self):
+        try:
+            result = test_https_trust(self.ssl_settings, self.url)
+            self.finished_signal.emit(True, result, "")
+        except Exception as exc:
+            self.finished_signal.emit(False, {}, str(exc))
 
 
 class DiagnosticCheckWorker(QThread):

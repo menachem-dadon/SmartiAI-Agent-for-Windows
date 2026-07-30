@@ -47,13 +47,18 @@ from .common import (
     TOOLS_DIR,
     USAGE_FILE,
     USER_DATA_DIR,
+    SSL_MODE_CUSTOM_CA,
+    SSL_MODE_LEGACY_INSECURE,
+    SSL_MODE_SYSTEM,
     fetch_text_models_for_provider,
+    normalize_ssl_trust_mode,
     normalize_provider_name,
     provider_config,
     provider_default_model,
     provider_display_name,
     provider_requires_api_key,
     provider_secret_key,
+    validate_custom_ca,
 )
 from .codex_signin import CODEX_SIGNIN_PROVIDER, CodexSignInProvider
 from .config import BUILTIN_TOOL_SCHEMAS, DEFAULT_POLICY_MATRIX, SETTINGS_SCHEMA_VERSION
@@ -659,11 +664,12 @@ class SmartiDiagnostic:
                 f"provider={provider}; api_key_configured={has_key}; selected_model={model}; network_check=skipped",
                 category="providers", title_he="ספק המודל הפעיל",
             )
+        ssl_snapshot = getattr(self.core, "_ssl_settings_snapshot", lambda: copy.deepcopy(settings))()
         models, ok, message = fetch_text_models_for_provider(
             provider,
             secret,
             settings.get("local_server_url", ""),
-            bool(getattr(self.core, "_allow_insecure_ssl", lambda: False)()),
+            ssl_snapshot,
             validate_key=True,
         )
         if not ok:
@@ -923,9 +929,9 @@ class SmartiDiagnostic:
                 f"imap={cfg['imap_host']}:{cfg['imap_port']}; smtp={cfg['smtp_host']}:{cfg['smtp_port']}; network_check=skipped",
                 category="email", title_he="דוא\"ל",
             )
-        ok, message = test_email_connection(
-            cfg, bool(getattr(self.core, "_allow_insecure_ssl", lambda: False)())
-        )
+        settings = getattr(self.core, "settings", {}) or {}
+        ssl_snapshot = getattr(self.core, "_ssl_settings_snapshot", lambda: copy.deepcopy(settings))()
+        ok, message = test_email_connection(cfg, ssl_snapshot)
         if not ok:
             return self._result(
                 "email.connection", STATUS_ERROR,
@@ -1437,6 +1443,7 @@ class SmartiDiagnostic:
         settings = getattr(self.core, "settings", {}) or {}
         policy = settings.get("policy_matrix", {})
         invalid_policy = [key for key in DEFAULT_POLICY_MATRIX if str(policy.get(key, "")).lower() not in {"allow", "ask", "deny"}]
+        ssl_mode = normalize_ssl_trust_mode(settings.get("ssl_trust_mode"))
         insecure_ssl = bool(getattr(self.core, "_allow_insecure_ssl", lambda: False)())
         trust = settings.get("tool_trust", {})
         if not isinstance(trust, dict):
@@ -1448,16 +1455,26 @@ class SmartiDiagnostic:
             return self._result(
                 "security.policy", STATUS_ERROR,
                 "מדיניות ההרשאות אינה שלמה. Smarti צריך לחזור לברירות מחדל בטוחות רק באישור שלך.",
-                f"invalid_policy_keys={invalid_policy}; insecure_ssl={insecure_ssl}; trust_entries={len(trust)}; redact_logs={redact_logs}",
+                f"invalid_policy_keys={invalid_policy}; ssl_mode={ssl_mode}; global_insecure={insecure_ssl}; trust_entries={len(trust)}; redact_logs={redact_logs}",
                 RepairAction("restore_safe_policy", "שחזור מדיניות בטוחה", "רק ערכי מדיניות לא תקינים יוחזרו לברירות המחדל הבטוחות.", "medium"),
                 category="security", title_he="מדיניות ואבטחה",
             )
-        if insecure_ssl:
+        if ssl_mode == SSL_MODE_CUSTOM_CA:
+            ca_ok, ca_message = validate_custom_ca(settings.get("ssl_custom_ca_path", ""))
+            if not ca_ok:
+                return self._result(
+                    "security.policy", STATUS_ERROR,
+                    "מצב תעודת סינון נבחר, אך קובץ ה-CA אינו תקין. Smarti לא יעבור אוטומטית לחיבור לא מאובטח.",
+                    f"policy_valid=true; ssl_mode={ssl_mode}; custom_ca_valid=false; reason={self._redact(ca_message)}; trust_entries={len(trust)}",
+                    RepairAction("open_settings", "תיקון אמון HTTPS", "יש לפתוח את הגדרות האמון, לבחור תעודת CA תקינה ולהריץ בדיקת חיבור.", "medium"),
+                    category="security", title_he="מדיניות ואבטחה",
+                )
+        if ssl_mode == SSL_MODE_LEGACY_INSECURE:
             return self._result(
                 "security.policy", STATUS_WARNING,
-                "מצב תאימות SSL פחות בטוח פעיל. הוא יכול לעזור ברשת מסוננת, אבל מפחית אימות תעודות.",
-                f"policy_valid=true; risky_allow={risky_allow}; insecure_ssl=true; trust_entries={len(trust)}; redact_logs={redact_logs}; audit_log_exists={os.path.exists(AUDIT_LOG_FILE)}",
-                RepairAction("disable_insecure_ssl", "כיבוי תאימות SSL פחות בטוחה", "האימות המאובטח יחזור לברירת המחדל; ייתכן שחיבור דרך פרוקסי מסנן ידרוש טיפול בתעודה.", "medium"),
+                "תאימות ישנה ללא אימות תעודות פעילה באופן רחב. זהות שרתי HTTPS אינה נבדקת ב-Smarti ובכלים שמופעלים ממנו. עדיף להשתמש במאגר Windows או בתעודת CA של ספק הסינון.",
+                f"policy_valid=true; risky_allow={risky_allow}; ssl_mode={ssl_mode}; global_insecure={str(insecure_ssl).lower()}; trust_entries={len(trust)}; redact_logs={redact_logs}; audit_log_exists={os.path.exists(AUDIT_LOG_FILE)}",
+                RepairAction("disable_insecure_ssl", "חזרה לאמון Windows", "התאימות ללא אימות תכובה והאימות המאובטח ישתמש שוב במאגר האישורים של Windows.", "medium"),
                 category="security", title_he="מדיניות ואבטחה",
             )
         if not redact_logs:
@@ -1563,9 +1580,12 @@ class SmartiDiagnostic:
                 raise RuntimeError(self._redact(outcome))
             return f"דרישות ה־Skill '{skill_name}' טופלו.\n{self._redact(outcome)}"
         if action_id == "disable_insecure_ssl":
+            self.core.settings["ssl_trust_mode"] = SSL_MODE_SYSTEM
             self.core.settings["allow_insecure_ssl_compat"] = False
+            if hasattr(self.core, "_set_legacy_ssl_session_enabled"):
+                self.core._set_legacy_ssl_session_enabled(False)
             self._save_settings()
-            return "מצב תאימות SSL פחות בטוח כובה."
+            return "התאימות ללא אימות תעודות כובתה. Smarti חזר לאמון המאומת של Windows."
         if action_id == "enable_log_redaction":
             self.core.settings["privacy_redact_logs"] = True
             self.core.settings.setdefault("privacy", {})["redact_logs"] = True

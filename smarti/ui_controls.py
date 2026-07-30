@@ -1,6 +1,7 @@
 """Reusable PyQt controls used across Smarti screens."""
 from .common import *
 from .ui_styles import *
+from PyQt6.QtCore import QRect
 
 # ==========================================
 # פונקציות עזר UI
@@ -897,6 +898,7 @@ class SmartiCheckBox(QCheckBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._smarti_info_reserved = False
+        self._smarti_word_wrap = False
         self.setMinimumWidth(1)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -909,9 +911,38 @@ class SmartiCheckBox(QCheckBox):
         self._smarti_info_reserved = bool(reserved)
         self.update()
 
+    def setWordWrap(self, enabled=True):
+        self._smarti_word_wrap = bool(enabled)
+        self.updateGeometry()
+        self.update()
+
+    def wordWrap(self):
+        return self._smarti_word_wrap
+
+    def hasHeightForWidth(self):
+        return self._smarti_word_wrap
+
+    def heightForWidth(self, width):
+        if not self._smarti_word_wrap:
+            return super().sizeHint().height()
+        text_left = 52 + (44 if self._smarti_info_reserved else 16)
+        available = max(1, int(width) - text_left - 2)
+        flags = (
+            Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignAbsolute
+            | Qt.TextFlag.TextWordWrap
+        )
+        bounds = self.fontMetrics().boundingRect(
+            QRect(0, 0, available, 10000),
+            flags,
+            self.text(),
+        )
+        return max(38, bounds.height() + 12)
+
     def sizeHint(self):
         hint = super().sizeHint()
-        return QSize(max(hint.width() + 40, 180), max(hint.height(), 38))
+        height = self.heightForWidth(max(180, hint.width())) if self._smarti_word_wrap else hint.height()
+        return QSize(max(hint.width() + 40, 180), max(height, 38))
 
     def hitButton(self, pos):
         return self.rect().contains(pos)
@@ -951,7 +982,14 @@ class SmartiCheckBox(QCheckBox):
         text_rect = QRectF(text_left, 0, max(1, self.width() - text_left - 2), self.height())
         painter.setPen(qcolor_from_css(TEXT_COLOR if self.isEnabled() else SUBTLE_TEXT_COLOR))
         painter.setFont(self.font())
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignAbsolute, self.text())
+        text_flags = (
+            Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignVCenter
+            | Qt.AlignmentFlag.AlignAbsolute
+        )
+        if self._smarti_word_wrap:
+            text_flags |= Qt.TextFlag.TextWordWrap
+        painter.drawText(text_rect, text_flags, self.text())
         painter.end()
 
 class RtlFillSlider(QSlider):

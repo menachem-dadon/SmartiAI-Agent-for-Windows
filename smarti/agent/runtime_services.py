@@ -28,8 +28,40 @@ class RuntimeServicesMixin:
             except Exception: pass
         return allowed or [APP_DIR]
 
-    def _allow_insecure_ssl(self):
-        return bool(self.settings.get("allow_insecure_ssl_compat", True))
+    def _ssl_settings_snapshot(self):
+        snapshot = {
+            key: copy.deepcopy((self.settings or {}).get(key))
+            for key in (
+                "ssl_trust_mode",
+                "ssl_custom_ca_path",
+                "ssl_filter_setup_completed",
+                "ssl_legacy_insecure_allowed_hosts",
+                "ssl_trust_migration_version",
+                "allow_insecure_ssl_compat",
+            )
+        }
+        snapshot["_ssl_legacy_insecure_session_enabled"] = bool(
+            getattr(self, "_ssl_legacy_insecure_session_enabled", False)
+        )
+        snapshot["_ssl_data_dir"] = USER_DATA_DIR
+        return snapshot
+
+    def _ssl_trust_mode(self):
+        return normalize_ssl_trust_mode(self.settings.get("ssl_trust_mode"))
+
+    def _allow_insecure_ssl(self, url_or_host=""):
+        """Compatibility name for the explicit global verification bypass."""
+        return self._ssl_trust_mode() == SSL_MODE_LEGACY_INSECURE
+
+    def _set_legacy_ssl_session_enabled(self, enabled):
+        # Kept as a compatibility method for older UI/extensions. The selected
+        # mode itself is now persistent and global, exactly like Smarti's
+        # historical SSL compatibility switch.
+        self._ssl_legacy_insecure_session_enabled = (
+            self._ssl_trust_mode() == SSL_MODE_LEGACY_INSECURE
+        )
+        self._sync_ssl_compat_env()
+        return self._ssl_legacy_insecure_session_enabled
 
     def _add_ssl_sitecustomize_path(self, env):
         existing = env.get("PYTHONPATH", "")
@@ -42,31 +74,15 @@ class RuntimeServicesMixin:
         return env
 
     def _sync_ssl_compat_env(self, env=None):
-        apply_insecure_ssl_compat()
         target = os.environ if env is None else dict(env)
-        enabled = self._allow_insecure_ssl()
-        enabled_values = {
-            "SMARTI_ALLOW_INSECURE_SSL": "1",
-            "PYTHONHTTPSVERIFY": "0",
-            "NODE_TLS_REJECT_UNAUTHORIZED": "0",
-            "npm_config_strict_ssl": "false",
-            "GIT_SSL_NO_VERIFY": "true",
-            "CURL_SSL_NO_REVOKE": "1",
-            "YARN_ENABLE_STRICT_SSL": "false",
-            "PNPM_CONFIG_STRICT_SSL": "false",
-            "PIP_TRUSTED_HOST": "pypi.org files.pythonhosted.org pypi.python.org",
-            "UV_SYSTEM_CERTS": "true",
-            "UV_NATIVE_TLS": "true",
-        }
-        if enabled:
-            for key, value in enabled_values.items():
-                target[key] = value
-            self._add_ssl_sitecustomize_path(target)
-        else:
-            target["SMARTI_ALLOW_INSECURE_SSL"] = "0"
-            for key, value in enabled_values.items():
-                if key != "SMARTI_ALLOW_INSECURE_SSL" and target.get(key) == value:
-                    target.pop(key, None)
+        apply_ssl_trust_environment(
+            self._ssl_settings_snapshot(),
+            target,
+            data_dir=USER_DATA_DIR,
+        )
+        if env is None:
+            configure_ssl_from_environment()
+        self._add_ssl_sitecustomize_path(target)
         return target
 
     def _subprocess_env(self, env=None):
@@ -75,26 +91,34 @@ class RuntimeServicesMixin:
         target.setdefault("PYTHONUTF8", "1")
         return self._sync_ssl_compat_env(target)
 
-    def _ssl_request_kwargs(self):
+    def _ssl_request_kwargs(self, url="", *, allow_legacy=True):
         self._sync_ssl_compat_env()
-        if self._allow_insecure_ssl():
-            try:
-                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            except Exception:
-                pass
-            return {"verify": False}
-        return {}
+        return ssl_request_kwargs(
+            self._ssl_settings_snapshot(),
+            url=url,
+            allow_legacy=allow_legacy,
+            data_dir=USER_DATA_DIR,
+        )
 
-    def _with_ssl_request_kwargs(self, kwargs):
+    def _with_ssl_request_kwargs(self, url, kwargs, *, allow_legacy=True):
         merged = dict(kwargs or {})
-        merged.update(self._ssl_request_kwargs())
+        merged.update(self._ssl_request_kwargs(url, allow_legacy=allow_legacy))
         return merged
 
     def _request_get(self, url, **kwargs):
-        return requests.get(url, **self._with_ssl_request_kwargs(kwargs))
+        return requests.get(url, **self._with_ssl_request_kwargs(url, kwargs))
 
     def _request_post(self, url, **kwargs):
-        return requests.post(url, **self._with_ssl_request_kwargs(kwargs))
+        return requests.post(url, **self._with_ssl_request_kwargs(url, kwargs))
+
+    def _ssl_context(self, url="", *, allow_legacy=True):
+        self._sync_ssl_compat_env()
+        return create_ssl_context(
+            self._ssl_settings_snapshot(),
+            url=url,
+            data_dir=USER_DATA_DIR,
+            allow_legacy=allow_legacy,
+        )
 
     def _network_auto_resume_enabled(self):
         return bool(self.settings.get("network_auto_resume_enabled", True))
@@ -143,15 +167,24 @@ class RuntimeServicesMixin:
         return False
 
     def _friendly_ssl_error(self, error):
-        if self._allow_insecure_ssl():
+        self._ssl_last_certificate_error = str(error or "")[:600]
+        mode = self._ssl_trust_mode()
+        if mode == SSL_MODE_CUSTOM_CA:
             return (
-                "שגיאת SSL מול ספק ה-AI גם לאחר הפעלת מצב תאימות SSL. "
-                "זה בדרך כלל מצביע על סינון/פרוקסי/אנטי-וירוס שמחליף תעודות, או על תקלה זמנית בנתיב הרשת."
+                "אימות תעודת ה-HTTPS נכשל גם עם תעודת הסינון שנבחרה. "
+                "יש לפתוח הגדרות ← מתקדם ← אמון HTTPS, לבדוק שהתעודה בתוקף ולהריץ בדיקת חיבור מאומתת. "
+                "Smarti לא עבר למצב לא מאובטח."
+            )
+        if mode == SSL_MODE_LEGACY_INSECURE:
+            return (
+                "חיבור ה-HTTPS נכשל גם כאשר התאימות הישנה ללא אימות תעודות פעילה. "
+                "במצב זה אימות זהות השרת כבר כבוי, ולכן הסיבה כנראה היא חסימת רשת, "
+                "פרוקסי שאינו זמין או תקלה זמנית בשירות."
             )
         return (
-            "שגיאת SSL מול ספק ה-AI: שרשרת התעודות שהתקבלה כוללת תעודה שאינה אמינה למערכת. "
-            "אם יש סינון רשת, פרוקסי או אנטי-וירוס שמבצע בדיקת HTTPS, אפשר להפעיל בהגדרות את מצב תאימות SSL "
-            "(פחות בטוח), או להתקין במערכת את תעודת השורש של הסינון."
+            "אימות תעודת ה-HTTPS נכשל. Smarti משתמש במאגר האישורים של Windows ולא החליש את האימות. "
+            "אם פועל סינון רשת, יש לפתוח הגדרות ← מתקדם ← אמון HTTPS ולייבא את תעודת השורש "
+            "הציבורית של ספק הסינון או לבדוק שהיא מותקנת ב-Windows."
         )
 
     def _mcp_env(self):

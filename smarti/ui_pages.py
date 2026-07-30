@@ -5,7 +5,15 @@ from .ui_styles import *
 from .ui_controls import *
 from .visual_canvas import web_canvas_available
 from .doctor import CheckResult, RepairAction
-from .workers import FetchModelsWorker, ApiKeyValidationWorker, TTSWorker, EmailConnectionTestWorker, DiagnosticCheckWorker, DiagnosticRepairWorker
+from .workers import (
+    FetchModelsWorker,
+    ApiKeyValidationWorker,
+    TTSWorker,
+    EmailConnectionTestWorker,
+    DiagnosticCheckWorker,
+    DiagnosticRepairWorker,
+    SSLTrustTestWorker,
+)
 from PyQt6.QtCore import QRect, QUrl
 from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
 
@@ -2397,6 +2405,644 @@ class ToolsSettingsPage(QWidget):
         self.core._save_settings()
         self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page)
 
+class SSLTrustSettingsCard(QFrame):
+    """Theme-aware, inline TLS trust editor for Smarti's narrow settings page."""
+
+    settingsChanged = pyqtSignal()
+    MODE_OPTIONS = (
+        (SSL_MODE_SYSTEM, "מאגר Windows"),
+        (SSL_MODE_CUSTOM_CA, "תעודה"),
+        (SSL_MODE_LEGACY_INSECURE, "ללא אימות"),
+    )
+
+    def __init__(self, core, parent=None):
+        super().__init__(parent)
+        self.core = core
+        self._values = {
+            "ssl_trust_mode": normalize_ssl_trust_mode(core.settings.get("ssl_trust_mode")),
+            "ssl_custom_ca_path": str(core.settings.get("ssl_custom_ca_path") or ""),
+            "ssl_filter_setup_completed": bool(core.settings.get("ssl_filter_setup_completed", False)),
+            # Retained as an empty migration field for older settings files.
+            "ssl_legacy_insecure_allowed_hosts": [],
+            "ssl_trust_migration_version": SSL_TRUST_MIGRATION_VERSION,
+            "allow_insecure_ssl_compat": bool(core.settings.get("allow_insecure_ssl_compat", False)),
+        }
+        self._test_worker = None
+        self._editor_expanded = False
+        self._pending_test_completed = bool(
+            self._values.get("ssl_filter_setup_completed", False)
+        )
+        self.setObjectName("SSLTrustSettingsCard")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(12)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        summary = QVBoxLayout()
+        summary.setSpacing(4)
+
+        self.current_badge = QLabel("המצב הפעיל כעת")
+        self.current_badge.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.mode_label = QLabel()
+        self.mode_label.setWordWrap(True)
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
+        self.trust_detail_label = QLabel()
+        self.trust_detail_label.setWordWrap(True)
+        self.trust_detail_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        summary.addWidget(self.current_badge)
+        summary.addWidget(self.mode_label)
+        summary.addWidget(self.status_label)
+        summary.addWidget(self.trust_detail_label)
+
+        self.configure_btn = QPushButton()
+        self.configure_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.configure_btn.setFixedWidth(96)
+        self.configure_btn.clicked.connect(self.toggle_editor)
+        header.addLayout(summary, 1)
+        header.addWidget(self.configure_btn, 0, Qt.AlignmentFlag.AlignTop)
+        root.addLayout(header)
+
+        self.editor = QFrame()
+        self.editor.setObjectName("SSLTrustInlineEditor")
+        self.editor.setMinimumHeight(680)
+        editor_layout = QVBoxLayout(self.editor)
+        editor_layout.setContentsMargins(12, 14, 12, 12)
+        editor_layout.setSpacing(11)
+
+        editor_title = QLabel("בחירת דרך החיבור המאובטח")
+        editor_title.setObjectName("SSLTrustEditorTitle")
+        editor_layout.addWidget(editor_title)
+        editor_help = QLabel(
+            "בכל חיבור HTTPS, סמארטי בודק את זהות השרת. ברשת עם סינון מומלץ להתחיל "
+            "במאגר האישורים של Windows. רק אם האפשרות הזו אינה עובדת, אפשר לייבא "
+            "תעודת שורש ציבורית שהתקבלה מספק הסינון."
+        )
+        editor_help.setObjectName("SSLTrustEditorHelp")
+        editor_help.setWordWrap(True)
+        editor_layout.addWidget(editor_help)
+
+        self.mode_control = SegmentedControl([label for _, label in self.MODE_OPTIONS])
+        editor_layout.addWidget(self.mode_control)
+
+        self.mode_stack = QStackedWidget()
+        self.mode_stack.setStyleSheet(
+            "QStackedWidget { background: transparent; border: none; }"
+        )
+        self.mode_stack.setMinimumHeight(260)
+        self.mode_stack.addWidget(self._build_system_page())
+        self.mode_stack.addWidget(self._build_custom_page())
+        self.mode_stack.addWidget(self._build_compat_page())
+        editor_layout.addWidget(self.mode_stack)
+
+        test_card = QFrame()
+        test_card.setObjectName("SSLTrustTestCard")
+        test_card.setMinimumHeight(155)
+        test_layout = QVBoxLayout(test_card)
+        test_layout.setContentsMargins(12, 11, 12, 11)
+        test_layout.setSpacing(7)
+        self.test_title = QLabel("בדיקת החיבור")
+        test_layout.addWidget(self.test_title)
+        self.test_explanation = QLabel(
+            "הבדיקה מתחברת לכתובת ציבורית קבועה של Google בלי לשלוח מפתח API, "
+            "תוכן שיחה או מידע אישי."
+        )
+        self.test_explanation.setWordWrap(True)
+        test_layout.addWidget(self.test_explanation)
+        self.test_endpoint = QLabel("https://www.gstatic.com/generate_204")
+        self.test_endpoint.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.test_endpoint.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        test_layout.addWidget(self.test_endpoint)
+        test_row = QHBoxLayout()
+        test_row.setSpacing(8)
+        self.test_btn = QPushButton("בדיקת חיבור")
+        self.test_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.test_btn.setFixedSize(118, 40)
+        self.test_status = QLabel("טרם בוצעה בדיקה עבור הבחירה הנוכחית.")
+        self.test_status.setWordWrap(True)
+        test_row.addWidget(self.test_btn, 0)
+        test_row.addWidget(self.test_status, 1)
+        test_layout.addLayout(test_row)
+        editor_layout.addWidget(test_card)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch()
+        self.cancel_btn = QPushButton("ביטול")
+        self.save_btn = QPushButton("שמירה והחלה")
+        self.cancel_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.save_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.cancel_btn.setFixedSize(132, 50)
+        self.save_btn.setFixedSize(132, 50)
+        actions.addWidget(self.cancel_btn)
+        actions.addWidget(self.save_btn)
+        editor_layout.addLayout(actions)
+        root.addWidget(self.editor)
+        self.editor.hide()
+
+        self.mode_control.currentIndexChanged.connect(self._on_mode_changed)
+        self.test_btn.clicked.connect(self._run_test)
+        self.cancel_btn.clicked.connect(self._cancel_editor)
+        self.save_btn.clicked.connect(self._save_editor)
+        self._load_editor_from_values()
+        self._refresh_summary()
+        self.apply_theme()
+
+    def _mode_page(self, title, explanation):
+        page = QFrame()
+        page.setObjectName("SSLTrustModePage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 11, 12, 11)
+        layout.setSpacing(7)
+        heading = QLabel(title)
+        heading.setProperty("smartiSSLModeTitle", True)
+        heading.setWordWrap(True)
+        body = QLabel(explanation)
+        body.setProperty("smartiSSLModeBody", True)
+        body.setWordWrap(True)
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        return page, layout
+
+    def _build_system_page(self):
+        page, layout = self._mode_page(
+            "מומלץ: מאגר האישורים של Windows",
+            "כדי לאמת את שרשרת האישורים, סמארטי משתמש במאגר של Windows. כך נעשה "
+            "שימוש גם בתעודות של נטפרי, רימון וכדומה שכבר מותקנות במערכת, בלי לבחור קובץ.",
+        )
+        badge = QLabel("אימות זהות השרת נשאר פעיל")
+        badge.setProperty("smartiSSLSafeBadge", True)
+        badge.setWordWrap(True)
+        layout.addWidget(badge)
+        return page
+
+    def _build_custom_page(self):
+        page, layout = self._mode_page(
+            "תעודת שורש ציבורית של ספק הסינון",
+            "מיועד למקרה שבו מאגר Windows עדיין אינו מספיק. יש לבחור קובץ CER, CRT "
+            "או PEM ציבורי שקיבלת מספק הסינון. Smarti דוחה מפתח פרטי ותעודת שרת רגילה.",
+        )
+        path_row = QHBoxLayout()
+        path_row.setSpacing(8)
+        self.custom_ca_path = QLineEdit()
+        self.custom_ca_path.setReadOnly(True)
+        self.custom_ca_path.setMinimumHeight(40)
+        self.custom_ca_path.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.custom_ca_path.setPlaceholderText("לא נבחרה תעודה")
+        self.browse_btn = QPushButton("בחירת תעודה")
+        self.browse_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.browse_btn.setFixedSize(122, 40)
+        path_row.addWidget(self.custom_ca_path, 1)
+        path_row.addWidget(self.browse_btn, 0)
+        layout.addLayout(path_row)
+        self.custom_ca_status = QLabel("")
+        self.custom_ca_status.setWordWrap(True)
+        layout.addWidget(self.custom_ca_status)
+        self.browse_btn.clicked.connect(self._choose_custom_ca)
+        return page
+
+    def _build_compat_page(self):
+        page, layout = self._mode_page(
+            "תאימות ישנה — חיבור ללא אימות תעודות",
+            "אפשרות זו מחזירה את התנהגות ה-SSL הישנה של Smarti: אימות תעודות HTTPS "
+            "מכובה באופן רחב ב-Smarti, בדפדפן האוטומציה ובכלי שורת הפקודה שמופעלים ממנו.",
+        )
+        warning = QLabel(
+            "זהות השרת לא תיבדק, ולכן מסנן או גורם אחר ברשת עלולים להתחזות לשירות. "
+            "יש להשתמש באפשרות זו רק אם מאגר Windows וייבוא תעודה אינם פותרים את הבעיה."
+        )
+        warning.setProperty("smartiSSLWarning", True)
+        warning.setWordWrap(True)
+        layout.addWidget(warning)
+        self.compat_ack = SmartiCheckBox(
+            "ברור לי שבמצב זה אימות תעודות HTTPS כבוי בכל רכיבי Smarti"
+        )
+        self.compat_ack.setWordWrap(True)
+        layout.addWidget(self.compat_ack)
+        return page
+
+    def _mode_index(self, mode):
+        return next(
+            (
+                index
+                for index, (key, _label) in enumerate(self.MODE_OPTIONS)
+                if key == normalize_ssl_trust_mode(mode)
+            ),
+            0,
+        )
+
+    def _current_mode(self):
+        index = max(0, min(self.mode_control.currentIndex(), len(self.MODE_OPTIONS) - 1))
+        return self.MODE_OPTIONS[index][0]
+
+    def _apply_test_status_style(self):
+        tone = self.test_status.property("smartiSSLTestStatusTone") or "muted"
+        colors = {
+            "muted": MUTED_TEXT_COLOR,
+            "accent": ACCENT_SECONDARY_COLOR,
+            "danger": DANGER_COLOR,
+        }
+        weight = 400 if tone == "muted" else 800
+        self.test_status.setStyleSheet(
+            f"color: {colors.get(tone, MUTED_TEXT_COLOR)}; font-size: 12px; "
+            f"font-weight: {weight}; background: transparent;"
+        )
+
+    def _set_test_status(self, text, tone="muted"):
+        self.test_status.setText(text)
+        self.test_status.setProperty("smartiSSLTestStatusTone", tone)
+        self._apply_test_status_style()
+
+    def _load_editor_from_values(self):
+        mode = normalize_ssl_trust_mode(self._values.get("ssl_trust_mode"))
+        self.mode_control.setCurrentIndex(self._mode_index(mode), emit=False)
+        self.mode_stack.setCurrentIndex(self._mode_index(mode))
+        path = str(self._values.get("ssl_custom_ca_path") or "")
+        self.custom_ca_path.setText(path)
+        self.compat_ack.setChecked(False)
+        self._pending_test_completed = bool(
+            self._values.get("ssl_filter_setup_completed", False)
+        )
+        self._show_certificate_selection(path)
+        self._set_test_status("טרם בוצעה בדיקה עבור הבחירה הנוכחית.")
+
+    def _show_certificate_selection(self, path, validation_message=""):
+        metadata = describe_custom_ca(path)
+        if not path:
+            text = "לא נבחר קובץ. אפשר לבחור את תעודת השורש הציבורית של ספק הסינון."
+            color = MUTED_TEXT_COLOR
+        elif metadata.get("name"):
+            parts = [f"תעודה: {metadata['name']}"]
+            if metadata.get("expires"):
+                parts.append(f"בתוקף עד {metadata['expires']}")
+            if metadata.get("fingerprint"):
+                fingerprint = metadata["fingerprint"]
+                parts.append(f"SHA-256 {fingerprint[:16]}…{fingerprint[-8:]}")
+            if validation_message:
+                parts.append(validation_message)
+            text = " · ".join(parts)
+            color = ACCENT_SECONDARY_COLOR
+        else:
+            text = validation_message or "נבחר קובץ, אך פרטי התעודה עדיין לא אומתו."
+            color = MUTED_TEXT_COLOR
+        self.custom_ca_status.setText(text)
+        self.custom_ca_status.setStyleSheet(
+            f"color: {color}; font-size: 12px; font-weight: 700; background: transparent;"
+        )
+
+    def _refresh_summary(self):
+        mode = normalize_ssl_trust_mode(self._values.get("ssl_trust_mode"))
+        completed = bool(self._values.get("ssl_filter_setup_completed"))
+        if mode == SSL_MODE_CUSTOM_CA:
+            metadata = describe_custom_ca(self._values.get("ssl_custom_ca_path"))
+            cert_name = (
+                metadata.get("name")
+                or metadata.get("filename")
+                or "לא נבחרה תעודה"
+            )
+            self.mode_label.setText("תעודת סינון מיובאת")
+            self.status_label.setText(
+                "אימות HTTPS פעיל · החיבור עבר את הבדיקה האחרונה"
+                if completed
+                else "אימות HTTPS פעיל · מומלץ לבצע בדיקת חיבור"
+            )
+            details = [f"תעודה בשימוש: {cert_name}"]
+            if metadata.get("issuer") and metadata["issuer"] != metadata.get("name"):
+                details.append(f"מנפיק: {metadata['issuer']}")
+            if metadata.get("fingerprint"):
+                fingerprint = metadata["fingerprint"]
+                details.append(f"SHA-256 {fingerprint[:16]}…{fingerprint[-8:]}")
+            self.trust_detail_label.setText(" · ".join(details))
+            color = ACCENT_SECONDARY_COLOR if completed else MUTED_TEXT_COLOR
+        elif mode == SSL_MODE_LEGACY_INSECURE:
+            self.mode_label.setText("תאימות ישנה ללא אימות תעודות")
+            self.status_label.setText("אזהרה: אימות HTTPS כבוי באופן רחב")
+            self.trust_detail_label.setText(
+                "אין תעודת CA בשימוש. Smarti וכלי הרשת שמופעלים ממנו מקבלים "
+                "חיבורי HTTPS בלי לאמת את זהות השרת."
+            )
+            color = DANGER_COLOR
+        else:
+            self.mode_label.setText("מאגר האישורים של Windows")
+            self.status_label.setText(
+                "אימות HTTPS פעיל · החיבור עבר את הבדיקה האחרונה"
+                if completed
+                else "אימות HTTPS פעיל · האפשרות המומלצת לרשת מסוננת"
+            )
+            self.trust_detail_label.setText(
+                "מקור האמון: מאגר האישורים המקומי של Windows, כולל תעודות סינון "
+                "שמותקנות במערכת."
+            )
+            color = ACCENT_SECONDARY_COLOR
+        self.status_label.setStyleSheet(
+            f"color: {color}; font-size: 12px; font-weight: 800; background: transparent;"
+        )
+        self.trust_detail_label.setStyleSheet(
+            f"color: {MUTED_TEXT_COLOR}; font-size: 11px; background: transparent;"
+        )
+        self._update_expand_button()
+
+    def _update_expand_button(self):
+        self.configure_btn.setText(
+            "ביטול" if self._editor_expanded else "הגדר"
+        )
+        icon = themed_icon(
+            "message_collapse_arrow",
+            "agent_process_chevron",
+            "agent_tool_row_chevron",
+        )
+        if not icon.isNull():
+            self.configure_btn.setIcon(icon)
+            self.configure_btn.setIconSize(QSize(17, 17))
+
+    def toggle_editor(self):
+        self.set_expanded(not self._editor_expanded)
+
+    def open_setup(self):
+        """Compatibility entrypoint used by older callers and tests."""
+        self.set_expanded(True)
+
+    def set_expanded(self, expanded):
+        expanded = bool(expanded)
+        if expanded and not self._editor_expanded:
+            self._load_editor_from_values()
+        self._editor_expanded = expanded
+        self.editor.setVisible(expanded)
+        self._update_expand_button()
+        self.updateGeometry()
+
+    def is_expanded(self):
+        return self._editor_expanded
+
+    def _on_mode_changed(self, index):
+        index = max(0, min(int(index), self.mode_stack.count() - 1))
+        self.mode_stack.setCurrentIndex(index)
+        self._pending_test_completed = False
+        if self._current_mode() == SSL_MODE_LEGACY_INSECURE:
+            message = "במצב ללא אימות, הבדיקה יכולה לאשר קישוריות בלבד — לא את זהות השרת."
+        else:
+            message = "הבדיקה תאשר ש-Smarti מצליח לזהות את שרשרת האישורים של השרת."
+        self._set_test_status(message)
+
+    def _choose_custom_ca(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "בחירת תעודת שורש ציבורית של ספק הסינון",
+            os.path.expanduser("~"),
+            "Certificates (*.pem *.crt *.cer);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            managed_path = import_custom_ca(path, USER_DATA_DIR)
+            ok, message = validate_custom_ca(managed_path)
+            if not ok:
+                raise ValueError(message)
+            self.custom_ca_path.setText(managed_path)
+            self._show_certificate_selection(managed_path, message)
+            self._pending_test_completed = False
+        except Exception as exc:
+            self.custom_ca_path.clear()
+            self._pending_test_completed = False
+            self.custom_ca_status.setText(f"לא ניתן לייבא את התעודה: {exc}")
+            self.custom_ca_status.setStyleSheet(
+                f"color: {DANGER_COLOR}; font-size: 12px; font-weight: 800; background: transparent;"
+            )
+
+    def _pending_settings(self):
+        mode = self._current_mode()
+        return {
+            "ssl_trust_mode": mode,
+            "ssl_custom_ca_path": self.custom_ca_path.text().strip(),
+            "ssl_filter_setup_completed": bool(self._pending_test_completed),
+            "ssl_legacy_insecure_allowed_hosts": [],
+            "ssl_trust_migration_version": SSL_TRUST_MIGRATION_VERSION,
+            "allow_insecure_ssl_compat": mode == SSL_MODE_LEGACY_INSECURE,
+            "_ssl_data_dir": USER_DATA_DIR,
+        }
+
+    def _run_test(self):
+        # A non-None reference means one worker is still owned by the
+        # QApplication. We never call into a QThread after deleteLater().
+        if self._test_worker is not None:
+            return
+        settings = self._pending_settings()
+        if settings["ssl_trust_mode"] == SSL_MODE_CUSTOM_CA:
+            ok, message = validate_custom_ca(settings["ssl_custom_ca_path"])
+            self._show_certificate_selection(settings["ssl_custom_ca_path"], message)
+            if not ok:
+                return
+        if (
+            settings["ssl_trust_mode"] == SSL_MODE_LEGACY_INSECURE
+            and not self.compat_ack.isChecked()
+        ):
+            self._set_test_status(
+                "יש לאשר תחילה שהמשמעות של חיבור ללא אימות תעודות ברורה.",
+                "danger",
+            )
+            return
+        self.test_btn.setEnabled(False)
+        self.save_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(False)
+        self.configure_btn.setEnabled(False)
+        self._set_test_status("בודק את החיבור ברקע…", "accent")
+        worker = SSLTrustTestWorker(
+            settings,
+            "https://www.gstatic.com/generate_204",
+            parent=QApplication.instance(),
+        )
+        self._test_worker = worker
+        worker.finished_signal.connect(self._on_test_finished)
+        worker.finished.connect(lambda current=worker: self._release_test_worker(current))
+        worker.start()
+
+    def _release_test_worker(self, worker):
+        if self._test_worker is worker:
+            self._test_worker = None
+        worker.deleteLater()
+
+    def _on_test_finished(self, ok, result, error):
+        self.test_btn.setEnabled(True)
+        self.save_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(True)
+        self.configure_btn.setEnabled(True)
+        if not ok:
+            self._pending_test_completed = False
+            self._set_test_status(
+                "הבדיקה נכשלה ולא בוצע מעבר אוטומטי למצב פחות בטוח: "
+                + str(error or "שגיאה לא ידועה"),
+                "danger",
+            )
+            return
+        verified = bool((result or {}).get("verified"))
+        self._pending_test_completed = verified
+        if verified:
+            self._set_test_status(
+                f"החיבור אומת בהצלחה מול {(result or {}).get('host', '')} "
+                f"(HTTP {(result or {}).get('status_code', '')}).",
+                "accent",
+            )
+        else:
+            self._set_test_status(
+                "הקישוריות הצליחה, אך זהות השרת לא אומתה בגלל הבחירה במצב ללא אימות.",
+                "danger",
+            )
+
+    def _cancel_editor(self):
+        self._load_editor_from_values()
+        self.set_expanded(False)
+
+    def _save_editor(self):
+        values = self._pending_settings()
+        mode = values["ssl_trust_mode"]
+        if mode == SSL_MODE_CUSTOM_CA:
+            ok, message = validate_custom_ca(values["ssl_custom_ca_path"])
+            self._show_certificate_selection(values["ssl_custom_ca_path"], message)
+            if not ok:
+                return
+        if mode == SSL_MODE_LEGACY_INSECURE:
+            if not self.compat_ack.isChecked():
+                QMessageBox.warning(
+                    self,
+                    "נדרש אישור",
+                    "יש לאשר שהמשמעות של כיבוי אימות תעודות HTTPS ברורה.",
+                )
+                return
+            answer = QMessageBox.question(
+                self,
+                "הפעלת תאימות ללא אימות תעודות",
+                "הבחירה מכבה באופן רחב את אימות תעודות HTTPS ב-Smarti ובכלים "
+                "שמופעלים ממנו. להחיל את המצב הפחות בטוח?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.apply_values(values)
+        self.set_expanded(False)
+
+    def settings_values(self):
+        return copy.deepcopy(self._values)
+
+    def ssl_snapshot(self):
+        snapshot = self.settings_values()
+        snapshot["_ssl_data_dir"] = USER_DATA_DIR
+        snapshot["_ssl_legacy_insecure_session_enabled"] = (
+            normalize_ssl_trust_mode(snapshot.get("ssl_trust_mode"))
+            == SSL_MODE_LEGACY_INSECURE
+        )
+        snapshot["_ssl_last_certificate_error"] = str(
+            getattr(self.core, "_ssl_last_certificate_error", "") or ""
+        )
+        return snapshot
+
+    def apply_values(self, values, *, legacy_session_enabled=False, emit=True):
+        values = values if isinstance(values, dict) else {}
+        mode = normalize_ssl_trust_mode(values.get("ssl_trust_mode"))
+        self._values.update({
+            "ssl_trust_mode": mode,
+            "ssl_custom_ca_path": str(values.get("ssl_custom_ca_path") or "").strip(),
+            "ssl_filter_setup_completed": bool(values.get("ssl_filter_setup_completed", False)),
+            "ssl_legacy_insecure_allowed_hosts": [],
+            "ssl_trust_migration_version": SSL_TRUST_MIGRATION_VERSION,
+            "allow_insecure_ssl_compat": mode == SSL_MODE_LEGACY_INSECURE,
+        })
+        self.core._ssl_legacy_insecure_session_enabled = (
+            mode == SSL_MODE_LEGACY_INSECURE
+        )
+        self._pending_test_completed = bool(
+            self._values.get("ssl_filter_setup_completed", False)
+        )
+        self._refresh_summary()
+        if emit:
+            self.settingsChanged.emit()
+
+    def apply_theme(self):
+        self.setStyleSheet(
+            f"""
+            QFrame#SSLTrustSettingsCard {{
+                background: {GLASS_COLOR};
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 18px;
+            }}
+            QFrame#SSLTrustInlineEditor {{
+                background: {PANEL_ELEVATED_COLOR};
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 16px;
+            }}
+            QFrame#SSLTrustModePage, QFrame#SSLTrustTestCard {{
+                background: {GLASS_STRONG_COLOR};
+                border: 1px solid {SOFT_LINE_COLOR};
+                border-radius: 14px;
+            }}
+            """
+        )
+        self.current_badge.setStyleSheet(
+            f"color: {ACCENT_SECONDARY_COLOR}; background: {ACCENT_TINT}; "
+            "border-radius: 9px; padding: 4px 8px; font-size: 10px; font-weight: 900;"
+        )
+        self.mode_label.setStyleSheet(
+            f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 900; background: transparent;"
+        )
+        for label in self.findChildren(QLabel):
+            if label.property("smartiSSLModeTitle"):
+                label.setStyleSheet(
+                    f"color: {TEXT_COLOR}; font-size: 13px; font-weight: 900; background: transparent;"
+                )
+            elif label.property("smartiSSLModeBody"):
+                label.setStyleSheet(
+                    f"color: {MUTED_TEXT_COLOR}; font-size: 12px; background: transparent;"
+                )
+            elif label.property("smartiSSLSafeBadge"):
+                label.setStyleSheet(
+                    f"color: {ACCENT_SECONDARY_COLOR}; background: {ACCENT_TINT}; "
+                    "border-radius: 10px; padding: 7px 9px; font-size: 11px; font-weight: 800;"
+                )
+            elif label.property("smartiSSLWarning"):
+                label.setStyleSheet(
+                    f"color: {DANGER_COLOR}; background: rgba(240,90,110,0.10); "
+                    "border-radius: 10px; padding: 8px 9px; font-size: 11px; font-weight: 800;"
+                )
+        editor_title = self.findChild(QLabel, "SSLTrustEditorTitle")
+        if editor_title:
+            editor_title.setStyleSheet(
+                f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 900; background: transparent;"
+            )
+        editor_help = self.findChild(QLabel, "SSLTrustEditorHelp")
+        if editor_help:
+            editor_help.setStyleSheet(
+                f"color: {MUTED_TEXT_COLOR}; font-size: 12px; background: transparent;"
+            )
+        self.test_title.setStyleSheet(
+            f"color: {TEXT_COLOR}; font-size: 13px; font-weight: 900; background: transparent;"
+        )
+        self.test_explanation.setStyleSheet(
+            f"color: {MUTED_TEXT_COLOR}; font-size: 11px; background: transparent;"
+        )
+        self._apply_test_status_style()
+        self.test_endpoint.setStyleSheet(
+            f"color: {TEXT_COLOR}; background: {FIELD_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
+            "border-radius: 10px; padding: 6px 8px; font-size: 11px;"
+        )
+        self.custom_ca_path.setStyleSheet(LINE_EDIT_CSS)
+        self.configure_btn.setStyleSheet(doctor_action_button_css(primary=False))
+        self.browse_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        self.test_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        self.cancel_btn.setStyleSheet(doctor_action_button_css(primary=False))
+        self.save_btn.setStyleSheet(doctor_action_button_css(primary=True))
+        self.compat_ack.setStyleSheet(CHECKBOX_CSS)
+        self.mode_control.apply_theme()
+        self._refresh_summary()
+
+
 class SettingsPage(QWidget):
     def __init__(self, core, main_window):
         super().__init__(getattr(main_window, "stacked_widget", None))
@@ -3904,9 +4550,7 @@ class SettingsPage(QWidget):
         self.voice_beep_cb.setChecked(bool(self.core.settings.get("voice_beep_enabled", True)))
         self.voice_beep_cb.setStyleSheet(CHECKBOX_CSS)
 
-        self.insecure_ssl_cb = SmartiCheckBox("תאימות SSL לכלי MCP")
-        self.insecure_ssl_cb.setChecked(self.core.settings.get("allow_insecure_ssl_compat", True))
-        self.insecure_ssl_cb.setStyleSheet(CHECKBOX_CSS)
+        self.ssl_trust_card = SSLTrustSettingsCard(self.core)
         self.cloud_upload_cb = SmartiCheckBox("אישור לפני שליחת נתונים למודל חיצוני")
         self.cloud_upload_cb.setChecked(self.core.settings.get("require_approval_for_cloud_upload", True))
         self.cloud_upload_cb.setStyleSheet(CHECKBOX_CSS)
@@ -4402,7 +5046,16 @@ class SettingsPage(QWidget):
         app_settings.addStretch()
 
         self._add_internal_back(advanced, "מתקדם ומפתחים")
-        self._add_checkbox(self.insecure_ssl_cb, advanced, "הגדרת תאימות SSL שמרפה אימות תעודות עבור סביבות שבהן חיבורי HTTPS נחסמים או מוחלפים, למשל בסינוני רשת. פעיל כברירת מחדל כדי לצמצם תקלות חיבור בסביבות מסוננות.", keywords="ssl certificate verify insecure network filter proxy", advanced=True)
+        self._add_field(
+            "אמון HTTPS ורשת מסוננת",
+            self.ssl_trust_card,
+            advanced,
+            "המצב הפעיל ומקור האמון מוצגים כאן תמיד. אפשר להשתמש במאגר Windows, לייבא "
+            "תעודת שורש ציבורית של ספק הסינון, או לבחור במפורש תאימות ישנה ללא אימות תעודות.",
+            keywords="ssl tls certificate ca windows trust network filter proxy תעודה סינון רשת",
+            advanced=True,
+            info=True,
+        )
         self._add_checkbox(self.prevent_sleep_cb, advanced, "משאיר את Windows ער בזמן שסמארטי מבצע משימה פעילה, ומשחרר את הבקשה מיד בסיום או בביטול. המסך עדיין יכול להיכבות.", keywords="prevent sleep keep awake long running task hours windows", advanced=True)
         self._add_field("זמן המתנה לפקודות מחשב (שניות)", self.cmd_timeout, advanced, "משך הזמן המקסימלי שסמארטי ימתין לפקודת מערכת לפני עצירה.", keywords="command timeout shell seconds", advanced=True)
         self._add_field("זמן המתנה לכלים מותאמים אישית (שניות)", self.tool_timeout, advanced, "משך הזמן המקסימלי להרצת כלי מותאם אישית לפני שסמארטי מפסיק אותו.", keywords="custom tool timeout seconds", advanced=True)
@@ -4547,7 +5200,7 @@ class SettingsPage(QWidget):
             text,
             self.api_key_edit.secret(),
             self.core.settings.get("local_server_url", ""),
-            self.core.settings.get("allow_insecure_ssl_compat", True)
+            self._ssl_settings_from_ui(),
         )
         self.fetch_worker.finished_signal.connect(lambda models: self.populate_models(models, text))
         self.fetch_worker.start()
@@ -4640,6 +5293,16 @@ class SettingsPage(QWidget):
             raise ValueError("חסרים כתובת אימייל או סיסמת אפליקציה.")
         return cfg
 
+    def _ssl_settings_from_ui(self):
+        if hasattr(self, "ssl_trust_card"):
+            return self.ssl_trust_card.ssl_snapshot()
+        snapshot = copy.deepcopy(self.core.settings or {})
+        snapshot["_ssl_data_dir"] = USER_DATA_DIR
+        snapshot["_ssl_legacy_insecure_session_enabled"] = bool(
+            getattr(self.core, "_ssl_legacy_insecure_session_enabled", False)
+        )
+        return snapshot
+
     def test_email_connection(self):
         worker = getattr(self, "email_test_worker", None)
         if worker and worker.isRunning():
@@ -4652,7 +5315,7 @@ class SettingsPage(QWidget):
         self.setFocus(Qt.FocusReason.OtherFocusReason)
         try:
             email_cfg = self._email_test_config_from_ui()
-            allow_insecure_ssl = bool(self.insecure_ssl_cb.isChecked() if hasattr(self, "insecure_ssl_cb") else self.core.settings.get("allow_insecure_ssl_compat", True))
+            ssl_settings = self._ssl_settings_from_ui()
         except Exception as exc:
             if hasattr(self, "email_test_btn"):
                 self.email_test_btn.setEnabled(True)
@@ -4662,7 +5325,7 @@ class SettingsPage(QWidget):
                     f"color: {DANGER_COLOR}; font-size: 12px; background: transparent;"
                 )
             return
-        worker = EmailConnectionTestWorker(email_cfg, allow_insecure_ssl)
+        worker = EmailConnectionTestWorker(email_cfg, ssl_settings)
         self.email_test_worker = worker
         worker.finished_signal.connect(
             self._on_email_test_finished_current,
@@ -4706,12 +5369,13 @@ class SettingsPage(QWidget):
             self.tool_search_catalog_cb,
             self.web_canvas_cb, self.web_canvas_remote_images_cb,
             self.update_auto_cb,
-            self.tts_cb, self.tts_voice_cb, self.insecure_ssl_cb, self.cloud_upload_cb,
+            self.tts_cb, self.tts_voice_cb, self.cloud_upload_cb,
             self.write_outside_dirs_approval_cb, self.mcp_pin_cb, self.prevent_sleep_cb,
             self.email_imap_ssl_cb, self.email_smtp_ssl_cb, self.email_smtp_starttls_cb,
             self.voice_dynamic_energy_cb, self.voice_beep_cb
         ]:
             cb.stateChanged.connect(lambda _=None: self._schedule_autosave())
+        self.ssl_trust_card.settingsChanged.connect(self._schedule_autosave)
         self.custom_permissions_cb.stateChanged.connect(lambda _=None: self.on_custom_permissions_change())
 
         self.api_key_edit.secretEdited.connect(self._on_api_key_edited)
@@ -4796,7 +5460,7 @@ class SettingsPage(QWidget):
             provider,
             key,
             self.local_url.text().strip() or self.core.settings.get("local_server_url", ""),
-            self.insecure_ssl_cb.isChecked() if hasattr(self, "insecure_ssl_cb") else self.core.settings.get("allow_insecure_ssl_compat", True),
+            self._ssl_settings_from_ui(),
         )
         self.api_key_validation_worker = worker
         worker.finished_signal.connect(lambda p, k, ok, msg, models, gen=generation: self._on_api_key_validation_finished(gen, p, k, ok, msg, models))
@@ -4954,6 +5618,8 @@ class SettingsPage(QWidget):
             self._update_provider_key_help()
         if hasattr(self, "tavily_key_help_link"):
             self._set_external_link(self.tavily_key_help_link, provider_help_url(secret_key="tavily_api_key"), "קבל מפתח")
+        if hasattr(self, "ssl_trust_card"):
+            self.ssl_trust_card.apply_theme()
         self._refresh_developer_log_buttons()
 
     def _apply_profile_to_widgets(self, profile_key):
@@ -5115,7 +5781,16 @@ class SettingsPage(QWidget):
         self.core.settings["require_approval_for_cloud_upload"] = self.cloud_upload_cb.isChecked()
         self.core.settings["write_outside_allowed_dirs_requires_approval"] = self.write_outside_dirs_approval_cb.isChecked()
         self.core.settings["mcp_require_pinned_versions"] = self.mcp_pin_cb.isChecked()
-        self.core.settings["allow_insecure_ssl_compat"] = self.insecure_ssl_cb.isChecked()
+        ssl_values = self.ssl_trust_card.settings_values()
+        for key in (
+            "ssl_trust_mode",
+            "ssl_custom_ca_path",
+            "ssl_filter_setup_completed",
+            "ssl_legacy_insecure_allowed_hosts",
+            "ssl_trust_migration_version",
+            "allow_insecure_ssl_compat",
+        ):
+            self.core.settings[key] = copy.deepcopy(ssl_values[key])
         self.core.settings["prevent_sleep_during_active_task"] = self.prevent_sleep_cb.isChecked()
         self.core.settings["sandbox_enabled"] = self.sandbox_cb.isChecked()
         self.core.settings["sandbox_root_dir"] = self.sandbox_root_picker.path() or OUTPUTS_DIR
@@ -5153,7 +5828,15 @@ class SettingsPage(QWidget):
             self._set_save_status("idle")
             return
         self.core._save_settings()
-        model_reload_keys = {"api_mode", "local_server_url"} | model_provider_secret_keys()
+        ssl_reload_keys = {
+            "ssl_trust_mode",
+            "ssl_custom_ca_path",
+            "ssl_filter_setup_completed",
+            "ssl_legacy_insecure_allowed_hosts",
+            "ssl_trust_migration_version",
+            "allow_insecure_ssl_compat",
+        }
+        model_reload_keys = {"api_mode", "local_server_url"} | model_provider_secret_keys() | ssl_reload_keys
         needs_model_reload = any(key in model_reload_keys or key.startswith("selected_") for key in changed)
         needs_canvas_prompt_refresh = any(
             key in {"enable_visual_surfaces", "enable_web_canvas", "enable_canvas_remote_images"}
@@ -5161,9 +5844,11 @@ class SettingsPage(QWidget):
         )
         needs_mcp_refresh = any(key in {
             "enable_mcp_clawhub", "enable_skills_beta", "mcp_require_pinned_versions",
-            "mcp_allowed_directories", "allow_insecure_ssl_compat",
+            "mcp_allowed_directories",
+            *ssl_reload_keys,
         } for key in changed)
         if needs_mcp_refresh:
+            self.core._sync_ssl_compat_env()
             self.core._sync_trusted_mcp_packages()
             self.core._ensure_mcp_config()
         if needs_model_reload or needs_canvas_prompt_refresh:

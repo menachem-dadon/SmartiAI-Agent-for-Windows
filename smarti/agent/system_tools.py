@@ -52,7 +52,7 @@ class SystemToolsMixin:
         except Exception as first_error:
             prepared = requests.Request("GET", url, params=params, headers=headers).prepare()
             curl_cmd = ["curl.exe", "-L", "-sS", "--max-time", str(int(timeout)), prepared.url]
-            if self._allow_insecure_ssl():
+            if self._allow_insecure_ssl(url):
                 curl_cmd[1:1] = ["-k"]
             user_agent = headers.get("User-Agent") or headers.get("user-agent")
             if user_agent:
@@ -251,16 +251,12 @@ class SystemToolsMixin:
                 return f"ERROR: Failed to launch GUI app: {e}"
         if re.match(r'(?i)^\s*curl\s+', cmd):
             cmd = re.sub(r'(?i)^\s*curl\s+', 'curl.exe ', cmd, count=1)
-        if self._allow_insecure_ssl() and re.match(r'(?i)^\s*curl(?:\.exe)?\s+', cmd) and not re.search(r'(?i)(^|\s)(-k|--insecure)(\s|$)', cmd):
-            cmd = re.sub(r'(?i)^\s*curl(?:\.exe)?\s+', 'curl.exe -k ', cmd, count=1)
         try:
             timeout = max(5, int(timeout_seconds)) if timeout_seconds not in (None, "") else self._timeout("command_timeout_seconds", 60)
         except Exception:
             timeout = self._timeout("command_timeout_seconds", 60)
         try:
             ps_prefix = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $OutputEncoding = [System.Text.UTF8Encoding]::new(); "
-            if self._allow_insecure_ssl():
-                ps_prefix += "[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }; "
             ps_cmd = ps_prefix + cmd
             completed = self._run_cancelable_subprocess(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd], cwd=working_dir, text=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=WIN_CREATE_NO_WINDOW)
             output, err = (completed.stdout or "").strip(), (completed.stderr or "").strip()
@@ -436,29 +432,9 @@ def main():
         print("MCP_ERROR: Node.js (npx) is not installed.")
         return 1
 
+    # The parent process supplies one verified CA bundle for Python, Node,
+    # npm/pnpm/Yarn, Git, pip/uv, and curl. Never recreate broad bypasses here.
     env = os.environ.copy()
-    if env.get("SMARTI_ALLOW_INSECURE_SSL") == "1":
-        env["PYTHONHTTPSVERIFY"] = "0"
-        env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
-        env["npm_config_strict_ssl"] = "false"
-        env["GIT_SSL_NO_VERIFY"] = "true"
-        env["CURL_SSL_NO_REVOKE"] = "1"
-        env["YARN_ENABLE_STRICT_SSL"] = "false"
-        env["PNPM_CONFIG_STRICT_SSL"] = "false"
-        env["PIP_TRUSTED_HOST"] = "pypi.org files.pythonhosted.org pypi.python.org"
-        env["UV_SYSTEM_CERTS"] = "true"
-        env["UV_NATIVE_TLS"] = "true"
-    else:
-        env.pop("PYTHONHTTPSVERIFY", None)
-        env.pop("NODE_TLS_REJECT_UNAUTHORIZED", None)
-        env.pop("npm_config_strict_ssl", None)
-        env.pop("GIT_SSL_NO_VERIFY", None)
-        env.pop("CURL_SSL_NO_REVOKE", None)
-        env.pop("YARN_ENABLE_STRICT_SSL", None)
-        env.pop("PNPM_CONFIG_STRICT_SSL", None)
-        env.pop("PIP_TRUSTED_HOST", None)
-        env.pop("UV_SYSTEM_CERTS", None)
-        env.pop("UV_NATIVE_TLS", None)
 
     try:
         server_args = json.loads(env.get("MCP_SERVER_ARGS", "[]"))
@@ -630,7 +606,6 @@ if __name__ == "__main__":
         pkg_name = self._resolve_mcp_package(pkg_name)
         wrapper_path = self._write_mcp_wrapper(pkg_name)
         env = self._mcp_env()
-        env["SMARTI_ALLOW_INSECURE_SSL"] = "1" if self._allow_insecure_ssl() else "0"
         env["MCP_SERVER_ARGS"] = json.dumps(self._mcp_launch_args(pkg_name), ensure_ascii=False)
         env["MCP_PROTOCOL_VERSION"] = str(self.settings.get("mcp_protocol_version", "2025-11-25") or "2025-11-25")
         env["MCP_ARGS"] = json_args or "{}"

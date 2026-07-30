@@ -370,15 +370,9 @@ class ExtensionsMixin:
         if kind == "uv":
             if not self._binary_available("uv"):
                 return "", "ERROR: uv is required for this Skill install step but is not installed or not in PATH."
-            ssl_flags = "--system-certs"
-            if self._allow_insecure_ssl():
-                ssl_flags += " --allow-insecure-host pypi.org --allow-insecure-host files.pythonhosted.org --allow-insecure-host pypi.python.org"
-            return f"uv {ssl_flags} tool install {package}", None
+            return f"uv --system-certs tool install {package}", None
         if kind in {"pip", "python"}:
-            ssl_flags = ""
-            if self._allow_insecure_ssl():
-                ssl_flags = " --trusted-host pypi.org --trusted-host files.pythonhosted.org --trusted-host pypi.python.org"
-            return f"{json.dumps(self._python_executable())} -m pip install{ssl_flags} {package}", None
+            return f"{json.dumps(self._python_executable())} -m pip install {package}", None
         return "", f"ERROR: Unsupported Skill install method: {kind or 'unknown'}"
 
     def install_skill_requirements(self, name, reason=""):

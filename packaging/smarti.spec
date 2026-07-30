@@ -13,7 +13,7 @@ datas = [
     (str(repo_root / "sitecustomize.py"), "."),
 ]
 
-for package in ("certifi", "keyring"):
+for package in ("certifi", "keyring", "truststore"):
     try:
         datas += collect_data_files(package)
     except Exception:
@@ -40,6 +40,7 @@ for package in (
     "send2trash",
     "selenium",
     "speech_recognition",
+    "truststore",
     "uiautomation",
     "windows_toasts",
     "winrt",

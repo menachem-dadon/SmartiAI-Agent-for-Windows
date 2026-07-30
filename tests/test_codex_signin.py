@@ -526,6 +526,9 @@ class LongTaskSettingsTests(unittest.TestCase):
         loaded = {
             "settings_schema_version": 2,
             "long_task_defaults_version": 1,
+            "ssl_trust_migration_version": 1,
+            "ssl_trust_mode": "system",
+            "allow_insecure_ssl_compat": False,
             "max_agent_loops": 15,
             "max_total_task_seconds": 3600,
             "preserve_current_task_tool_context": True,

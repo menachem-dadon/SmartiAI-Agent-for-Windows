@@ -30,8 +30,8 @@ class BrowserRuntimeMixin:
             command_line = (completed.stdout or "").lower()
             if not command_line:
                 return True
-            has_insecure_flag = "--ignore-certificate-errors" in command_line
-            return has_insecure_flag == self._allow_insecure_ssl()
+            bypass_present = "--ignore-certificate-errors" in command_line
+            return bypass_present == self._allow_insecure_ssl()
         except Exception:
             return True
 

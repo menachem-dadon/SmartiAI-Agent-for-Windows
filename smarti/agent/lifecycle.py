@@ -11,6 +11,13 @@ class LifecycleMixin:
         self.settings_manager = SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
         self.settings = self._load_settings()
         self._secrets_pending_deletion = set()
+        # Compatibility attribute retained for extensions written against the
+        # former session-scoped design. The selected mode is now authoritative.
+        self._ssl_legacy_insecure_session_enabled = (
+            normalize_ssl_trust_mode(self.settings.get("ssl_trust_mode"))
+            == SSL_MODE_LEGACY_INSECURE
+        )
+        self._ssl_last_certificate_error = ""
         _CURRENT_SETTINGS_REF["settings"] = self.settings
         self.chat_store = ChatSessionStore(CHAT_HISTORY_FILE)
         self.chat_store.ensure_active_session()

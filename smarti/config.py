@@ -1266,7 +1266,15 @@ DEFAULT_SETTINGS = {
     "mcp_package_configs": {},
     "mcp_package_aliases": {},
     "max_concurrent_agents": 1,
-    "allow_insecure_ssl_compat": True,
+    "ssl_trust_mode": SSL_MODE_SYSTEM,
+    "ssl_custom_ca_path": "",
+    "ssl_filter_setup_completed": False,
+    "ssl_legacy_insecure_allowed_hosts": [],
+    "ssl_trust_migration_version": SSL_TRUST_MIGRATION_VERSION,
+    # Migration alias only. Runtime trust decisions use ssl_trust_mode and the
+    # The legacy host list remains only for backward-compatible settings reads;
+    # the explicit compatibility mode is now global and the UI always clears it.
+    "allow_insecure_ssl_compat": False,
     "command_timeout_seconds": 60,
     "tool_timeout_seconds": 120,
     "mcp_timeout_seconds": 60,

@@ -50,7 +50,27 @@ from pathlib import Path
 import urllib3
 
 from .runtime import SMARTI_RUNTIME
-from .ssl_compat import apply_insecure_ssl_compat
+from .ssl_compat import (
+    SSL_MODE_CUSTOM_CA,
+    SSL_MODE_LEGACY_INSECURE,
+    SSL_MODE_SYSTEM,
+    SSL_TRUST_MIGRATION_VERSION,
+    SSL_TRUST_MODES,
+    SSLTrustConfigurationError,
+    apply_insecure_ssl_compat,
+    apply_ssl_trust_environment,
+    configure_ssl_from_environment,
+    create_ssl_context,
+    describe_custom_ca,
+    import_custom_ca,
+    legacy_insecure_for_url,
+    normalize_legacy_hosts,
+    normalize_ssl_trust_mode,
+    resolve_ssl_trust,
+    ssl_request_kwargs as _resolved_ssl_request_kwargs,
+    test_https_trust,
+    validate_custom_ca,
+)
 from .api_errors import analyze_api_error, api_validation_message
 
 LITELLM_INSTALLED = importlib.util.find_spec("litellm") is not None
@@ -782,14 +802,24 @@ def _models_from_response(provider, payload):
         return _normalize_model_items(provider, payload.get("models", []))
     return _normalize_model_items(provider, payload.get("data", []))
 
-def ssl_request_kwargs(allow_insecure_ssl=False):
-    if allow_insecure_ssl:
-        try:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        except Exception:
-            pass
-        return {"verify": False}
-    return {}
+def _coerce_ssl_settings(ssl_settings=None):
+    if isinstance(ssl_settings, dict):
+        return ssl_settings
+    # A legacy boolean is migration input only. It must never re-enable the
+    # historical global verification bypass.
+    return {
+        "ssl_trust_mode": SSL_MODE_SYSTEM,
+        "allow_insecure_ssl_compat": bool(ssl_settings),
+    }
+
+
+def ssl_request_kwargs(ssl_settings=None, *, url="", allow_legacy=True, data_dir=None):
+    return _resolved_ssl_request_kwargs(
+        _coerce_ssl_settings(ssl_settings),
+        url=url,
+        allow_legacy=allow_legacy,
+        data_dir=data_dir,
+    )
 
 def _bearer_headers(api_key):
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -815,16 +845,16 @@ def _validation_url_for_provider(provider, local_url=""):
         return f"{base_url}{config['validation_path']}"
     return _models_url_for_provider(provider, local_url)
 
-def fetch_text_models_for_provider(provider, api_key="", local_url="", allow_insecure_ssl=False, validate_key=False):
+def fetch_text_models_for_provider(provider, api_key="", local_url="", ssl_settings=None, validate_key=False):
     provider = normalize_provider_name(provider)
     api_key = sanitize_secret_value(api_key)
-    kwargs = ssl_request_kwargs(allow_insecure_ssl)
     headers = {}
     try:
         if provider == "openai_codex_signin":
             return provider_fallback_models(provider), False, "נדרשת התחברות עם ChatGPT / Codex."
         if provider == "local":
             url = _models_url_for_provider(provider, local_url)
+            kwargs = ssl_request_kwargs(ssl_settings, url=url)
             response = requests.get(url, timeout=5, **kwargs)
             if response.status_code == 200:
                 return _models_from_response(provider, response.json()), True, ""
@@ -842,8 +872,10 @@ def fetch_text_models_for_provider(provider, api_key="", local_url="", allow_ins
             headers = _bearer_headers(api_key)
 
         if validate_key:
+            validation_url = _validation_url_for_provider(provider, local_url)
+            kwargs = ssl_request_kwargs(ssl_settings, url=validation_url)
             validation_response = requests.get(
-                _validation_url_for_provider(provider, local_url),
+                validation_url,
                 headers=headers,
                 timeout=12,
                 **kwargs,
@@ -855,8 +887,10 @@ def fetch_text_models_for_provider(provider, api_key="", local_url="", allow_ins
                 analysis = analyze_api_error(provider, response=validation_response)
                 return [], False, api_validation_message(analysis)
             if provider_config(provider).get("validation_path"):
+                models_url = _models_url_for_provider(provider, local_url)
+                kwargs = ssl_request_kwargs(ssl_settings, url=models_url)
                 model_response = requests.get(
-                    _models_url_for_provider(provider, local_url),
+                    models_url,
                     headers=headers,
                     timeout=12,
                     **kwargs,
@@ -866,7 +900,9 @@ def fetch_text_models_for_provider(provider, api_key="", local_url="", allow_ins
             models = _models_from_response(provider, validation_response.json())
             return models or provider_fallback_models(provider), True, ""
 
-        response = requests.get(_models_url_for_provider(provider, local_url), headers=headers, timeout=10, **kwargs)
+        models_url = _models_url_for_provider(provider, local_url)
+        kwargs = ssl_request_kwargs(ssl_settings, url=models_url)
+        response = requests.get(models_url, headers=headers, timeout=10, **kwargs)
         if response.status_code == 200:
             models = _models_from_response(provider, response.json())
             return models or provider_fallback_models(provider), True, ""

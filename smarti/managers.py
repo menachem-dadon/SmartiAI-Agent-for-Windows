@@ -52,6 +52,13 @@ class SettingsManager:
         settings["allowed_write_dirs"] = [settings.get("default_output_dir") or OUTPUTS_DIR]
         settings.setdefault("background_jobs", settings.get("background_tasks", []))
         settings.setdefault("background_tasks", settings.get("background_jobs", []))
+        mode = normalize_ssl_trust_mode(settings.get("ssl_trust_mode"))
+        settings["ssl_trust_mode"] = mode
+        settings["ssl_custom_ca_path"] = str(settings.get("ssl_custom_ca_path") or "").strip()
+        settings["ssl_legacy_insecure_allowed_hosts"] = normalize_legacy_hosts(
+            settings.get("ssl_legacy_insecure_allowed_hosts", [])
+        )
+        settings["allow_insecure_ssl_compat"] = mode == SSL_MODE_LEGACY_INSECURE
         settings.setdefault("settings_schema_version", SETTINGS_SCHEMA_VERSION)
         return settings
 
@@ -74,6 +81,48 @@ class SettingsManager:
         settings["long_task_defaults_version"] = 1
         return settings, True
 
+    @staticmethod
+    def migrate_ssl_trust(settings):
+        """Migrate the old global bypass to verified Windows trust.
+
+        The old boolean was enabled by default, so it cannot prove that a user
+        deliberately accepted an insecure mode.  Existing installations
+        therefore move to the system store and may opt into a narrow emergency
+        host list explicitly through the new UI.
+        """
+        settings = copy.deepcopy(settings or {})
+        try:
+            version = int(settings.get("ssl_trust_migration_version", 0) or 0)
+        except Exception:
+            version = 0
+        changed = False
+        if version < SSL_TRUST_MIGRATION_VERSION:
+            old_insecure = bool(settings.get("allow_insecure_ssl_compat", False))
+            explicit_mode = str(settings.get("ssl_trust_mode") or "").strip().lower()
+            if explicit_mode not in SSL_TRUST_MODES:
+                settings["ssl_trust_mode"] = SSL_MODE_SYSTEM
+            else:
+                settings["ssl_trust_mode"] = explicit_mode
+            settings.setdefault("ssl_custom_ca_path", "")
+            settings.setdefault("ssl_filter_setup_completed", False)
+            settings.setdefault("ssl_legacy_insecure_allowed_hosts", [])
+            settings["ssl_migrated_from_global_insecure"] = old_insecure
+            settings["ssl_trust_migration_version"] = SSL_TRUST_MIGRATION_VERSION
+            changed = True
+        mode = normalize_ssl_trust_mode(settings.get("ssl_trust_mode"))
+        hosts = normalize_legacy_hosts(settings.get("ssl_legacy_insecure_allowed_hosts", []))
+        if settings.get("ssl_trust_mode") != mode:
+            settings["ssl_trust_mode"] = mode
+            changed = True
+        if settings.get("ssl_legacy_insecure_allowed_hosts", []) != hosts:
+            settings["ssl_legacy_insecure_allowed_hosts"] = hosts
+            changed = True
+        alias = mode == SSL_MODE_LEGACY_INSECURE
+        if bool(settings.get("allow_insecure_ssl_compat", False)) != alias:
+            settings["allow_insecure_ssl_compat"] = alias
+            changed = True
+        return settings, changed
+
     def migrate_or_merge(self, loaded):
         loaded = self.decrypt_loaded_secrets(copy.deepcopy(loaded or {}))
         if int(loaded.get("settings_schema_version", 0) or 0) != SETTINGS_SCHEMA_VERSION:
@@ -92,6 +141,7 @@ class SettingsManager:
                 "dangerous_trust_reset": True
             }
             return self.sync_legacy_aliases(migrated), True
+        loaded, ssl_trust_changed = self.migrate_ssl_trust(loaded)
         loaded, long_task_changed = self.migrate_long_task_defaults(loaded)
         context_limits_changed = False
         for key in self.DEPRECATED_CONTEXT_LIMIT_KEYS:
@@ -100,7 +150,7 @@ class SettingsManager:
                 context_limits_changed = True
         return (
             self.sync_legacy_aliases(deep_merge_defaults(self.defaults, loaded)),
-            bool(long_task_changed or context_limits_changed),
+            bool(ssl_trust_changed or long_task_changed or context_limits_changed),
         )
 
 

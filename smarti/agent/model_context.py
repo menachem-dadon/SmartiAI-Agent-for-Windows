@@ -22,15 +22,21 @@ class ModelContextMixin:
                 logging.error("OpenAI Python package is missing; install openai to use OpenAI-compatible providers.")
                 return
             url = provider_base_url(self.mode, self.settings.get("local_server_url", "http://localhost:1234/v1"))
+            ssl_url = url or get_url(URL_OPENAI_MODELS)
             key = "lm-studio" if self.mode == "local" else self.settings.get(provider_secret_key(self.mode), "")
             self._universal_client_key = key if key else "dummy"
             client_kwargs = {"base_url": url, "api_key": key if key else "dummy", "timeout": 120.0}
-            if self._allow_insecure_ssl() and (self.mode != "local" or str(url or "").lower().startswith("https://")):
+            if str(ssl_url or "").lower().startswith("https://"):
                 try:
                     import httpx
-                    client_kwargs["http_client"] = httpx.Client(verify=False, timeout=120.0)
-                except Exception:
-                    pass
+                    client_kwargs["http_client"] = httpx.Client(
+                        verify=self._ssl_context(ssl_url),
+                        timeout=120.0,
+                    )
+                except SSLTrustConfigurationError as exc:
+                    self.universal_client = None
+                    logging.error("OpenAI-compatible TLS trust configuration is invalid: %s", exc)
+                    return
             self.universal_client = OpenAI(**client_kwargs)
             self.universal_history = [{"role": "system", "content": self.system_prompt}]
         elif self.mode == "anthropic":
@@ -797,7 +803,7 @@ class ModelContextMixin:
             provider,
             api_key,
             self.settings.get("local_server_url", "http://localhost:1234/v1"),
-            self._allow_insecure_ssl(),
+            self._ssl_settings_snapshot(),
             validate_key=True,
         )
         return bool(ok), message or ""
@@ -1803,19 +1809,22 @@ CWD: {current_dir}
             request_mode,
             self.settings.get("local_server_url", "http://localhost:1234/v1"),
         )
+        ssl_url = base_url or get_url(URL_OPENAI_MODELS)
         client_kwargs = {
             "base_url": base_url,
             "api_key": required_key or "dummy",
             "timeout": 120.0,
         }
-        if self._allow_insecure_ssl() and (
-            request_mode != "local" or str(base_url or "").lower().startswith("https://")
-        ):
+        if str(ssl_url or "").lower().startswith("https://"):
             try:
                 import httpx
-                client_kwargs["http_client"] = httpx.Client(verify=False, timeout=120.0)
-            except Exception:
-                pass
+                client_kwargs["http_client"] = httpx.Client(
+                    verify=self._ssl_context(ssl_url),
+                    timeout=120.0,
+                )
+            except SSLTrustConfigurationError as exc:
+                logging.error("OpenAI-compatible TLS trust configuration is invalid: %s", exc)
+                return None
         return OpenAI(**client_kwargs)
 
     @staticmethod
@@ -2280,9 +2289,9 @@ CWD: {current_dir}
                     )
                 else:
                     analysis = analyze_api_error(request_mode, current_model, error=e)
-                    if isinstance(e, requests.exceptions.SSLError):
-                        analysis.user_message = self._friendly_ssl_error(e)
-                        analysis.retry_action = "none"
+                if analysis.category == "ssl" or isinstance(e, requests.exceptions.SSLError):
+                    analysis.user_message = self._friendly_ssl_error(e)
+                    analysis.retry_action = "none"
                 if (
                     network_reconnect_allowed
                     and self._network_auto_resume_enabled()

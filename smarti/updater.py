@@ -103,9 +103,17 @@ def _headers():
     }
 
 
-def _request_kwargs(settings=None):
+def _request_kwargs(settings=None, url=GITHUB_API_RELEASE_LATEST):
     settings = settings or {}
-    kwargs = ssl_request_kwargs(bool(settings.get("allow_insecure_ssl_compat", True)))
+    # The explicit compatibility mode restores Smarti's historical global
+    # verification bypass, including update transport. Artifact hash/signature
+    # checks remain independent defence-in-depth after download.
+    kwargs = ssl_request_kwargs(
+        settings,
+        url=url,
+        allow_legacy=True,
+        data_dir=USER_DATA_DIR,
+    )
     kwargs["timeout"] = 25
     return kwargs
 
@@ -252,7 +260,7 @@ def download_update(update_info, settings=None, progress_callback=None):
     target_path = os.path.join(target_dir, _safe_asset_name(info.asset_name, info.version))
     temp_path = target_path + ".part"
 
-    request_kwargs = _request_kwargs(settings)
+    request_kwargs = _request_kwargs(settings, info.asset_url)
     request_kwargs["timeout"] = (10, 120)
     with requests.get(info.asset_url, headers={"User-Agent": _headers()["User-Agent"]}, stream=True, **request_kwargs) as response:
         response.raise_for_status()
