@@ -5,10 +5,16 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from smarti.codex_signin import CodexSignInProvider
 from smarti.common import markdown_to_plain_text
-from smarti.config import DEFAULT_SETTINGS, PUBLIC_BUILTIN_TOOLS
+from smarti.config import (
+    BUILTIN_TOOL_SCHEMAS,
+    DEFAULT_SETTINGS,
+    PUBLIC_BUILTIN_TOOLS,
+    TOOL_ACTION_FIELDS,
+)
 from smarti.core import SmartiCore
 from smarti.history import ChatSessionStore
 
@@ -76,6 +82,88 @@ def _request_core(mode):
 
 
 class ContextEfficiencyTests(unittest.TestCase):
+    def test_get_tool_info_action_is_model_required_but_backward_compatible(self):
+        schema = BUILTIN_TOOL_SCHEMAS["get_tool_info"]["inputSchema"]
+
+        self.assertIn("action", schema["properties"])
+        self.assertEqual(schema["required"], ["tool_name"])
+        self.assertIn("המודל חייב לשלוח", schema["properties"]["action"]["description"])
+
+    def test_get_tool_info_missing_or_full_returns_the_original_full_schema(self):
+        core = _prompt_core({"get_tool_info", "file_manager"})
+
+        legacy = core.get_tool_info("file_manager")
+        explicit_full = core.get_tool_info("file_manager", "full")
+
+        self.assertEqual(legacy, explicit_full)
+        self.assertIn("סכמת JSON חוקית ומלאה", legacy)
+        self.assertIn('"operations"', legacy)
+
+    def test_get_tool_info_returns_a_small_action_scoped_schema(self):
+        core = _prompt_core({"get_tool_info", "file_manager"})
+
+        full = core.get_tool_info("file_manager", "full")
+        scoped = core.get_tool_info("file_manager", "read_chunk")
+
+        self.assertIn("action=read_chunk", scoped)
+        self.assertIn('"enum": [\n        "read_chunk"', scoped)
+        self.assertIn('"encoding"', scoped)
+        self.assertIn('"offset"', scoped)
+        self.assertNotIn('"operations"', scoped)
+        self.assertLess(len(scoped), len(full) // 5)
+
+    def test_every_registered_manager_action_has_a_valid_scoped_field_map(self):
+        for tool_name, action_map in TOOL_ACTION_FIELDS.items():
+            schema = BUILTIN_TOOL_SCHEMAS[tool_name]["inputSchema"]
+            properties = schema["properties"]
+            actions = set(properties["action"]["enum"])
+            self.assertEqual(actions, set(action_map), tool_name)
+            for action, fields in action_map.items():
+                with self.subTest(tool=tool_name, action=action):
+                    self.assertTrue(set(fields).issubset(properties))
+
+    def test_get_tool_info_rejects_unknown_action_instead_of_silently_returning_full(self):
+        core = _prompt_core({"get_tool_info", "file_manager"})
+
+        info = core.get_tool_info("file_manager", "not_a_real_action")
+
+        self.assertTrue(info.startswith("ERROR:"))
+        self.assertIn("search_files", info)
+        self.assertIn("action='full'", info)
+
+    def test_get_tool_info_selects_one_mcp_function_by_action(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.settings = copy.deepcopy(DEFAULT_SETTINGS)
+        core.settings["enable_mcp_clawhub"] = True
+        core.tool_registry = SimpleNamespace(trust_status=lambda *args: "trusted")
+        core._resolve_mcp_package = lambda requested: str(requested)
+        payload = [
+            {"name": "lookup", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}}},
+            {"name": "publish", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}},
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "demo-package.txt").write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+            with mock.patch("smarti.agent.model_context.MCP_TOOLS_DIR", directory):
+                scoped = core.get_tool_info("demo-package", "lookup")
+                full = core.get_tool_info("demo-package", "full")
+
+        self.assertIn("function=lookup", scoped)
+        self.assertIn('"lookup"', scoped)
+        self.assertNotIn('"publish"', scoped)
+        self.assertIn('"publish"', full)
+
+    def test_system_prompt_requires_tool_name_and_action_for_every_schema_lookup(self):
+        core = _prompt_core({"get_tool_info", "file_manager"})
+
+        prompt = core._load_system_prompt("מצא קובץ")
+
+        self.assertIn("בכל קריאת `get_tool_info` חובה לשלוח גם `tool_name` וגם `action`", prompt)
+        self.assertIn("השמטת action עדיין מחזירה את הסכמה המלאה", prompt)
+
     def test_disabled_tool_policies_and_schemas_are_absent(self):
         core = _prompt_core({
             "get_tool_info",

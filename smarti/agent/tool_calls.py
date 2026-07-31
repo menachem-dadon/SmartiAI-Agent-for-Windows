@@ -8,6 +8,19 @@ class ToolCallMixin:
             return args_dict
         args = copy.deepcopy(args_dict)
 
+        if action == "get_tool_info":
+            if "tool_name" not in args:
+                for alias in ("tool", "name", "package"):
+                    if alias in args:
+                        args["tool_name"] = args.get(alias)
+                        break
+            if "action" not in args:
+                for alias in ("schema_action", "operation", "function"):
+                    if alias in args:
+                        args["action"] = args.get(alias)
+                        break
+            return {k: v for k, v in args.items() if k in {"tool_name", "action"}}
+
         if action == "search_tools":
             if "query" not in args and "q" in args:
                 args["query"] = args.get("q")
@@ -724,6 +737,53 @@ class ToolCallMixin:
             cleaned_lines.append(line)
         return "\n".join(cleaned_lines).strip()
 
+    def _tool_schema_name_variants(self, tool_name, resolve_mcp=False):
+        name = str(tool_name or "").strip(" []'\"")
+        variants = {
+            name,
+            safe_filename(name),
+            mcp_pkg_to_file_stem(name),
+        }
+        if resolve_mcp:
+            resolved = self._resolve_mcp_package(name)
+            variants.update({
+                resolved,
+                mcp_pkg_to_file_stem(resolved),
+            })
+        return {str(item) for item in variants if str(item or "").strip()}
+
+    @staticmethod
+    def _tool_schema_scope_key(tool_name, schema_action):
+        return f"{tool_name}::action={str(schema_action or '').strip().casefold()}"
+
+    def _tool_schema_was_seen(self, tool_name, schema_action, schemas_seen, resolve_mcp=False):
+        seen = schemas_seen or set()
+        variants = self._tool_schema_name_variants(tool_name, resolve_mcp=resolve_mcp)
+        # Old checkpoints and action=full both use the broad name key.
+        if variants & seen:
+            return True
+        requested = str(schema_action or "full").strip()
+        if not requested or requested.casefold() == "full":
+            return False
+        scoped = {
+            self._tool_schema_scope_key(name, requested)
+            for name in variants
+        }
+        return bool(scoped & seen)
+
+    @staticmethod
+    def _schema_action_for_tool_call(action, args_dict):
+        args = args_dict if isinstance(args_dict, dict) else {}
+        if action == "run_mcp":
+            return str(args.get("function", "") or "full").strip()
+        if action == "run_skill":
+            skill_args = args.get("arguments", {})
+            if isinstance(skill_args, dict) and skill_args.get("action"):
+                return str(skill_args.get("action")).strip()
+            return "full"
+        inner_action = str(args.get("action", "") or "").strip()
+        return inner_action or "full"
+
     def _tool_requires_info_before_use(self, action, args_dict, schemas_seen):
         schemas_seen = schemas_seen or set()
         settings = getattr(self, "settings", {}) or {}
@@ -740,7 +800,15 @@ class ToolCallMixin:
         if action == "extension_manager":
             try:
                 routed_action, routed_args = self._route_unified_tool(action, args_dict)
-                return self._tool_requires_info_before_use(routed_action, routed_args, schemas_seen)
+                if routed_action in {"run_mcp", "run_skill"}:
+                    return self._tool_requires_info_before_use(routed_action, routed_args, schemas_seen)
+                requested = self._schema_action_for_tool_call(action, args_dict)
+                if not self._tool_schema_was_seen(action, requested, schemas_seen):
+                    return True, (
+                        "לפני הפעלת extension_manager חובה לקרוא "
+                        f"`get_tool_info` עם tool_name='extension_manager' ו-action='{requested}'."
+                    )
+                return False, None
             except ValueError:
                 return False, None
         if action == "canvas_manager":
@@ -749,20 +817,39 @@ class ToolCallMixin:
             return False, None
         if action == "run_skill":
             skill_name = safe_filename(args_dict.get("name", ""))
-            if skill_name and skill_name not in schemas_seen:
-                return True, f"לפני הפעלת Skill חובה לקרוא `get_tool_info` על שם ה-Skill עצמו: {skill_name}."
+            requested = self._schema_action_for_tool_call(action, args_dict)
+            if skill_name and not self._tool_schema_was_seen(skill_name, requested, schemas_seen):
+                return True, (
+                    "לפני הפעלת Skill חובה לקרוא `get_tool_info` "
+                    f"עם tool_name='{skill_name}' ו-action='{requested}'."
+                )
         if action == "run_mcp":
             pkg = str(args_dict.get("package", "")).strip()
-            resolved = self._resolve_mcp_package(pkg) if pkg else ""
-            keys = {pkg, resolved, mcp_pkg_to_file_stem(pkg), mcp_pkg_to_file_stem(resolved)}
-            if pkg and not (keys & schemas_seen):
-                return True, f"לפני הפעלת MCP חובה לקרוא `get_tool_info` על שם החבילה: {pkg}."
+            requested = self._schema_action_for_tool_call(action, args_dict)
+            if pkg and not self._tool_schema_was_seen(pkg, requested, schemas_seen, resolve_mcp=True):
+                return True, (
+                    "לפני הפעלת MCP חובה לקרוא `get_tool_info` "
+                    f"עם tool_name='{pkg}' ו-action='{requested}' (שם פונקציית ה-MCP)."
+                )
         if action not in BUILTIN_TOOL_SCHEMAS:
             tool_key = safe_filename(action)
-            if os.path.exists(os.path.join(TOOLS_DIR, f"{tool_key}.txt")) and tool_key not in schemas_seen:
-                return True, f"לפני הפעלת כלי פייתון מותאם אישית חובה לקרוא `get_tool_info`: {tool_key}."
-        if action in BUILTIN_TOOL_SCHEMAS and action not in inline_schema_tools and action not in schemas_seen:
-            return True, f"לפני הפעלת הכלי `{action}` חובה לקרוא `get_tool_info` כי הסכמה המלאה שלו אינה מופיעה בהנחיית המערכת."
+            requested = self._schema_action_for_tool_call(action, args_dict)
+            if (
+                os.path.exists(os.path.join(TOOLS_DIR, f"{tool_key}.txt"))
+                and not self._tool_schema_was_seen(tool_key, requested, schemas_seen)
+            ):
+                return True, (
+                    "לפני הפעלת כלי Python מותאם אישית חובה לקרוא "
+                    f"`get_tool_info` עם tool_name='{tool_key}' ו-action='{requested}'."
+                )
+        if action in BUILTIN_TOOL_SCHEMAS and action not in inline_schema_tools:
+            requested = self._schema_action_for_tool_call(action, args_dict)
+            if not self._tool_schema_was_seen(action, requested, schemas_seen):
+                return True, (
+                    f"לפני הפעלת הכלי `{action}` חובה לקרוא `get_tool_info` "
+                    f"עם tool_name='{action}' ו-action='{requested}', כי הסכמה שלו "
+                    "אינה מופיעה במלואה בהנחיית המערכת."
+                )
         return False, None
 
     def _get_mcp_function_schema(self, pkg_name, func_name):
@@ -925,7 +1012,7 @@ class ToolCallMixin:
 
     def _fallback_contingencies(self):
         return [
-            "If a tool schema is unclear or validation fails, call get_tool_info before retrying.",
+            "If a tool schema is unclear or validation fails, call get_tool_info with tool_name and the intended action before retrying.",
             "If a check disproves progress, retry with corrected parameters or call agent_planner with intent=replan.",
             "Ask the user only when required information or permission cannot be obtained with safe discovery tools.",
         ]
@@ -1164,7 +1251,7 @@ class ToolCallMixin:
         ) or "- Verify observable progress and final state before answering."
         contingency_lines = "\n".join(
             f"- {item}" for item in (task_state.get("contingencies") or [])[:8]
-        ) or "- On schema errors, call get_tool_info; on failed checks, retry or replan."
+        ) or "- On schema errors, call get_tool_info with tool_name and action; on failed checks, retry or replan."
         recent_obs = "\n".join(task_state.get("observations", [])[-5:]) or "אין עדיין תצפיות."
         failures = "\n".join(task_state.get("failures", [])[-3:]) or "אין כשלים משמעותיים."
         guidance = (
@@ -1280,7 +1367,10 @@ class ToolCallMixin:
         if not step_text:
             step_text = self._fallback_step_for_tool(action, args_dict, schema_check=needs_info)
         if needs_info:
-            return None, f"SCHEMA_REQUIRED: {info_error} הפעל קודם get_tool_info עם tool_name מתאים, ואז המשך."
+            return None, (
+                f"SCHEMA_REQUIRED: {info_error} הפעל קודם get_tool_info עם "
+                "tool_name ו-action מתאימים, ואז המשך."
+            )
 
         valid_call, validation_error = self._validate_tool_call(action, args_dict)
         if not valid_call:
@@ -1432,9 +1522,12 @@ class ToolCallMixin:
             feedback_for_ai, message_for_user = f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(str(e), self.settings)}", None
         if action == "get_tool_info" and not str(feedback_for_ai).startswith("ERROR:"):
             info_name = str(args_dict.get("tool_name", "")).strip(" []'\"")
-            for key in {info_name, safe_filename(info_name), self._resolve_mcp_package(info_name), mcp_pkg_to_file_stem(info_name)}:
-                if key:
+            info_action = str(args_dict.get("action", "") or "full").strip()
+            for key in self._tool_schema_name_variants(info_name, resolve_mcp=True):
+                if not info_action or info_action.casefold() == "full":
                     schemas_seen.add(key)
+                else:
+                    schemas_seen.add(self._tool_schema_scope_key(key, info_action))
         output = feedback_for_ai if feedback_for_ai is not None else message_for_user
         status = "error" if str(output or "").startswith("ERROR") else "ok"
         if output:
@@ -1613,8 +1706,14 @@ class ToolCallMixin:
                 arguments = item.get("arguments", {}) if isinstance(item.get("arguments"), dict) else {}
                 schema_name = str(arguments.get("tool_name", "") or "").strip(" []'\"")
                 if schema_name:
+                    schema_action = str(arguments.get("action", "") or "full").strip()
+                    retained_key = (
+                        schema_name
+                        if schema_action.casefold() == "full"
+                        else self._tool_schema_scope_key(schema_name, schema_action)
+                    )
                     retained = task_state.setdefault("loaded_tool_schemas", {})
-                    retained[schema_name] = str(item.get("output", "") or "")[:12000]
+                    retained[retained_key] = str(item.get("output", "") or "")[:12000]
                     while len(retained) > 2:
                         retained.pop(next(iter(retained)))
             if status == "error":

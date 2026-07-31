@@ -1149,7 +1149,7 @@ class ModelContextMixin:
                     "enabled": enabled,
                     "trust": "builtin",
                     "runner": name,
-                    "next": "call directly if schema is visible; otherwise call get_tool_info first",
+                    "next": "call directly if schema is visible; otherwise call get_tool_info with tool_name and the intended action",
                 })
 
         if os.path.isdir(TOOLS_DIR):
@@ -1169,7 +1169,7 @@ class ModelContextMixin:
                         "enabled": enabled,
                         "trust": trust,
                         "runner": name,
-                        "next": "call get_tool_info, then call the Python tool by name with the documented arguments",
+                        "next": "call get_tool_info with tool_name and its intended action (or full when it has no action field), then call the Python tool",
                     })
 
         if os.path.isdir(MCP_TOOLS_DIR):
@@ -1198,7 +1198,7 @@ class ModelContextMixin:
                         "enabled": enabled,
                         "trust": trust,
                         "runner": "extension_manager/run_mcp",
-                        "next": "call get_tool_info on the package, then extension_manager action=run_mcp",
+                        "next": "call get_tool_info on the package with action set to the MCP function name, then extension_manager action=run_mcp",
                     })
 
         registry = getattr(self, "skill_registry", None) or self._load_skill_registry()
@@ -1303,9 +1303,82 @@ class ModelContextMixin:
         lines.append("</available_skills>")
         return "\n".join(lines)
 
-    def get_tool_info(self, tool_name):
+    @staticmethod
+    def _canonical_schema_action(schema, requested_action):
+        action = str(requested_action or "").strip()
+        if not action or action.lower() == "full":
+            return "full", None
+        properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        action_schema = properties.get("action", {}) if isinstance(properties, dict) else {}
+        choices = action_schema.get("enum", []) if isinstance(action_schema, dict) else []
+        if not choices:
+            return "", (
+                f"ERROR: הסכמה אינה מגדירה פעולות פנימיות. "
+                f"השתמש ב-action='full' כדי לקבל את הסכמה המלאה."
+            )
+        exact = next((str(item) for item in choices if str(item) == action), "")
+        if exact:
+            return exact, None
+        folded = action.casefold()
+        matched = next((str(item) for item in choices if str(item).casefold() == folded), "")
+        if matched:
+            return matched, None
+        return "", (
+            f"ERROR: הפעולה '{action}' אינה קיימת בסכמה. "
+            f"פעולות זמינות: {', '.join(str(item) for item in choices)}. "
+            "לסכמה המלאה השתמש ב-action='full'."
+        )
+
+    def _schema_for_requested_action(self, tool_name, schema, requested_action):
+        canonical_action, error = self._canonical_schema_action(schema, requested_action)
+        if error:
+            return None, "", error
+        if canonical_action == "full":
+            return copy.deepcopy(schema), "full", None
+
+        scoped = copy.deepcopy(schema)
+        properties = scoped.get("properties", {}) if isinstance(scoped, dict) else {}
+        if not isinstance(properties, dict):
+            return None, "", "ERROR: סכמת הכלי אינה סכמת object חוקית."
+
+        configured_fields = (TOOL_ACTION_FIELDS.get(tool_name, {}) or {}).get(canonical_action)
+        if configured_fields is None:
+            # Custom Python tools and executable Skills can declare an action
+            # enum without registering a Smarti-specific field map. Narrow the
+            # action enum while retaining their author-owned parameter schema.
+            selected_names = list(properties)
+        else:
+            selected_names = ["action", *configured_fields]
+        selected_properties = {
+            name: copy.deepcopy(properties[name])
+            for name in selected_names
+            if name in properties
+        }
+        action_schema = selected_properties.get("action")
+        if isinstance(action_schema, dict):
+            action_schema["enum"] = [canonical_action]
+            original_description = str(action_schema.get("description", "") or "").strip()
+            fixed_description = f"Fixed operation for this scoped schema: {canonical_action}."
+            action_schema["description"] = " ".join(
+                item for item in (original_description, fixed_description) if item
+            )
+        scoped["properties"] = selected_properties
+        required = [
+            name for name in (schema.get("required", []) if isinstance(schema, dict) else [])
+            if name in selected_properties
+        ]
+        if "action" in selected_properties and "action" not in required:
+            required.insert(0, "action")
+        if required:
+            scoped["required"] = required
+        else:
+            scoped.pop("required", None)
+        return scoped, canonical_action, None
+
+    def get_tool_info(self, tool_name, action=""):
         if not tool_name: return "ERROR: Missing tool name."
         tool_name = str(tool_name).strip(" []'\"").replace('.pyw', '').replace('.py', '')
+        requested_action = str(action or "").strip()
         if tool_name in {"search_mcp", "install_mcp", "run_mcp"} and not self.settings.get("enable_mcp_clawhub", False):
             return "ERROR: השימוש ב-MCP כבוי בהגדרות המשתמש."
         if tool_name in {"list_skills", "search_skills", "install_skill", "install_skill_requirements", "load_skill", "run_skill"} and not self.settings.get("enable_skills_beta", True):
@@ -1318,10 +1391,24 @@ class ModelContextMixin:
                 and not self._builtin_tool_context_enabled(tool_name)
             ):
                 return f"ERROR: הכלי '{tool_name}' כבוי או אינו זמין בהגדרות הנוכחיות."
-            info = f"--- סכמת JSON חוקית ומלאה עבור הכלי המובנה: {tool_name} ---\n{json.dumps(BUILTIN_TOOL_SCHEMAS[tool_name]['inputSchema'], ensure_ascii=False, indent=2)}"
-            if tool_name == "canvas_manager":
+            schema, canonical_action, error = self._schema_for_requested_action(
+                tool_name,
+                BUILTIN_TOOL_SCHEMAS[tool_name]["inputSchema"],
+                requested_action,
+            )
+            if error:
+                return error
+            if canonical_action == "full":
+                info = f"--- סכמת JSON חוקית ומלאה עבור הכלי המובנה: {tool_name} ---\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+            else:
+                info = (
+                    f"--- סכמת JSON ממוקדת עבור הכלי המובנה: {tool_name} | action={canonical_action} ---\n"
+                    f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n"
+                    "\nהסכמה מוגבלת לפעולה המבוקשת. לסכמה המלאה השתמש ב-action='full'."
+                )
+            if tool_name == "canvas_manager" and canonical_action == "full":
                 info += f"\n\n--- הנחיות שימוש מחייבות עבור canvas_manager ---\n{CANVAS_MANAGER_MODEL_GUIDANCE}"
-            if tool_name == "computer_automation_manager":
+            if tool_name == "computer_automation_manager" and canonical_action == "full":
                 info += (
                     "\n\nPrimary safe mode: use structured UIA actions, not raw code and not guessed coordinates.\n"
                     "- Inspect visible UIA elements: {\"action\":\"inspect\",\"max_depth\":2,\"limit\":120}\n"
@@ -1341,7 +1428,7 @@ class ModelContextMixin:
                     "- שליחת מקשים למחשבון: code=\"activate_window('Calculator')\\nsend_keys('128*37+456=')\\nprint('SUCCESS: calculation keys sent')\"\n"
                     "- הדבקת טקסט עברי: code=\"paste_text('שלום')\\nprint('SUCCESS: text pasted')\". רק כשאין אלמנט UI מתאים השתמש ב-pa.press / pa.hotkey."
                 )
-            if tool_name == "browser_automation_manager":
+            if tool_name == "browser_automation_manager" and canonical_action == "full":
                 info += (
                     "\n\nTechnical browser_automation_manager usage:\n"
                     "- For multi-step browser work, first run the built-in Skill `browser_automation` (via extension_manager/run_skill) for strategy, then use this schema for exact calls.\n"
@@ -1368,8 +1455,16 @@ class ModelContextMixin:
                 desc = f.read().strip()
                 try:
                     schema_dict = json.loads(desc)
+                    schema, canonical_action, error = self._schema_for_requested_action(
+                        tool_name,
+                        schema_dict,
+                        requested_action,
+                    )
+                    if error:
+                        return error
                     trust = self.tool_registry.trust_status("custom", tool_name) if getattr(self, "tool_registry", None) else "unknown"
-                    return f"--- סכמת JSON עבור כלי הפייתון {tool_name} ---\nTrust: {trust}\n{json.dumps(schema_dict, ensure_ascii=False, indent=2)}\n\n(להפעלה, שלח אובייקט תחת המפתח 'arguments' לפי סכמה זו, או השאר ריק אם אין דרישה)."
+                    action_note = "" if canonical_action == "full" else f" | action={canonical_action}"
+                    return f"--- סכמת JSON עבור כלי הפייתון {tool_name}{action_note} ---\nTrust: {trust}\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n(להפעלה, שלח אובייקט תחת המפתח 'arguments' לפי סכמה זו, או השאר ריק אם אין דרישה)."
                 except json.JSONDecodeError as e:
                     return f"ERROR: קובץ ההוראות של הכלי '{tool_name}' אינו בפורמט JSON חוקי. שגיאה: {e}"
                 
@@ -1383,13 +1478,35 @@ class ModelContextMixin:
             with open(mcp_doc_path, 'r', encoding='utf-8') as f:
                 try:
                     mcp_array = json.loads(f.read().strip())
+                    canonical_action = "full"
+                    if requested_action and requested_action.lower() != "full":
+                        folded = requested_action.casefold()
+                        selected = [
+                            item for item in mcp_array
+                            if isinstance(item, dict)
+                            and str(item.get("name", "")).casefold() == folded
+                        ]
+                        if not selected:
+                            available = [
+                                str(item.get("name", ""))
+                                for item in mcp_array
+                                if isinstance(item, dict) and item.get("name")
+                            ]
+                            return (
+                                f"ERROR: פונקציית MCP בשם '{requested_action}' לא נמצאה בחבילה '{pkg}'. "
+                                f"פונקציות זמינות: {', '.join(available)}. "
+                                "לכל הסכמות השתמש ב-action='full'."
+                            )
+                        mcp_array = selected
+                        canonical_action = str(selected[0].get("name", requested_action))
                     trust = self.tool_registry.trust_status("mcp", stem) if getattr(self, "tool_registry", None) else "unknown"
-                    return f"--- מדריך סכמות JSON עבור פונקציות ה-MCP בחבילה '{pkg}' ---\nTrust: {trust}\n(להפעלה, השתמש בכלי 'run_mcp' וציין את שם החבילה, הפונקציה ואובייקט ה-arguments)\n\n{json.dumps(mcp_array, ensure_ascii=False, indent=2)}"
+                    action_note = "" if canonical_action == "full" else f" | function={canonical_action}"
+                    return f"--- מדריך סכמות JSON עבור פונקציות ה-MCP בחבילה '{pkg}'{action_note} ---\nTrust: {trust}\n(להפעלה, השתמש בכלי 'run_mcp' וציין את שם החבילה, הפונקציה ואובייקט ה-arguments)\n\n{json.dumps(mcp_array, ensure_ascii=False, indent=2)}"
                 except json.JSONDecodeError as e:
                      return f"ERROR: קובץ ההוראות של ה-MCP '{pkg}' אינו בפורמט JSON חוקי. נסה להתקין את החבילה מחדש. שגיאה: {e}"
 
         # 4. Skill
-        skill_info = self.get_skill_info(tool_name)
+        skill_info = self.get_skill_info(tool_name, requested_action)
         if skill_info:
             return skill_info
                 
@@ -1483,38 +1600,38 @@ class ModelContextMixin:
                         "may justify false, while 'all files' may include subfolders; retain judgment. "
                         "control cost with limit/offset/scan_limit/max_output_chars, sort_by/sort_order, and "
                         "output_format=paths|records|text plus detail=minimal|standard|full or exact fields. "
-                        "Use `get_tool_info` for the complete schema."
+                        "Use `get_tool_info` with tool_name=`file_manager` and the intended action; use action=`full` only when the complete schema is genuinely needed."
                     )
                 else:
                     schema_str = json.dumps(data["inputSchema"], ensure_ascii=False)
                     active_tools.append(f"- `{name}`: {data['description']} | Schema: {schema_str}")
             else:
                 desc = BUILTIN_DYNAMIC_TOOLS.get(name, data.get("description", ""))
-                active_tools.append(f"- `{name}`: {desc} (אם אינך בטוח בפרמטרים, שלוף סכמה עם `get_tool_info`).")
+                active_tools.append(f"- `{name}`: {desc} (אם אינך בטוח בפרמטרים, שלוף סכמה עם `get_tool_info` וציין את הפעולה המדויקת).")
 
         # 2. Custom Python Tools
         python_tools = self._get_existing_python_tools()
         if python_tools:
             active_tools.append(f"\n[כלים מותאמים אישית (Python) - סכמות מוסתרות]")
-            active_tools.append("אסור להפעיל ישירות! חובה לשלוף סכמה דרך `get_tool_info` לפני השימוש.")
+            active_tools.append("אסור להפעיל ישירות! חובה לשלוף סכמה דרך `get_tool_info` עם tool_name ו-action לפני השימוש; השתמש ב-action=`full` רק אם לכלי אין פעולות פנימיות.")
             for t in python_tools: 
                 active_tools.append(f"- {t}")
 
         # 3. MCP Tools
         mcp_tools = self._get_existing_mcp_tools()
         if mcp_tools:
-            active_tools.append("Use `extension_manager` with action=`run_mcp` after `get_tool_info`; legacy `run_mcp` remains only as a compatibility alias.")
+            active_tools.append("Use `extension_manager` with action=`run_mcp` after `get_tool_info` with action set to the exact MCP function name; legacy `run_mcp` remains only as a compatibility alias.")
             active_tools.append(f"\n[מיומנויות וכלים ממאגר MCP עולמי - סכמות מוסתרות]")
-            active_tools.append("חל איסור מוחלט לנחש פרמטרים לפונקציות אלו! חובה להשתמש ב-`get_tool_info` על שם *החבילה* כדי לקבל את הסכמה המדויקת, ורק אז להפעיל דרך `run_mcp`.\n")
+            active_tools.append("חל איסור מוחלט לנחש פרמטרים לפונקציות אלו! חובה להשתמש ב-`get_tool_info` עם tool_name של *החבילה* ו-action שהוא שם פונקציית ה-MCP המדויקת, ורק אז להפעיל דרך `run_mcp`.\n")
             for t in mcp_tools: 
                 active_tools.append(f"- {t}")
 
         # 4. Skills: high-level workflows above tools/MCP.
         skills = self._get_existing_skills() if self.settings.get("enable_skills_beta", True) else []
         if skills:
-            active_tools.append("Use `extension_manager` with action=`load_skill` to read instruction Skills from <available_skills>. Use action=`run_skill` only for builtin/handler Skills that must execute, after `get_tool_info`.")
+            active_tools.append("Use `extension_manager` with action=`load_skill` to read instruction Skills from <available_skills>. Use action=`run_skill` only for builtin/handler Skills that must execute, after `get_tool_info` with the Skill parameter action or action=`full` when it has no internal action.")
             active_tools.append("\n[Skills - תהליכי עבודה מעל הכלים]")
-            active_tools.append("Skill יכול להיות אחד משלושה סוגים: מובנה שרץ בפנים, handler מקומי, או מדריך תהליכי בלבד. ClawHub Skills בדרך כלל מספקים הוראות ודרישות, לא בהכרח כלי מותקן. שלוף `get_tool_info` לפי שם ה-Skill; אם חסרות דרישות השתמש ב-`install_skill_requirements` רק באישור; אם הוא מחזיר הוראות, בצע אותן עם הכלים הרגילים.")
+            active_tools.append("Skill יכול להיות אחד משלושה סוגים: מובנה שרץ בפנים, handler מקומי, או מדריך תהליכי בלבד. ClawHub Skills בדרך כלל מספקים הוראות ודרישות, לא בהכרח כלי מותקן. שלוף `get_tool_info` עם tool_name של ה-Skill ו-action של פרמטר הפעולה שלו, או `full` אם אין לו פעולה פנימית; אם חסרות דרישות השתמש ב-`install_skill_requirements` רק באישור; אם הוא מחזיר הוראות, בצע אותן עם הכלים הרגילים.")
             for skill in skills:
                 active_tools.append(f"- {skill}")
 
@@ -1525,7 +1642,7 @@ class ModelContextMixin:
             automation_instructions = (
                 "`browser_automation_manager` uses Smarti's persistent Playwright/CDP profile. "
                 "Inspect status/tabs/snapshot first, then act by returned accessibility ref and snapshotEpoch. "
-                "For a login wall, ask the user to log in manually; never bypass it. Use get_tool_info for the full action schema."
+                "For a login wall, ask the user to log in manually; never bypass it. Use get_tool_info with the intended browser action for its scoped schema."
             )
 
         background_note = "מצב רקע פעיל: פעל בשקט, אל תפתח חלונות/דפדפן/הקראה אלא אם ההוראה דורשת זאת במפורש." if self._is_background_context() else ""
@@ -1546,9 +1663,9 @@ class ModelContextMixin:
             else "Skills כבויים בהגדרות: דלג על חיפוש, התקנה, בחירה והרצה של Skills גם אם הם מוזכרים בהיסטוריה."
         )
         schema_lookup_rule = (
-            "אל תנחש פרמטרים. השתמש ישירות רק בכלי שהסכמה המלאה והוראות השימוש שלו מופיעות כאן בבירור. אם כלי מורכב/מאוחד, פעולה פנימית, Skill, MCP, כלי Python מותאם, או שדה חובה אינם ברורים לך לחלוטין, קרא קודם `get_tool_info` עם שם הכלי/החבילה. אחרי כל כשל סכימה חובה לקרוא `get_tool_info` או להיצמד בדיוק לסכמה שהוחזרה בשגיאה לפני ניסיון חוזר."
+            "אל תנחש פרמטרים. השתמש ישירות רק בכלי שהסכמה והוראות השימוש שלו מופיעות כאן בבירור. בכל קריאת `get_tool_info` חובה לשלוח גם `tool_name` וגם `action`: בכלי מאוחד שלח את הפעולה הפנימית המדויקת, ובחבילת MCP את שם הפונקציה המדויק. שלח `action=\"full\"` רק אם לכלי אין פעולות פנימיות או אם באמת דרושה כל הסכמה. לצורכי תאימות בלבד, השמטת action עדיין מחזירה את הסכמה המלאה—אך אתה כמודל לא תשמיט אותו. אחרי כל כשל סכימה קרא `get_tool_info` עם הפעולה המתאימה או היצמד בדיוק לסכמה שהוחזרה בשגיאה לפני ניסיון חוזר."
             if self.settings.get("enable_skills_beta", True)
-            else "אל תנחש פרמטרים. השתמש ישירות רק בכלי שהסכמה המלאה והוראות השימוש שלו מופיעות כאן בבירור. אם כלי מורכב/מאוחד, פעולה פנימית, MCP, כלי Python מותאם, או שדה חובה אינם ברורים לך לחלוטין, קרא קודם `get_tool_info` עם שם הכלי/החבילה. אחרי כל כשל סכימה חובה לקרוא `get_tool_info` או להיצמד בדיוק לסכמה שהוחזרה בשגיאה לפני ניסיון חוזר. Skills כבויים, לכן אל תשתמש בסכמות שלהם."
+            else "אל תנחש פרמטרים. בכל קריאת `get_tool_info` חובה לשלוח `tool_name` ו-`action`: פעולה פנימית מדויקת, שם פונקציית MCP, או `full` רק אם אין פעולה פנימית/דרושה כל הסכמה. השמטת action נתמכת רק לתאימות לאחור והמודל לא ישמיט אותו. אחרי כשל סכימה קרא שוב עם הפעולה המתאימה. Skills כבויים, לכן אל תשתמש בסכמות שלהם."
         )
         skill_output_rule = (
             "פלט `run_skill` הוא הנחיית תהליך מותרת רק בכפוף למדיניות ולבקשת המשתמש."
@@ -1573,7 +1690,7 @@ class ModelContextMixin:
         tool_catalog_rule = (
             "2ב. When you are unsure which capability exists, or before installing/creating a new tool, call `search_tools` with a short task-focused query. Treat its results as the authorized catalog: built-in first, then loaded Skill guidance, then existing Python/MCP. Only search ClawHub/NPM or create a Python tool when the catalog has no suitable enabled trusted capability."
             if self.settings.get("enable_tool_search_catalog", True)
-            else "2ב. Tool catalog search is disabled in settings. Use the active tools list and `get_tool_info` for schemas; install or create new tools only when the visible enabled capabilities do not fit."
+            else "2ב. Tool catalog search is disabled in settings. Use the active tools list and `get_tool_info` with tool_name plus the intended action for schemas; install or create new tools only when the visible enabled capabilities do not fit."
         )
         available_skills_section = (
             f"""**Available Skills Catalog**
@@ -1629,7 +1746,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
         if self._builtin_tool_context_enabled("computer_automation_manager"):
             computer_policy = (
                 "באוטומציית מחשב העדף פעולות UIA מובנות על פני קוד או קואורדינטות; בדוק חלונות "
-                "ואלמנטים תחילה והשתמש ב-get_tool_info לסכמה המלאה."
+                "ואלמנטים תחילה והשתמש ב-get_tool_info עם פעולת האוטומציה המדויקת."
             )
         memory_policy = ""
         if self._builtin_tool_context_enabled("memory_manager"):
@@ -1688,7 +1805,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
 {tool_catalog_rule}
 3. בחירת כלי היא שיקול דעת: built-in מתאים לפני יכולת חיצונית; Skill למתודולוגיה; Python לעיבוד מקומי ייעודי; MCP לשירות חיצוני. התקן או צור רק כשאין יכולת פעילה מתאימה.
 4. אם המשתמש ביקש דרך ביצוע מסוימת, נסה אותה תחילה. אחרי כשל אבחן ונסה דרך בטוחה קרובה; עבור לחלופה רק אחרי חסימה ברורה והסבר זאת ביושר.
-5. לפני התקנת MCP/Skill בדוק התאמה, מקור וגרסה נעולה. סכמות MCP/Python נטענות רק דרך get_tool_info. המדיניות גנרית לכל שרת; אין העדפה קשיחה לחבילה מסוימת.
+5. לפני התקנת MCP/Skill בדוק התאמה, מקור וגרסה נעולה. סכמות MCP/Python נטענות רק דרך get_tool_info עם tool_name ו-action מדויקים; full שמור למקרה שאין פעולה פנימית או שנדרשת כל הסכמה. המדיניות גנרית לכל שרת; אין העדפה קשיחה לחבילה מסוימת.
 6. {skills_runtime_rule}
 7. {system_policy}
 8. {file_policy}

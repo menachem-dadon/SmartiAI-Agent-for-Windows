@@ -849,6 +849,53 @@ class AgentToolLoopRegressionTests(unittest.TestCase):
 
         self.assertEqual(task_state["loaded_tool_schemas"]["email_manager"], "EMAIL SCHEMA BODY")
 
+    def test_action_scoped_schema_only_unlocks_that_action(self):
+        scoped_key = self.core._tool_schema_scope_key("email_manager", "read")
+        schemas_seen = {scoped_key}
+
+        read_needs_info, _ = self.core._tool_requires_info_before_use(
+            "email_manager",
+            {"action": "read", "mailbox": "INBOX", "uid": "1"},
+            schemas_seen,
+        )
+        send_needs_info, send_reason = self.core._tool_requires_info_before_use(
+            "email_manager",
+            {"action": "send", "to": "a@example.com", "subject": "x", "body": "y"},
+            schemas_seen,
+        )
+
+        self.assertFalse(read_needs_info)
+        self.assertTrue(send_needs_info)
+        self.assertIn("action='send'", send_reason)
+
+    def test_full_schema_still_unlocks_all_actions(self):
+        schemas_seen = {"email_manager"}
+
+        for email_action in ("read", "send", "search"):
+            with self.subTest(action=email_action):
+                needs_info, reason = self.core._tool_requires_info_before_use(
+                    "email_manager",
+                    {"action": email_action},
+                    schemas_seen,
+                )
+                self.assertFalse(needs_info)
+                self.assertIsNone(reason)
+
+    def test_scoped_schema_is_retained_under_an_action_specific_key(self):
+        task_state = {"observations": [], "loaded_tool_schemas": {}}
+
+        self.core._record_results_in_task_state(task_state, [{
+            "action": "get_tool_info",
+            "arguments": {"tool_name": "email_manager", "action": "read"},
+            "status": "ok",
+            "output": "EMAIL READ SCHEMA",
+        }])
+
+        self.assertEqual(
+            task_state["loaded_tool_schemas"]["email_manager::action=read"],
+            "EMAIL READ SCHEMA",
+        )
+
     @unittest.skipUnless(os.name == "nt", "Windows execution state is Windows-specific")
     def test_active_task_sleep_prevention_is_scoped_and_released(self):
         core = SmartiCore.__new__(SmartiCore)

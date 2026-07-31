@@ -273,7 +273,14 @@ class ToolDispatchMixin:
                 allowed, err = self._ensure_capability_allowed("browser_open", "אישור פתיחה בדפדפן", str(args_dict.get("query_or_url", "")), risk="low")
                 if not allowed: return (err, None)
                 return (self.open_direct_website(str(args_dict.get("query_or_url", ""))), None)
-            elif action == "get_tool_info": return (self.get_tool_info(str(args_dict.get("tool_name", ""))), None)
+            elif action == "get_tool_info":
+                return (
+                    self.get_tool_info(
+                        str(args_dict.get("tool_name", "")),
+                        str(args_dict.get("action", "")),
+                    ),
+                    None,
+                )
             elif action == "email_manager":
                 email_action = str(args_dict.get("action", "") or "").strip()
                 details = json.dumps({k: v for k, v in args_dict.items() if k not in {"body", "html_body"}}, ensure_ascii=False, default=str)[:1200]

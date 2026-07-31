@@ -769,7 +769,11 @@ class MessagingMixin:
                         else:
                             action = selected_calls[0].get("action", "")
                             if action == "get_tool_info":
-                                self.status_callback(f"מאתחל טעינה דינמית: {selected_calls[0].get('arguments', {}).get('tool_name', '')}...")
+                                info_args = selected_calls[0].get("arguments", {})
+                                self.status_callback(
+                                    "מאתחל טעינה דינמית: "
+                                    f"{info_args.get('tool_name', '')} / {info_args.get('action') or 'full'}..."
+                                )
                             else:
                                 self.status_callback(f"מפעיל כלי: {action}...")
 

@@ -469,7 +469,8 @@ class RuntimeServicesMixin:
             manager_op = self._short_step_value(args.get("action") or args.get("target") or "", 24)
             return f"מפעיל {self._short_step_value(action.replace('_', ' '), 30)} {manager_op}".strip()
         if action == "get_tool_info":
-            return f"בודק סכמת {tool_name or 'כלי'}"
+            schema_action = self._short_step_value(args.get("action") or "full", 24)
+            return f"בודק סכמת {tool_name or 'כלי'} עבור {schema_action}"
         if action == "get_weather":
             return f"שולף תחזית עבור {target}" if target else "שולף תחזית מזג אוויר"
         if action == "trash_file_or_folder":

@@ -802,16 +802,23 @@ class ExtensionsMixin:
             lines.append(f"- {name} | {status} | סוג: {spec.get('handler')} | מקור: {spec.get('source')} | סיכון: {spec.get('risk')}{dep_note} | {spec.get('description')}")
         return "\n".join(lines)
 
-    def get_skill_info(self, skill_name):
+    def get_skill_info(self, skill_name, action=""):
         registry = getattr(self, "skill_registry", None) or self._load_skill_registry()
         name = safe_filename(str(skill_name or "").replace("skill:", ""))
         spec = registry.get(name)
         if not spec:
             return None
+        parameters, canonical_action, schema_error = self._schema_for_requested_action(
+            name,
+            spec.get("parameters", {"type": "object", "properties": {}}),
+            action,
+        )
+        if schema_error:
+            return schema_error
         data = {
             "name": spec.get("name"),
             "description": spec.get("description"),
-            "parameters": spec.get("parameters", {"type": "object", "properties": {}}),
+            "parameters": parameters,
             "risk": spec.get("risk"),
             "source": spec.get("source"),
             "handler": spec.get("handler"),
@@ -827,7 +834,8 @@ class ExtensionsMixin:
             f"להפעלה השתמש בכלי run_skill עם name='{name}' ו-arguments לפי הסכמה.\n"
             "חשוב: Skill מסוג מדריך אינו כלי הרצה בפני עצמו. הוא מספק הוראות עבודה לסוכן; אם חסרות דרישות הרצה, התקן אותן קודם עם install_skill_requirements."
         )
-        return f"--- Skill: {name} ---\n{json.dumps(data, ensure_ascii=False, indent=2)}\n\n{guidance}"
+        action_note = "" if canonical_action == "full" else f" | action={canonical_action}"
+        return f"--- Skill: {name}{action_note} ---\n{json.dumps(data, ensure_ascii=False, indent=2)}\n\n{guidance}"
 
     def load_skill(self, name, task=""):
         registry = getattr(self, "skill_registry", None) or self._load_skill_registry()

@@ -252,10 +252,27 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "get_tool_info": {
-        "description": "שליפת סכמת JSON מלאה והוראות של כלי פייתון, MCP או כלי מורכב. חובה להפעיל לפני שימוש בכלי אם הסכמה שלו לא ידועה לך.",
+        "description": (
+            "שליפת סכמת JSON עבור פעולה מסוימת של כלי מובנה, כלי Python, חבילת MCP או Skill. "
+            "בכל קריאה יש לשלוח tool_name וגם action. השתמש בשם הפעולה/פונקציית MCP המדויקת; "
+            "action='full' (או השמטת action לצורכי תאימות לאחור) מחזיר את הסכמה המלאה כפי שהוחזרה בעבר."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"tool_name": {"type": "string", "description": "שם הכלי (או שם חבילת ה-MCP) שעבורו תרצה לקבל סכמה"}},
+            "properties": {
+                "tool_name": {
+                    "type": "string",
+                    "description": "שם הכלי, חבילת ה-MCP או ה-Skill שעבורו נדרשת סכמה.",
+                },
+                "action": {
+                    "type": "string",
+                    "description": (
+                        "הפעולה המדויקת בתוך הכלי, או שם פונקציית MCP. המודל חייב לשלוח שדה זה. "
+                        "הערך full מבקש את הסכמה המלאה; השדה נשאר אופציונלי רק לתאימות לאחור, "
+                        "והשמטתו שקולה ל-full."
+                    ),
+                },
+            },
             "required": ["tool_name"]
         }
     },
@@ -419,7 +436,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "run_skill": {
-        "description": "מפעיל Skill גבוה/תהליכי. חובה לשלוף סכמה דרך get_tool_info לפני שימוש אם אינך מכיר את הפרמטרים.",
+        "description": "מפעיל Skill גבוה/תהליכי. לפני שימוש יש לשלוף סכמה דרך get_tool_info עם שם ה-Skill ו-action של הפעולה הפנימית שלו, או full אם אין לו שדה פעולה.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1337,6 +1354,258 @@ BUILTIN_TOOL_SCHEMAS["browser_automation_manager"] = {
             **BROWSER_AUTOMATION_PROPERTIES,
         },
         "required": ["action"]
+    },
+}
+
+# Property allowlists used by get_tool_info(action=...) to expose only the
+# parameters relevant to one operation. The canonical full schemas above stay
+# unchanged; missing action or action="full" therefore remains fully backward
+# compatible. Keep this table complete for every public manager action.
+_FILE_QUERY_FIELDS = (
+    "path", "query", "glob", "globs", "exclude_globs", "extensions",
+    "match_mode", "match_path", "case_sensitive", "entry_type", "min_size",
+    "max_size", "date_field", "date_from", "date_to", "created_after",
+    "created_before", "modified_after", "modified_before", "accessed_after",
+    "accessed_before", "recursive", "search_backend", "fallback_to_filesystem",
+    "verify_index_results", "content_query", "content_mode", "windows_kinds",
+    "mime_types", "windows_property_filters", "include_search_diagnostics",
+    "offset", "limit", "scan_limit", "max_output_chars", "max_depth",
+    "min_depth", "sort_by", "sort_order", "directories_first", "detail",
+    "fields", "output_format", "include_hidden", "follow_symlinks",
+)
+_FILE_TREE_FIELDS = tuple(
+    field for field in _FILE_QUERY_FIELDS
+    if field not in {
+        "search_backend", "fallback_to_filesystem", "verify_index_results",
+        "content_query", "content_mode", "windows_kinds", "mime_types",
+        "windows_property_filters", "include_search_diagnostics",
+    }
+)
+_FILE_MUTATION_FIELDS = (
+    "dry_run", "conflict", "create_parents", "expected_hash",
+    "idempotency_key", "preserve_timestamps", "preserve_acl",
+)
+_EMAIL_MESSAGE_FIELDS = (
+    "to", "cc", "bcc", "subject", "body", "html_body", "direction",
+    "text_align", "font_family", "font_size_px", "line_height", "text_color",
+    "background_color", "custom_css", "content_mode", "from_name", "reply_to",
+    "priority", "request_read_receipt", "headers", "attachments", "save_copy",
+)
+_EMAIL_SEARCH_FIELDS = (
+    "mailbox", "mailboxes", "all_mailboxes", "query", "from", "to_filter",
+    "subject_filter", "since", "before", "unread", "flagged",
+    "has_attachment", "count", "offset", "search_mode", "scan_bodies",
+    "scan_limit", "include_body", "max_body_chars",
+)
+_EMAIL_TARGET_FIELDS = ("mailbox", "uid", "uids")
+_BROWSER_TAB_FIELDS = ("profile", "targetId", "tabId")
+_BROWSER_REF_FIELDS = (
+    "targetId", "tabId", "ref", "snapshotEpoch", "refEpoch", "allowStaleRef",
+    "selector", "role", "name", "textSelector",
+)
+_BROWSER_ACTION_TAIL = (
+    "timeoutMs", "expectDialog", "promptText", "expectDownload",
+    "downloadPath", "noSnapshot",
+)
+_COMPUTER_TARGET_FIELDS = (
+    "window", "name", "automation_id", "class_name", "control_type", "path",
+    "timeout", "dry_run", "allow_destructive",
+)
+
+TOOL_ACTION_FIELDS = {
+    "system_manager": {
+        "run_command": ("command", "cwd", "timeout_seconds", "require_approval", "explanation"),
+        "git_status": ("path", "operation", "ref"),
+        "run_project_check": ("path", "command"),
+        "list_processes": (),
+        "set_clipboard": ("text",),
+        "set_volume": ("volume_action",),
+    },
+    "software_manager": {
+        "list": ("query", "limit", "refresh", "include_paths", "format"),
+        "find": ("query", "limit", "refresh", "include_paths", "format"),
+        "open": ("name",),
+        "refresh": ("query", "limit", "refresh", "include_paths", "format"),
+    },
+    "file_manager": {
+        "open": ("path",),
+        "save_text": ("path", "content"),
+        "read_document": ("path",),
+        "search_files": _FILE_QUERY_FIELDS,
+        "search_content": ("directory", "text"),
+        "extract_image_text": ("path",),
+        "attach": ("path",),
+        "list_directory": (
+            "path", "offset", "limit", "sort_by", "sort_order",
+            "directories_first", "detail", "fields", "output_format",
+            "include_hidden", "follow_symlinks",
+        ),
+        "tree": _FILE_TREE_FIELDS,
+        "stat": ("path", "paths", "follow_symlinks"),
+        "exists": ("path", "paths", "follow_symlinks"),
+        "hash": ("path", "paths", "algorithm", "follow_symlinks"),
+        "compare": ("source", "destination", "other_path", "algorithm", "follow_symlinks"),
+        "diff_text": ("source", "destination", "other_path", "encoding", "max_output_chars"),
+        "read_chunk": ("path", "mode", "offset", "limit", "encoding"),
+        "disk_usage": ("path", "paths", "follow_symlinks"),
+        "mkdir": ("path",) + _FILE_MUTATION_FIELDS,
+        "copy": ("source", "destination") + _FILE_MUTATION_FIELDS,
+        "move": ("source", "destination") + _FILE_MUTATION_FIELDS,
+        "rename": ("source", "destination") + _FILE_MUTATION_FIELDS,
+        "atomic_write_text": ("path", "content", "encoding") + _FILE_MUTATION_FIELDS,
+        "append_text": ("path", "content", "encoding") + _FILE_MUTATION_FIELDS,
+        "touch": ("path",) + _FILE_MUTATION_FIELDS,
+        "batch": ("operations", "dry_run", "idempotency_key"),
+        "trash": ("path", "paths", "dry_run", "expected_hash", "idempotency_key"),
+        "restore_from_trash": (
+            "path", "recycle_id", "destination", "dry_run", "conflict",
+            "create_parents", "idempotency_key",
+        ),
+        "zip": ("source", "path", "paths", "destination") + _FILE_MUTATION_FIELDS,
+        "unzip": ("source", "destination") + _FILE_MUTATION_FIELDS,
+    },
+    "web_manager": {
+        "search": ("query",),
+        "read": (
+            "url", "query", "mode", "max_pages", "max_depth",
+            "max_total_chars", "max_page_chars", "include_links", "max_links",
+            "same_domain", "include_subdomains", "include_patterns",
+            "exclude_patterns", "respect_robots_txt", "use_sitemap",
+            "delay_seconds", "timeout_seconds", "user_agent",
+        ),
+        "open": ("query_or_url", "url", "query"),
+        "weather": ("location", "query", "days", "units"),
+    },
+    "screen_manager": {
+        "capture": (),
+        "save_screenshot": (),
+        "analyze_image": ("path",),
+    },
+    "background_task_manager": {
+        "schedule": ("delay_minutes", "prompt", "repeat", "interval_minutes", "days_of_week", "conversation_mode"),
+        "list": (),
+        "cancel": ("id",),
+        "edit": ("id", "delay_minutes", "prompt", "repeat", "interval_minutes", "days_of_week", "conversation_mode"),
+        "retry": ("id", "delay_minutes"),
+    },
+    "notification_manager": {
+        "send_toast": ("title", "body", "message", "kind", "open_button"),
+        "schedule_reminder": ("title", "message", "delay_minutes", "repeat", "interval_minutes"),
+        "list_reminders": (),
+        "cancel_reminder": ("id",),
+        "create_calendar_event": ("title", "start", "end", "duration_minutes", "location", "notes", "open"),
+        "open_windows_app": ("target",),
+    },
+    "memory_manager": {
+        "search": ("query", "memory_type", "max_results"),
+        "update": ("mode", "content", "memory_type", "subject", "ttl_hours", "importance", "tags", "memory_id"),
+    },
+    "canvas_manager": {
+        "create": ("title", "html", "css", "javascript", "images", "buttons"),
+        "update": ("canvas_id", "title", "html", "css", "javascript", "images", "buttons"),
+        "close": ("canvas_id",),
+    },
+    "extension_manager": {
+        "search_mcp": ("query",),
+        "install_mcp": ("package",),
+        "run_mcp": ("package", "function", "arguments"),
+        "list_skills": (),
+        "search_skills": ("query",),
+        "install_skill": ("source", "id", "path"),
+        "install_skill_requirements": ("name", "reason"),
+        "load_skill": ("name",),
+        "run_skill": ("name", "arguments"),
+    },
+    "email_manager": {
+        "list_folders": (),
+        "search": _EMAIL_SEARCH_FIELDS,
+        "read": _EMAIL_TARGET_FIELDS + ("include_headers", "include_attachments", "max_body_chars"),
+        "send": _EMAIL_MESSAGE_FIELDS,
+        "draft": _EMAIL_MESSAGE_FIELDS,
+        "reply": _EMAIL_TARGET_FIELDS + _EMAIL_MESSAGE_FIELDS,
+        "forward": _EMAIL_TARGET_FIELDS + _EMAIL_MESSAGE_FIELDS,
+        "mark_read": _EMAIL_TARGET_FIELDS,
+        "mark_unread": _EMAIL_TARGET_FIELDS,
+        "star": _EMAIL_TARGET_FIELDS,
+        "unstar": _EMAIL_TARGET_FIELDS,
+        "archive": _EMAIL_TARGET_FIELDS + ("target_mailbox",),
+        "trash": _EMAIL_TARGET_FIELDS + ("target_mailbox",),
+        "delete": _EMAIL_TARGET_FIELDS + ("confirm_destructive",),
+        "move": _EMAIL_TARGET_FIELDS + ("target_mailbox",),
+        "copy": _EMAIL_TARGET_FIELDS + ("target_mailbox",),
+        "create_folder": ("folder",),
+        "delete_folder": ("folder", "confirm_destructive"),
+        "rename_folder": ("folder", "new_folder"),
+        "save_attachments": _EMAIL_TARGET_FIELDS + ("output_dir", "attachment_names"),
+    },
+    "browser_automation_manager": {
+        "doctor": (),
+        "status": ("profile",),
+        "start": ("profile", "url", "targetUrl"),
+        "stop": ("profile",),
+        "profiles": (),
+        "tabs": _BROWSER_TAB_FIELDS + ("cleanup", "closeOthers"),
+        "open": _BROWSER_TAB_FIELDS + ("url", "targetUrl", "newTab", "waitUntil", "timeoutMs", "noSnapshot"),
+        "focus": _BROWSER_TAB_FIELDS,
+        "close": _BROWSER_TAB_FIELDS,
+        "navigate": _BROWSER_TAB_FIELDS + ("url", "targetUrl", "newTab", "waitUntil", "timeoutMs", "noSnapshot"),
+        "snapshot": _BROWSER_TAB_FIELDS + (
+            "refs", "snapshotFormat", "limit", "maxChars", "bodyChars",
+            "htmlChars", "urls", "includeUrls", "includeHidden",
+        ),
+        "screenshot": _BROWSER_REF_FIELDS + ("path", "fullPage", "clip", "labels", "annotate"),
+        "act": _BROWSER_REF_FIELDS + (
+            "request", "kind", "text", "value", "keys", "label", "index",
+            "x", "y", "deltaX", "deltaY", "path", "paths", "files", "timeMs",
+            "state", "script", "function", "urlContains", "submit", "clear",
+            "slowly", "delay", "delayMs",
+        ) + _BROWSER_ACTION_TAIL,
+        "console": _BROWSER_TAB_FIELDS + ("limit",),
+        "errors": _BROWSER_TAB_FIELDS + ("limit",),
+        "requests": _BROWSER_TAB_FIELDS + ("limit", "includeBody", "responseBody", "maxBodyChars", "captureMs", "reload", "live"),
+        "network": _BROWSER_TAB_FIELDS + ("limit", "includeBody", "responseBody", "maxBodyChars", "captureMs", "reload", "live"),
+        "trace": _BROWSER_TAB_FIELDS + ("captureMs", "reload", "record", "save", "path", "traceCategories"),
+        "storage": _BROWSER_TAB_FIELDS + ("storage", "op", "operation", "key", "value"),
+        "cookies": _BROWSER_TAB_FIELDS + ("op", "operation", "key", "value", "includeValues"),
+        "upload": _BROWSER_REF_FIELDS + ("path", "paths", "files", "timeoutMs", "noSnapshot"),
+        "download": _BROWSER_REF_FIELDS + ("path", "downloadPath", "timeoutMs", "noSnapshot"),
+        "dialog": _BROWSER_TAB_FIELDS + ("accept", "promptText", "timeoutMs"),
+        "evaluate": _BROWSER_TAB_FIELDS + ("script", "expression", "timeoutMs", "noSnapshot"),
+        "pdf": _BROWSER_TAB_FIELDS + ("path", "printBackground", "landscape"),
+        "cdp": _BROWSER_TAB_FIELDS + ("method", "params"),
+        "click": _BROWSER_REF_FIELDS + _BROWSER_ACTION_TAIL,
+        "clickCoords": _BROWSER_TAB_FIELDS + ("x", "y") + _BROWSER_ACTION_TAIL,
+        "type": _BROWSER_REF_FIELDS + ("text", "value", "submit", "clear", "slowly", "delay", "delayMs") + _BROWSER_ACTION_TAIL,
+        "fill": _BROWSER_REF_FIELDS + ("text", "value", "submit", "clear") + _BROWSER_ACTION_TAIL,
+        "press": _BROWSER_REF_FIELDS + ("keys", "text") + _BROWSER_ACTION_TAIL,
+        "hover": _BROWSER_REF_FIELDS + _BROWSER_ACTION_TAIL,
+        "select": _BROWSER_REF_FIELDS + ("value", "label", "index") + _BROWSER_ACTION_TAIL,
+        "wait": _BROWSER_TAB_FIELDS + ("text", "urlContains", "state", "timeMs", "script", "function", "timeoutMs"),
+        "scroll": _BROWSER_REF_FIELDS + ("x", "y", "deltaX", "deltaY", "noSnapshot"),
+        "scrollIntoView": _BROWSER_REF_FIELDS + ("noSnapshot",),
+        "resize": _BROWSER_TAB_FIELDS + ("width", "height", "noSnapshot"),
+        "close_tab": _BROWSER_TAB_FIELDS,
+        "close_browser": ("profile",),
+        "close_all": ("profile",),
+    },
+    "computer_automation_manager": {
+        "inspect": _COMPUTER_TARGET_FIELDS + ("max_depth", "limit", "include_offscreen"),
+        "list_windows": ("limit",),
+        "find": _COMPUTER_TARGET_FIELDS + ("max_depth", "limit", "include_offscreen"),
+        "get_focused": (),
+        "focus_window": ("window", "class_name", "timeout", "dry_run"),
+        "focus": _COMPUTER_TARGET_FIELDS,
+        "invoke": _COMPUTER_TARGET_FIELDS + ("allow_mouse_fallback",),
+        "click": _COMPUTER_TARGET_FIELDS + ("allow_mouse_fallback",),
+        "set_text": _COMPUTER_TARGET_FIELDS + ("text", "allow_clipboard_fallback"),
+        "toggle": _COMPUTER_TARGET_FIELDS,
+        "select": _COMPUTER_TARGET_FIELDS,
+        "expand": _COMPUTER_TARGET_FIELDS,
+        "collapse": _COMPUTER_TARGET_FIELDS,
+        "send_keys": _COMPUTER_TARGET_FIELDS + ("keys", "allow_global_keys"),
+        "press": _COMPUTER_TARGET_FIELDS + ("keys", "text", "allow_global_keys"),
+        "hotkey": _COMPUTER_TARGET_FIELDS + ("keys", "allow_global_keys"),
+        "code": ("code",),
     },
 }
 
