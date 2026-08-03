@@ -245,7 +245,9 @@ class ToolCallMixin:
                 args["memory_type"] = args.get("type")
             return {k: v for k, v in args.items() if k in {
                 "action", "query", "mode", "content", "memory_type", "subject",
-                "ttl_hours", "importance", "tags", "memory_id", "max_results"
+                "ttl_hours", "importance", "tags", "memory_id", "max_results",
+                "status", "category", "sensitivity", "source",
+                "date_range", "expiry", "pinned", "expected_version", "path", "encrypted"
             }}
 
         if action == "email_manager":
@@ -664,7 +666,19 @@ class ToolCallMixin:
                 return "search_memory", {"query": args.get("query"), "memory_type": args.get("memory_type", "any"), "max_results": args.get("max_results", 6)}
             if op == "update":
                 return "update_memory", {k: v for k, v in args.items() if k in {"mode", "content", "memory_type", "subject", "ttl_hours", "importance", "tags", "memory_id"}}
-            raise ValueError("memory_manager action must be search or update.")
+            required = {
+                "get": ("memory_id",), "add": ("content",), "edit": ("memory_id",),
+                "archive": ("memory_id",), "restore": ("memory_id",), "forget": ("memory_id",),
+                "export": ("path",), "import": ("path",),
+            }
+            if op in required:
+                self._require_unified_fields(op, args, list(required[op]))
+            if op in {
+                "list", "get", "add", "edit", "archive", "restore", "forget", "clear",
+                "export", "import", "stats"
+            }:
+                return "memory_operation", {k: v for k, v in args.items() if k != "action"} | {"action": op}
+            raise ValueError("Unsupported memory_manager action.")
 
         if action == "extension_manager":
             if op in {"search_mcp", "install_mcp", "run_mcp", "list_skills", "search_skills", "install_skill", "install_skill_requirements", "load_skill", "run_skill"}:
@@ -1501,6 +1515,9 @@ class ToolCallMixin:
             operation = str((args_dict or {}).get("action") or "send_toast").strip().lower()
             operation = NOTIFICATION_ACTION_ALIASES.get(operation, operation)
             return operation != "list_reminders"
+        if effective == "memory_operation":
+            operation = str((args_dict or {}).get("action") or "").strip().lower()
+            return operation not in {"list", "get", "stats"}
         return effective in {
             "system_command", "run_project_check", "create_python_tool", "install_mcp",
             "run_mcp", "install_skill", "install_skill_requirements", "run_skill",

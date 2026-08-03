@@ -203,9 +203,14 @@ class SettingsManager:
 
 class SmartiMemoryManager:
     """Local structured memory with TTL and bounded RAG injection."""
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 4
     PROFILE_POLICY_VERSION = 4
+    PRIVACY_POLICY_VERSION = 1
+    AUTOMATIC_USE_POLICY_VERSION = 1
+    USER_WORK_CLEANUP_VERSION = 1
     VALID_TYPES = {"short_term", "long_term", "tool", "user"}
+    SENSITIVE_CATEGORIES = {"address", "phone", "email", "health"}
+    NEVER_STORE_CATEGORIES = {"authentication_secret", "financial_secret"}
     RETRIEVER_NAME = "local-hebrew-weighted-v2"
     HEBREW_FINALS = str.maketrans({
         "\u05da": "\u05db",
@@ -292,18 +297,34 @@ class SmartiMemoryManager:
         ("family", "user", 4, ["my wife", "my husband", "my son", "my daughter", "my mother", "my father",
                               "\u05d0\u05e9\u05ea\u05d9", "\u05d1\u05e2\u05dc\u05d9", "\u05d4\u05d1\u05df \u05e9\u05dc\u05d9", "\u05d4\u05d1\u05ea \u05e9\u05dc\u05d9", "\u05d0\u05de\u05d0 \u05e9\u05dc\u05d9", "\u05d0\u05d1\u05d0 \u05e9\u05dc\u05d9"]),
         ("health", "user", 5, ["allergy", "allergic", "medication", "medical", "\u05d0\u05dc\u05e8\u05d2", "\u05ea\u05e8\u05d5\u05e4\u05d4", "\u05e8\u05e4\u05d5\u05d0\u05d9"]),
-        ("work", "long_term", 4, ["i work at", "i work as", "my job", "my company", "\u05d0\u05e0\u05d9 \u05e2\u05d5\u05d1\u05d3", "\u05d0\u05e0\u05d9 \u05e2\u05d5\u05d1\u05d3\u05ea", "\u05d4\u05e2\u05d1\u05d5\u05d3\u05d4 \u05e9\u05dc\u05d9", "\u05d4\u05d7\u05d1\u05e8\u05d4 \u05e9\u05dc\u05d9"]),
+        ("work", "long_term", 4, ["i work at", "i work for", "i work as", "my job", "my company", "my employer", "\u05d0\u05e0\u05d9 \u05e2\u05d5\u05d1\u05d3 \u05d1", "\u05d0\u05e0\u05d9 \u05e2\u05d5\u05d1\u05d3\u05ea \u05d1", "\u05de\u05e7\u05d5\u05dd \u05d4\u05e2\u05d1\u05d5\u05d3\u05d4 \u05e9\u05dc\u05d9", "\u05d4\u05de\u05e2\u05e1\u05d9\u05e7 \u05e9\u05dc\u05d9", "\u05d4\u05d7\u05d1\u05e8\u05d4 \u05e9\u05dc\u05d9"]),
         ("preference", "user", 4, ["i prefer", "i like", "i don't like", "always use", "never use",
                                   "\u05d0\u05e0\u05d9 \u05de\u05e2\u05d3\u05d9\u05e3", "\u05d0\u05e0\u05d9 \u05de\u05e2\u05d3\u05d9\u05e4\u05d4", "\u05d0\u05e0\u05d9 \u05d0\u05d5\u05d4\u05d1", "\u05ea\u05de\u05d9\u05d3", "\u05d0\u05e3 \u05e4\u05e2\u05dd"]),
     ]
+    CRITICAL_CATEGORY_LABELS = {
+        "address": "כתובת המשתמש",
+        "phone": "טלפון המשתמש",
+        "email": "דוא״ל המשתמש",
+        "identity": "פרטי זהות של המשתמש",
+        "birthday": "יום ההולדת של המשתמש",
+        "family": "פרט משפחתי של המשתמש",
+        "health": "מידע בריאותי של המשתמש",
+        "work": "פרט תעסוקתי של המשתמש",
+        "preference": "העדפת המשתמש",
+    }
 
     def __init__(self, core, path=MEMORY_FILE):
         self.core = core
         self.path = path
         self.export_path = MEMORY_EXPORT_FILE if os.path.abspath(path) == os.path.abspath(MEMORY_FILE) else os.path.splitext(path)[0] + ".md"
         self._lock = threading.RLock()
+        self._session_entries = []
+        self._undo_stack = []
         self.data = self._load()
         self._migrate_legacy_user_memory()
+        self._migrate_privacy_model()
+        self._migrate_automatic_use_model()
+        self._migrate_user_work_artifacts()
         self._migrate_profile_eligibility()
         self.prune_expired()
         self.backfill_critical_user_details()
@@ -317,7 +338,7 @@ class SmartiMemoryManager:
 
     def _load(self):
         if not os.path.exists(self.path):
-            return {"schema_version": self.SCHEMA_VERSION, "entries": [], "archive": [], "stats": {}}
+            return {"schema_version": self.SCHEMA_VERSION, "entries": [], "archive": [], "pending": [], "stats": {}}
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
@@ -326,11 +347,14 @@ class SmartiMemoryManager:
             loaded.setdefault("schema_version", self.SCHEMA_VERSION)
             loaded.setdefault("entries", [])
             loaded.setdefault("archive", [])
+            loaded.setdefault("pending", [])
             loaded.setdefault("stats", {})
             if not isinstance(loaded["entries"], list):
                 loaded["entries"] = []
             if not isinstance(loaded["archive"], list):
                 loaded["archive"] = []
+            if not isinstance(loaded["pending"], list):
+                loaded["pending"] = []
             loaded["schema_version"] = self.SCHEMA_VERSION
             return loaded
         except Exception as e:
@@ -339,16 +363,37 @@ class SmartiMemoryManager:
                 "schema_version": self.SCHEMA_VERSION,
                 "entries": [],
                 "archive": [],
+                "pending": [],
                 "stats": {"load_error": str(e)},
             }
 
     def _save(self):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        tmp_path = self.path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, self.path)
-        self._export_markdown()
+        directory = os.path.dirname(self.path) or "."
+        os.makedirs(directory, exist_ok=True)
+        tmp_path = f"{self.path}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            last_error = None
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, self.path)
+                    last_error = None
+                    break
+                except PermissionError as e:
+                    last_error = e
+                    time.sleep(0.025 * (attempt + 1))
+            if last_error is not None:
+                raise last_error
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+        self._export_markdown_safe()
 
     def _export_markdown(self):
         try:
@@ -369,7 +414,7 @@ class SmartiMemoryManager:
                     expires = entry.get("expires_at") or "never"
                     subject = entry.get("subject") or "memory"
                     rows.append(f"- `{entry.get('id')}` | importance={entry.get('importance', 3)} | expires={expires} | {subject}")
-                    rows.append(f"  {str(entry.get('content', '')).replace(chr(10), ' ')}")
+                    rows.append(f"  {self._markdown_content(entry)}")
                 rows.append("")
             archived = [
                 entry for entry in self.data.get("archive", [])
@@ -383,12 +428,147 @@ class SmartiMemoryManager:
                         f"archived={entry.get('archived_at') or 'unknown'} | "
                         f"reason={entry.get('archive_reason') or 'unknown'}"
                     )
-                    rows.append(f"  {str(entry.get('content', '')).replace(chr(10), ' ')}")
+                    rows.append(f"  {self._markdown_content(entry)}")
                 rows.append("")
             with open(self.export_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(rows).strip() + "\n")
         except Exception as e:
             logging.warning(f"Memory markdown export failed: {e}")
+
+    def _export_markdown_safe(self):
+        """Write the convenience Markdown view without sensitive plaintext."""
+        try:
+            now = datetime.now()
+            rows = [
+                "# Smarti Memory",
+                "",
+                "Human-readable export of smarti_memory.json. Edit through Smarti when possible.",
+                "",
+            ]
+            active = [e for e in self.data.get("entries", []) if not self._is_expired(e, now)]
+            for memory_type in ["user", "long_term", "short_term", "tool"]:
+                items = [e for e in active if e.get("type") == memory_type]
+                if not items:
+                    continue
+                rows.append(f"## {memory_type}")
+                for entry in sorted(items, key=lambda x: x.get("updated_at", ""), reverse=True):
+                    expires = entry.get("expires_at") or "never"
+                    subject = entry.get("subject") or "memory"
+                    rows.append(
+                        f"- `{entry.get('id')}` | importance={entry.get('importance', 3)} | "
+                        f"expires={expires} | {subject}"
+                    )
+                    rows.append(f"  {self._markdown_content(entry)}")
+                rows.append("")
+            archived = [entry for entry in self.data.get("archive", []) if isinstance(entry, dict)]
+            if archived:
+                rows.extend(["## archive", ""])
+                for entry in archived:
+                    rows.append(
+                        f"- `{entry.get('id')}` | type={entry.get('type')} | "
+                        f"archived={entry.get('archived_at') or 'unknown'} | "
+                        f"reason={entry.get('archive_reason') or 'unknown'}"
+                    )
+                    rows.append(f"  {self._markdown_content(entry)}")
+                rows.append("")
+            pending = [entry for entry in self.data.get("pending", []) if isinstance(entry, dict)]
+            if pending:
+                rows.extend(["## pending review", ""])
+                for entry in pending:
+                    rows.append(
+                        f"- `{entry.get('id')}` | category={entry.get('category') or 'unknown'} | "
+                        f"sensitivity={entry.get('sensitivity') or 'ordinary'} | "
+                        f"captured={entry.get('created_at') or 'unknown'}"
+                    )
+                    rows.append("  [Pending user review; content omitted from Markdown export.]")
+                rows.append("")
+            with open(self.export_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(rows).strip() + "\n")
+        except Exception as e:
+            logging.warning(f"Memory safe markdown export failed: {e}")
+
+    def _entry_metadata(self, entry):
+        metadata = entry.get("metadata") if isinstance(entry, dict) else None
+        return metadata if isinstance(metadata, dict) else {}
+
+    def _entry_category(self, entry):
+        metadata = self._entry_metadata(entry)
+        return str(entry.get("category") or metadata.get("category") or "general").strip().lower()
+
+    def _entry_sensitivity(self, entry):
+        metadata = self._entry_metadata(entry)
+        explicit = str(entry.get("sensitivity") or metadata.get("sensitivity") or "").strip().lower()
+        if explicit in {"ordinary", "sensitive"}:
+            return explicit
+        if metadata.get("sensitive") or self._entry_category(entry) in self.SENSITIVE_CATEGORIES:
+            return "sensitive"
+        return "ordinary"
+
+    def _plain_content(self, entry):
+        content = str((entry or {}).get("content") or "")
+        metadata = self._entry_metadata(entry or {})
+        if metadata.get("encrypted") or content.startswith(SECRET_PREFIX):
+            return dpapi_unprotect_text(content)
+        return content
+
+    def _protect_content(self, content):
+        protected = dpapi_protect_text(str(content or ""))
+        if not protected:
+            raise RuntimeError("Sensitive memory could not be protected with Windows DPAPI.")
+        return protected
+
+    def _mask_sensitive_content(self, content, category=""):
+        text = re.sub(r"\s+", " ", str(content or "")).strip()
+        category = str(category or "").lower()
+        if category == "email":
+            match = re.search(r"([\w.+-])[^\s@]*@([\w.-]+)", text)
+            if match:
+                return f"{match.group(1)}••••@{match.group(2)}"
+        if category == "phone":
+            digits = re.sub(r"\D", "", text)
+            if digits:
+                return f"••••••{digits[-4:]}"
+        return "מידע רגיש מוגן ••••"
+
+    def _markdown_content(self, entry):
+        if self._entry_sensitivity(entry) == "sensitive":
+            return "[Sensitive memory protected; plaintext omitted.]"
+        return re.sub(r"\s+", " ", self._plain_content(entry)).strip()
+
+    def _public_entry(self, entry, *, reveal_sensitive=False, user_authorized=False):
+        item = copy.deepcopy(entry or {})
+        category = self._entry_category(item)
+        sensitivity = self._entry_sensitivity(item)
+        plain = self._plain_content(item)
+        item["category"] = category
+        item["sensitivity"] = sensitivity
+        item["version"] = int(item.get("version", 1) or 1)
+        # Stored memories are always eligible for use with the configured model.
+        # Sensitive values remain DPAPI-protected at rest and are only retrieved
+        # when they are relevant to the current request.
+        item["cloud_allowed"] = True
+        item["masked"] = sensitivity == "sensitive" and not (reveal_sensitive and user_authorized)
+        item["content"] = plain if not item["masked"] else self._mask_sensitive_content(plain, category)
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        metadata.pop("encrypted", None)
+        item["metadata"] = metadata
+        return item
+
+    def _audit_memory_event(self, event, entry=None, **extra):
+        payload = {
+            "manager": "memory_manager",
+            "event": str(event or ""),
+            "memory_id": str((entry or {}).get("id") or extra.pop("memory_id", "")),
+            "category": self._entry_category(entry or {}) if entry else str(extra.pop("category", "")),
+            "sensitivity": self._entry_sensitivity(entry or {}) if entry else str(extra.pop("sensitivity", "")),
+        }
+        payload.update({k: v for k, v in extra.items() if k not in {"content", "plaintext"}})
+        try:
+            logger = getattr(self.core, "audit_logger", None)
+            if logger:
+                logger.record("memory_management", payload, self.core.settings)
+        except Exception:
+            pass
 
     def _now_iso(self):
         return datetime.now().isoformat(timespec="seconds")
@@ -400,6 +580,259 @@ class SmartiMemoryManager:
             return datetime.fromisoformat(str(value))
         except Exception:
             return None
+
+    def classify_content(self, content, category=""):
+        """Return deterministic privacy metadata; secrets are never eligible for storage."""
+        text = str(content or "")
+        low = self._normalize_text_for_search(text)
+        category = str(category or "").strip().lower()
+        if category in {"general", "unknown"}:
+            category = ""
+        secret_pattern = re.compile(
+            r"(?i)(?:sk-[a-z0-9_-]{12,}|AIza[a-z0-9_-]{20,}|gh[pousr]_[a-z0-9]{20,}|"
+            r"(?:otp|2fa|cvv|password|passcode|api\s*key|access\s*token|refresh\s*token)\s*[:=]\s*\S+|"
+            r"(?:credit\s*card|card\s*number|כרטיס\s*אשראי|אשראי)[^\d]{0,30}\d(?:[\d\s-]{10,}\d))"
+        )
+        secret_value_context = re.search(
+            r"(?i)(?:my\s+)?(?:password|passcode|api\s*key|access\s*token|refresh\s*token|otp|2fa|cvv|"
+            r"credit\s*card|card\s*number|סיסמ(?:ה|ת)|מפתח\s*api|טוקן|קוד\s*אימות|כרטיס\s*אשראי|אשראי)"
+            r"\s*(?:is|הוא|היא|:|=)\s*\S+",
+            text,
+        )
+        if secret_pattern.search(text) or secret_value_context:
+            return {
+                "category": "authentication_secret",
+                "sensitivity": "sensitive",
+                "store_allowed": False,
+                "reason": "Secrets, authentication values, OTPs and payment credentials are never stored.",
+            }
+        if not category:
+            if re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", text):
+                category = "email"
+            elif re.search(r"(?i)(?:phone|mobile|cell|tel|טלפון|נייד)[^\d+]{0,30}\+?\d[\d\s().-]{6,}\d", text):
+                category = "phone"
+            else:
+                for candidate, _memory_type, _importance, terms in self.CRITICAL_USER_DETAIL_RULES:
+                    if candidate in self.SENSITIVE_CATEGORIES and self._contains_any(low, terms):
+                        category = candidate
+                        break
+        category = category or "general"
+        sensitivity = "sensitive" if category in self.SENSITIVE_CATEGORIES else "ordinary"
+        return {
+            "category": category,
+            "sensitivity": sensitivity,
+            "store_allowed": True,
+            "reason": "Sensitive personal detail" if sensitivity == "sensitive" else "Ordinary memory",
+        }
+
+    def _migrate_privacy_model(self):
+        """Encrypt and quarantine legacy sensitive entries without deleting them."""
+        with self._lock:
+            stats = self.data.setdefault("stats", {})
+            if int(stats.get("privacy_policy_version", 0) or 0) >= self.PRIVACY_POLICY_VERSION:
+                return
+            pending = self.data.setdefault("pending", [])
+            migrated_pending = []
+            active = []
+            changed = 0
+            try:
+                for entry in list(self.data.get("entries", [])):
+                    if not isinstance(entry, dict):
+                        continue
+                    plain = self._plain_content(entry)
+                    classification = self.classify_content(plain, self._entry_category(entry))
+                    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                    entry["metadata"] = metadata
+                    entry["category"] = classification["category"]
+                    entry["sensitivity"] = classification["sensitivity"]
+                    entry["version"] = int(entry.get("version", 1) or 1)
+                    entry.setdefault("pinned", False)
+                    entry.setdefault("source_conversation_id", str(metadata.get("source_conversation_id") or "")[:120])
+                    entry.setdefault("source_message_id", str(metadata.get("source_message_id") or "")[:120])
+                    entry.setdefault("cloud_allowed", classification["sensitivity"] != "sensitive")
+                    metadata["category"] = classification["category"]
+                    metadata["sensitivity"] = classification["sensitivity"]
+                    metadata.setdefault("consent_state", "approved" if classification["sensitivity"] == "ordinary" else "pending_review")
+                    metadata.setdefault("why_saved", entry.get("source") or "legacy memory")
+                    if classification["sensitivity"] == "sensitive":
+                        if not str(entry.get("content") or "").startswith(SECRET_PREFIX):
+                            entry["content"] = self._protect_content(plain)
+                            changed += 1
+                        metadata["encrypted"] = True
+                        metadata["encryption_version"] = 1
+                        metadata["automatic_context_eligible"] = False
+                        metadata["profile_eligible"] = False
+                        entry["cloud_allowed"] = False
+                        entry["pending_kind"] = "privacy_migration"
+                        entry["pending_reason"] = (
+                            "Existing sensitive memory was protected and removed from active retrieval until reviewed."
+                        )
+                        migrated_pending.append(entry)
+                        changed += 1
+                    else:
+                        active.append(entry)
+                self.data["entries"] = active
+                existing_pending_ids = {str(item.get("id")) for item in pending if isinstance(item, dict)}
+                pending.extend(item for item in migrated_pending if str(item.get("id")) not in existing_pending_ids)
+                for entry in self.data.get("archive", []):
+                    if not isinstance(entry, dict):
+                        continue
+                    plain = self._plain_content(entry)
+                    classification = self.classify_content(plain, self._entry_category(entry))
+                    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                    entry["metadata"] = metadata
+                    entry["category"] = classification["category"]
+                    entry["sensitivity"] = classification["sensitivity"]
+                    entry["version"] = int(entry.get("version", 1) or 1)
+                    entry.setdefault("pinned", False)
+                    entry.setdefault("source_conversation_id", str(metadata.get("source_conversation_id") or "")[:120])
+                    entry.setdefault("source_message_id", str(metadata.get("source_message_id") or "")[:120])
+                    metadata["category"] = classification["category"]
+                    metadata["sensitivity"] = classification["sensitivity"]
+                    if classification["sensitivity"] == "sensitive":
+                        if not str(entry.get("content") or "").startswith(SECRET_PREFIX):
+                            entry["content"] = self._protect_content(plain)
+                            changed += 1
+                        metadata["encrypted"] = True
+                        metadata["encryption_version"] = 1
+                        entry["cloud_allowed"] = False
+                stats["privacy_policy_version"] = self.PRIVACY_POLICY_VERSION
+                stats["privacy_migrated_at"] = self._now_iso()
+                stats["privacy_pending_review"] = len(migrated_pending)
+                self.data["schema_version"] = self.SCHEMA_VERSION
+                self._save()
+            except Exception as e:
+                stats["privacy_migration_error"] = str(e)
+                logging.error(f"Memory privacy migration failed safely: {e}")
+                raise
+
+    def _migrate_automatic_use_model(self):
+        """Remove review gates while retaining local encryption and secret blocking."""
+        with self._lock:
+            stats = self.data.setdefault("stats", {})
+            policy_was_current = (
+                int(stats.get("automatic_use_policy_version", 0) or 0)
+                >= self.AUTOMATIC_USE_POLICY_VERSION
+            )
+            changed = 0
+            moved = 0
+            active = self.data.setdefault("entries", [])
+            had_pending = bool(self.data.setdefault("pending", []))
+            active_ids = {str(entry.get("id") or "") for entry in active if isinstance(entry, dict)}
+            for entry in list(active) + list(self.data.setdefault("archive", [])):
+                if not isinstance(entry, dict):
+                    continue
+                metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                entry["metadata"] = metadata
+                if entry.get("cloud_allowed") is not True:
+                    entry["cloud_allowed"] = True
+                    changed += 1
+                if metadata.get("cloud_allowed") is not True:
+                    metadata["cloud_allowed"] = True
+                    changed += 1
+                if metadata.get("consent_state") != "approved":
+                    metadata["consent_state"] = "approved"
+                    changed += 1
+                entry.pop("pending_kind", None)
+                entry.pop("pending_reason", None)
+
+            for pending in list(self.data.setdefault("pending", [])):
+                if not isinstance(pending, dict):
+                    continue
+                entry = copy.deepcopy(pending)
+                metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                entry["metadata"] = metadata
+                entry["cloud_allowed"] = True
+                metadata["cloud_allowed"] = True
+                metadata["consent_state"] = "approved"
+                metadata["approved_by"] = "automatic_memory_policy"
+                metadata["approved_at"] = self._now_iso()
+                entry.pop("pending_kind", None)
+                entry.pop("pending_reason", None)
+                memory_id = str(entry.get("id") or "")
+                if not memory_id or memory_id not in active_ids:
+                    active.append(entry)
+                    if memory_id:
+                        active_ids.add(memory_id)
+                    moved += 1
+            self.data["pending"] = []
+            stats["pending_captures"] = 0
+            if not policy_was_current or changed or moved or had_pending:
+                stats["automatic_use_policy_version"] = self.AUTOMATIC_USE_POLICY_VERSION
+                stats["automatic_use_migrated_at"] = self._now_iso()
+                stats["automatic_use_moved_from_pending"] = moved
+                stats["automatic_use_updated_entries"] = changed
+            memory_cfg = self._settings()
+            settings_changed = (
+                memory_cfg.get("store_sensitive_personal_details") is not True
+                or memory_cfg.get("sensitive_category_consent") != {
+                    "address": True, "phone": True, "email": True, "health": True,
+                }
+                or memory_cfg.get("health_memory_mode") != "persistent"
+                or memory_cfg.get("sensitive_memory_cloud_default") is not True
+            )
+            memory_cfg["store_sensitive_personal_details"] = True
+            memory_cfg["sensitive_category_consent"] = {
+                "address": True, "phone": True, "email": True, "health": True,
+            }
+            memory_cfg["health_memory_mode"] = "persistent"
+            memory_cfg["sensitive_memory_cloud_default"] = True
+            if settings_changed:
+                try:
+                    self.core._save_settings()
+                except Exception:
+                    pass
+            if not policy_was_current or changed or moved or had_pending:
+                self._save()
+
+    @staticmethod
+    def _strip_user_work_artifact(text):
+        return re.sub(
+            r"\bUser\s+work\b\s*:?\s*",
+            "",
+            str(text or ""),
+            flags=re.IGNORECASE,
+        ).strip()
+
+    def _migrate_user_work_artifacts(self):
+        """Remove the old recursive English marker from generated stored records."""
+        with self._lock:
+            stats = self.data.setdefault("stats", {})
+            if int(stats.get("user_work_cleanup_version", 0) or 0) >= self.USER_WORK_CLEANUP_VERSION:
+                return
+            changed = 0
+            for collection in (self.data.get("entries", []), self.data.get("archive", []), self.data.get("pending", [])):
+                for entry in collection:
+                    if not isinstance(entry, dict):
+                        continue
+                    subject = str(entry.get("subject") or "")
+                    plain = self._plain_content(entry)
+                    if not (
+                        re.search(r"\bUser\s+work\b", subject, flags=re.IGNORECASE)
+                        or re.search(r"\bUser\s+work\b", plain, flags=re.IGNORECASE)
+                    ):
+                        continue
+                    cleaned_content = self._strip_user_work_artifact(plain)
+                    cleaned_subject = self._strip_user_work_artifact(subject)
+                    if not cleaned_content:
+                        cleaned_content = plain.replace("User work", "").strip()
+                    if not cleaned_subject:
+                        cleaned_subject = self._derive_subject(cleaned_content)
+                    sensitive = self._entry_sensitivity(entry) == "sensitive"
+                    entry["content"] = self._protect_content(cleaned_content) if sensitive else cleaned_content
+                    entry["subject"] = cleaned_subject[:120]
+                    entry["fingerprint"] = hashlib.sha256(
+                        f"{entry.get('type')}\0{entry.get('scope')}\0{entry.get('subject', '').lower()}\0{cleaned_content.lower()}".encode("utf-8", "ignore")
+                    ).hexdigest()
+                    entry["version"] = int(entry.get("version", 1) or 1) + 1
+                    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                    metadata["user_work_artifact_removed"] = True
+                    entry["metadata"] = metadata
+                    changed += 1
+            stats["user_work_cleanup_version"] = self.USER_WORK_CLEANUP_VERSION
+            stats["user_work_cleanup_at"] = self._now_iso()
+            stats["user_work_cleanup_count"] = changed
+            self._save()
 
     def _normalize_type(self, memory_type):
         value = str(memory_type or "long_term").strip().lower().replace("-", "_")
@@ -479,7 +912,7 @@ class SmartiMemoryManager:
         metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
         return " ".join([
             str(entry.get("subject", "")),
-            str(entry.get("content", "")),
+            self._plain_content(entry),
             " ".join(entry.get("tags", []) or []),
             str(entry.get("tool_name", "")),
             str(metadata.get("category", "")),
@@ -687,6 +1120,17 @@ class SmartiMemoryManager:
             return not self._contains_any(low, ["where do i live", "\u05d0\u05d9\u05e4\u05d4 \u05d0\u05e0\u05d9 \u05d2\u05e8", "\u05d0\u05d9\u05da \u05d0\u05ea\u05d4 \u05d9\u05d5\u05d3\u05e2"])
         return False
 
+    def _work_has_value(self, text):
+        """Require an actual first-person employment fact, not a loose word match."""
+        low = self._normalize_text_for_search(text)
+        return bool(re.search(
+            r"(?:\bi\s+work\s+(?:at|for|as)\s+\S+|"
+            r"\bmy\s+(?:job|company|employer)\s+(?:is|at)\s+\S+|"
+            r"(?:אני\s+עובד(?:ת)?\s+ב|מקום\s+העבודה\s+שלי\s+הוא|"
+            r"המעסיק\s+שלי\s+הוא|החברה\s+שלי\s+היא)\s*\S+)",
+            low,
+        ))
+
     def _split_memory_candidate_spans(self, text):
         text = re.sub(r"\s+", " ", str(text or "")).strip()
         if not text:
@@ -712,7 +1156,7 @@ class SmartiMemoryManager:
             context = raw[max(0, match.start() - 90):match.end() + 40]
             if not self._has_user_ownership_signal(context):
                 continue
-            details.append(("email", "user", 5, f"User email: {match.group(0)}"))
+            details.append(("email", "user", 5, f"דוא״ל המשתמש: {match.group(0)}"))
         phone_context_re = re.compile(
             r"(?i)(?:phone|mobile|cell|tel|\u05d8\u05dc\u05e4\u05d5\u05df|\u05e0\u05d9\u05d9\u05d3)[^\d+]{0,30}(\+?\d[\d\s().-]{6,}\d)"
         )
@@ -720,7 +1164,7 @@ class SmartiMemoryManager:
             context = raw[max(0, match.start() - 90):match.end() + 40]
             if not self._has_user_ownership_signal(context):
                 continue
-            details.append(("phone", "user", 5, f"User phone: {match.group(1).strip()}"))
+            details.append(("phone", "user", 5, f"טלפון המשתמש: {match.group(1).strip()}"))
         return details
 
     def extract_critical_user_memories(self, user_text):
@@ -744,15 +1188,16 @@ class SmartiMemoryManager:
                     continue
                 if category == "address" and not self._address_has_value(span):
                     continue
+                if category == "work" and not self._work_has_value(span):
+                    continue
                 if self._contains_any(span, self.SECRET_DETAIL_TERMS):
                     continue
-                if category in {"address", "phone", "email", "health"} and not cfg.get("store_sensitive_personal_details", True):
-                    continue
-                content = f"User {category}: {span[:max_chars]}"
+                label = self.CRITICAL_CATEGORY_LABELS.get(category, "פרט על המשתמש")
+                content = f"{label}: {span[:max_chars]}"
                 candidates.append({
                     "memory_type": memory_type,
                     "content": content,
-                    "subject": f"User {category}",
+                    "subject": label,
                     "tags": ["auto", "critical", category],
                     "importance": importance,
                     "category": category,
@@ -767,12 +1212,10 @@ class SmartiMemoryManager:
         for category, memory_type, importance, content in self._extract_regex_personal_details(text):
             if self._contains_any(content, self.SECRET_DETAIL_TERMS):
                 continue
-            if category in {"phone", "email"} and not cfg.get("store_sensitive_personal_details", True):
-                continue
             candidates.append({
                 "memory_type": memory_type,
                 "content": content[:max_chars],
-                "subject": f"User {category}",
+                "subject": self.CRITICAL_CATEGORY_LABELS.get(category, "פרט על המשתמש"),
                 "tags": ["auto", "critical", category],
                 "importance": importance,
                 "category": category,
@@ -790,28 +1233,55 @@ class SmartiMemoryManager:
             deduped.append(item)
         return deduped[:10]
 
+    def queue_pending_capture(self, memory_type, content, *, subject="", tags=None,
+                              importance=3, source="capture", category="", confidence=0.75,
+                              metadata=None):
+        # Compatibility entry point for older callers. Captures are stored
+        # immediately; there is no user-review queue in the current model.
+        return self.add(
+            memory_type,
+            content,
+            subject=subject,
+            tags=tags,
+            importance=importance,
+            source=source,
+            category=category,
+            confidence=confidence,
+            metadata=metadata,
+            consent_state="approved",
+            cloud_allowed=True,
+            storage_mode="persistent",
+        )
+
     def capture_critical_user_details(self, user_text, source="critical_preflight"):
         added = []
         for item in self.extract_critical_user_memories(user_text):
+            category = item["category"]
+            common = {
+                "subject": item["subject"],
+                "tags": item["tags"],
+                "importance": item["importance"],
+                "source": source,
+                "confidence": 0.88,
+                "category": category,
+                "metadata": {
+                    "category": category,
+                    "sensitive": bool(item.get("sensitive", False)),
+                    "capture": "deterministic_preflight",
+                    "profile_eligible": bool(item.get("profile_eligible", True)),
+                    "automatic_context_eligible": bool(item.get("automatic_context_eligible", True)),
+                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
+                    "why_saved": "Detected as a reusable personal detail from the user's message.",
+                },
+            }
             entry_id = self.add(
                 item["memory_type"],
                 item["content"],
-                subject=item["subject"],
-                tags=item["tags"],
-                importance=item["importance"],
-                source=source,
-                confidence=0.88,
                 volatile=False,
-                metadata={
-                    "category": item["category"],
-                    "sensitive": item.get("sensitive", False),
-                    "capture": "deterministic_preflight",
-                    "profile_eligible": bool(item.get("profile_eligible", True)),
-                    "automatic_context_eligible": bool(
-                        item.get("automatic_context_eligible", True)
-                    ),
-                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
-                },
+                consent_state="approved",
+                cloud_allowed=True,
+                storage_mode="persistent",
+                **common,
             )
             if entry_id:
                 added.append(entry_id)
@@ -830,7 +1300,19 @@ class SmartiMemoryManager:
         for entry in list(self.data.get("entries", [])):
             if entry.get("type") not in {"short_term", "long_term"}:
                 continue
-            content = str(entry.get("content", ""))
+            metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+            source = str(entry.get("source") or "").strip().lower()
+            tags = {str(tag or "").strip().lower() for tag in (entry.get("tags") or [])}
+            # Never feed a memory produced by this backfill into the next
+            # policy migration. Older versions did so after each policy bump,
+            # producing chains such as "User work: User work ...".
+            if (
+                metadata.get("capture") == "deterministic_preflight"
+                or source in {"critical_preflight", "critical_backfill"}
+                or "critical" in tags
+            ):
+                continue
+            content = self._plain_content(entry)
             match = re.search(r"User request:\s*(.*?)(?:\s+Outcome:|$)", content, flags=re.DOTALL)
             text = match.group(1).strip() if match else " ".join(str(entry.get(key, "")) for key in ("subject", "content"))
             added.extend(self.capture_critical_user_details(text, source="critical_backfill"))
@@ -900,12 +1382,21 @@ class SmartiMemoryManager:
             pass
 
     def add(self, memory_type, content, *, subject="", tags=None, ttl_hours=None, importance=3,
-            source="manual", confidence=0.75, scope="global", tool_name="", volatile=None, metadata=None):
-        content = str(content or "").strip()
+            source="manual", confidence=0.75, scope="global", tool_name="", volatile=None,
+            metadata=None, category="", consent_state="approved", cloud_allowed=None,
+            storage_mode="persistent", entry_id="", pinned=False):
+        content = self._strip_user_work_artifact(content)
         if not content:
             return None
         memory_type = self._normalize_type(memory_type)
-        cfg = self._settings()
+        metadata = copy.deepcopy(metadata) if isinstance(metadata, dict) else {}
+        classification = self.classify_content(content, category or metadata.get("category", ""))
+        if not classification.get("store_allowed", True):
+            raise ValueError(classification.get("reason") or "This content cannot be stored in memory.")
+        category = classification["category"]
+        sensitivity = classification["sensitivity"]
+        cloud_allowed = True
+        consent_state = "approved"
         if ttl_hours is None:
             ttl_hours = self._ttl_for_type(memory_type, source=source)
         try:
@@ -920,12 +1411,13 @@ class SmartiMemoryManager:
         except Exception:
             importance = 3
         tags = self._coerce_tags(tags)
-        subject = str(subject or "").strip()[:120] or self._derive_subject(content)
+        subject = self._strip_user_work_artifact(subject)[:120] or self._derive_subject(content)
         fingerprint = hashlib.sha256(
             f"{memory_type}\0{scope}\0{subject.lower()}\0{content.lower()}".encode("utf-8", "ignore")
         ).hexdigest()
         with self._lock:
-            for entry in self.data.get("entries", []):
+            target_entries = self._session_entries if storage_mode == "session_only" else self.data.setdefault("entries", [])
+            for entry in target_entries:
                 if entry.get("fingerprint") == fingerprint:
                     entry["updated_at"] = self._now_iso()
                     entry["expires_at"] = expires_at
@@ -933,21 +1425,46 @@ class SmartiMemoryManager:
                     entry["access_count"] = int(entry.get("access_count", 0)) + 1
                     entry["last_source"] = source
                     entry["tags"] = sorted(set(entry.get("tags", []) or []) | set(tags))[:12]
+                    entry["cloud_allowed"] = True
                     if isinstance(metadata, dict) and metadata:
                         existing_metadata = entry.get("metadata")
                         if not isinstance(existing_metadata, dict):
                             existing_metadata = {}
                             entry["metadata"] = existing_metadata
                         existing_metadata.update(copy.deepcopy(metadata))
-                    self._save()
+                        existing_metadata["cloud_allowed"] = True
+                        existing_metadata["consent_state"] = "approved"
+                    entry["version"] = int(entry.get("version", 1) or 1) + 1
+                    if storage_mode != "session_only":
+                        self._save()
                     return entry.get("id")
-            entry_id = "mem_" + uuid.uuid4().hex[:12]
+            entry_id = str(entry_id or "").strip() or "mem_" + uuid.uuid4().hex[:12]
+            metadata.update({
+                "category": category,
+                "sensitivity": sensitivity,
+                "sensitive": sensitivity == "sensitive",
+                "consent_state": consent_state,
+                "cloud_allowed": bool(cloud_allowed),
+                "encrypted": sensitivity == "sensitive" and storage_mode != "session_only",
+                "encryption_version": 1 if sensitivity == "sensitive" and storage_mode != "session_only" else 0,
+                "why_saved": metadata.get("why_saved") or source,
+            })
+            stored_content = (
+                self._protect_content(content[:6000])
+                if sensitivity == "sensitive" and storage_mode != "session_only"
+                else content[:6000]
+            )
             entry = {
                 "id": entry_id,
                 "type": memory_type,
                 "scope": scope or "global",
                 "subject": subject,
-                "content": content[:6000],
+                "content": stored_content,
+                "category": category,
+                "sensitivity": sensitivity,
+                "cloud_allowed": bool(cloud_allowed),
+                "pinned": bool(pinned),
+                "version": 1,
                 "tags": tags,
                 "importance": importance,
                 "confidence": max(0.0, min(1.0, float(confidence or 0.75))),
@@ -959,18 +1476,369 @@ class SmartiMemoryManager:
                 "expires_at": expires_at,
                 "fingerprint": fingerprint,
                 "access_count": 0,
-                "metadata": metadata or {},
+                "source_conversation_id": str(metadata.get("source_conversation_id") or "")[:120],
+                "source_message_id": str(metadata.get("source_message_id") or "")[:120],
+                "metadata": metadata,
             }
-            self.data.setdefault("entries", []).append(entry)
+            target_entries.append(entry)
             stats = self.data.setdefault("stats", {})
             stats["total_added"] = int(stats.get("total_added", 0)) + 1
             stats["last_added_at"] = self._now_iso()
-            self._save()
+            if storage_mode != "session_only":
+                self._save()
+            self._audit_memory_event("add", entry, storage_mode=storage_mode)
             return entry_id
 
     def _derive_subject(self, content):
         text = re.sub(r"\s+", " ", str(content or "")).strip()
         return text[:80] + ("..." if len(text) > 80 else "")
+
+    def _locate_entry(self, memory_id):
+        memory_id = str(memory_id or "").strip()
+        collections = (
+            ("active", self.data.setdefault("entries", [])),
+            ("archive", self.data.setdefault("archive", [])),
+            ("session", self._session_entries),
+            ("pending", self.data.setdefault("pending", [])),
+        )
+        for status, entries in collections:
+            for index, entry in enumerate(entries):
+                if str(entry.get("id") or "") == memory_id:
+                    return status, entries, index, entry
+        return None, None, None, None
+
+    def list_entries(self, *, query="", memory_type="any", status="active", category="",
+                     sensitivity="any", source="", date_range="any", expiry="any",
+                     max_results=200, sort_by="updated_desc",
+                     reveal_sensitive=False, user_authorized=False):
+        self.prune_expired()
+        statuses = {str(status or "active").strip().lower()}
+        if "all" in statuses:
+            statuses = {"active", "archive", "session", "pending"}
+        collections = {
+            "active": self.data.get("entries", []),
+            "archive": self.data.get("archive", []),
+            "session": self._session_entries,
+            "pending": self.data.get("pending", []),
+        }
+        normalized_query = self._normalize_text_for_search(query)
+        normalized_source = str(source or "").strip().lower()
+        normalized_category = str(category or "").strip().lower()
+        normalized_sensitivity = str(sensitivity or "any").strip().lower()
+        normalized_type = str(memory_type or "any").strip().lower()
+        normalized_date_range = str(date_range or "any").strip().lower()
+        normalized_expiry = str(expiry or "any").strip().lower()
+        date_days = {"7d": 7, "30d": 30, "90d": 90}.get(normalized_date_range)
+        now = datetime.now()
+        rows = []
+        with self._lock:
+            for item_status in statuses:
+                for entry in list(collections.get(item_status, [])):
+                    if normalized_type not in {"", "any"} and entry.get("type") != self._normalize_type(normalized_type):
+                        continue
+                    if normalized_category and self._entry_category(entry) != normalized_category:
+                        continue
+                    if normalized_sensitivity not in {"", "any"} and self._entry_sensitivity(entry) != normalized_sensitivity:
+                        continue
+                    if normalized_source and normalized_source not in str(entry.get("source") or "").lower():
+                        continue
+                    updated = self._parse_dt(entry.get("updated_at")) or self._parse_dt(entry.get("created_at"))
+                    if date_days and updated and updated < now - timedelta(days=date_days):
+                        continue
+                    expires = self._parse_dt(entry.get("expires_at"))
+                    if normalized_expiry == "never" and expires is not None:
+                        continue
+                    if normalized_expiry == "expiring" and (
+                        expires is None or expires < now or expires > now + timedelta(days=7)
+                    ):
+                        continue
+                    if normalized_expiry == "expired" and not (
+                        entry.get("archive_reason") == "expired" or (expires is not None and expires <= now)
+                    ):
+                        continue
+                    if normalized_query:
+                        haystack = self._normalize_text_for_search(
+                            " ".join((
+                                str(entry.get("subject") or ""),
+                                self._plain_content(entry),
+                                " ".join(entry.get("tags") or []),
+                                self._entry_category(entry),
+                                str(entry.get("source") or ""),
+                            ))
+                        )
+                        if normalized_query not in haystack and not self._tokenize(normalized_query).intersection(self._tokenize(haystack)):
+                            continue
+                    public = self._public_entry(
+                        entry,
+                        reveal_sensitive=reveal_sensitive,
+                        user_authorized=user_authorized,
+                    )
+                    public["status"] = item_status
+                    rows.append(public)
+        reverse = not str(sort_by or "updated_desc").endswith("_asc")
+        field = "importance" if str(sort_by).startswith("importance") else (
+            "created_at" if str(sort_by).startswith("created") else "updated_at"
+        )
+        rows.sort(key=lambda item: item.get(field, 0) or 0, reverse=reverse)
+        rows.sort(key=lambda item: bool(item.get("pinned", False)), reverse=True)
+        try:
+            limit = max(1, min(1000, int(max_results or 200)))
+        except Exception:
+            limit = 200
+        return rows[:limit]
+
+    def get_entry(self, memory_id, *, reveal_sensitive=False, user_authorized=False):
+        with self._lock:
+            status, _entries, _index, entry = self._locate_entry(memory_id)
+            if not entry:
+                return None
+            public = self._public_entry(
+                entry,
+                reveal_sensitive=reveal_sensitive,
+                user_authorized=user_authorized,
+            )
+            public["status"] = status
+            return public
+
+    def edit_entry(self, memory_id, *, expected_version=None, user_authorized=False, **changes):
+        with self._lock:
+            status, entries, index, entry = self._locate_entry(memory_id)
+            if not entry or status == "pending":
+                raise KeyError("memory_id not found or is pending review")
+            current_version = int(entry.get("version", 1) or 1)
+            if expected_version not in (None, "") and int(expected_version) != current_version:
+                raise RuntimeError(
+                    f"Memory changed concurrently (expected version {expected_version}, current {current_version})."
+                )
+            before = copy.deepcopy(entry)
+            content = self._strip_user_work_artifact(
+                changes.get("content", self._plain_content(entry))
+            )
+            if not content:
+                raise ValueError("Memory content cannot be empty.")
+            category = str(changes.get("category", self._entry_category(entry)) or "").strip().lower()
+            classification = self.classify_content(content, category)
+            if not classification.get("store_allowed", True):
+                raise ValueError(classification.get("reason") or "This content cannot be stored.")
+            if classification["sensitivity"] == "sensitive" and not user_authorized:
+                raise PermissionError("Only the user-facing memory page may edit sensitive memory.")
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            metadata.update({
+                "category": classification["category"],
+                "sensitivity": classification["sensitivity"],
+                "sensitive": classification["sensitivity"] == "sensitive",
+                "encrypted": classification["sensitivity"] == "sensitive" and status != "session",
+                "encryption_version": 1 if classification["sensitivity"] == "sensitive" and status != "session" else 0,
+            })
+            entry["metadata"] = metadata
+            entry["content"] = (
+                self._protect_content(content[:6000])
+                if classification["sensitivity"] == "sensitive" and status != "session"
+                else content[:6000]
+            )
+            entry["category"] = classification["category"]
+            entry["sensitivity"] = classification["sensitivity"]
+            if "subject" in changes:
+                entry["subject"] = self._strip_user_work_artifact(changes.get("subject"))[:120] or self._derive_subject(content)
+            if "memory_type" in changes:
+                entry["type"] = self._normalize_type(changes.get("memory_type"))
+            if "importance" in changes:
+                entry["importance"] = max(1, min(5, int(changes.get("importance") or 3)))
+            if "tags" in changes:
+                entry["tags"] = self._coerce_tags(changes.get("tags"))
+            entry["cloud_allowed"] = True
+            metadata["cloud_allowed"] = True
+            metadata["consent_state"] = "approved"
+            if "pinned" in changes:
+                entry["pinned"] = bool(changes.get("pinned"))
+            if "ttl_hours" in changes:
+                ttl = changes.get("ttl_hours")
+                entry["expires_at"] = (
+                    (datetime.now() + timedelta(hours=float(ttl))).isoformat(timespec="seconds")
+                    if ttl not in (None, "", 0, "0") else None
+                )
+            entry["updated_at"] = self._now_iso()
+            entry["version"] = current_version + 1
+            entry["fingerprint"] = hashlib.sha256(
+                f"{entry.get('type')}\0{entry.get('scope')}\0{entry.get('subject', '').lower()}\0{content.lower()}".encode("utf-8", "ignore")
+            ).hexdigest()
+            self._undo_stack.append({"action": "edit", "status": status, "entry": before})
+            self._undo_stack = self._undo_stack[-20:]
+            if status != "session":
+                self._save()
+            self._audit_memory_event("edit", entry, version=entry["version"])
+            return self._public_entry(entry)
+
+    def archive_entry(self, memory_id, reason="manual"):
+        with self._lock:
+            status, entries, index, entry = self._locate_entry(memory_id)
+            if not entry or status not in {"active", "session"}:
+                return False
+            before = copy.deepcopy(entry)
+            archived = entries.pop(index)
+            if status == "session" and self._entry_sensitivity(archived) == "sensitive":
+                archived["content"] = self._protect_content(self._plain_content(archived))
+                archived.setdefault("metadata", {})["encrypted"] = True
+            archived["archived_at"] = self._now_iso()
+            archived["archive_reason"] = str(reason or "manual")[:120]
+            archived["version"] = int(archived.get("version", 1) or 1) + 1
+            self.data.setdefault("archive", []).append(archived)
+            self._undo_stack.append({"action": "archive", "from_status": status, "entry": before})
+            self._undo_stack = self._undo_stack[-20:]
+            self._save()
+            self._audit_memory_event("archive", archived, reason=archived["archive_reason"])
+            return True
+
+    def restore_entry(self, memory_id):
+        with self._lock:
+            status, entries, index, entry = self._locate_entry(memory_id)
+            if not entry or status != "archive":
+                return False
+            restored = entries.pop(index)
+            before = copy.deepcopy(restored)
+            restored.pop("archived_at", None)
+            restored.pop("archive_reason", None)
+            restored["updated_at"] = self._now_iso()
+            restored["version"] = int(restored.get("version", 1) or 1) + 1
+            self.data.setdefault("entries", []).append(restored)
+            self._undo_stack.append({"action": "restore", "entry": before})
+            self._undo_stack = self._undo_stack[-20:]
+            self._save()
+            self._audit_memory_event("restore", restored)
+            return True
+
+    def undo_last(self):
+        with self._lock:
+            if not self._undo_stack:
+                return False
+            undo = self._undo_stack.pop()
+            entry = copy.deepcopy(undo.get("entry") or {})
+            memory_id = str(entry.get("id") or "")
+            status, entries, index, _current = self._locate_entry(memory_id)
+            if entries is not None and index is not None:
+                entries.pop(index)
+            target_status = undo.get("status") or undo.get("from_status")
+            if undo.get("action") == "restore":
+                target_status = "archive"
+            target = {
+                "archive": self.data.setdefault("archive", []),
+                "session": self._session_entries,
+                "pending": self.data.setdefault("pending", []),
+            }.get(target_status, self.data.setdefault("entries", []))
+            target.append(entry)
+            if target_status != "session":
+                self._save()
+            self._audit_memory_event("undo", entry, reverted_action=undo.get("action"))
+            return True
+
+    def memory_stats(self):
+        with self._lock:
+            active = list(self.data.get("entries", []))
+            archive = list(self.data.get("archive", []))
+            pending = list(self.data.get("pending", []))
+            all_entries = active + archive + pending + list(self._session_entries)
+            by_type = {}
+            by_category = {}
+            sensitive = 0
+            for entry in all_entries:
+                by_type[entry.get("type", "unknown")] = by_type.get(entry.get("type", "unknown"), 0) + 1
+                category = self._entry_category(entry)
+                by_category[category] = by_category.get(category, 0) + 1
+                sensitive += self._entry_sensitivity(entry) == "sensitive"
+            try:
+                storage_bytes = os.path.getsize(self.path) if os.path.exists(self.path) else 0
+            except Exception:
+                storage_bytes = 0
+            return {
+                "active": len(active),
+                "archive": len(archive),
+                "session": len(self._session_entries),
+                "pending": len(pending),
+                "sensitive": int(sensitive),
+                "by_type": by_type,
+                "by_category": by_category,
+                "storage_bytes": storage_bytes,
+                "undo_available": bool(self._undo_stack),
+                "stats": copy.deepcopy(self.data.get("stats", {})),
+            }
+
+    def export_memory(self, path, *, encrypted=True, include_sensitive=True):
+        path = os.path.abspath(str(path or "").strip())
+        if not path:
+            raise ValueError("Export path is required.")
+        payload = {
+            "format": "smarti-memory-export-v1",
+            "created_at": self._now_iso(),
+            "encrypted_sensitive": bool(encrypted),
+            "entries": [],
+            "archive": [],
+            "pending": [],
+        }
+        with self._lock:
+            for key, collection in (
+                ("entries", self.data.get("entries", [])),
+                ("archive", self.data.get("archive", [])),
+                ("pending", self.data.get("pending", [])),
+            ):
+                for entry in collection:
+                    item = copy.deepcopy(entry)
+                    if self._entry_sensitivity(item) == "sensitive":
+                        if not include_sensitive:
+                            continue
+                        if encrypted:
+                            if not str(item.get("content") or "").startswith(SECRET_PREFIX):
+                                item["content"] = self._protect_content(self._plain_content(item))
+                                item.setdefault("metadata", {})["encrypted"] = True
+                        else:
+                            item["content"] = self._mask_sensitive_content(
+                                self._plain_content(item), self._entry_category(item)
+                            )
+                            item["redacted"] = True
+                    payload[key].append(item)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        self._audit_memory_event("export", memory_id="", encrypted=bool(encrypted), count=sum(len(payload[k]) for k in ("entries", "archive", "pending")))
+        return path
+
+    def import_memory(self, path, *, user_authorized=False):
+        path = os.path.abspath(str(path or "").strip())
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict) or payload.get("format") != "smarti-memory-export-v1":
+            raise ValueError("Unsupported memory export format.")
+        imported = 0
+        skipped = 0
+        for entry in payload.get("entries", []):
+            if not isinstance(entry, dict) or entry.get("redacted"):
+                skipped += 1
+                continue
+            plain = self._plain_content(entry)
+            sensitivity = self._entry_sensitivity(entry)
+            if sensitivity == "sensitive" and not user_authorized:
+                skipped += 1
+                continue
+            try:
+                entry_id = self.add(
+                    entry.get("type", "long_term"),
+                    plain,
+                    subject=entry.get("subject", ""),
+                    tags=entry.get("tags", []),
+                    importance=entry.get("importance", 3),
+                    source="memory_import",
+                    confidence=entry.get("confidence", 0.75),
+                    category=self._entry_category(entry),
+                    consent_state="approved",
+                    cloud_allowed=bool(entry.get("cloud_allowed", False)),
+                    metadata={**self._entry_metadata(entry), "imported_at": self._now_iso()},
+                )
+                imported += bool(entry_id)
+            except Exception:
+                skipped += 1
+        self._audit_memory_event("import", memory_id="", imported=int(imported), skipped=int(skipped))
+        return {"imported": int(imported), "skipped": int(skipped)}
 
     def clear(self, memory_type=None):
         memory_type = self._normalize_type(memory_type) if memory_type else None
@@ -978,14 +1846,23 @@ class SmartiMemoryManager:
             before = (
                 len(self.data.get("entries", []))
                 + len(self.data.get("archive", []))
+                + len(self.data.get("pending", []))
+                + len(self._session_entries)
             )
             if memory_type:
                 self.data["entries"] = [e for e in self.data.get("entries", []) if e.get("type") != memory_type]
                 self.data["archive"] = [e for e in self.data.get("archive", []) if e.get("type") != memory_type]
+                self.data["pending"] = [e for e in self.data.get("pending", []) if e.get("type") != memory_type]
+                self._session_entries = [e for e in self._session_entries if e.get("type") != memory_type]
             else:
                 self.data["entries"] = []
                 self.data["archive"] = []
-            removed = before - len(self.data["entries"]) - len(self.data["archive"])
+                self.data["pending"] = []
+                self._session_entries = []
+            removed = (
+                before - len(self.data["entries"]) - len(self.data["archive"])
+                - len(self.data["pending"]) - len(self._session_entries)
+            )
             stats = self.data.setdefault("stats", {})
             stats["total_cleared"] = int(stats.get("total_cleared", 0)) + removed
             stats["last_cleared_at"] = self._now_iso()
@@ -997,15 +1874,27 @@ class SmartiMemoryManager:
         if not memory_id:
             return False
         with self._lock:
-            before = len(self.data.get("entries", [])) + len(self.data.get("archive", []))
-            self.data["entries"] = [e for e in self.data.get("entries", []) if e.get("id") != memory_id]
-            self.data["archive"] = [e for e in self.data.get("archive", []) if e.get("id") != memory_id]
-            removed = before - len(self.data["entries"]) - len(self.data["archive"])
-            if removed:
-                self._save()
-            return bool(removed)
+            status, entries, index, entry = self._locate_entry(memory_id)
+            if entry is not None:
+                entries.pop(index)
+                if status != "session":
+                    self._save()
+                self._audit_memory_event("forget", entry, previous_status=status)
+                return True
+            return False
 
-    def search(self, query, memory_types=None, max_results=None, max_chars=None):
+    def _sensitive_entry_relevant(self, query, entry):
+        category = self._entry_category(entry)
+        normalized = self._normalize_text_for_search(query)
+        category_terms = {
+            "address": ("address", "street", "where do i live", "כתובת", "רחוב", "איפה אני גר"),
+            "phone": ("phone", "mobile", "call me", "טלפון", "נייד", "המספר שלי"),
+            "email": ("email", "mail address", "אימייל", "מייל", "דואר אלקטרוני"),
+            "health": ("health", "medical", "allergy", "medication", "בריאות", "רפואי", "אלרג", "תרופה"),
+        }
+        return any(self._normalize_text_for_search(term) in normalized for term in category_terms.get(category, ()))
+
+    def search(self, query, memory_types=None, max_results=None, max_chars=None, *, for_prompt=False):
         started = time.time()
         self.prune_expired()
         cfg = self._settings()
@@ -1025,7 +1914,7 @@ class SmartiMemoryManager:
         live_query = intent.get("live")
         scored = []
         with self._lock:
-            entries = list(self.data.get("entries", []))
+            entries = list(self.data.get("entries", [])) + list(self._session_entries)
         prepared = []
         doc_freq = {}
         for entry in entries:
@@ -1033,6 +1922,9 @@ class SmartiMemoryManager:
                 continue
             if memory_types and entry.get("type") not in memory_types:
                 continue
+            if self._entry_sensitivity(entry) == "sensitive":
+                if for_prompt and not self._sensitive_entry_relevant(q, entry):
+                    continue
             haystack = self._entry_search_text(entry)
             tokens = self._tokenize(haystack)
             prepared.append((entry, haystack, tokens))
@@ -1071,14 +1963,14 @@ class SmartiMemoryManager:
         used_chars = 0
         seen = set()
         for score, entry in scored:
-            content = str(entry.get("content", ""))
+            content = self._plain_content(entry)
             if not content.strip():
                 continue
             dedupe = hashlib.sha1(content.lower().encode("utf-8", "ignore")).hexdigest()
             if dedupe in seen:
                 continue
             seen.add(dedupe)
-            formatted = self._format_entry(entry, score)
+            formatted = self._format_entry(entry, score, reveal_sensitive=for_prompt)
             if used_chars + len(formatted) > max_chars and results:
                 continue
             results.append({"score": score, "entry": entry, "text": formatted})
@@ -1094,6 +1986,10 @@ class SmartiMemoryManager:
                     entry["last_accessed_at"] = self._now_iso()
                     memory_type = entry.get("type", "unknown")
                     type_counts[memory_type] = type_counts.get(memory_type, 0) + 1
+            for entry in self._session_entries:
+                if entry.get("id") in ids:
+                    entry["access_count"] = int(entry.get("access_count", 0)) + 1
+                    entry["last_accessed_at"] = self._now_iso()
             stats = self.data.setdefault("stats", {})
             stats["searches"] = int(stats.get("searches", 0)) + 1
             stats["last_search_at"] = self._now_iso()
@@ -1107,7 +2003,7 @@ class SmartiMemoryManager:
             self._save()
         return results
 
-    def _format_entry(self, entry, score):
+    def _format_entry(self, entry, score, *, reveal_sensitive=False):
         created = entry.get("created_at", "?")
         expires = entry.get("expires_at") or "never"
         tags = ", ".join(entry.get("tags", []) or [])
@@ -1121,7 +2017,9 @@ class SmartiMemoryManager:
         )
         if tags:
             header += f" tags={tags}"
-        content = re.sub(r"\s+", " ", str(entry.get("content", "")).strip())
+        content = re.sub(r"\s+", " ", self._plain_content(entry).strip())
+        if self._entry_sensitivity(entry) == "sensitive" and not reveal_sensitive:
+            content = self._mask_sensitive_content(content, self._entry_category(entry))
         if len(content) > 900:
             content = content[:900].rstrip() + "..."
         return f"{header}\n  {content}"
@@ -1195,6 +2093,7 @@ class SmartiMemoryManager:
                 memory_types="user",
                 max_results=cfg.get("user_memory_max_results", 8),
                 max_chars=cfg.get("user_memory_max_injected_chars", 2200),
+                for_prompt=True,
             )
             user_results = unique([
                 result
@@ -1210,6 +2109,7 @@ class SmartiMemoryManager:
             memory_types={"user", "long_term", "short_term"},
             max_results=cfg.get("non_tool_memory_max_results", cfg.get("max_results", 8)),
             max_chars=max(800, max_chars),
+            for_prompt=True,
         )
         non_tool_results = unique([
             result
@@ -1237,6 +2137,7 @@ class SmartiMemoryManager:
                 memory_types="tool",
                 max_results=cfg.get("tool_memory_prompt_max_results", 3),
                 max_chars=cfg.get("tool_memory_prompt_max_chars", 1400),
+                for_prompt=True,
             )
             try:
                 max_age = float(cfg.get("tool_memory_prompt_max_age_hours", 24) or 24)
@@ -1250,6 +2151,8 @@ class SmartiMemoryManager:
             tool_results = unique(filtered)
 
         results = user_results + non_tool_results + tool_results
+        if results:
+            self._mark_injected([result.get("entry", {}).get("id") for result in results])
         live_warning = ""
         if cfg.get("verify_live_data", True) and self._looks_live_or_temporal(query):
             live_warning = (
@@ -1285,6 +2188,25 @@ class SmartiMemoryManager:
         if log_usage and cfg.get("log_rag_usage", True):
             self.record_injection_usage(context, results_count=len(results), query=query)
         return context
+
+    def _mark_injected(self, entry_ids):
+        ids = {str(value or "") for value in (entry_ids or []) if value}
+        if not ids:
+            return
+        now = self._now_iso()
+        with self._lock:
+            changed_persistent = False
+            for entry in self.data.get("entries", []):
+                if str(entry.get("id") or "") in ids:
+                    entry["last_injected_at"] = now
+                    entry["injection_count"] = int(entry.get("injection_count", 0) or 0) + 1
+                    changed_persistent = True
+            for entry in self._session_entries:
+                if str(entry.get("id") or "") in ids:
+                    entry["last_injected_at"] = now
+                    entry["injection_count"] = int(entry.get("injection_count", 0) or 0) + 1
+            if changed_persistent:
+                self._save()
 
     def record_injection_usage(self, context, results_count=None, query=""):
         tokens = estimate_text_tokens(context)

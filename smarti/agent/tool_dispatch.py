@@ -361,6 +361,31 @@ class ToolDispatchMixin:
                 return (self.extract_image_text_tool(args_dict.get("path", "")), None)
             elif action == "search_memory":
                 return (self.search_memory_tool(args_dict.get("query", ""), args_dict.get("memory_type", "any"), args_dict.get("max_results", 6)), None)
+            elif action == "memory_operation":
+                operation = str(args_dict.get("action", "")).strip().lower()
+                read_actions = {"list", "get", "stats"}
+                if operation not in read_actions:
+                    if operation in {"export", "import"}:
+                        path = self._abs_path(str(args_dict.get("path", "")))
+                        access = "write" if operation == "export" else "read"
+                        sandbox_ok, sandbox_err = self._ensure_sandbox_path_allowed(path, access)
+                        if not sandbox_ok:
+                            return (sandbox_err, None)
+                        args_dict["path"] = path
+                    detail = f"פעולת זיכרון: {operation}"
+                    if args_dict.get("memory_id"):
+                        detail += f"\nמזהה: {args_dict.get('memory_id')}"
+                    if args_dict.get("subject"):
+                        detail += f"\nנושא: {str(args_dict.get('subject'))[:160]}"
+                    if args_dict.get("path"):
+                        detail += f"\nנתיב: {args_dict.get('path')}"
+                    risk = "high" if operation in {"clear", "forget", "import"} else "medium"
+                    allowed, err = self._ensure_capability_allowed(
+                        "file_write", "אישור ניהול זיכרון", detail, risk=risk
+                    )
+                    if not allowed:
+                        return (err, None)
+                return (self.memory_manager_tool(operation, args_dict), None)
             elif action == "update_memory":
                 allowed, err = self._ensure_capability_allowed("file_write", "אישור עדכון זיכרון", str(args_dict.get("content", ""))[:800], risk="medium")
                 if not allowed: return (err, None)

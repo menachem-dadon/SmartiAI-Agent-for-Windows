@@ -1132,11 +1132,11 @@ BUILTIN_TOOL_SCHEMAS["notification_manager"] = {
 }
 
 BUILTIN_TOOL_SCHEMAS["memory_manager"] = {
-    "description": "Unified memory tool for search and update. Use only for durable or task-continuity memory.",
+    "description": "Unified local memory management. Sensitive values are protected at rest and masked in management-tool results.",
     "inputSchema": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["search", "update"], "description": "Memory operation."},
+            "action": {"type": "string", "enum": ["list", "get", "search", "add", "edit", "archive", "restore", "forget", "clear", "export", "import", "stats", "update"], "description": "Memory operation."},
             "query": {"type": "string", "description": "Search query."},
             "mode": {"type": "string", "enum": ["add", "append", "replace", "clear", "forget"], "description": "Update mode."},
             "content": {"type": "string", "description": "Memory content for add/append/replace."},
@@ -1145,8 +1145,18 @@ BUILTIN_TOOL_SCHEMAS["memory_manager"] = {
             "ttl_hours": {"type": "number", "description": "Optional expiry in hours."},
             "importance": {"type": "integer", "description": "1-5 importance."},
             "tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tags."},
-            "memory_id": {"type": "string", "description": "Entry id for forget."},
-            "max_results": {"type": "integer", "description": "Maximum search results."}
+            "memory_id": {"type": "string", "description": "Stable memory entry ID."},
+            "status": {"type": "string", "enum": ["active", "archive", "session", "all"], "description": "State filter."},
+            "category": {"type": "string", "description": "Category filter or explicit category."},
+            "sensitivity": {"type": "string", "enum": ["ordinary", "sensitive", "any"], "description": "Sensitivity filter."},
+            "source": {"type": "string", "description": "Source filter."},
+            "date_range": {"type": "string", "enum": ["any", "7d", "30d", "90d"], "description": "Created/updated date filter."},
+            "expiry": {"type": "string", "enum": ["any", "expiring", "never", "expired"], "description": "Expiry filter."},
+            "pinned": {"type": "boolean", "description": "Pin an important entry in management views."},
+            "expected_version": {"type": "integer", "description": "Optimistic concurrency version for edits."},
+            "path": {"type": "string", "description": "Import/export path."},
+            "encrypted": {"type": "boolean", "description": "Export sensitive content only in encrypted form."},
+            "max_results": {"type": "integer", "description": "Maximum results."}
         },
         "required": ["action"]
     }
@@ -1497,7 +1507,18 @@ TOOL_ACTION_FIELDS = {
         "open_windows_app": ("target",),
     },
     "memory_manager": {
+        "list": ("query", "memory_type", "status", "category", "sensitivity", "source", "date_range", "expiry", "max_results"),
+        "get": ("memory_id",),
         "search": ("query", "memory_type", "max_results"),
+        "add": ("content", "memory_type", "subject", "ttl_hours", "importance", "tags", "category", "pinned"),
+        "edit": ("memory_id", "content", "memory_type", "subject", "ttl_hours", "importance", "tags", "category", "pinned", "expected_version"),
+        "archive": ("memory_id",),
+        "restore": ("memory_id",),
+        "forget": ("memory_id",),
+        "clear": ("memory_type",),
+        "export": ("path", "encrypted"),
+        "import": ("path",),
+        "stats": (),
         "update": ("mode", "content", "memory_type", "subject", "ttl_hours", "importance", "tags", "memory_id"),
     },
     "canvas_manager": {
@@ -1617,7 +1638,7 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "screen_manager": "Unified screen/image context: capture, save_screenshot, analyze_image.",
     "background_task_manager": "Unified background tasks: schedule, list, cancel, retry.",
     "notification_manager": "Unified Windows toasts, reminders, calendar events, Calendar/Clock/settings opening.",
-    "memory_manager": "Unified memory: search and update.",
+    "memory_manager": "Unified local memory: inspect, edit, archive, import/export, and control retention.",
     "extension_manager": "Unified MCP and Skills operations.",
     "search_tools": "Search Smarti's effective catalog before selecting, installing, or creating a tool.",
     "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
@@ -1907,6 +1928,16 @@ DEFAULT_SETTINGS = {
         "tool_memory_ttl_hours": 72,
         "capture_critical_user_details": True,
         "store_sensitive_personal_details": True,
+        "sensitive_category_consent": {
+            "address": True,
+            "phone": True,
+            "email": True,
+            "health": True
+        },
+        "health_memory_mode": "persistent",
+        "sensitive_memory_encryption": "dpapi",
+        "sensitive_memory_cloud_default": True,
+        "memory_management_refresh_seconds": 3,
         "critical_capture_max_chars": 1800,
         "verify_live_data": True,
         "log_rag_usage": True

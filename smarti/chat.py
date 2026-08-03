@@ -9,6 +9,7 @@ from .ui_controls import *
 from .config import PUBLIC_BUILTIN_TOOLS
 from .workers import AgentWorker, VoiceWorker, TTSWorker, CodexQuotaWorker
 from .ui_pages import ActionConfirmDialog, ApiKeyRequiredDialog, SmartiDiagnosticPage, UsageStatsPage, TaskCenterPage, DeveloperTracePage, ToolsSettingsPage, SettingsPage, AboutPage, refresh_back_button_icon
+from .memory_ui import MemoryManagementPage
 from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, detect_installation_kind, human_size, launch_update_installer
@@ -4419,6 +4420,7 @@ class ChatWindow(QMainWindow):
         self.settings_page = None
         self.tools_page = None
         self.usage_page = None
+        self.memory_page = None
         self.task_center_page = None
         self.trace_page = None
         self.history_page = None
@@ -5547,7 +5549,7 @@ class ChatWindow(QMainWindow):
         QTimer.singleShot(0, apply_batch)
 
     def invalidate_themed_pages(self):
-        for attr in ("tools_page", "usage_page", "task_center_page", "trace_page", "history_page", "about_page"):
+        for attr in ("tools_page", "usage_page", "memory_page", "task_center_page", "trace_page", "history_page", "about_page"):
             page = getattr(self, attr, None)
             if page is not None:
                 self.stacked_widget.removeWidget(page)
@@ -5591,6 +5593,7 @@ class ChatWindow(QMainWindow):
         self._add_menu_action("Smarti Diagnostic", self.show_doctor_page, "doctor_icon")
         self._add_menu_action("כלים", self.show_tools_page, "tools_icon", "toolbox_icon")
         self._add_menu_action("הגדרות", self.show_settings_page, "settings_icon")
+        self._add_menu_action("ניהול הזיכרון", self.show_memory_page, "memory_management_icon")
         self._add_menu_action("מרכז משימות", self.show_task_center_page, "task_center_icon", "tasks_icon")
         self._add_menu_action("נתוני שימוש", self.show_usage_page, "usage_icon", "usage_stats_icon", "chart_icon")
         self._add_menu_action("אודות", self.show_about_page, "about_icon", "info_icon")
@@ -5854,6 +5857,15 @@ class ChatWindow(QMainWindow):
         self.usage_page.load_data('today')
         self.stacked_widget.setCurrentWidget(self.usage_page)
         self._reset_page_scrolls(self.usage_page)
+
+    def show_memory_page(self):
+        self._close_canvas_for_secondary_page()
+        if self.memory_page is None:
+            self.memory_page = MemoryManagementPage(self.core, self)
+            self.stacked_widget.addWidget(self.memory_page)
+        self.stacked_widget.setCurrentWidget(self.memory_page)
+        self.memory_page.activate(force=False)
+        self._reset_page_scrolls(self.memory_page)
 
     def show_settings_page(self):
         self._close_canvas_for_secondary_page()

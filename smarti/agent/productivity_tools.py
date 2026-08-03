@@ -801,3 +801,88 @@ class ProductivityToolsMixin:
         self._save_settings()
         self.system_prompt = self._load_system_prompt()
         return f"SUCCESS: memory updated ({entry_id})."
+
+    def memory_manager_tool(self, action, args=None):
+        """Canonical management API. Sensitive values are never revealed to the model."""
+        manager = getattr(self, "memory_manager", None)
+        if not manager:
+            return "ERROR: Memory manager is not available."
+        args = dict(args or {})
+        action = str(action or "").strip().lower()
+        try:
+            if action == "list":
+                rows = manager.list_entries(
+                    query=args.get("query", ""),
+                    memory_type=args.get("memory_type", "any"),
+                    status=args.get("status", "active"),
+                    category=args.get("category", ""),
+                    sensitivity=args.get("sensitivity", "any"),
+                    source=args.get("source", ""),
+                    date_range=args.get("date_range", "any"),
+                    expiry=args.get("expiry", "any"),
+                    max_results=args.get("max_results", 100),
+                )
+                return json.dumps({"ok": True, "entries": rows}, ensure_ascii=False)
+            if action == "get":
+                entry = manager.get_entry(args.get("memory_id", ""))
+                return json.dumps({"ok": bool(entry), "entry": entry}, ensure_ascii=False)
+            if action == "search":
+                return self.search_memory_tool(
+                    args.get("query", ""),
+                    args.get("memory_type", "any"),
+                    args.get("max_results", 6),
+                )
+            if action == "stats":
+                return json.dumps({"ok": True, "stats": manager.memory_stats()}, ensure_ascii=False)
+            if action == "add":
+                entry_id = manager.add(
+                    args.get("memory_type", "long_term"),
+                    args.get("content", ""),
+                    subject=args.get("subject", ""),
+                    tags=args.get("tags", []),
+                    ttl_hours=args.get("ttl_hours"),
+                    importance=args.get("importance", 3),
+                    source="explicit_tool",
+                    confidence=0.8,
+                    category=args.get("category", ""),
+                    consent_state="approved",
+                    cloud_allowed=True,
+                    pinned=bool(args.get("pinned", False)),
+                )
+                return json.dumps({"ok": True, "memory_id": entry_id}, ensure_ascii=False)
+            if action == "edit":
+                editable = {
+                    key: args[key] for key in (
+                        "content", "memory_type", "subject", "ttl_hours", "importance",
+                        "tags", "category", "pinned"
+                    ) if key in args
+                }
+                entry = manager.edit_entry(
+                    args.get("memory_id", ""),
+                    expected_version=args.get("expected_version"),
+                    user_authorized=False,
+                    **editable,
+                )
+                return json.dumps({"ok": True, "entry": entry}, ensure_ascii=False)
+            if action == "archive":
+                return json.dumps({"ok": manager.archive_entry(args.get("memory_id", ""))}, ensure_ascii=False)
+            if action == "restore":
+                return json.dumps({"ok": manager.restore_entry(args.get("memory_id", ""))}, ensure_ascii=False)
+            if action == "forget":
+                return json.dumps({"ok": manager.forget(args.get("memory_id", ""))}, ensure_ascii=False)
+            if action == "clear":
+                removed = manager.clear(args.get("memory_type") if args.get("memory_type") not in {"", "any"} else None)
+                return json.dumps({"ok": True, "removed": removed}, ensure_ascii=False)
+            if action == "export":
+                path = manager.export_memory(
+                    args.get("path", ""),
+                    encrypted=bool(args.get("encrypted", True)),
+                    include_sensitive=bool(args.get("encrypted", True)),
+                )
+                return json.dumps({"ok": True, "path": path}, ensure_ascii=False)
+            if action == "import":
+                result = manager.import_memory(args.get("path", ""), user_authorized=False)
+                return json.dumps({"ok": True, **result}, ensure_ascii=False)
+            return f"ERROR: Unsupported memory action: {action}"
+        except Exception as e:
+            return f"ERROR: {e}"
