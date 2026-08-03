@@ -14,7 +14,7 @@ class SettingsManager:
         "max_inline_tool_error_chars",
     }
     PRESERVE_ON_V2_MIGRATION = {
-        "api_mode", "local_server_url", "shopping_list", "user_memory",
+        "api_mode", "local_server_url", "local_fast_mode_enabled", "shopping_list", "user_memory",
         "read_aloud_all", "read_aloud_voice_only", "tts_voice_id", "tts_volume",
         "voice_hotkey", "keep_running_in_tray",
         "voice_sensitivity", "voice_dynamic_energy_threshold", "voice_pause_threshold",

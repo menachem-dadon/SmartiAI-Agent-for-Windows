@@ -1199,6 +1199,21 @@ class ToolCallMixin:
             steps = provided_steps[:9]
             verification_points = provided_verification_points[:8] or self._fallback_verification_points()
             contingencies = provided_contingencies[:8] or self._fallback_contingencies()
+        elif bool(getattr(self, "_local_fast_mode_enabled", lambda *_: False)()):
+            # FastMode never spends a second model request on planning. The
+            # controller should provide steps in the original call; malformed
+            # or legacy planner calls still receive a safe local fallback.
+            steps = self._fallback_task_plan(objective)
+            verification_points = (
+                provided_verification_points[:8]
+                or self._fallback_verification_points()
+            )
+            contingencies = (
+                provided_contingencies[:8]
+                or self._fallback_contingencies()
+            )
+            source = "replan_fast_local" if replanning else "fast_local"
+            notes = reason or "FastMode used a local fallback plan without another model request."
         elif not is_background_task:
             replan_context = self._planner_context_for_replan(task_state, reason=reason) if replanning else ""
             steps, verification_points, contingencies, risk, notes, used_model_planner = self._model_task_plan(objective, current_model, context=replan_context)
@@ -1726,6 +1741,9 @@ class ToolCallMixin:
         # normal tool loop never schedules evaluator calls automatically.
         if not requested_by_model:
             self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=model_directed")
+            return ""
+        if bool(getattr(self, "_local_fast_mode_enabled", lambda *_: False)()):
+            self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=local_fast_mode")
             return ""
         if not task_state or not task_state.get("planner_enabled") or not results:
             self._trace_agent_phase("evaluator", f"skipped iteration={iteration} reason=no_planner_or_results")

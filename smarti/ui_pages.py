@@ -3662,6 +3662,11 @@ class SettingsPage(QWidget):
         self.search_results_list.clear()
         scored = []
         for entry in self._settings_search_entries:
+            if (
+                entry.get("id") == "local_fast_mode_enabled"
+                and normalize_provider_name(self.provider_combo.currentText()) != "local"
+            ):
+                continue
             score = self._score_settings_entry(query, entry)
             if score > 0:
                 scored.append((score, entry))
@@ -3710,6 +3715,11 @@ class SettingsPage(QWidget):
         entry_id = item.data(Qt.ItemDataRole.UserRole)
         entry = self._settings_entry_by_id.get(entry_id)
         if not entry:
+            return
+        if (
+            entry.get("id") == "local_fast_mode_enabled"
+            and normalize_provider_name(self.provider_combo.currentText()) != "local"
+        ):
             return
         self._save_recent_settings_search(self.settings_search_edit.text())
         if entry.get("advanced") and not self._advanced_settings_visible():
@@ -4327,6 +4337,11 @@ class SettingsPage(QWidget):
         self._set_external_link(self.tavily_key_help_link, provider_help_url(secret_key="tavily_api_key"), "קבל מפתח")
         self._update_provider_key_help()
         self.local_url = QLineEdit(self.core.settings.get("local_server_url", "http://localhost:1234/v1"))
+        self.local_fast_mode_cb = SmartiCheckBox("הפעל FastMode למודלים מקומיים")
+        self.local_fast_mode_cb.setChecked(
+            bool(self.core.settings.get("local_fast_mode_enabled", False))
+        )
+        self.local_fast_mode_cb.setStyleSheet(CHECKBOX_CSS)
 
         # Google Drive settings UI is parked until OAuth sign-in is reworked.
         
@@ -4763,6 +4778,7 @@ class SettingsPage(QWidget):
         inner.addWidget(widget, 1)
         layout.addWidget(container)
         self._register_setting_entry(widget.text() if hasattr(widget, "text") else "", widget, container, hint or "", keywords, advanced, setting_id)
+        return container
 
     def _add_field(self, label_text, widget, target_layout=None, hint=None, *, keywords=None, setting_id="", advanced=False, info=None):
         layout = target_layout
@@ -4942,6 +4958,16 @@ class SettingsPage(QWidget):
         )
         self.codex_reasoning_effort_field_container.setVisible(False)
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.", keywords="local server url lm studio ollama localhost endpoint base url")
+        self.local_fast_mode_field_container = self._add_checkbox(
+            self.local_fast_mode_cb,
+            ai,
+            "מצמצם את חוזה המערכת ואת קטלוג הכלים הקבוע, וטוען סכמות רק לפי צורך. כל היכולות נשארות זמינות. המצב אינו מופעל כברירת מחדל.",
+            keywords="local fast mode small model weak hardware context tokens speed",
+            setting_id="local_fast_mode_enabled",
+        )
+        self.local_fast_mode_field_container.setVisible(
+            normalize_provider_name(self.provider_combo.currentText()) == "local"
+        )
         self._add_field("מפתח חיפוש באינטרנט (Tavily)", self.tavily_key_row, ai, "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.", keywords="web search internet tavily live current latest")
         ai.addWidget(self.tavily_key_help_hint)
         ai.addStretch()
@@ -5136,6 +5162,8 @@ class SettingsPage(QWidget):
 
     def on_provider_change(self, text):
         text = normalize_provider_name(text)
+        if hasattr(self, "local_fast_mode_field_container"):
+            self.local_fast_mode_field_container.setVisible(text == "local")
         current_provider = normalize_provider_name(self.core.settings.get("api_mode", "gemini"))
         self._favorite_model_on_populate_provider = text if text != current_provider else None
         is_codex_signin = text == "openai_codex_signin"
@@ -5412,7 +5440,7 @@ class SettingsPage(QWidget):
             self.tts_cb, self.tts_voice_cb, self.cloud_upload_cb,
             self.write_outside_dirs_approval_cb, self.mcp_pin_cb, self.prevent_sleep_cb,
             self.email_imap_ssl_cb, self.email_smtp_ssl_cb, self.email_smtp_starttls_cb,
-            self.voice_dynamic_energy_cb, self.voice_beep_cb
+            self.voice_dynamic_energy_cb, self.voice_beep_cb, self.local_fast_mode_cb
         ]:
             cb.stateChanged.connect(lambda _=None: self._schedule_autosave())
         self.ssl_trust_card.settingsChanged.connect(self._schedule_autosave)
@@ -5783,6 +5811,7 @@ class SettingsPage(QWidget):
         else:
             self.core.mark_secret_for_deletion("tavily_api_key")
         self.core.settings["local_server_url"] = self.local_url.text().strip() or "http://localhost:1234/v1"
+        self.core.settings["local_fast_mode_enabled"] = self.local_fast_mode_cb.isChecked()
         self.core.settings["email_address"] = self.email.text()
         self.core.settings["email_password"] = self.pwd.text().replace(" ", "")
         self.core.settings["email_from_name"] = self.email_from_name.text().strip()
@@ -5902,6 +5931,7 @@ class SettingsPage(QWidget):
             key in {"enable_visual_surfaces", "enable_web_canvas", "enable_canvas_remote_images"}
             for key in changed
         )
+        needs_fast_mode_prompt_refresh = "local_fast_mode_enabled" in changed
         needs_mcp_refresh = any(key in {
             "enable_mcp_clawhub", "enable_skills_beta", "mcp_require_pinned_versions",
             "mcp_allowed_directories",
@@ -5911,7 +5941,7 @@ class SettingsPage(QWidget):
             self.core._sync_ssl_compat_env()
             self.core._sync_trusted_mcp_packages()
             self.core._ensure_mcp_config()
-        if needs_model_reload or needs_canvas_prompt_refresh:
+        if needs_model_reload or needs_canvas_prompt_refresh or needs_fast_mode_prompt_refresh:
             self.core.system_prompt = self.core._load_system_prompt()
         if needs_model_reload:
             self.core.setup_model()
@@ -5923,6 +5953,8 @@ class SettingsPage(QWidget):
             self.main_window.refresh_favorite_model_controls()
         if hasattr(self.main_window, "refresh_quick_autonomy_controls"):
             self.main_window.refresh_quick_autonomy_controls()
+        if hasattr(self.main_window, "refresh_local_fast_mode_control"):
+            self.main_window.refresh_local_fast_mode_control()
 
     def save(self):
         self._save_from_ui()

@@ -1759,6 +1759,8 @@ DEFAULT_SETTINGS = {
         "anthropic": {},
     },
     "local_server_url": "http://localhost:1234/v1",
+    # Opt-in only: a local endpoint does not imply a small model or weak hardware.
+    "local_fast_mode_enabled": False,
     "shopping_list": [],
     "user_memory": "",
     "read_aloud_all": False,

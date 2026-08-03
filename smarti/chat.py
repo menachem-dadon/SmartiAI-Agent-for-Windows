@@ -5091,7 +5091,17 @@ class ChatWindow(QMainWindow):
         spacing = max(0, int(self.quick_control_row.spacing()))
         fixed_width = int(self.action_btn_host.width() or self.action_btn_host.sizeHint().width() or 52)
         fixed_width += int(self.attach_btn.width() or self.attach_btn.sizeHint().width() or 42)
-        gap_count = 4 if model_in_input else 3
+        fast_mode_visible = bool(
+            hasattr(self, "local_fast_mode_widget")
+            and self.local_fast_mode_widget.isVisible()
+        )
+        if fast_mode_visible:
+            fixed_width += int(
+                self.local_fast_mode_widget.width()
+                or self.local_fast_mode_widget.sizeHint().width()
+                or 122
+            )
+        gap_count = (4 if model_in_input else 3) + (1 if fast_mode_visible else 0)
         return max(0, row_width - fixed_width - (spacing * gap_count))
 
     def _quick_input_button_widths(self):
@@ -5164,6 +5174,42 @@ class ChatWindow(QMainWindow):
             self._fit_quick_input_button(self.favorite_model_btn, label, model_width, model_width, min(model_width, 88))
         self.favorite_model_btn.setToolTip("מודלים מועדפים")
 
+    def _on_local_fast_mode_toggled(self, checked):
+        provider = normalize_provider_name(
+            self.core.settings.get("api_mode", getattr(self.core, "mode", ""))
+        )
+        if provider != "local":
+            self.refresh_local_fast_mode_control()
+            return
+        self.core.set_local_fast_mode_enabled(bool(checked))
+        settings_page = getattr(self, "settings_page", None)
+        settings_toggle = getattr(settings_page, "local_fast_mode_cb", None)
+        if settings_toggle is not None:
+            blocked = settings_toggle.blockSignals(True)
+            settings_toggle.setChecked(bool(checked))
+            settings_toggle.blockSignals(blocked)
+        self.refresh_local_fast_mode_control()
+
+    def refresh_local_fast_mode_control(self):
+        if not hasattr(self, "local_fast_mode_widget"):
+            return
+        provider = normalize_provider_name(
+            self.core.settings.get("api_mode", getattr(self.core, "mode", ""))
+        )
+        visible = provider == "local"
+        checked = visible and bool(
+            self.core.settings.get("local_fast_mode_enabled", False)
+        )
+        blocked = self.local_fast_mode_toggle.blockSignals(True)
+        self.local_fast_mode_toggle.setChecked(checked)
+        self.local_fast_mode_toggle.blockSignals(blocked)
+        self.local_fast_mode_label.setStyleSheet(
+            f"color: {ACCENT_SECONDARY_COLOR if checked else SUBTLE_TEXT_COLOR}; "
+            "font-size: 12px; font-weight: 700; background: transparent;"
+        )
+        self.local_fast_mode_widget.setVisible(visible)
+        QTimer.singleShot(0, self._resize_quick_input_controls)
+
     def _favorites_by_provider(self):
         grouped = {}
         for item in self._normalized_favorite_models():
@@ -5223,6 +5269,8 @@ class ChatWindow(QMainWindow):
         if hasattr(self, "subtitle"):
             self.subtitle.setText(self.format_model_name(model))
         self.refresh_favorite_model_controls()
+        if hasattr(self, "refresh_local_fast_mode_control"):
+            self.refresh_local_fast_mode_control()
         if getattr(self, "settings_page", None) is not None:
             self.stacked_widget.removeWidget(self.settings_page)
             self.settings_page.deleteLater()
@@ -5729,11 +5777,40 @@ class ChatWindow(QMainWindow):
         self.autonomy_quick_btn.clicked.connect(self.show_quick_autonomy_menu)
         control_row.addWidget(self.autonomy_quick_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
+        self.local_fast_mode_widget = QWidget(self.input_frame)
+        self.local_fast_mode_widget.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.local_fast_mode_widget.setFixedSize(122, 42)
+        self.local_fast_mode_widget.setStyleSheet("background: transparent;")
+        fast_mode_layout = QHBoxLayout(self.local_fast_mode_widget)
+        fast_mode_layout.setContentsMargins(0, 2, 0, 2)
+        fast_mode_layout.setSpacing(6)
+        self.local_fast_mode_label = QLabel("FastMode")
+        self.local_fast_mode_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.local_fast_mode_toggle = SmartiCheckBox("")
+        self.local_fast_mode_toggle.setFixedSize(56, 38)
+        self.local_fast_mode_toggle.setToolTip(
+            "מצב הקשר חסכוני למודלים מקומיים קטנים או לחומרה חלשה"
+        )
+        self.local_fast_mode_label.setToolTip(self.local_fast_mode_toggle.toolTip())
+        self.local_fast_mode_toggle.stateChanged.connect(
+            lambda state: self._on_local_fast_mode_toggled(bool(state))
+        )
+        fast_mode_layout.addWidget(self.local_fast_mode_label, 1)
+        fast_mode_layout.addWidget(self.local_fast_mode_toggle, 0)
+        control_row.addWidget(
+            self.local_fast_mode_widget,
+            0,
+            alignment=Qt.AlignmentFlag.AlignVCenter,
+        )
+
         control_row.addStretch(1)
         control_row.addWidget(self.attach_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
         input_frame_layout.addLayout(control_row)
         self.refresh_quick_autonomy_controls()
         self.refresh_favorite_model_controls()
+        self.refresh_local_fast_mode_control()
         QTimer.singleShot(0, self._resize_quick_input_controls)
         
         bottom_layout.addWidget(self.input_frame, alignment=Qt.AlignmentFlag.AlignVCenter)

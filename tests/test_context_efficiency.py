@@ -4,7 +4,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 from smarti.codex_signin import CodexSignInProvider
@@ -164,6 +164,58 @@ class ContextEfficiencyTests(unittest.TestCase):
         self.assertIn("בכל קריאת `get_tool_info` חובה לשלוח גם `tool_name` וגם `action`", prompt)
         self.assertIn("השמטת action עדיין מחזירה את הסכמה המלאה", prompt)
 
+    def test_local_fast_mode_halves_the_fixed_contract_without_hiding_capabilities(self):
+        active = set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner"}
+        core = _prompt_core(active)
+        core.settings["api_mode"] = "local"
+        core.mode = "local"
+        core._get_existing_python_tools = lambda: ["csv_helper", "image_helper"]
+        core._get_existing_mcp_tools = lambda: ["demo-mcp"]
+        core._get_existing_skills = lambda: ["special-workflow"]
+
+        core.settings["local_fast_mode_enabled"] = False
+        normal_prompt = core._load_system_prompt("בצע משימה")
+        core.settings["local_fast_mode_enabled"] = True
+        fast_prompt = core._load_system_prompt("בצע משימה")
+
+        self.assertLess(len(fast_prompt), len(normal_prompt) * 0.60)
+        self.assertIn("FastMode פעיל", fast_prompt)
+        self.assertIn("`get_tool_info` schema", fast_prompt)
+        self.assertIn("`search_tools` schema", fast_prompt)
+        self.assertIn("action=full", fast_prompt)
+        self.assertIn("Python tools: 2 installed", fast_prompt)
+        self.assertNotIn("csv_helper", fast_prompt)
+        self.assertNotIn("special-workflow", fast_prompt)
+        for name in PUBLIC_BUILTIN_TOOLS:
+            if core._builtin_tool_context_enabled(name):
+                self.assertIn(f"`{name}`", fast_prompt)
+
+    def test_fast_mode_never_activates_for_a_nonlocal_provider(self):
+        core = _prompt_core({"get_tool_info", "search_tools", "file_manager"})
+        core.settings["local_fast_mode_enabled"] = True
+        core.settings["api_mode"] = "openai"
+        core.mode = "openai"
+
+        self.assertFalse(core._local_fast_mode_enabled())
+        self.assertNotIn("FastMode פעיל", core._load_system_prompt("שלום"))
+
+    def test_fast_mode_lists_extension_names_when_catalog_search_is_disabled(self):
+        core = _prompt_core({"get_tool_info", "extension_manager"})
+        core.settings["api_mode"] = "local"
+        core.mode = "local"
+        core.settings["local_fast_mode_enabled"] = True
+        core.settings["enable_tool_search_catalog"] = False
+        core._get_existing_python_tools = lambda: ["csv_helper"]
+        core._get_existing_mcp_tools = lambda: ["demo-mcp"]
+        core._get_existing_skills = lambda: ["special-workflow"]
+
+        prompt = core._load_system_prompt("בצע משימה")
+
+        self.assertIn("Python tools: csv_helper", prompt)
+        self.assertIn("MCP packages: demo-mcp", prompt)
+        self.assertIn("Skills: special-workflow", prompt)
+        self.assertNotIn("`search_tools` schema", prompt)
+
     def test_disabled_tool_policies_and_schemas_are_absent(self):
         core = _prompt_core({
             "get_tool_info",
@@ -279,6 +331,117 @@ class ContextEfficiencyTests(unittest.TestCase):
             core.chat_store.rename_session(session_id, "כותרת ידנית")
             self.assertFalse(core.chat_store.apply_generated_title(session_id, "אסור לדרוס"))
             self.assertEqual(core.chat_store.active_session()["title"], "כותרת ידנית")
+
+    def test_local_fast_mode_titles_are_local_and_do_not_call_the_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core = SmartiCore.__new__(SmartiCore)
+            core.mode = "local"
+            core.settings = copy.deepcopy(DEFAULT_SETTINGS)
+            core.settings["api_mode"] = "local"
+            core.settings["local_fast_mode_enabled"] = True
+            core.chat_store = ChatSessionStore(str(Path(directory) / "chats.json"))
+            core.generate_conversation_title = mock.Mock(
+                side_effect=AssertionError("FastMode must not request a title")
+            )
+            notifications = []
+            core._emit_notification = lambda name, payload: notifications.append((name, payload))
+            session_id = core.chat_store.active_session()["id"]
+
+            applied = core._schedule_conversation_title(
+                session_id,
+                "מצא את כל המסמכים הרלוונטיים וסכם אותם לפי נושא",
+                "תשובה",
+            )
+
+            self.assertTrue(applied)
+            self.assertEqual(
+                core.chat_store.active_session()["title"],
+                "מצא את כל המסמכים הרלוונטיים וסכם אותם",
+            )
+            core.generate_conversation_title.assert_not_called()
+            self.assertEqual(notifications[0][0], "chat_title_updated")
+
+    def test_local_clients_have_no_request_timeout_but_cloud_compatible_clients_keep_it(self):
+        created = []
+        openai_module = ModuleType("openai")
+
+        def fake_openai(**kwargs):
+            created.append(kwargs)
+            return SimpleNamespace()
+
+        openai_module.OpenAI = fake_openai
+        core = _request_core("local")
+        core.settings["api_mode"] = "local"
+        core.settings["local_server_url"] = "http://local.example/v1"
+        core._sync_ssl_compat_env = lambda: None
+        with mock.patch.dict("sys.modules", {"openai": openai_module}):
+            with mock.patch(
+                "smarti.agent.model_context.provider_base_url",
+                side_effect=lambda mode, local_url: f"http://{mode}.example/v1",
+            ):
+                core.setup_model()
+                core.mode = "unused"
+                core.universal_client = None
+                core._openai_compatible_client_for_request("local")
+                core._openai_compatible_client_for_request("openrouter")
+
+        self.assertIsNone(created[0]["timeout"])
+        self.assertIsNone(created[1]["timeout"])
+        self.assertEqual(created[2]["timeout"], 1800)
+
+    def test_provider_request_timeout_default_is_thirty_minutes_except_local(self):
+        core = SmartiCore.__new__(SmartiCore)
+
+        self.assertIsNone(core._provider_request_timeout("local"))
+        for provider in ("gemini", "openai", "anthropic", "openrouter", "groq"):
+            with self.subTest(provider=provider):
+                self.assertEqual(core._provider_request_timeout(provider), 1800)
+
+    def test_local_fast_mode_planner_uses_same_call_steps_or_a_local_fallback(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.mode = "local"
+        core.settings = copy.deepcopy(DEFAULT_SETTINGS)
+        core.settings["api_mode"] = "local"
+        core.settings["local_fast_mode_enabled"] = True
+        core._trace_agent_phase = mock.Mock()
+        core._emit_agent_phase = mock.Mock()
+        core._model_task_plan = mock.Mock(
+            side_effect=AssertionError("FastMode must not start a second planner request")
+        )
+        state = core._base_task_state("בדוק וסכם את התיקייה", planner_enabled=False)
+
+        planned, _feedback = core._activate_model_requested_planner(
+            state,
+            {"intent": "initial_plan", "reason": "משימה מורכבת"},
+            "local-model",
+        )
+
+        self.assertEqual(planned["planner_source"], "fast_local")
+        self.assertTrue(planned["plan_steps"])
+        self.assertFalse(planned["used_model_planner"])
+        core._model_task_plan.assert_not_called()
+
+    def test_local_fast_mode_suppresses_even_an_explicit_evaluator_microtask(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.mode = "local"
+        core.settings = copy.deepcopy(DEFAULT_SETTINGS)
+        core.settings["api_mode"] = "local"
+        core.settings["local_fast_mode_enabled"] = True
+        core._trace_agent_phase = mock.Mock()
+        core._handle_api_request_with_retry = mock.Mock(
+            side_effect=AssertionError("FastMode must not start an evaluator request")
+        )
+
+        result = core._maybe_evaluate_task_progress(
+            {"planner_enabled": True},
+            [{"action": "file_manager", "status": "ok", "arguments": {"action": "read"}}],
+            "local-model",
+            1,
+            requested_by_model=True,
+        )
+
+        self.assertEqual(result, "")
+        core._handle_api_request_with_retry.assert_not_called()
 
     def test_microtask_budget_estimate_uses_its_own_small_system_prompt(self):
         core = SmartiCore.__new__(SmartiCore)
