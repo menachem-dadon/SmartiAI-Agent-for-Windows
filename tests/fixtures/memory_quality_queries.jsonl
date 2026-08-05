@@ -1,0 +1,5 @@
+{"query":"באיזה מסד נתונים משתמש הפרויקט?","expected":"SQLite","forbidden":"מזג האוויר"}
+{"query":"What database does this project use?","expected":"SQLite","forbidden":"weather"}
+{"query":"מה ההעדפה שלי לגבי שפת הממשק?","expected":"עברית","forbidden":"SQLite"}
+{"query":"איך מתקנים את מנהל הקבצים?","expected":null,"forbidden":"SQLite"}
+{"query":"מה מזג האוויר מחר?","expected":null,"forbidden":"SQLite"}

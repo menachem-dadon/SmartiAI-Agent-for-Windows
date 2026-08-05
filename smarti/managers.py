@@ -2,6 +2,7 @@
 import math
 from .common import *
 from .config import *
+from .memory_store import MemorySQLiteStore
 
 class SettingsManager:
     """Schema-v2 settings migration with a clean reset of dangerous trust state."""
@@ -80,6 +81,45 @@ class SettingsManager:
             settings["preserve_current_task_tool_context"] = False
         settings["long_task_defaults_version"] = 1
         return settings, True
+
+    @staticmethod
+    def migrate_memory_retrieval_defaults(settings):
+        """Translate the shipped v1 relevance scale to the bounded v2 scale."""
+        settings = copy.deepcopy(settings or {})
+        memory = settings.get("memory")
+        if not isinstance(memory, dict) or not memory:
+            return settings, False
+        try:
+            version = int(memory.get("retrieval_settings_version", 0) or 0)
+        except Exception:
+            version = 0
+        if version >= 1:
+            return settings, False
+        before = copy.deepcopy(memory)
+        # Replace only exact historical shipped defaults.  Deliberately tuned
+        # user values remain untouched, except that an impossible >1 threshold
+        # belongs to the old score scale and must be converted.
+        replacements = {
+            "max_results": (8, 3),
+            "max_injected_chars": (4200, 1200),
+            "user_memory_max_results": (8, 3),
+            "user_memory_max_injected_chars": (2200, 1200),
+            "non_tool_memory_max_results": (8, 3),
+            "tool_memory_prompt_max_results": (3, 0),
+            "tool_memory_prompt_max_chars": (1400, 0),
+        }
+        for key, (old_value, new_value) in replacements.items():
+            if memory.get(key) == old_value:
+                memory[key] = new_value
+        try:
+            old_threshold = float(memory.get("min_relevance_score", 4.2) or 4.2)
+        except Exception:
+            old_threshold = 4.2
+        if old_threshold > 1.0 or old_threshold < 0.0:
+            memory["min_relevance_score"] = 0.62
+        memory["retrieval_settings_version"] = 1
+        settings["memory"] = memory
+        return settings, memory != before
 
     @staticmethod
     def migrate_model_selection_provenance(settings, prior_settings=None):
@@ -181,6 +221,7 @@ class SettingsManager:
             return self.sync_legacy_aliases(migrated), True
         loaded, ssl_trust_changed = self.migrate_ssl_trust(loaded)
         loaded, long_task_changed = self.migrate_long_task_defaults(loaded)
+        loaded, memory_retrieval_changed = self.migrate_memory_retrieval_defaults(loaded)
         loaded, model_provenance_changed = self.migrate_model_selection_provenance(
             loaded,
             prior_settings=prior_loaded,
@@ -195,6 +236,7 @@ class SettingsManager:
             bool(
                 ssl_trust_changed
                 or long_task_changed
+                or memory_retrieval_changed
                 or model_provenance_changed
                 or context_limits_changed
             ),
@@ -203,15 +245,44 @@ class SettingsManager:
 
 class SmartiMemoryManager:
     """Local structured memory with TTL and bounded RAG injection."""
-    SCHEMA_VERSION = 4
-    PROFILE_POLICY_VERSION = 4
-    PRIVACY_POLICY_VERSION = 1
-    AUTOMATIC_USE_POLICY_VERSION = 1
+    SCHEMA_VERSION = 5
+    PROFILE_POLICY_VERSION = 5
+    PRIVACY_POLICY_VERSION = 3
+    AUTOMATIC_USE_POLICY_VERSION = 4
+    QUALITY_POLICY_VERSION = 3
+    MODEL_MEMORY_POLICY_VERSION = 2
+    SCOPE_POLICY_VERSION = 1
     USER_WORK_CLEANUP_VERSION = 1
     VALID_TYPES = {"short_term", "long_term", "tool", "user"}
+    MODEL_MEMORY_ACTIONS = {"add", "update", "delete"}
+    MODEL_MEMORY_SOURCE_TYPES = {"user", "assistant", "tool", "web", "decision"}
+    MODEL_MEMORY_CATEGORY_ALIASES = {
+        "preferences": "preference",
+        # Broad labels produced by models are not retrieval categories. Clear
+        # them so deterministic content classification can recover address,
+        # phone, identity, preference, and the other canonical categories.
+        "personal": "",
+        "personal_detail": "",
+        "personal_details": "",
+        "personal_info": "",
+        "personal_information": "",
+        "contact_detail": "",
+        "contact_details": "",
+        "contact_info": "",
+        "contact_information": "",
+        "user_detail": "",
+        "user_details": "",
+        "user_info": "",
+        "user_information": "",
+        "profile": "",
+    }
+    MODEL_MEMORY_BLOCK_RE = re.compile(
+        r"<smarti_memory>\s*(.*?)\s*</smarti_memory>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     SENSITIVE_CATEGORIES = {"address", "phone", "email", "health"}
     NEVER_STORE_CATEGORIES = {"authentication_secret", "financial_secret"}
-    RETRIEVER_NAME = "local-hebrew-weighted-v2"
+    RETRIEVER_NAME = "encrypted-scope-rerank-v4"
     HEBREW_FINALS = str.maketrans({
         "\u05da": "\u05db",
         "\u05dd": "\u05de",
@@ -225,6 +296,9 @@ class SmartiMemoryManager:
         "\u05d9\u05e9", "\u05dc\u05d0", "\u05db\u05df", "\u05e9\u05dc", "\u05e2\u05dc", "\u05e2\u05dd",
         "\u05db\u05dc", "\u05db\u05de\u05d4", "\u05de\u05d4", "\u05de\u05d9", "\u05d0\u05d9\u05da",
         "\u05d0\u05dd", "\u05d1\u05d5", "\u05d1\u05d4", "\u05dc\u05d9", "\u05dc\u05da", "\u05dc\u05d5",
+        "the", "a", "an", "and", "or", "of", "to", "for", "in", "on", "at", "by",
+        "is", "are", "was", "were", "be", "been", "being", "do", "does", "did",
+        "which", "what", "how", "when", "where", "who", "why", "this", "that", "these", "those",
     }
     SEARCH_EXPANSION_GROUPS = {
         "identity": {
@@ -239,9 +313,11 @@ class SmartiMemoryManager:
             "\u05e8\u05d7\u05d5\u05d1", "\u05e2\u05d9\u05e8",
         },
         "preference": {
-            "preference", "prefer", "style", "likes", "dislikes", "always", "never",
+            "preference", "prefer", "preferred", "favorite", "favourite", "taste", "tastes",
+            "style", "likes", "dislikes", "always", "never",
             "\u05de\u05e2\u05d3\u05d9\u05e3", "\u05de\u05e2\u05d3\u05d9\u05e4\u05d4", "\u05d0\u05d5\u05d4\u05d1",
-            "\u05d0\u05d5\u05d4\u05d1\u05ea", "\u05e1\u05d2\u05e0\u05d5\u05df", "\u05ea\u05de\u05d9\u05d3",
+            "\u05d0\u05d5\u05d4\u05d1\u05ea", "\u05d0\u05d4\u05d5\u05d1", "\u05d0\u05d4\u05d5\u05d1\u05d4", "\u05de\u05d5\u05e2\u05d3\u05e3", "\u05de\u05d5\u05e2\u05d3\u05e4\u05ea", "\u05d8\u05e2\u05dd",
+            "\u05e1\u05d2\u05e0\u05d5\u05df", "\u05ea\u05de\u05d9\u05d3",
             "\u05d0\u05e3\u05e4\u05e2\u05dd", "\u05d4\u05e2\u05d3\u05e4\u05d5\u05ea",
         },
         "tool": {
@@ -282,7 +358,8 @@ class SmartiMemoryManager:
     }
     SECRET_DETAIL_TERMS = {
         "password", "passcode", "api key", "apikey", "secret key", "access token",
-        "refresh token", "otp", "2fa", "cvv", "credit card", "card number",
+        "refresh token", "bearer token", "session token", "otp", "2fa", "cvv",
+        "credit card", "card number", "bank account", "iban",
         "\u05e1\u05d9\u05e1\u05de\u05d4", "\u05e1\u05d9\u05e1\u05de\u05ea", "\u05de\u05e4\u05ea\u05d7 api",
         "\u05d8\u05d5\u05e7\u05df", "\u05e7\u05d5\u05d3 \u05d0\u05d9\u05de\u05d5\u05ea", "\u05d0\u05e9\u05e8\u05d0\u05d9"
     }
@@ -320,14 +397,23 @@ class SmartiMemoryManager:
         self._lock = threading.RLock()
         self._session_entries = []
         self._undo_stack = []
+        self._evidence_validation_cache = {}
+        self.store = MemorySQLiteStore(path)
+        if not self.store.has_snapshot():
+            self.store.ensure_legacy_backup()
         self.data = self._load()
+        self.data.setdefault("rejected", [])
+        self._migrate_memory_v2_quality()
+        self._migrate_project_scopes()
         self._migrate_legacy_user_memory()
         self._migrate_privacy_model()
         self._migrate_automatic_use_model()
         self._migrate_user_work_artifacts()
         self._migrate_profile_eligibility()
         self.prune_expired()
+        self.prune_unused()
         self.backfill_critical_user_details()
+        self._save()
 
     def _settings(self):
         cfg = self.core.settings.setdefault("memory", {})
@@ -337,8 +423,13 @@ class SmartiMemoryManager:
         return cfg
 
     def _load(self):
+        if self.store.has_snapshot():
+            return self.store.load_snapshot()
         if not os.path.exists(self.path):
-            return {"schema_version": self.SCHEMA_VERSION, "entries": [], "archive": [], "pending": [], "stats": {}}
+            return {
+                "schema_version": self.SCHEMA_VERSION, "entries": [], "archive": [],
+                "pending": [], "rejected": [], "stats": {},
+            }
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
@@ -348,6 +439,7 @@ class SmartiMemoryManager:
             loaded.setdefault("entries", [])
             loaded.setdefault("archive", [])
             loaded.setdefault("pending", [])
+            loaded.setdefault("rejected", [])
             loaded.setdefault("stats", {})
             if not isinstance(loaded["entries"], list):
                 loaded["entries"] = []
@@ -355,6 +447,8 @@ class SmartiMemoryManager:
                 loaded["archive"] = []
             if not isinstance(loaded["pending"], list):
                 loaded["pending"] = []
+            if not isinstance(loaded["rejected"], list):
+                loaded["rejected"] = []
             loaded["schema_version"] = self.SCHEMA_VERSION
             return loaded
         except Exception as e:
@@ -364,10 +458,13 @@ class SmartiMemoryManager:
                 "entries": [],
                 "archive": [],
                 "pending": [],
+                "rejected": [],
                 "stats": {"load_error": str(e)},
             }
 
     def _save(self):
+        self.data["schema_version"] = self.SCHEMA_VERSION
+        self.store.replace_snapshot(self.data)
         directory = os.path.dirname(self.path) or "."
         os.makedirs(directory, exist_ok=True)
         tmp_path = f"{self.path}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp"
@@ -471,17 +568,6 @@ class SmartiMemoryManager:
                     )
                     rows.append(f"  {self._markdown_content(entry)}")
                 rows.append("")
-            pending = [entry for entry in self.data.get("pending", []) if isinstance(entry, dict)]
-            if pending:
-                rows.extend(["## pending review", ""])
-                for entry in pending:
-                    rows.append(
-                        f"- `{entry.get('id')}` | category={entry.get('category') or 'unknown'} | "
-                        f"sensitivity={entry.get('sensitivity') or 'ordinary'} | "
-                        f"captured={entry.get('created_at') or 'unknown'}"
-                    )
-                    rows.append("  [Pending user review; content omitted from Markdown export.]")
-                rows.append("")
             with open(self.export_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(rows).strip() + "\n")
         except Exception as e:
@@ -493,7 +579,9 @@ class SmartiMemoryManager:
 
     def _entry_category(self, entry):
         metadata = self._entry_metadata(entry)
-        return str(entry.get("category") or metadata.get("category") or "general").strip().lower()
+        category = str(entry.get("category") or metadata.get("category") or "general").strip().lower()
+        category = self.MODEL_MEMORY_CATEGORY_ALIASES.get(category, category)
+        return category or "general"
 
     def _entry_sensitivity(self, entry):
         metadata = self._entry_metadata(entry)
@@ -531,25 +619,22 @@ class SmartiMemoryManager:
         return "מידע רגיש מוגן ••••"
 
     def _markdown_content(self, entry):
-        if self._entry_sensitivity(entry) == "sensitive":
-            return "[Sensitive memory protected; plaintext omitted.]"
-        return re.sub(r"\s+", " ", self._plain_content(entry)).strip()
+        return "[Memory content protected with Windows DPAPI; plaintext omitted.]"
 
     def _public_entry(self, entry, *, reveal_sensitive=False, user_authorized=False):
         item = copy.deepcopy(entry or {})
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         category = self._entry_category(item)
         sensitivity = self._entry_sensitivity(item)
         plain = self._plain_content(item)
         item["category"] = category
         item["sensitivity"] = sensitivity
         item["version"] = int(item.get("version", 1) or 1)
-        # Stored memories are always eligible for use with the configured model.
-        # Sensitive values remain DPAPI-protected at rest and are only retrieved
-        # when they are relevant to the current request.
-        item["cloud_allowed"] = True
+        # DPAPI protects every persisted payload at rest. Sensitivity controls
+        # masking and relevance, while the global memory switch controls model use.
+        item["cloud_allowed"] = bool(item.get("cloud_allowed", metadata.get("cloud_allowed", False)))
         item["masked"] = sensitivity == "sensitive" and not (reveal_sensitive and user_authorized)
         item["content"] = plain if not item["masked"] else self._mask_sensitive_content(plain, category)
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         metadata.pop("encrypted", None)
         item["metadata"] = metadata
         return item
@@ -577,25 +662,256 @@ class SmartiMemoryManager:
         if not value:
             return None
         try:
-            return datetime.fromisoformat(str(value))
+            parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone().replace(tzinfo=None)
+            return parsed
         except Exception:
             return None
+
+    def _project_scope(self):
+        """Compatibility alias: Smarti has no project-scoped memory container."""
+        return "global"
+
+    def _canonical_scope(self, scope, memory_type="long_term"):
+        value = str(scope or "").strip()
+        if value.startswith("project:") or os.path.isabs(value):
+            return "global"
+        if value and value != "global":
+            if value.startswith(("conversation:", "user:")):
+                return value
+            return value[:500]
+        return "user:default" if memory_type == "user" else "global"
+
+    def _migrate_project_scopes(self):
+        """Collapse the former CWD-derived pseudo-project scope into global memory."""
+        stats = self.data.setdefault("stats", {})
+        try:
+            version = int(stats.get("scope_policy_version", 0) or 0)
+        except Exception:
+            version = 0
+        if version >= self.SCOPE_POLICY_VERSION:
+            return 0
+        changed = 0
+        for key in ("entries", "archive", "pending", "rejected"):
+            for entry in self.data.setdefault(key, []):
+                if str(entry.get("scope") or "").startswith("project:"):
+                    entry["scope"] = "global"
+                    changed += 1
+        for entry in self._session_entries:
+            if str(entry.get("scope") or "").startswith("project:"):
+                entry["scope"] = "global"
+                changed += 1
+        stats["scope_policy_version"] = self.SCOPE_POLICY_VERSION
+        stats["project_scopes_migrated"] = int(stats.get("project_scopes_migrated", 0) or 0) + changed
+        return changed
+
+    def _canonical_memory_text(self, text):
+        value = self._normalize_text_for_search(self._strip_user_work_artifact(text))
+        value = re.sub(
+            r"^(?:recent exchange\.?\s*)?(?:explicit memory request from user|recent temporal context from user|user request|outcome)\s*:\s*",
+            "",
+            value,
+            flags=re.IGNORECASE,
+        )
+        value = re.sub(r"\btool\s+[\w.-]+\s+returned\s+status\s*=\s*\w+\.?\s*preview\s*:\s*", "", value)
+        value = re.sub(r"\s+", " ", value).strip(" .,:;-\u2013\u2014")
+        return value
+
+    def _canonical_key_for(self, entry, content=None):
+        memory_type = self._normalize_type(entry.get("type", "long_term"))
+        category = self._entry_category(entry)
+        canonical = self._canonical_memory_text(self._plain_content(entry) if content is None else content)
+        material = f"{memory_type}\0{category}\0{canonical}"
+        return hashlib.sha256(material.encode("utf-8", "ignore")).hexdigest()
+
+    def _near_duplicate_text(self, left, right):
+        left_canonical = self._canonical_memory_text(left)
+        right_canonical = self._canonical_memory_text(right)
+        left_numbers = re.findall(r"\d+", left_canonical)
+        right_numbers = re.findall(r"\d+", right_canonical)
+        if (left_numbers or right_numbers) and left_numbers != right_numbers:
+            return False
+        left_tokens = set(self._tokenize_list(left_canonical, include_ngrams=False))
+        right_tokens = set(self._tokenize_list(right_canonical, include_ngrams=False))
+        if len(left_tokens) < 4 or len(right_tokens) < 4:
+            return False
+        overlap = len(left_tokens.intersection(right_tokens))
+        containment = overlap / max(1, min(len(left_tokens), len(right_tokens)))
+        jaccard = overlap / max(1, len(left_tokens.union(right_tokens)))
+        return containment >= 0.92 and jaccard >= 0.78
+
+    @staticmethod
+    def _entry_quality_key(entry):
+        source_rank = {
+            "manual_ui": 7, "manual": 7, "explicit_tool": 6, "legacy_settings": 5,
+            "critical_preflight": 4, "critical_backfill": 2, "conversation": 1,
+            "background": 1, "tool_observation": 0,
+        }
+        return (
+            bool(entry.get("pinned")),
+            source_rank.get(str(entry.get("source") or ""), 3),
+            int(entry.get("importance", 3) or 3),
+            int(entry.get("helpful_count", 0) or 0),
+            int(entry.get("used_count", 0) or 0),
+            str(entry.get("updated_at") or entry.get("created_at") or ""),
+        )
+
+    def _archive_for_quality(self, entry, reason, **metadata):
+        archived = copy.deepcopy(entry)
+        archived["archived_at"] = self._now_iso()
+        archived["archive_reason"] = str(reason)
+        archived.setdefault("metadata", {}).update(metadata)
+        archived["status"] = "archive"
+        self.data.setdefault("archive", []).append(archived)
+
+    def _migrate_memory_v2_quality(self):
+        """Consolidate exact duplicates and remove transcript/tool traces from active memory."""
+        stats = self.data.setdefault("stats", {})
+        if int(stats.get("quality_policy_version", 0) or 0) >= self.QUALITY_POLICY_VERSION:
+            for entry in self.data.get("entries", []) + self.data.get("archive", []):
+                if isinstance(entry, dict):
+                    entry.setdefault("canonical_key", self._canonical_key_for(entry))
+                    entry["scope"] = self._canonical_scope(entry.get("scope"), entry.get("type"))
+            return
+        active = []
+        grouped = {}
+        archived_traces = 0
+        duplicate_count = 0
+        for raw in list(self.data.get("entries", [])):
+            if not isinstance(raw, dict):
+                continue
+            entry = copy.deepcopy(raw)
+            classification = self.classify_content(
+                f"{entry.get('subject', '')} {self._plain_content(entry)}",
+                self._entry_category(entry),
+            )
+            entry["category"] = classification["category"]
+            entry["sensitivity"] = classification["sensitivity"]
+            entry["scope"] = self._canonical_scope(entry.get("scope"), entry.get("type"))
+            entry["canonical_key"] = self._canonical_key_for(entry)
+            metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+            entry["metadata"] = metadata
+            metadata["category"] = classification["category"]
+            metadata["sensitivity"] = classification["sensitivity"]
+            source = str(entry.get("source") or "").lower()
+            capture = str(metadata.get("capture") or "").lower()
+            auto_trace = (
+                entry.get("type") == "tool"
+                or source == "tool_observation"
+                or capture == "tool_continuity_retrievable"
+                or (
+                    source in {"conversation", "background"}
+                    and capture not in {"explicit_user_request", "strict_inferred_capture"}
+                )
+                or (
+                    entry.get("type") == "short_term"
+                    and source in {"conversation", "background"}
+                    and ("conversation" in capture or "temporal" in capture or "auto" in (entry.get("tags") or []))
+                )
+                or (
+                    source == "critical_backfill"
+                    and self._looks_one_time_action_request(self._plain_content(entry))
+                )
+                or (
+                    source in {"conversation", "background"}
+                    and self._looks_one_time_action_request(self._plain_content(entry))
+                )
+            )
+            if auto_trace:
+                self._archive_for_quality(
+                    entry, "legacy_conversation_or_tool_trace",
+                    v2_disposition="kept_as_history_evidence_not_active_memory",
+                )
+                archived_traces += 1
+                continue
+            grouped.setdefault((entry["scope"], entry["canonical_key"]), []).append(entry)
+        for (_scope, _key), entries in grouped.items():
+            entries.sort(key=self._entry_quality_key, reverse=True)
+            keeper = entries[0]
+            if len(entries) > 1:
+                merged_ids = [str(item.get("id") or "") for item in entries[1:]]
+                keeper.setdefault("metadata", {})["merged_duplicate_ids"] = merged_ids
+                keeper["metadata"]["dedupe_count"] = len(entries)
+                keeper["importance"] = max(int(item.get("importance", 3) or 3) for item in entries)
+                keeper["tags"] = sorted({tag for item in entries for tag in (item.get("tags") or [])})[:12]
+                for duplicate in entries[1:]:
+                    self._archive_for_quality(
+                        duplicate, "duplicate_consolidated",
+                        duplicate_of=keeper.get("id"), canonical_key=keeper.get("canonical_key"),
+                    )
+            active.append(keeper)
+        archive_groups = {}
+        for raw in self.data.get("archive", []):
+            if not isinstance(raw, dict):
+                continue
+            entry = copy.deepcopy(raw)
+            entry["scope"] = self._canonical_scope(entry.get("scope"), entry.get("type"))
+            entry["canonical_key"] = self._canonical_key_for(entry)
+            archive_groups.setdefault((entry["scope"], entry["canonical_key"]), []).append(entry)
+        active_by_key = {(entry["scope"], entry["canonical_key"]): entry for entry in active}
+        consolidated_archive = []
+        for key, entries in archive_groups.items():
+            entries.sort(key=self._entry_quality_key, reverse=True)
+            active_keeper = active_by_key.get(key)
+            if active_keeper is not None:
+                merged = active_keeper.setdefault("metadata", {}).setdefault("merged_duplicate_ids", [])
+                for duplicate in entries:
+                    duplicate_id = str(duplicate.get("id") or "")
+                    if duplicate_id and duplicate_id not in merged:
+                        merged.append(duplicate_id)
+                active_keeper["metadata"]["dedupe_count"] = 1 + len(merged)
+                duplicate_count += len(entries)
+                continue
+            keeper = entries[0]
+            if len(entries) > 1:
+                merged = keeper.setdefault("metadata", {}).setdefault("merged_duplicate_ids", [])
+                for duplicate in entries[1:]:
+                    duplicate_id = str(duplicate.get("id") or "")
+                    if duplicate_id and duplicate_id not in merged:
+                        merged.append(duplicate_id)
+                keeper["metadata"]["dedupe_count"] = 1 + len(merged)
+                keeper["metadata"]["merged_archive_reasons"] = sorted({
+                    str(item.get("archive_reason") or "unknown") for item in entries
+                })
+                duplicate_count += len(entries) - 1
+            consolidated_archive.append(keeper)
+        self.data["archive"] = consolidated_archive
+        self.data["entries"] = active
+        stats["quality_policy_version"] = self.QUALITY_POLICY_VERSION
+        stats["quality_migrated_at"] = self._now_iso()
+        stats["duplicates_consolidated"] = duplicate_count
+        stats["legacy_traces_archived"] = archived_traces
+        stats["storage_backend"] = "sqlite-v2"
 
     def classify_content(self, content, category=""):
         """Return deterministic privacy metadata; secrets are never eligible for storage."""
         text = str(content or "")
         low = self._normalize_text_for_search(text)
         category = str(category or "").strip().lower()
+        category = self.MODEL_MEMORY_CATEGORY_ALIASES.get(category, category)
         if category in {"general", "unknown"}:
             category = ""
+        if category in self.NEVER_STORE_CATEGORIES:
+            return {
+                "category": category,
+                "sensitivity": "sensitive",
+                "store_allowed": False,
+                "reason": "Secrets, authentication values, OTPs and payment credentials are never stored.",
+            }
         secret_pattern = re.compile(
             r"(?i)(?:sk-[a-z0-9_-]{12,}|AIza[a-z0-9_-]{20,}|gh[pousr]_[a-z0-9]{20,}|"
-            r"(?:otp|2fa|cvv|password|passcode|api\s*key|access\s*token|refresh\s*token)\s*[:=]\s*\S+|"
-            r"(?:credit\s*card|card\s*number|כרטיס\s*אשראי|אשראי)[^\d]{0,30}\d(?:[\d\s-]{10,}\d))"
+            r"eyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{8,}|"
+            r"(?:otp|2fa|cvv|password|passcode|api\s*key|access\s*token|refresh\s*token|"
+            r"bearer\s*token|session\s*token|token|iban|bank\s*account)\s*[:=]\s*\S+|"
+            r"(?:credit\s*card|card\s*number|bank\s*account|iban|כרטיס\s*אשראי|אשראי|"
+            r"חשבון\s*בנק)[^\d]{0,30}\d(?:[\d\s-]{8,}\d))"
         )
         secret_value_context = re.search(
-            r"(?i)(?:my\s+)?(?:password|passcode|api\s*key|access\s*token|refresh\s*token|otp|2fa|cvv|"
-            r"credit\s*card|card\s*number|סיסמ(?:ה|ת)|מפתח\s*api|טוקן|קוד\s*אימות|כרטיס\s*אשראי|אשראי)"
+            r"(?i)(?:my\s+)?(?:password|passcode|api\s*key|access\s*token|refresh\s*token|"
+            r"bearer\s*token|session\s*token|token|otp|2fa|cvv|credit\s*card|card\s*number|"
+            r"bank\s*account|iban|סיסמ(?:ה|ת)|מפתח\s*api|טוקן|קוד\s*אימות|כרטיס\s*אשראי|"
+            r"אשראי|חשבון\s*בנק)"
             r"\s*(?:is|הוא|היא|:|=)\s*\S+",
             text,
         )
@@ -613,7 +929,7 @@ class SmartiMemoryManager:
                 category = "phone"
             else:
                 for candidate, _memory_type, _importance, terms in self.CRITICAL_USER_DETAIL_RULES:
-                    if candidate in self.SENSITIVE_CATEGORIES and self._contains_any(low, terms):
+                    if self._contains_any(low, terms):
                         category = candidate
                         break
         category = category or "general"
@@ -626,164 +942,155 @@ class SmartiMemoryManager:
         }
 
     def _migrate_privacy_model(self):
-        """Encrypt and quarantine legacy sensitive entries without deleting them."""
+        """Encrypt every persisted memory while retaining its logical state."""
         with self._lock:
             stats = self.data.setdefault("stats", {})
-            if int(stats.get("privacy_policy_version", 0) or 0) >= self.PRIVACY_POLICY_VERSION:
-                return
-            pending = self.data.setdefault("pending", [])
-            migrated_pending = []
-            active = []
-            changed = 0
-            try:
-                for entry in list(self.data.get("entries", [])):
-                    if not isinstance(entry, dict):
-                        continue
-                    plain = self._plain_content(entry)
-                    classification = self.classify_content(plain, self._entry_category(entry))
-                    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-                    entry["metadata"] = metadata
-                    entry["category"] = classification["category"]
-                    entry["sensitivity"] = classification["sensitivity"]
-                    entry["version"] = int(entry.get("version", 1) or 1)
-                    entry.setdefault("pinned", False)
-                    entry.setdefault("source_conversation_id", str(metadata.get("source_conversation_id") or "")[:120])
-                    entry.setdefault("source_message_id", str(metadata.get("source_message_id") or "")[:120])
-                    entry.setdefault("cloud_allowed", classification["sensitivity"] != "sensitive")
-                    metadata["category"] = classification["category"]
-                    metadata["sensitivity"] = classification["sensitivity"]
-                    metadata.setdefault("consent_state", "approved" if classification["sensitivity"] == "ordinary" else "pending_review")
-                    metadata.setdefault("why_saved", entry.get("source") or "legacy memory")
-                    if classification["sensitivity"] == "sensitive":
-                        if not str(entry.get("content") or "").startswith(SECRET_PREFIX):
-                            entry["content"] = self._protect_content(plain)
-                            changed += 1
-                        metadata["encrypted"] = True
-                        metadata["encryption_version"] = 1
-                        metadata["automatic_context_eligible"] = False
-                        metadata["profile_eligible"] = False
-                        entry["cloud_allowed"] = False
-                        entry["pending_kind"] = "privacy_migration"
-                        entry["pending_reason"] = (
-                            "Existing sensitive memory was protected and removed from active retrieval until reviewed."
+            if int(stats.get("privacy_policy_version", 0) or 0) < self.PRIVACY_POLICY_VERSION:
+                changed = 0
+                purged = 0
+                prohibited_refs = set()
+                for collection in (
+                    self.data.setdefault("entries", []), self.data.setdefault("archive", []),
+                    self.data.setdefault("pending", []), self.data.setdefault("rejected", []),
+                ):
+                    for entry in collection:
+                        if not isinstance(entry, dict):
+                            continue
+                        plain = self._plain_content(entry)
+                        classification = (
+                            self.classify_content(plain, self._entry_category(entry))
+                            if plain
+                            else {
+                                "category": self._entry_category(entry),
+                                "sensitivity": self._entry_sensitivity(entry),
+                                "store_allowed": True,
+                            }
                         )
-                        migrated_pending.append(entry)
-                        changed += 1
-                    else:
-                        active.append(entry)
-                self.data["entries"] = active
-                existing_pending_ids = {str(item.get("id")) for item in pending if isinstance(item, dict)}
-                pending.extend(item for item in migrated_pending if str(item.get("id")) not in existing_pending_ids)
-                for entry in self.data.get("archive", []):
-                    if not isinstance(entry, dict):
-                        continue
-                    plain = self._plain_content(entry)
-                    classification = self.classify_content(plain, self._entry_category(entry))
-                    metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-                    entry["metadata"] = metadata
-                    entry["category"] = classification["category"]
-                    entry["sensitivity"] = classification["sensitivity"]
-                    entry["version"] = int(entry.get("version", 1) or 1)
-                    entry.setdefault("pinned", False)
-                    entry.setdefault("source_conversation_id", str(metadata.get("source_conversation_id") or "")[:120])
-                    entry.setdefault("source_message_id", str(metadata.get("source_message_id") or "")[:120])
-                    metadata["category"] = classification["category"]
-                    metadata["sensitivity"] = classification["sensitivity"]
-                    if classification["sensitivity"] == "sensitive":
-                        if not str(entry.get("content") or "").startswith(SECRET_PREFIX):
+                        if not classification.get("store_allowed", True):
+                            prohibited_refs.add(id(entry))
+                            purged += 1
+                            continue
+                        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                        entry["metadata"] = metadata
+                        entry["category"] = classification["category"]
+                        entry["sensitivity"] = classification["sensitivity"]
+                        metadata["category"] = classification["category"]
+                        metadata["sensitivity"] = classification["sensitivity"]
+                        if not str(entry.get("content") or "").startswith(SECRET_PREFIX) and plain:
                             entry["content"] = self._protect_content(plain)
                             changed += 1
+                        decryptable = bool(plain) or not str(entry.get("content") or "").startswith(SECRET_PREFIX)
                         metadata["encrypted"] = True
                         metadata["encryption_version"] = 1
-                        entry["cloud_allowed"] = False
+                        metadata["automatic_context_eligible"] = decryptable
+                        # The single global memory switch controls model use. A
+                        # second per-category/per-entry consent layer made useful
+                        # personal memory silently unusable.
+                        metadata["cloud_allowed"] = decryptable
+                        entry["cloud_allowed"] = decryptable
+                if prohibited_refs:
+                    for collection_name in ("entries", "archive", "pending", "rejected"):
+                        self.data[collection_name] = [
+                            entry for entry in self.data.get(collection_name, [])
+                            if id(entry) not in prohibited_refs
+                        ]
+                memory_cfg = self._settings()
+                for obsolete_key in (
+                    "store_sensitive_personal_details", "sensitive_category_consent",
+                    "health_memory_mode", "sensitive_memory_cloud_default",
+                    "allow_sensitive_memory_in_prompt",
+                ):
+                    memory_cfg.pop(obsolete_key, None)
                 stats["privacy_policy_version"] = self.PRIVACY_POLICY_VERSION
                 stats["privacy_migrated_at"] = self._now_iso()
-                stats["privacy_pending_review"] = len(migrated_pending)
-                self.data["schema_version"] = self.SCHEMA_VERSION
-                self._save()
-            except Exception as e:
-                stats["privacy_migration_error"] = str(e)
-                logging.error(f"Memory privacy migration failed safely: {e}")
-                raise
-
-    def _migrate_automatic_use_model(self):
-        """Remove review gates while retaining local encryption and secret blocking."""
-        with self._lock:
-            stats = self.data.setdefault("stats", {})
-            policy_was_current = (
-                int(stats.get("automatic_use_policy_version", 0) or 0)
-                >= self.AUTOMATIC_USE_POLICY_VERSION
-            )
-            changed = 0
-            moved = 0
-            active = self.data.setdefault("entries", [])
-            had_pending = bool(self.data.setdefault("pending", []))
-            active_ids = {str(entry.get("id") or "") for entry in active if isinstance(entry, dict)}
-            for entry in list(active) + list(self.data.setdefault("archive", [])):
-                if not isinstance(entry, dict):
-                    continue
-                metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-                entry["metadata"] = metadata
-                if entry.get("cloud_allowed") is not True:
-                    entry["cloud_allowed"] = True
-                    changed += 1
-                if metadata.get("cloud_allowed") is not True:
-                    metadata["cloud_allowed"] = True
-                    changed += 1
-                if metadata.get("consent_state") != "approved":
-                    metadata["consent_state"] = "approved"
-                    changed += 1
-                entry.pop("pending_kind", None)
-                entry.pop("pending_reason", None)
-
-            for pending in list(self.data.setdefault("pending", [])):
-                if not isinstance(pending, dict):
-                    continue
-                entry = copy.deepcopy(pending)
-                metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
-                entry["metadata"] = metadata
-                entry["cloud_allowed"] = True
-                metadata["cloud_allowed"] = True
-                metadata["consent_state"] = "approved"
-                metadata["approved_by"] = "automatic_memory_policy"
-                metadata["approved_at"] = self._now_iso()
-                entry.pop("pending_kind", None)
-                entry.pop("pending_reason", None)
-                memory_id = str(entry.get("id") or "")
-                if not memory_id or memory_id not in active_ids:
-                    active.append(entry)
-                    if memory_id:
-                        active_ids.add(memory_id)
-                    moved += 1
-            self.data["pending"] = []
-            stats["pending_captures"] = 0
-            if not policy_was_current or changed or moved or had_pending:
-                stats["automatic_use_policy_version"] = self.AUTOMATIC_USE_POLICY_VERSION
-                stats["automatic_use_migrated_at"] = self._now_iso()
-                stats["automatic_use_moved_from_pending"] = moved
-                stats["automatic_use_updated_entries"] = changed
-            memory_cfg = self._settings()
-            settings_changed = (
-                memory_cfg.get("store_sensitive_personal_details") is not True
-                or memory_cfg.get("sensitive_category_consent") != {
-                    "address": True, "phone": True, "email": True, "health": True,
-                }
-                or memory_cfg.get("health_memory_mode") != "persistent"
-                or memory_cfg.get("sensitive_memory_cloud_default") is not True
-            )
-            memory_cfg["store_sensitive_personal_details"] = True
-            memory_cfg["sensitive_category_consent"] = {
-                "address": True, "phone": True, "email": True, "health": True,
-            }
-            memory_cfg["health_memory_mode"] = "persistent"
-            memory_cfg["sensitive_memory_cloud_default"] = True
-            if settings_changed:
+                stats["privacy_v3_protected_entries"] = changed
+                stats["privacy_v3_prohibited_entries_removed"] = purged
                 try:
                     self.core._save_settings()
                 except Exception:
                     pass
-            if not policy_was_current or changed or moved or had_pending:
                 self._save()
+            return
+    def _migrate_automatic_use_model(self):
+        """Remove the accidentally introduced review queue without losing data."""
+        with self._lock:
+            stats = self.data.setdefault("stats", {})
+            pending = list(self.data.setdefault("pending", []))
+            rejected = list(self.data.setdefault("rejected", []))
+            policy_was_current = (
+                int(stats.get("automatic_use_policy_version", 0) or 0)
+                >= self.AUTOMATIC_USE_POLICY_VERSION
+            )
+            if policy_was_current and not pending and not rejected:
+                return
+
+            active = self.data.setdefault("entries", [])
+            archive = self.data.setdefault("archive", [])
+            active_keys = {
+                (
+                    self._canonical_scope(item.get("scope"), item.get("type")),
+                    str(item.get("canonical_key") or self._canonical_key_for(item)),
+                )
+                for item in active if isinstance(item, dict)
+            }
+            activated = 0
+            archived = 0
+            for raw in pending:
+                if not isinstance(raw, dict):
+                    continue
+                entry = copy.deepcopy(raw)
+                metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+                entry["metadata"] = metadata
+                entry.pop("status", None)
+                entry.pop("pending_kind", None)
+                entry.pop("pending_reason", None)
+                metadata.pop("pending_reason", None)
+                metadata.pop("review_state", None)
+                entry["id"] = "mem_" + uuid.uuid4().hex[:12]
+                entry["scope"] = self._canonical_scope(entry.get("scope"), entry.get("type"))
+                entry["canonical_key"] = str(entry.get("canonical_key") or self._canonical_key_for(entry))
+                key = (entry["scope"], entry["canonical_key"])
+                if str(entry.get("content") or "").startswith(SECRET_PREFIX) and not self._plain_content(entry):
+                    entry["archived_at"] = self._now_iso()
+                    entry["archive_reason"] = "protected_memory_could_not_be_decrypted"
+                    archive.append(entry)
+                    archived += 1
+                    continue
+                classification = self.classify_content(
+                    self._plain_content(entry), self._entry_category(entry)
+                )
+                if not classification.get("store_allowed", True):
+                    entry["archived_at"] = self._now_iso()
+                    entry["archive_reason"] = "removed_review_queue_prohibited_secret"
+                    archive.append(entry)
+                    archived += 1
+                elif key not in active_keys:
+                    metadata["consent_state"] = "approved"
+                    metadata["automatic_context_eligible"] = True
+                    active.append(entry)
+                    active_keys.add(key)
+                    activated += 1
+
+            for raw in rejected:
+                if not isinstance(raw, dict):
+                    continue
+                entry = copy.deepcopy(raw)
+                entry.pop("status", None)
+                entry["archived_at"] = entry.get("rejected_at") or self._now_iso()
+                entry["archive_reason"] = "removed_review_queue_rejected_capture"
+                archive.append(entry)
+                archived += 1
+
+            self.data["pending"] = []
+            self.data["rejected"] = []
+            stats.pop("pending_captures", None)
+            stats.pop("privacy_pending_review", None)
+            stats["automatic_use_policy_version"] = self.AUTOMATIC_USE_POLICY_VERSION
+            stats["automatic_use_migrated_at"] = self._now_iso()
+            stats["automatic_use_mode"] = "strict_capture_without_review"
+            stats["review_queue_activated"] = activated
+            stats["review_queue_archived"] = archived
+            self._save()
 
     @staticmethod
     def _strip_user_work_artifact(text):
@@ -894,42 +1201,41 @@ class SmartiMemoryManager:
             stem = self._hebrew_light_stem(token)
             if stem != token and len(stem) >= 2 and stem not in self.HEBREW_STOPWORDS:
                 tokens.append(stem)
-            if include_ngrams and re.fullmatch(r"[\u0590-\u05FF]{5,}", token):
-                tokens.extend(token[i:i + 4] for i in range(0, max(0, len(token) - 3)))
         return tokens
 
     def _tokenize(self, text):
         return set(self._tokenize_list(text))
 
     def _entry_search_text(self, entry):
-        memory_type = str(entry.get("type", ""))
-        type_terms = {
-            "user": "user profile identity preference personal address phone email family health",
-            "long_term": "long term durable project preference decision recurring fact",
-            "short_term": "recent conversation continuity previous last request",
-            "tool": "tool command result observation error status run",
-        }.get(memory_type, "")
         metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+        retrieval_hints = metadata.get("retrieval_hints", [])
+        if not isinstance(retrieval_hints, list):
+            retrieval_hints = [retrieval_hints] if retrieval_hints else []
         return " ".join([
             str(entry.get("subject", "")),
             self._plain_content(entry),
             " ".join(entry.get("tags", []) or []),
-            str(entry.get("tool_name", "")),
-            str(metadata.get("category", "")),
-            type_terms,
+            self._entry_category(entry),
+            " ".join(str(item or "") for item in retrieval_hints[:8]),
         ])
 
     def _expanded_query_tokens(self, query):
-        normalized_query = self._normalize_text_for_search(query)
-        tokens = set(self._tokenize_list(normalized_query))
-        compact_query = normalized_query.replace(" ", "")
-        for terms in self.SEARCH_EXPANSION_GROUPS.values():
-            normalized_terms = {self._normalize_text_for_search(t).replace(" ", "") for t in terms}
-            if tokens.intersection(normalized_terms) or any(term and term in compact_query for term in normalized_terms):
-                tokens.update(normalized_terms)
-                for term in terms:
-                    tokens.update(self._tokenize_list(term, include_ngrams=False))
-        return {t for t in tokens if len(t) >= 2}
+        # Query expansion used to add dozens of generic words and Hebrew
+        # character four-grams. Both produced convincing but unrelated hits.
+        # FTS now receives only words the user actually supplied (plus a light
+        # Hebrew stem emitted by _tokenize_list).
+        tokens = {t for t in self._tokenize_list(query, include_ngrams=False) if len(t) >= 2}
+        # A tiny domain-specific bilingual bridge is safer than the former
+        # broad synonym expansion and keeps equivalent Hebrew/English project
+        # questions comparable without introducing generic noise.
+        aliases = {
+            "database": {"מסד", "נתונים"},
+            "databases": {"מסד", "נתונים"},
+            "מסד": {"database"},
+        }
+        for token in tuple(tokens):
+            tokens.update(aliases.get(token, ()))
+        return tokens
 
     def _query_intent(self, query):
         normalized_query = self._normalize_text_for_search(query)
@@ -1102,7 +1408,7 @@ class SmartiMemoryManager:
         if re.search(r"\b(my|mine|me|i|i'm|i am)\b", low):
             return True
         return bool(re.search(
-            r"(^|\s)(\u05d0\u05e0\u05d9|\u05e9\u05dc\u05d9|\u05dc\u05d9|\u05d0\u05e6\u05dc\u05d9|\u05d2\u05e8|\u05d2\u05e8\u05d4|\u05de\u05ea\u05d2\u05d5\u05e8\u05e8|\u05de\u05ea\u05d2\u05d5\u05e8\u05e8\u05ea)(\s|$)",
+            r"(?<![\u0590-\u05FF])(\u05d0\u05e0\u05d9|\u05e9\u05dc\u05d9|\u05dc\u05d9|\u05d0\u05e6\u05dc\u05d9|\u05d2\u05e8|\u05d2\u05e8\u05d4|\u05de\u05ea\u05d2\u05d5\u05e8\u05e8|\u05de\u05ea\u05d2\u05d5\u05e8\u05e8\u05ea)(?![\u0590-\u05FF])",
             low,
         ))
 
@@ -1233,97 +1539,16 @@ class SmartiMemoryManager:
             deduped.append(item)
         return deduped[:10]
 
-    def queue_pending_capture(self, memory_type, content, *, subject="", tags=None,
-                              importance=3, source="capture", category="", confidence=0.75,
-                              metadata=None):
-        # Compatibility entry point for older callers. Captures are stored
-        # immediately; there is no user-review queue in the current model.
-        return self.add(
-            memory_type,
-            content,
-            subject=subject,
-            tags=tags,
-            importance=importance,
-            source=source,
-            category=category,
-            confidence=confidence,
-            metadata=metadata,
-            consent_state="approved",
-            cloud_allowed=True,
-            storage_mode="persistent",
-        )
-
     def capture_critical_user_details(self, user_text, source="critical_preflight"):
-        added = []
-        for item in self.extract_critical_user_memories(user_text):
-            category = item["category"]
-            common = {
-                "subject": item["subject"],
-                "tags": item["tags"],
-                "importance": item["importance"],
-                "source": source,
-                "confidence": 0.88,
-                "category": category,
-                "metadata": {
-                    "category": category,
-                    "sensitive": bool(item.get("sensitive", False)),
-                    "capture": "deterministic_preflight",
-                    "profile_eligible": bool(item.get("profile_eligible", True)),
-                    "automatic_context_eligible": bool(item.get("automatic_context_eligible", True)),
-                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
-                    "why_saved": "Detected as a reusable personal detail from the user's message.",
-                },
-            }
-            entry_id = self.add(
-                item["memory_type"],
-                item["content"],
-                volatile=False,
-                consent_state="approved",
-                cloud_allowed=True,
-                storage_mode="persistent",
-                **common,
-            )
-            if entry_id:
-                added.append(entry_id)
-        if added:
-            logging.info(f"MEMORY | critical_capture | added_or_refreshed={len(added)}")
-        return added
-
+        """Deprecated compatibility shim; mechanical capture is disabled."""
+        return []
     def backfill_critical_user_details(self):
-        cfg = self._settings()
-        if not cfg.get("capture_critical_user_details", True):
-            return []
+        # V1 repeatedly mined its own generated memories and amplified them on
+        # every policy bump. V2 deliberately never backfills from memory text.
         stats = self.data.setdefault("stats", {})
-        if int(stats.get("critical_backfill_version", 0) or 0) >= self.PROFILE_POLICY_VERSION:
-            return []
-        added = []
-        for entry in list(self.data.get("entries", [])):
-            if entry.get("type") not in {"short_term", "long_term"}:
-                continue
-            metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
-            source = str(entry.get("source") or "").strip().lower()
-            tags = {str(tag or "").strip().lower() for tag in (entry.get("tags") or [])}
-            # Never feed a memory produced by this backfill into the next
-            # policy migration. Older versions did so after each policy bump,
-            # producing chains such as "User work: User work ...".
-            if (
-                metadata.get("capture") == "deterministic_preflight"
-                or source in {"critical_preflight", "critical_backfill"}
-                or "critical" in tags
-            ):
-                continue
-            content = self._plain_content(entry)
-            match = re.search(r"User request:\s*(.*?)(?:\s+Outcome:|$)", content, flags=re.DOTALL)
-            text = match.group(1).strip() if match else " ".join(str(entry.get(key, "")) for key in ("subject", "content"))
-            added.extend(self.capture_critical_user_details(text, source="critical_backfill"))
         stats["critical_backfill_version"] = self.PROFILE_POLICY_VERSION
-        stats["critical_backfill_last_count"] = len(added)
-        stats["critical_backfill_last_at"] = self._now_iso()
-        try:
-            self._save()
-        except Exception:
-            pass
-        return added
+        stats.setdefault("critical_backfill_last_count", 0)
+        return []
 
     def _is_expired(self, entry, now=None):
         now = now or datetime.now()
@@ -1362,6 +1587,52 @@ class SmartiMemoryManager:
                 self._save()
             return len(archived)
 
+    def prune_unused(self):
+        """Archive low-value inferred memories that have never proved useful."""
+        with self._lock:
+            now = datetime.now()
+            cfg = self._settings()
+            active = []
+            archived = []
+            for entry in self.data.setdefault("entries", []):
+                metadata = self._entry_metadata(entry)
+                source = str(entry.get("source") or "").lower()
+                inferred = bool(metadata.get("inferred")) or source in {
+                    "conversation", "background", "auto_inferred", "critical_preflight", "critical_backfill",
+                }
+                if not inferred or entry.get("pinned") or int(entry.get("helpful_count", 0) or 0) > 0:
+                    active.append(entry)
+                    continue
+                days = cfg.get("project_memory_unused_days", 90) if str(entry.get("scope") or "").startswith("project:") else cfg.get("inferred_memory_unused_days", 30)
+                try:
+                    cutoff = now - timedelta(days=max(1.0, float(days or 30)))
+                except Exception:
+                    cutoff = now - timedelta(days=30)
+                last_value = (
+                    self._parse_dt(entry.get("last_used_at"))
+                    or self._parse_dt(entry.get("last_injected_at"))
+                    or self._parse_dt(entry.get("updated_at"))
+                    or self._parse_dt(entry.get("created_at"))
+                )
+                if last_value and last_value < cutoff:
+                    item = copy.deepcopy(entry)
+                    item["status"] = "archive"
+                    item["archived_at"] = self._now_iso()
+                    item["archive_reason"] = "unused_inferred_memory"
+                    archived.append(item)
+                else:
+                    active.append(entry)
+            if archived:
+                self.data["entries"] = active
+                self.data.setdefault("archive", []).extend(archived)
+            changed = len(archived)
+            if changed:
+                stats = self.data.setdefault("stats", {})
+                stats["unused_archived"] = int(stats.get("unused_archived", 0) or 0) + len(archived)
+                stats["last_retention_at"] = self._now_iso()
+                self._save()
+            return changed
+
     def _migrate_legacy_user_memory(self):
         legacy = str(self.core.settings.get("user_memory", "") or "").strip()
         if not legacy or self.core.settings.get("_structured_memory_migrated"):
@@ -1382,9 +1653,10 @@ class SmartiMemoryManager:
             pass
 
     def add(self, memory_type, content, *, subject="", tags=None, ttl_hours=None, importance=3,
-            source="manual", confidence=0.75, scope="global", tool_name="", volatile=None,
+            source="manual", confidence=0.75, scope="", tool_name="", volatile=None,
             metadata=None, category="", consent_state="approved", cloud_allowed=None,
-            storage_mode="persistent", entry_id="", pinned=False):
+            storage_mode="persistent", entry_id="", pinned=False, created_at="",
+            updated_at="", expires_at=""):
         content = self._strip_user_work_artifact(content)
         if not content:
             return None
@@ -1396,7 +1668,8 @@ class SmartiMemoryManager:
         category = classification["category"]
         sensitivity = classification["sensitivity"]
         cloud_allowed = True
-        consent_state = "approved"
+        consent_state = str(consent_state or "approved")
+        scope = self._canonical_scope(scope, memory_type)
         if ttl_hours is None:
             ttl_hours = self._ttl_for_type(memory_type, source=source)
         try:
@@ -1404,7 +1677,14 @@ class SmartiMemoryManager:
         except Exception:
             ttl_hours = None
         now = datetime.now()
-        expires_at = (now + timedelta(hours=ttl_hours)).isoformat(timespec="seconds") if ttl_hours else None
+        created_dt = self._parse_dt(created_at) or now
+        updated_dt = self._parse_dt(updated_at) or created_dt
+        supplied_expiry = self._parse_dt(expires_at)
+        expires_at = (
+            supplied_expiry.isoformat(timespec="seconds")
+            if supplied_expiry is not None
+            else ((updated_dt + timedelta(hours=ttl_hours)).isoformat(timespec="seconds") if ttl_hours else None)
+        )
         volatile = self._looks_live_or_temporal(content) if volatile is None else bool(volatile)
         try:
             importance = max(1, min(5, int(float(importance))))
@@ -1412,28 +1692,46 @@ class SmartiMemoryManager:
             importance = 3
         tags = self._coerce_tags(tags)
         subject = self._strip_user_work_artifact(subject)[:120] or self._derive_subject(content)
+        if sensitivity == "sensitive":
+            # Titles are stored and rendered as plaintext metadata, so they must
+            # never repeat an email, phone number, address, or health detail.
+            subject = self.CRITICAL_CATEGORY_LABELS.get(category, "Sensitive memory")
         fingerprint = hashlib.sha256(
             f"{memory_type}\0{scope}\0{subject.lower()}\0{content.lower()}".encode("utf-8", "ignore")
         ).hexdigest()
+        canonical_key = self._canonical_key_for(
+            {"type": memory_type, "category": category, "content": content}, content=content,
+        )
         with self._lock:
             target_entries = self._session_entries if storage_mode == "session_only" else self.data.setdefault("entries", [])
             for entry in target_entries:
-                if entry.get("fingerprint") == fingerprint:
+                same_canonical = (
+                    entry.get("scope") == scope
+                    and str(entry.get("canonical_key") or self._canonical_key_for(entry)) == canonical_key
+                )
+                near_duplicate = bool(
+                    entry.get("scope") == scope
+                    and entry.get("type") == memory_type
+                    and self._entry_category(entry) == category
+                    and self._near_duplicate_text(self._plain_content(entry), content)
+                )
+                if entry.get("fingerprint") == fingerprint or same_canonical or near_duplicate:
                     entry["updated_at"] = self._now_iso()
                     entry["expires_at"] = expires_at
                     entry["importance"] = max(int(entry.get("importance", 3)), importance)
-                    entry["access_count"] = int(entry.get("access_count", 0)) + 1
+                    entry["duplicate_count"] = int(entry.get("duplicate_count", 0) or 0) + 1
                     entry["last_source"] = source
                     entry["tags"] = sorted(set(entry.get("tags", []) or []) | set(tags))[:12]
-                    entry["cloud_allowed"] = True
+                    entry["cloud_allowed"] = bool(entry.get("cloud_allowed")) or bool(cloud_allowed)
+                    entry["canonical_key"] = canonical_key
                     if isinstance(metadata, dict) and metadata:
                         existing_metadata = entry.get("metadata")
                         if not isinstance(existing_metadata, dict):
                             existing_metadata = {}
                             entry["metadata"] = existing_metadata
                         existing_metadata.update(copy.deepcopy(metadata))
-                        existing_metadata["cloud_allowed"] = True
-                        existing_metadata["consent_state"] = "approved"
+                        existing_metadata["cloud_allowed"] = bool(entry.get("cloud_allowed"))
+                        existing_metadata["consent_state"] = consent_state
                     entry["version"] = int(entry.get("version", 1) or 1) + 1
                     if storage_mode != "session_only":
                         self._save()
@@ -1445,19 +1743,20 @@ class SmartiMemoryManager:
                 "sensitive": sensitivity == "sensitive",
                 "consent_state": consent_state,
                 "cloud_allowed": bool(cloud_allowed),
-                "encrypted": sensitivity == "sensitive" and storage_mode != "session_only",
-                "encryption_version": 1 if sensitivity == "sensitive" and storage_mode != "session_only" else 0,
+                "encrypted": storage_mode != "session_only",
+                "encryption_version": 1 if storage_mode != "session_only" else 0,
                 "why_saved": metadata.get("why_saved") or source,
             })
             stored_content = (
                 self._protect_content(content[:6000])
-                if sensitivity == "sensitive" and storage_mode != "session_only"
+                if storage_mode != "session_only"
                 else content[:6000]
             )
             entry = {
                 "id": entry_id,
                 "type": memory_type,
-                "scope": scope or "global",
+                "scope": scope,
+                "canonical_key": canonical_key,
                 "subject": subject,
                 "content": stored_content,
                 "category": category,
@@ -1471,8 +1770,8 @@ class SmartiMemoryManager:
                 "source": source,
                 "tool_name": str(tool_name or "")[:80],
                 "volatile": volatile,
-                "created_at": now.isoformat(timespec="seconds"),
-                "updated_at": now.isoformat(timespec="seconds"),
+                "created_at": created_dt.isoformat(timespec="seconds"),
+                "updated_at": updated_dt.isoformat(timespec="seconds"),
                 "expires_at": expires_at,
                 "fingerprint": fingerprint,
                 "access_count": 0,
@@ -1499,7 +1798,6 @@ class SmartiMemoryManager:
             ("active", self.data.setdefault("entries", [])),
             ("archive", self.data.setdefault("archive", [])),
             ("session", self._session_entries),
-            ("pending", self.data.setdefault("pending", [])),
         )
         for status, entries in collections:
             for index, entry in enumerate(entries):
@@ -1514,12 +1812,11 @@ class SmartiMemoryManager:
         self.prune_expired()
         statuses = {str(status or "active").strip().lower()}
         if "all" in statuses:
-            statuses = {"active", "archive", "session", "pending"}
+            statuses = {"active", "archive", "session"}
         collections = {
             "active": self.data.get("entries", []),
             "archive": self.data.get("archive", []),
             "session": self._session_entries,
-            "pending": self.data.get("pending", []),
         }
         normalized_query = self._normalize_text_for_search(query)
         normalized_source = str(source or "").strip().lower()
@@ -1603,8 +1900,8 @@ class SmartiMemoryManager:
     def edit_entry(self, memory_id, *, expected_version=None, user_authorized=False, **changes):
         with self._lock:
             status, entries, index, entry = self._locate_entry(memory_id)
-            if not entry or status == "pending":
-                raise KeyError("memory_id not found or is pending review")
+            if not entry:
+                raise KeyError("memory_id not found")
             current_version = int(entry.get("version", 1) or 1)
             if expected_version not in (None, "") and int(expected_version) != current_version:
                 raise RuntimeError(
@@ -1620,48 +1917,76 @@ class SmartiMemoryManager:
             classification = self.classify_content(content, category)
             if not classification.get("store_allowed", True):
                 raise ValueError(classification.get("reason") or "This content cannot be stored.")
-            if classification["sensitivity"] == "sensitive" and not user_authorized:
-                raise PermissionError("Only the user-facing memory page may edit sensitive memory.")
             metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
             metadata.update({
                 "category": classification["category"],
                 "sensitivity": classification["sensitivity"],
                 "sensitive": classification["sensitivity"] == "sensitive",
-                "encrypted": classification["sensitivity"] == "sensitive" and status != "session",
-                "encryption_version": 1 if classification["sensitivity"] == "sensitive" and status != "session" else 0,
+                "encrypted": status != "session",
+                "encryption_version": 1 if status != "session" else 0,
             })
             entry["metadata"] = metadata
             entry["content"] = (
                 self._protect_content(content[:6000])
-                if classification["sensitivity"] == "sensitive" and status != "session"
+                if status != "session"
                 else content[:6000]
             )
             entry["category"] = classification["category"]
             entry["sensitivity"] = classification["sensitivity"]
             if "subject" in changes:
                 entry["subject"] = self._strip_user_work_artifact(changes.get("subject"))[:120] or self._derive_subject(content)
+            if classification["sensitivity"] == "sensitive":
+                entry["subject"] = self.CRITICAL_CATEGORY_LABELS.get(
+                    classification["category"], "Sensitive memory"
+                )
             if "memory_type" in changes:
                 entry["type"] = self._normalize_type(changes.get("memory_type"))
+            if "scope" in changes:
+                entry["scope"] = self._canonical_scope(changes.get("scope"), entry.get("type"))
             if "importance" in changes:
                 entry["importance"] = max(1, min(5, int(changes.get("importance") or 3)))
+            if "confidence" in changes:
+                entry["confidence"] = max(0.0, min(1.0, float(changes.get("confidence") or 0.75)))
             if "tags" in changes:
                 entry["tags"] = self._coerce_tags(changes.get("tags"))
-            entry["cloud_allowed"] = True
-            metadata["cloud_allowed"] = True
+            if "volatile" in changes:
+                entry["volatile"] = bool(changes.get("volatile"))
+            if "cloud_allowed" in changes:
+                entry["cloud_allowed"] = bool(changes.get("cloud_allowed"))
+            else:
+                entry["cloud_allowed"] = True
+            metadata["cloud_allowed"] = bool(entry.get("cloud_allowed"))
             metadata["consent_state"] = "approved"
             if "pinned" in changes:
                 entry["pinned"] = bool(changes.get("pinned"))
-            if "ttl_hours" in changes:
+            if "expires_at" in changes:
+                supplied_expiry = self._parse_dt(changes.get("expires_at"))
+                entry["expires_at"] = (
+                    supplied_expiry.isoformat(timespec="seconds") if supplied_expiry else None
+                )
+            elif "ttl_hours" in changes:
                 ttl = changes.get("ttl_hours")
                 entry["expires_at"] = (
                     (datetime.now() + timedelta(hours=float(ttl))).isoformat(timespec="seconds")
                     if ttl not in (None, "", 0, "0") else None
                 )
-            entry["updated_at"] = self._now_iso()
+            supplied_metadata = changes.get("metadata")
+            if isinstance(supplied_metadata, dict):
+                metadata.update(copy.deepcopy(supplied_metadata))
+            if changes.get("last_source"):
+                entry["last_source"] = str(changes.get("last_source"))[:120]
+            if changes.get("tool_name"):
+                entry["tool_name"] = str(changes.get("tool_name"))[:80]
+            supplied_updated = self._parse_dt(changes.get("updated_at"))
+            entry["updated_at"] = (
+                supplied_updated.isoformat(timespec="seconds") if supplied_updated else self._now_iso()
+            )
             entry["version"] = current_version + 1
             entry["fingerprint"] = hashlib.sha256(
                 f"{entry.get('type')}\0{entry.get('scope')}\0{entry.get('subject', '').lower()}\0{content.lower()}".encode("utf-8", "ignore")
             ).hexdigest()
+            entry["scope"] = self._canonical_scope(entry.get("scope"), entry.get("type"))
+            entry["canonical_key"] = self._canonical_key_for(entry, content=content)
             self._undo_stack.append({"action": "edit", "status": status, "entry": before})
             self._undo_stack = self._undo_stack[-20:]
             if status != "session":
@@ -1676,7 +2001,7 @@ class SmartiMemoryManager:
                 return False
             before = copy.deepcopy(entry)
             archived = entries.pop(index)
-            if status == "session" and self._entry_sensitivity(archived) == "sensitive":
+            if status == "session":
                 archived["content"] = self._protect_content(self._plain_content(archived))
                 archived.setdefault("metadata", {})["encrypted"] = True
             archived["archived_at"] = self._now_iso()
@@ -1694,12 +2019,22 @@ class SmartiMemoryManager:
             status, entries, index, entry = self._locate_entry(memory_id)
             if not entry or status != "archive":
                 return False
+            scope = self._canonical_scope(entry.get("scope"), entry.get("type"))
+            canonical_key = str(entry.get("canonical_key") or self._canonical_key_for(entry))
+            if any(
+                self._canonical_scope(item.get("scope"), item.get("type")) == scope
+                and str(item.get("canonical_key") or self._canonical_key_for(item)) == canonical_key
+                for item in self.data.get("entries", [])
+            ):
+                return False
             restored = entries.pop(index)
             before = copy.deepcopy(restored)
             restored.pop("archived_at", None)
             restored.pop("archive_reason", None)
             restored["updated_at"] = self._now_iso()
             restored["version"] = int(restored.get("version", 1) or 1) + 1
+            restored["scope"] = scope
+            restored["canonical_key"] = canonical_key
             self.data.setdefault("entries", []).append(restored)
             self._undo_stack.append({"action": "restore", "entry": before})
             self._undo_stack = self._undo_stack[-20:]
@@ -1723,7 +2058,6 @@ class SmartiMemoryManager:
             target = {
                 "archive": self.data.setdefault("archive", []),
                 "session": self._session_entries,
-                "pending": self.data.setdefault("pending", []),
             }.get(target_status, self.data.setdefault("entries", []))
             target.append(entry)
             if target_status != "session":
@@ -1735,8 +2069,7 @@ class SmartiMemoryManager:
         with self._lock:
             active = list(self.data.get("entries", []))
             archive = list(self.data.get("archive", []))
-            pending = list(self.data.get("pending", []))
-            all_entries = active + archive + pending + list(self._session_entries)
+            all_entries = active + archive + list(self._session_entries)
             by_type = {}
             by_category = {}
             sensitive = 0
@@ -1746,14 +2079,16 @@ class SmartiMemoryManager:
                 by_category[category] = by_category.get(category, 0) + 1
                 sensitive += self._entry_sensitivity(entry) == "sensitive"
             try:
-                storage_bytes = os.path.getsize(self.path) if os.path.exists(self.path) else 0
+                storage_bytes = sum(
+                    os.path.getsize(candidate) for candidate in (self.path, self.store.path)
+                    if os.path.exists(candidate)
+                )
             except Exception:
                 storage_bytes = 0
             return {
                 "active": len(active),
                 "archive": len(archive),
                 "session": len(self._session_entries),
-                "pending": len(pending),
                 "sensitive": int(sensitive),
                 "by_type": by_type,
                 "by_category": by_category,
@@ -1769,16 +2104,15 @@ class SmartiMemoryManager:
         payload = {
             "format": "smarti-memory-export-v1",
             "created_at": self._now_iso(),
+            "encrypted_content": bool(encrypted),
             "encrypted_sensitive": bool(encrypted),
             "entries": [],
             "archive": [],
-            "pending": [],
         }
         with self._lock:
             for key, collection in (
                 ("entries", self.data.get("entries", [])),
                 ("archive", self.data.get("archive", [])),
-                ("pending", self.data.get("pending", [])),
             ):
                 for entry in collection:
                     item = copy.deepcopy(entry)
@@ -1800,7 +2134,7 @@ class SmartiMemoryManager:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         os.replace(tmp, path)
-        self._audit_memory_event("export", memory_id="", encrypted=bool(encrypted), count=sum(len(payload[k]) for k in ("entries", "archive", "pending")))
+        self._audit_memory_event("export", memory_id="", encrypted=bool(encrypted), count=sum(len(payload[k]) for k in ("entries", "archive")))
         return path
 
     def import_memory(self, path, *, user_authorized=False):
@@ -1830,6 +2164,7 @@ class SmartiMemoryManager:
                     source="memory_import",
                     confidence=entry.get("confidence", 0.75),
                     category=self._entry_category(entry),
+                    scope=entry.get("scope", ""),
                     consent_state="approved",
                     cloud_allowed=bool(entry.get("cloud_allowed", False)),
                     metadata={**self._entry_metadata(entry), "imported_at": self._now_iso()},
@@ -1847,21 +2182,25 @@ class SmartiMemoryManager:
                 len(self.data.get("entries", []))
                 + len(self.data.get("archive", []))
                 + len(self.data.get("pending", []))
+                + len(self.data.get("rejected", []))
                 + len(self._session_entries)
             )
             if memory_type:
                 self.data["entries"] = [e for e in self.data.get("entries", []) if e.get("type") != memory_type]
                 self.data["archive"] = [e for e in self.data.get("archive", []) if e.get("type") != memory_type]
                 self.data["pending"] = [e for e in self.data.get("pending", []) if e.get("type") != memory_type]
+                self.data["rejected"] = [e for e in self.data.get("rejected", []) if e.get("type") != memory_type]
                 self._session_entries = [e for e in self._session_entries if e.get("type") != memory_type]
             else:
                 self.data["entries"] = []
                 self.data["archive"] = []
                 self.data["pending"] = []
+                self.data["rejected"] = []
                 self._session_entries = []
             removed = (
                 before - len(self.data["entries"]) - len(self.data["archive"])
                 - len(self.data["pending"]) - len(self._session_entries)
+                - len(self.data["rejected"])
             )
             stats = self.data.setdefault("stats", {})
             stats["total_cleared"] = int(stats.get("total_cleared", 0)) + removed
@@ -1894,7 +2233,135 @@ class SmartiMemoryManager:
         }
         return any(self._normalize_text_for_search(term) in normalized for term in category_terms.get(category, ()))
 
-    def search(self, query, memory_types=None, max_results=None, max_chars=None, *, for_prompt=False):
+    def _query_memory_categories(self, query):
+        normalized = self._normalize_text_for_search(query)
+        routes = {
+            "identity": ("my name", "who am i", "call me", "מה השם שלי", "איך קוראים לי", "מי אני"),
+            "birthday": ("my birthday", "date of birth", "יום ההולדת שלי", "תאריך הלידה שלי"),
+            "preference": (
+                "my preference", "what do i prefer", "what do i like", "what is my favorite",
+                "favorite food", "favorite style", "ההעדפה שלי", "מה אני מעדיף", "מה אני מעדיפה",
+                "מה אני אוהב", "מה אני אוהבת", "מה אני הכי אוהב", "מה אני הכי אוהבת",
+                "המאכל האהוב עלי", "האוכל האהוב עלי", "הסגנון המועדף עלי",
+            ),
+            "address": ("my address", "where do i live", "הכתובת שלי", "איפה אני גר", "איפה אני גרה"),
+            "phone": ("my phone", "my mobile", "הטלפון שלי", "הנייד שלי"),
+            "email": ("my email", "email address", "האימייל שלי", "המייל שלי", "הדוא״ל שלי"),
+            "health": ("my health", "my allergy", "my medication", "הבריאות שלי", "האלרגיה שלי", "התרופה שלי"),
+            "work": ("my work", "where do i work", "העבודה שלי", "איפה אני עובד", "איפה אני עובדת"),
+        }
+        categories = {
+            category for category, terms in routes.items()
+            if any(self._normalize_text_for_search(term) in normalized for term in terms)
+        }
+        intent = self._query_intent(query)
+        preference_subject = bool(
+            self._has_user_ownership_signal(query)
+            or re.search(r"(?:של|על)\s+המשתמש", normalized)
+            or re.search(r"המשתמש.{0,35}(?:אוהב|אוהבת|מעדיף|מעדיפה)", normalized)
+            or re.search(r"\b(?:the\s+user|user's)\b", normalized)
+        )
+        if intent.get("preference") and preference_subject:
+            categories.add("preference")
+        # Phrase lists cannot reasonably enumerate every natural possessive
+        # form (for example, "מהי כתובת המגורים שלי?").  Route an owned
+        # profile question by the user's actual category words, without the
+        # broad synonym expansion that previously caused unrelated memories
+        # to be injected.  Requiring an explicit first-person possessive keeps
+        # generic questions about addresses or phone numbers from exposing a
+        # saved personal detail.
+        tokens = self._tokenize(query)
+        if tokens.intersection({"my", "שלי"}):
+            owned_category_terms = {
+                "identity": {"name", "identity", "שם", "זהות"},
+                "birthday": {"birthday", "birth", "הולדת", "לידה"},
+                "preference": {"preference", "preferences", "העדפה", "העדפות"},
+                "address": {"address", "street", "home", "כתובת", "רחוב", "מגורים"},
+                "phone": {"phone", "mobile", "cell", "טלפון", "נייד"},
+                "email": {"email", "mail", "אימייל", "מייל", "דואל"},
+                "health": {"health", "medical", "allergy", "medication", "בריאות", "אלרגיה", "תרופה"},
+                "work": {"work", "job", "employer", "עבודה", "מעסיק"},
+            }
+            for category, terms in owned_category_terms.items():
+                normalized_terms = {
+                    token
+                    for term in terms
+                    for token in self._tokenize(term)
+                }
+                if tokens.intersection(normalized_terms):
+                    categories.add(category)
+        return categories
+
+    def _looks_global_style_preference(self, entry):
+        if self._entry_category(entry) != "preference" or self._entry_sensitivity(entry) == "sensitive":
+            return False
+        text = self._normalize_text_for_search(self._entry_search_text(entry))
+        style_terms = (
+            "answer", "answers", "response", "responses", "reply", "replies",
+            "concise", "brief", "verbose", "language", "tone", "format", "formatting",
+            "markdown", "bullet", "explanation", "code style",
+            "תשובה", "תשובות", "תענה", "ענה", "בקצרה", "תמציתי", "תמציתיות",
+            "מפורט", "עברית", "אנגלית", "שפה", "טון", "סגנון", "פורמט",
+            "רשימה", "נקודות", "הסבר", "אימוג",
+        )
+        return any(self._normalize_text_for_search(term) in text for term in style_terms)
+
+    def _entry_recall_policy(self, entry):
+        metadata = self._entry_metadata(entry)
+        requested = str(metadata.get("recall_policy") or "").strip().lower()
+        if requested == "always":
+            if self._entry_category(entry) == "preference" and self._entry_sensitivity(entry) != "sensitive":
+                return "always"
+            return "relevant"
+        if requested == "relevant":
+            return "relevant"
+        # Compatibility for style preferences saved before the model-authored
+        # recall policy existed. New memories receive an explicit model choice.
+        return "always" if self._looks_global_style_preference(entry) else "relevant"
+
+    def _always_apply_memory_results(self, *, max_results=3, max_chars=600):
+        try:
+            max_results = max(0, min(8, int(max_results or 0)))
+            max_chars = max(0, min(4000, int(max_chars or 0)))
+        except Exception:
+            return []
+        if max_results <= 0 or max_chars <= 0:
+            return []
+        now = datetime.now()
+        with self._lock:
+            entries = list(self.data.get("entries", [])) + list(self._session_entries)
+        candidates = []
+        for entry in entries:
+            if entry.get("type") not in {"user", "long_term"} or self._is_expired(entry, now):
+                continue
+            metadata = self._entry_metadata(entry)
+            if not metadata.get("automatic_context_eligible", True) or not self._evidence_is_current(entry):
+                continue
+            if self._entry_recall_policy(entry) != "always":
+                continue
+            candidates.append(entry)
+        candidates.sort(
+            key=lambda entry: (
+                bool(entry.get("pinned")),
+                int(entry.get("importance", 3) or 3),
+                float(entry.get("confidence", 0.75) or 0.75),
+                str(entry.get("updated_at") or entry.get("created_at") or ""),
+            ),
+            reverse=True,
+        )
+        results = []
+        used_chars = 0
+        for entry in candidates:
+            formatted = self._format_entry(entry, 1.0, reveal_sensitive=False)
+            if used_chars + len(formatted) > max_chars:
+                continue
+            results.append({"score": 1.0, "entry": entry, "text": formatted})
+            used_chars += len(formatted)
+            if len(results) >= max_results:
+                break
+        return results
+
+    def _search_v1_legacy(self, query, memory_types=None, max_results=None, max_chars=None, *, for_prompt=False):
         started = time.time()
         self.prune_expired()
         cfg = self._settings()
@@ -2003,25 +2470,215 @@ class SmartiMemoryManager:
             self._save()
         return results
 
-    def _format_entry(self, entry, score, *, reveal_sensitive=False):
-        created = entry.get("created_at", "?")
-        expires = entry.get("expires_at") or "never"
-        tags = ", ".join(entry.get("tags", []) or [])
-        volatile = " volatile-verify" if entry.get("volatile") else ""
-        source = entry.get("source") or "unknown"
-        tool = f" tool={entry.get('tool_name')}" if entry.get("tool_name") else ""
-        header = (
-            f"- id={entry.get('id')} type={entry.get('type')} score={score:.2f}"
-            f" importance={entry.get('importance', 3)} source={source}{tool}"
-            f" created={created} expires={expires}{volatile}"
+    def _evidence_is_current(self, entry):
+        metadata = self._entry_metadata(entry)
+        if str(entry.get("validation_state") or metadata.get("validation_state") or "").lower() == "stale":
+            return False
+        evidence = metadata.get("evidence") if isinstance(metadata.get("evidence"), list) else []
+        for item in evidence:
+            if not isinstance(item, dict) or str(item.get("type") or "").lower() not in {"file", "path"}:
+                continue
+            reference = os.path.abspath(str(item.get("reference") or ""))
+            if not reference or not os.path.exists(reference):
+                return False
+            expected_size = item.get("size")
+            expected_mtime = item.get("mtime_ns")
+            expected_digest = str(item.get("digest") or "").strip().lower()
+            try:
+                stat = os.stat(reference)
+                if expected_size not in (None, "") and int(expected_size) != int(stat.st_size):
+                    return False
+                if expected_mtime not in (None, "") and int(expected_mtime) != int(stat.st_mtime_ns):
+                    return False
+                if expected_digest:
+                    cache_key = (reference, int(stat.st_size), int(stat.st_mtime_ns), expected_digest)
+                    valid = self._evidence_validation_cache.get(cache_key)
+                    if valid is None:
+                        digest = hashlib.sha256()
+                        with open(reference, "rb") as handle:
+                            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                                digest.update(chunk)
+                        normalized_expected = expected_digest.removeprefix("sha256:")
+                        valid = digest.hexdigest().lower() == normalized_expected
+                        self._evidence_validation_cache[cache_key] = valid
+                    if not valid:
+                        return False
+            except Exception:
+                return False
+        return True
+
+    def search(self, query, memory_types=None, max_results=None, max_chars=None, *, for_prompt=False):
+        """Read-only, scope-first encrypted-memory retrieval with a calibrated 0..1 score."""
+        cfg = self._settings()
+        if for_prompt and not cfg.get("enabled", True):
+            return []
+        try:
+            max_results = max(0, min(20, int(max_results if max_results is not None else cfg.get("max_results", 3))))
+        except Exception:
+            max_results = 3
+        try:
+            max_chars = max(0, min(20000, int(max_chars if max_chars is not None else cfg.get("max_injected_chars", 1200))))
+        except Exception:
+            max_chars = 1200
+        if max_results <= 0 or max_chars <= 0:
+            return []
+        if isinstance(memory_types, str):
+            memory_types = None if memory_types in {"", "any"} else {self._normalize_type(memory_types)}
+        elif memory_types:
+            memory_types = {self._normalize_type(value) for value in memory_types}
+        q = str(query or "").strip()
+        q_tokens = self._expanded_query_tokens(q)
+        if not q_tokens:
+            return []
+        q_normalized = self._normalize_text_for_search(q)
+        intent = self._query_intent(q)
+        routed_categories = self._query_memory_categories(q)
+        allowed_scopes = ["user:default", "global"]
+        # Memory payloads are encrypted at rest, including the SQLite store, so
+        # relevance is calculated over the bounded decrypted in-process view.
+        # The on-disk FTS table intentionally contains no memory plaintext.
+        fts_rows = []
+        bm25_by_id = {memory_id: rank for memory_id, rank in fts_rows}
+        with self._lock:
+            persistent = list(self.data.get("entries", []))
+            session = list(self._session_entries)
+            # Sensitive details remain restricted to category-relevant queries,
+            # even though the global memory switch now authorizes their use.
+            sensitive = [
+                entry for entry in self.data.get("entries", [])
+                if self._entry_sensitivity(entry) == "sensitive"
+                and self._sensitive_entry_relevant(q, entry)
+            ]
+            routed = [
+                entry for entry in self.data.get("entries", [])
+                if (
+                    self._entry_category(entry) in routed_categories
+                    or (
+                        intent.get("project")
+                        and self._entry_category(entry) in {"project", "work"}
+                    )
+                )
+            ]
+        candidates = persistent + session + sensitive + routed
+        now = datetime.now()
+        try:
+            min_score = float(cfg.get("min_relevance_score", 0.62) or 0.62)
+        except Exception:
+            min_score = 0.62
+        # A few existing installations still carry the old 4.2-style score.
+        # The current scorer is calibrated to 0..1, so fail safe even before
+        # settings persistence has had a chance to run its migration.
+        if not 0.0 <= min_score <= 1.0:
+            min_score = 0.62
+        scored = []
+        seen_ids = set()
+        for entry in candidates:
+            entry_id = str(entry.get("id") or "")
+            if not entry_id or entry_id in seen_ids or self._is_expired(entry, now):
+                continue
+            seen_ids.add(entry_id)
+            if memory_types and entry.get("type") not in memory_types:
+                continue
+            scope = self._canonical_scope(entry.get("scope"), entry.get("type"))
+            if scope not in allowed_scopes and not scope.startswith("conversation:"):
+                continue
+            if for_prompt:
+                metadata = self._entry_metadata(entry)
+                if not metadata.get("automatic_context_eligible", True):
+                    continue
+                if not self._evidence_is_current(entry):
+                    continue
+                if self._entry_sensitivity(entry) == "sensitive":
+                    if not self._sensitive_entry_relevant(q, entry):
+                        continue
+            haystack = self._entry_search_text(entry)
+            entry_tokens = self._tokenize(haystack)
+            matched = q_tokens.intersection(entry_tokens)
+            metadata = self._entry_metadata(entry)
+            retrieval_hints = metadata.get("retrieval_hints", [])
+            if not isinstance(retrieval_hints, list):
+                retrieval_hints = [retrieval_hints] if retrieval_hints else []
+            hint_tokens = self._tokenize(" ".join(str(item or "") for item in retrieval_hints[:8]))
+            matched_hints = q_tokens.intersection(hint_tokens)
+            hint_coverage = len(matched_hints) / max(1, len(q_tokens))
+            category_match = self._entry_category(entry) in routed_categories
+            project_route = bool(
+                intent.get("project") and self._entry_category(entry) in {"project", "work"}
+            )
+            if not matched and not category_match and not project_route:
+                continue
+            coverage = len(matched) / max(1, len(q_tokens))
+            precision = len(matched) / max(1, min(len(entry_tokens), len(q_tokens) * 3))
+            exact_phrase = bool(q_normalized and len(q_normalized) >= 4 and q_normalized in self._normalize_text_for_search(haystack))
+            rank = abs(float(bm25_by_id.get(entry_id, 4.0)))
+            bm25_signal = 1.0 / (1.0 + rank)
+            scope_signal = 0.8 if scope == "user:default" else 0.65
+            confidence = max(0.0, min(1.0, float(entry.get("confidence", 0.75) or 0.75)))
+            importance = max(1.0, min(5.0, float(entry.get("importance", 3) or 3))) / 5.0
+            helpful = int(entry.get("helpful_count", 0) or 0)
+            unhelpful = int(entry.get("unhelpful_count", 0) or 0)
+            score = (
+                0.55 * coverage
+                + 0.58 * (1.0 if category_match else 0.0)
+                + 0.30 * (1.0 if project_route else 0.0)
+                + 0.24 * (1.0 if matched_hints else 0.0)
+                + 0.32 * hint_coverage
+                + 0.07 * precision
+                + 0.10 * (1.0 if exact_phrase else 0.0)
+                + 0.08 * bm25_signal
+                + 0.08 * scope_signal
+                + 0.07 * confidence
+                + 0.05 * importance
+                + min(0.05, helpful * 0.02)
+                - min(0.35, unhelpful * 0.16)
+            )
+            if intent.get("live") and entry.get("volatile"):
+                score *= 0.25
+            score = max(0.0, min(1.0, score))
+            if score < min_score:
+                continue
+            scored.append((score, entry))
+        scored.sort(
+            key=lambda item: (
+                item[0],
+                item[1].get("scope") == "user:default",
+                item[1].get("helpful_count", 0),
+                item[1].get("updated_at", ""),
+            ),
+            reverse=True,
         )
-        if tags:
-            header += f" tags={tags}"
+        results = []
+        used_chars = 0
+        seen_keys = set()
+        for score, entry in scored:
+            key = (entry.get("scope"), entry.get("canonical_key") or self._canonical_key_for(entry))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            formatted = self._format_entry(entry, score, reveal_sensitive=for_prompt)
+            if used_chars + len(formatted) > max_chars:
+                continue
+            results.append({"score": score, "entry": entry, "text": formatted})
+            used_chars += len(formatted)
+            if len(results) >= max_results:
+                break
+        return results
+
+    def _format_entry(self, entry, score, *, reveal_sensitive=False):
+        raw_scope = str(entry.get("scope") or "global")
+        scope_label = (
+            "user" if raw_scope.startswith("user:")
+            else ("conversation" if raw_scope.startswith("conversation:") else "global")
+        )
+        header = (
+            f"- id={entry.get('id')} score={score:.2f} "
+            f"scope={scope_label} subject={entry.get('subject') or 'memory'}"
+        )
         content = re.sub(r"\s+", " ", self._plain_content(entry).strip())
         if self._entry_sensitivity(entry) == "sensitive" and not reveal_sensitive:
             content = self._mask_sensitive_content(content, self._entry_category(entry))
-        if len(content) > 900:
-            content = content[:900].rstrip() + "..."
+        if len(content) > 480:
+            content = content[:480].rstrip() + "..."
         return f"{header}\n  {content}"
 
     def _entry_age_hours(self, entry):
@@ -2063,7 +2720,7 @@ class SmartiMemoryManager:
             used += len(block) + 2
         return "\n\n".join(parts)
 
-    def build_prompt_context(self, query="", log_usage=False):
+    def _build_prompt_context_v1_legacy(self, query="", log_usage=False):
         cfg = self._settings()
         if not cfg.get("enabled", True):
             return "Memory is disabled."
@@ -2189,26 +2846,82 @@ class SmartiMemoryManager:
             self.record_injection_usage(context, results_count=len(results), query=query)
         return context
 
+    def build_prompt_context(self, query="", log_usage=False):
+        cfg = self._settings()
+        if not cfg.get("enabled", True) or not cfg.get("rag_enabled", True):
+            return "Saved memory is disabled."
+        query = str(query or "").strip()
+        total_budget = min(1050, int(cfg.get("max_injected_chars", 1200) or 1200))
+        always_results = self._always_apply_memory_results(
+            max_results=cfg.get("always_memory_max_results", 3),
+            max_chars=min(total_budget, int(cfg.get("always_memory_max_chars", 600) or 600)),
+        )
+        semantic_results = self.search(
+            query,
+            memory_types={"user", "long_term"},
+            max_results=cfg.get("max_results", 3),
+            max_chars=total_budget,
+            for_prompt=True,
+        )
+        always_ids = {
+            str(result.get("entry", {}).get("id") or "")
+            for result in always_results
+        }
+        semantic_results = [
+            result for result in semantic_results
+            if str(result.get("entry", {}).get("id") or "") not in always_ids
+        ]
+        results = always_results + semantic_results
+        live_warning = ""
+        if cfg.get("verify_live_data", True) and self._looks_live_or_temporal(query):
+            live_warning = " Changing facts must be checked with a current source; saved memory is not current evidence."
+        if results:
+            sections = []
+            if always_results:
+                sections.append(
+                    "Always-applied response preferences (apply silently unless the current request overrides them):\n"
+                    + "\n".join(result["text"] for result in always_results)
+                )
+            if semantic_results:
+                sections.append(
+                    "Semantically relevant saved memory:\n"
+                    + "\n".join(result["text"] for result in semantic_results)
+                )
+            body = "\n\n".join(sections)
+            if len(body) > total_budget:
+                body = body[:total_budget].rstrip() + "..."
+            context = (
+                "Relevant saved memory (advisory; the current user message and fresh evidence take precedence):\n"
+                f"{body}{live_warning}"
+            )
+        else:
+            context = f"No relevant saved memory was retrieved for this request.{live_warning}"
+        if log_usage and cfg.get("log_rag_usage", True):
+            entry_ids = [result.get("entry", {}).get("id") for result in results if result.get("entry", {}).get("id")]
+            self._mark_injected(entry_ids)
+            self.record_injection_usage(
+                context, results_count=len(results), query=query, entry_ids=entry_ids,
+            )
+        return context
+
     def _mark_injected(self, entry_ids):
         ids = {str(value or "") for value in (entry_ids or []) if value}
         if not ids:
             return
         now = self._now_iso()
         with self._lock:
-            changed_persistent = False
             for entry in self.data.get("entries", []):
                 if str(entry.get("id") or "") in ids:
+                    entry["selected_count"] = int(entry.get("selected_count", 0) or 0) + 1
                     entry["last_injected_at"] = now
                     entry["injection_count"] = int(entry.get("injection_count", 0) or 0) + 1
-                    changed_persistent = True
             for entry in self._session_entries:
                 if str(entry.get("id") or "") in ids:
+                    entry["selected_count"] = int(entry.get("selected_count", 0) or 0) + 1
                     entry["last_injected_at"] = now
                     entry["injection_count"] = int(entry.get("injection_count", 0) or 0) + 1
-            if changed_persistent:
-                self._save()
 
-    def record_injection_usage(self, context, results_count=None, query=""):
+    def record_injection_usage(self, context, results_count=None, query="", entry_ids=None):
         tokens = estimate_text_tokens(context)
         if tokens <= 0:
             return
@@ -2224,151 +2937,445 @@ class SmartiMemoryManager:
             stats["last_injected_query_preview"] = str(query)[:180]
         stats["last_retriever"] = self.RETRIEVER_NAME
         try:
-            self._save()
+            self.store.record_retrieval(
+                selected_ids=entry_ids or [], injected_ids=entry_ids or [], query=query,
+                tokens=tokens, chars=len(str(context or "")),
+            )
             self.core._log_usage("memory-rag/local", {"prompt": tokens, "completion": 0, "total": tokens})
         except Exception as e:
             logging.warning(f"Memory usage accounting failed: {e}")
 
-    def _should_capture_exchange(self, user_text, final_response, tool_records=None):
-        text = f"{user_text}\n{final_response}"
-        if self._contains_any(text, self.DO_NOT_REMEMBER_TERMS):
-            return False
-        if self._looks_user_memory(user_text) or self._looks_live_or_temporal(user_text):
-            return True
-        if tool_records:
-            return True
-        intent = self._query_intent(user_text)
-        if intent.get("continuity") or intent.get("project") or intent.get("preference"):
-            return True
-        durable_terms = [
-            "remember for next time", "from now on", "next time", "always", "never",
-            "project", "repo", "file", "saved", "created", "updated", "fixed",
-            "\u05de\u05e2\u05db\u05e9\u05d9\u05d5", "\u05dc\u05e4\u05e2\u05dd \u05d4\u05d1\u05d0\u05d4",
-            "\u05ea\u05de\u05d9\u05d3", "\u05d0\u05e3 \u05e4\u05e2\u05dd", "\u05e4\u05e8\u05d5\u05d9\u05e7\u05d8",
-            "\u05e7\u05d5\u05d1\u05e5", "\u05e9\u05de\u05e8", "\u05e0\u05e9\u05de\u05e8", "\u05e2\u05d3\u05db\u05df",
-            "\u05ea\u05d9\u05e7\u05df", "\u05d4\u05de\u05e9\u05da",
+    def extract_model_memory_decision(self, text):
+        """Remove hidden memory envelopes and return their validated operation objects."""
+        raw_text = str(text or "")
+        blocks = self.MODEL_MEMORY_BLOCK_RE.findall(raw_text)
+        cleaned = self.MODEL_MEMORY_BLOCK_RE.sub("", raw_text).strip()
+        operations = []
+        for raw_block in blocks:
+            payload_text = str(raw_block or "").strip()
+            payload_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", payload_text, flags=re.IGNORECASE)
+            try:
+                payload = json.loads(payload_text)
+            except Exception as exc:
+                logging.warning("Invalid model memory envelope ignored: %s", exc)
+                continue
+            raw_operations = payload.get("operations", []) if isinstance(payload, dict) else payload
+            if not isinstance(raw_operations, list):
+                continue
+            for operation in raw_operations:
+                if not isinstance(operation, dict):
+                    logging.warning(
+                        "Ignored model memory operation because it is not an object: %r",
+                        operation,
+                    )
+                    continue
+                normalized, repair = self._normalize_model_memory_operation(operation)
+                if normalized is None:
+                    logging.warning(
+                        "Ignored model memory operation with no safe action inference: keys=%s",
+                        sorted(str(key) for key in operation.keys()),
+                    )
+                    continue
+                if repair:
+                    logging.warning("Repaired model memory operation: %s", repair)
+                operations.append(normalized)
+                if len(operations) >= 6:
+                    return cleaned, operations
+        return cleaned, operations
+
+    def _normalize_model_memory_operation(self, operation):
+        """Repair only unambiguous envelope-shape mistakes after model selection."""
+        raw = copy.deepcopy(operation) if isinstance(operation, dict) else {}
+        action = str(raw.get("action") or "").strip().lower()
+        if action in self.MODEL_MEMORY_ACTIONS:
+            raw["action"] = action
+            return raw, ""
+
+        # Common LLM variant: {"add": { ...fields... }}. The model already
+        # selected the semantic operation, so flattening it does not create a
+        # mechanical memory decision.
+        wrapped_actions = [
+            candidate for candidate in self.MODEL_MEMORY_ACTIONS
+            if isinstance(raw.get(candidate), dict)
         ]
-        return self._contains_any(text, durable_terms)
+        if len(wrapped_actions) == 1:
+            action = wrapped_actions[0]
+            normalized = {
+                key: copy.deepcopy(value)
+                for key, value in raw.items()
+                if key != action
+            }
+            normalized.update(copy.deepcopy(raw[action]))
+            normalized["action"] = action
+            return normalized, f"flattened wrapped '{action}' object"
+
+        # Another observed variant is a flat new-memory payload that omits
+        # action. Content without a target can only mean add. With a target and
+        # changed fields it can only mean update. Deletion is never inferred.
+        has_content = bool(str(raw.get("content") or "").strip())
+        has_target = bool(str(raw.get("memory_id") or raw.get("match") or "").strip())
+        if has_content and not has_target:
+            raw["action"] = "add"
+            return raw, "inferred missing 'action=add' from flat new-memory payload"
+        update_fields = {
+            "content", "subject", "category", "scope", "memory_type",
+            "importance", "confidence", "tags", "volatile", "expires_at",
+            "refresh_validity", "tool_name", "recall_policy", "retrieval_hints",
+        }
+        if has_target and update_fields.intersection(raw):
+            raw["action"] = "update"
+            return raw, "inferred missing 'action=update' from targeted changed fields"
+        return None, ""
+
+    def _model_memory_scope(self, operation, memory_type="long_term"):
+        scope = str((operation or {}).get("scope") or "").strip().lower()
+        if scope in {"user", "profile", "user:default"} or memory_type == "user":
+            return "user:default"
+        return "global"
+
+    def _model_memory_type(self, operation):
+        requested = str((operation or {}).get("memory_type") or "").strip().lower()
+        if requested == "user" or str((operation or {}).get("scope") or "").strip().lower() in {
+            "user", "profile", "user:default",
+        }:
+            return "user"
+        # Provenance belongs in source_type. Durable semantic memory remains
+        # retrievable as long_term instead of becoming raw tool/conversation memory.
+        return "long_term"
+
+    @staticmethod
+    def _normalize_retrieval_hints(value):
+        if not isinstance(value, list):
+            value = [value] if value else []
+        hints = []
+        seen = set()
+        for item in value[:12]:
+            hint = re.sub(r"\s+", " ", str(item or "")).strip()[:160]
+            key = hint.casefold()
+            if not hint or key in seen:
+                continue
+            seen.add(key)
+            hints.append(hint)
+            if len(hints) >= 8:
+                break
+        return hints
+
+    def _model_memory_metadata(
+        self,
+        operation,
+        *,
+        session_id="",
+        memory_type="",
+        category="",
+        sensitivity="ordinary",
+        existing_metadata=None,
+    ):
+        operation = operation or {}
+        existing = copy.deepcopy(existing_metadata) if isinstance(existing_metadata, dict) else {}
+        source_type = str((operation or {}).get("source_type") or "assistant").strip().lower()
+        if source_type not in self.MODEL_MEMORY_SOURCE_TYPES:
+            source_type = "assistant"
+        evidence = (operation or {}).get("evidence", [])
+        if not isinstance(evidence, list):
+            evidence = [evidence] if evidence else []
+        normalized_evidence = []
+        for item in evidence[:6]:
+            if isinstance(item, dict):
+                normalized_evidence.append(copy.deepcopy(item))
+            elif str(item or "").strip():
+                normalized_evidence.append({"reference": str(item).strip()[:1000]})
+        requested_recall = str(
+            operation.get("recall_policy")
+            or operation.get("retrieval_policy")
+            or operation.get("application")
+            or existing.get("recall_policy")
+            or "relevant"
+        ).strip().lower()
+        recall_policy = requested_recall if requested_recall in {"always", "relevant"} else "relevant"
+        canonical_category = self.MODEL_MEMORY_CATEGORY_ALIASES.get(
+            str(category or operation.get("category") or "").strip().lower(),
+            str(category or operation.get("category") or "").strip().lower(),
+        )
+        # Unconditional prompt injection is intentionally narrow: it is for
+        # harmless response-style preferences, never personal details or other
+        # facts that could leak to an unrelated network request.
+        if recall_policy == "always" and (
+            canonical_category != "preference" or str(sensitivity or "ordinary") == "sensitive"
+        ):
+            recall_policy = "relevant"
+        raw_hints = (
+            operation.get("retrieval_hints")
+            if "retrieval_hints" in operation
+            else existing.get("retrieval_hints", [])
+        )
+        metadata = existing
+        metadata.update({
+            "capture": "model_semantic_decision",
+            "model_memory_policy_version": self.MODEL_MEMORY_POLICY_VERSION,
+            "model_authored": True,
+            "source_type": source_type,
+            "why_saved": str(
+                (operation or {}).get("why_saved")
+                or (operation or {}).get("reason")
+                or "Selected by the model as reusable memory."
+            )[:1000],
+            "validity_basis": str((operation or {}).get("validity_basis") or "")[:1000],
+            "evidence": normalized_evidence,
+            "source_conversation_id": str(session_id or "")[:120],
+            "automatic_context_eligible": True,
+            "profile_eligible": (memory_type or self._model_memory_type(operation)) == "user",
+            "inferred": source_type != "user",
+            "recall_policy": recall_policy,
+            "retrieval_hints": self._normalize_retrieval_hints(raw_hints),
+        })
+        return metadata
+
+    def _resolve_model_memory_target(self, operation):
+        memory_id = str((operation or {}).get("memory_id") or "").strip()
+        if memory_id:
+            status, _entries, _index, entry = self._locate_entry(memory_id)
+            return entry if status in {"active", "session"} else None
+        match = self._canonical_memory_text((operation or {}).get("match") or "")
+        if not match:
+            return None
+        requested_category = str((operation or {}).get("category") or "").strip().lower()
+        requested_scope = str((operation or {}).get("scope") or "").strip().lower()
+        candidates = []
+        for entry in list(self.data.get("entries", [])) + list(self._session_entries):
+            if requested_category and self._entry_category(entry) != requested_category:
+                continue
+            if requested_scope and self._canonical_scope(entry.get("scope"), entry.get("type")) != self._model_memory_scope(operation, entry.get("type")):
+                continue
+            content = self._canonical_memory_text(self._plain_content(entry))
+            subject = self._canonical_memory_text(entry.get("subject") or "")
+            if match in {content, subject}:
+                candidates.append(entry)
+        if len(candidates) == 1:
+            return candidates[0]
+        contained = []
+        if len(match) >= 12:
+            for entry in list(self.data.get("entries", [])) + list(self._session_entries):
+                if requested_category and self._entry_category(entry) != requested_category:
+                    continue
+                if requested_scope and self._canonical_scope(entry.get("scope"), entry.get("type")) != self._model_memory_scope(operation, entry.get("type")):
+                    continue
+                content = self._canonical_memory_text(self._plain_content(entry))
+                subject = self._canonical_memory_text(entry.get("subject") or "")
+                if match in content or content in match or match in subject:
+                    contained.append(entry)
+        return contained[0] if len(contained) == 1 else None
+
+    def _find_model_memory_duplicate(self, content, *, memory_type, category, scope):
+        canonical_key = self._canonical_key_for(
+            {"type": memory_type, "category": category, "content": content}, content=content,
+        )
+        for entry in list(self.data.get("entries", [])) + list(self._session_entries):
+            if self._canonical_scope(entry.get("scope"), entry.get("type")) != scope:
+                continue
+            if entry.get("type") != memory_type:
+                continue
+            if self._entry_category(entry) != category:
+                continue
+            entry_key = str(entry.get("canonical_key") or self._canonical_key_for(entry))
+            if entry_key == canonical_key or self._near_duplicate_text(self._plain_content(entry), content):
+                return entry
+        return None
+
+    def _model_update_changes(self, entry, operation, metadata):
+        changes = {}
+        content = self._strip_user_work_artifact(
+            operation.get("content", self._plain_content(entry))
+        )
+        if not content:
+            return {}
+        category = str(operation.get("category", self._entry_category(entry)) or "").strip().lower()
+        classification = self.classify_content(content, category)
+        if not classification.get("store_allowed", True):
+            return {}
+        if metadata.get("recall_policy") == "always" and (
+            classification["category"] != "preference"
+            or classification["sensitivity"] == "sensitive"
+        ):
+            metadata["recall_policy"] = "relevant"
+        if self._canonical_memory_text(content) != self._canonical_memory_text(self._plain_content(entry)):
+            changes["content"] = content
+        if "subject" in operation:
+            subject = self._strip_user_work_artifact(operation.get("subject"))[:120] or self._derive_subject(content)
+            if self._canonical_memory_text(subject) != self._canonical_memory_text(entry.get("subject") or ""):
+                changes["subject"] = subject
+        memory_type = self._model_memory_type(operation)
+        if "memory_type" in operation and memory_type != entry.get("type"):
+            changes["memory_type"] = memory_type
+        if "scope" in operation:
+            scope = self._model_memory_scope(operation, memory_type)
+            if scope != self._canonical_scope(entry.get("scope"), entry.get("type")):
+                changes["scope"] = scope
+        if "category" in operation and classification["category"] != self._entry_category(entry):
+            changes["category"] = classification["category"]
+        if "importance" in operation:
+            importance = max(1, min(5, int(float(operation.get("importance") or 3))))
+            if importance != int(entry.get("importance", 3) or 3):
+                changes["importance"] = importance
+        if "confidence" in operation:
+            confidence = max(0.0, min(1.0, float(operation.get("confidence") or 0.75)))
+            if abs(confidence - float(entry.get("confidence", 0.75) or 0.75)) >= 0.01:
+                changes["confidence"] = confidence
+        if "tags" in operation:
+            tags = self._coerce_tags(operation.get("tags"))
+            if set(tags) != set(entry.get("tags", []) or []):
+                changes["tags"] = tags
+        if "volatile" in operation and bool(operation.get("volatile")) != bool(entry.get("volatile")):
+            changes["volatile"] = bool(operation.get("volatile"))
+        existing_metadata = self._entry_metadata(entry)
+        retrieval_metadata_changed = any(
+            key in operation
+            for key in ("recall_policy", "retrieval_policy", "application", "retrieval_hints")
+        ) and any(
+            metadata.get(key) != existing_metadata.get(key)
+            for key in ("recall_policy", "retrieval_hints")
+        )
+        # A model-generated timestamp by itself must not keep refreshing a memory.
+        # Validity changes are applied only when the model explicitly marks them intentional.
+        if "expires_at" in operation and (changes or operation.get("refresh_validity") is True):
+            expiry = self._parse_dt(operation.get("expires_at"))
+            normalized_expiry = expiry.isoformat(timespec="seconds") if expiry else None
+            if normalized_expiry != entry.get("expires_at"):
+                changes["expires_at"] = normalized_expiry
+        if changes or retrieval_metadata_changed:
+            changes["metadata"] = metadata
+            changes["updated_at"] = operation.get("updated_at") or self._now_iso()
+            changes["last_source"] = "model_semantic_memory"
+            if operation.get("tool_name"):
+                changes["tool_name"] = operation.get("tool_name")
+        return changes
+
+    def apply_model_memory_operations(self, operations, *, session_id=""):
+        """Apply model-authored semantic operations; return only actual data changes."""
+        result = {"changed": False, "count": 0, "actions": [], "memory_ids": [], "skipped": 0}
+        cfg = self._settings()
+        if not cfg.get("enabled", True):
+            return result
+        for operation in list(operations or [])[:6]:
+            if not isinstance(operation, dict):
+                result["skipped"] += 1
+                continue
+            action = str(operation.get("action") or "").strip().lower()
+            try:
+                with self._lock:
+                    if action == "add":
+                        content = self._strip_user_work_artifact(operation.get("content"))
+                        if not content:
+                            result["skipped"] += 1
+                            continue
+                        memory_type = self._model_memory_type(operation)
+                        scope = self._model_memory_scope(operation, memory_type)
+                        classification = self.classify_content(content, operation.get("category", ""))
+                        if not classification.get("store_allowed", True):
+                            result["skipped"] += 1
+                            continue
+                        expiry = self._parse_dt(operation.get("expires_at"))
+                        if bool(operation.get("volatile")) and expiry is None:
+                            result["skipped"] += 1
+                            continue
+                        if expiry is not None and expiry <= datetime.now():
+                            result["skipped"] += 1
+                            continue
+                        duplicate = self._find_model_memory_duplicate(
+                            content,
+                            memory_type=memory_type,
+                            category=classification["category"],
+                            scope=scope,
+                        )
+                        if duplicate is not None:
+                            result["skipped"] += 1
+                            continue
+                        metadata = self._model_memory_metadata(
+                            operation,
+                            session_id=session_id,
+                            memory_type=memory_type,
+                            category=classification["category"],
+                            sensitivity=classification["sensitivity"],
+                        )
+                        memory_id = self.add(
+                            memory_type,
+                            content,
+                            subject=operation.get("subject", ""),
+                            tags=operation.get("tags", []),
+                            importance=operation.get("importance", 3),
+                            source="model_semantic_memory",
+                            confidence=operation.get("confidence", 0.75),
+                            scope=scope,
+                            tool_name=operation.get("tool_name", ""),
+                            volatile=bool(operation.get("volatile", False)),
+                            metadata=metadata,
+                            category=classification["category"],
+                            consent_state="approved",
+                            cloud_allowed=True,
+                            created_at=operation.get("created_at", ""),
+                            updated_at=operation.get("updated_at", ""),
+                            expires_at=operation.get("expires_at", ""),
+                        )
+                    elif action == "update":
+                        entry = self._resolve_model_memory_target(operation)
+                        if entry is None:
+                            result["skipped"] += 1
+                            continue
+                        metadata = self._model_memory_metadata(
+                            operation,
+                            session_id=session_id,
+                            memory_type=entry.get("type", ""),
+                            category=self._entry_category(entry),
+                            sensitivity=self._entry_sensitivity(entry),
+                            existing_metadata=self._entry_metadata(entry),
+                        )
+                        changes = self._model_update_changes(entry, operation, metadata)
+                        if not changes:
+                            result["skipped"] += 1
+                            continue
+                        resulting_volatile = bool(changes.get("volatile", entry.get("volatile")))
+                        resulting_expiry = self._parse_dt(
+                            changes.get("expires_at", entry.get("expires_at"))
+                        )
+                        if resulting_volatile and resulting_expiry is None:
+                            result["skipped"] += 1
+                            continue
+                        if resulting_expiry is not None and resulting_expiry <= datetime.now():
+                            result["skipped"] += 1
+                            continue
+                        memory_id = str(entry.get("id") or "")
+                        self.edit_entry(
+                            memory_id,
+                            expected_version=entry.get("version"),
+                            user_authorized=True,
+                            **changes,
+                        )
+                    elif action == "delete":
+                        entry = self._resolve_model_memory_target(operation)
+                        if entry is None:
+                            result["skipped"] += 1
+                            continue
+                        memory_id = str(entry.get("id") or "")
+                        if not self.forget(memory_id):
+                            result["skipped"] += 1
+                            continue
+                    else:
+                        result["skipped"] += 1
+                        continue
+                result["changed"] = True
+                result["count"] += 1
+                result["actions"].append(action)
+                result["memory_ids"].append(memory_id)
+            except Exception as exc:
+                result["skipped"] += 1
+                logging.warning("Model memory %s operation ignored: %s", action or "unknown", exc)
+        return result
 
     def auto_capture_turn(self, user_text, final_response, tool_records=None, is_background_task=False):
-        cfg = self._settings()
-        if not cfg.get("enabled", True) or not cfg.get("auto_capture", True):
-            return []
-        user_text = str(user_text or "").strip()
-        final_response = str(final_response or "").strip()
-        if not user_text:
-            return []
-        added = []
-        source = "background" if is_background_task else "conversation"
-        explicit = self._looks_user_memory(user_text)
-        temporal = self._looks_live_or_temporal(user_text)
-        if explicit:
-            automatic_context_eligible = (
-                self._durable_preference_signal(user_text)
-                and not self._looks_one_time_action_request(user_text)
-            )
-            added_id = self.add(
-                "long_term",
-                f"Explicit memory request from user: {user_text[:1400]}",
-                subject=self._derive_subject(user_text),
-                tags=["auto", "explicit_memory_request"],
-                importance=4,
-                source=source,
-                confidence=0.72,
-                metadata={
-                    "profile_eligible": False,
-                    "automatic_context_eligible": automatic_context_eligible,
-                    "capture": "explicit_request_retrievable",
-                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
-                    "note": (
-                        "Preserved for explicit search. Automatic context is allowed only for durable "
-                        "non-action content; deterministic profile facts are stored separately."
-                    ),
-                },
-            )
-            if added_id:
-                added.append(added_id)
-        if temporal:
-            ttl = 3 if any(t in user_text.lower() for t in ["weather", "forecast", "מזג", "תחזית"]) else None
-            added_id = self.add(
-                "short_term",
-                f"Recent temporal context from user: {user_text[:1200]}",
-                subject=self._derive_subject(user_text),
-                tags=["auto", "temporal"],
-                ttl_hours=ttl,
-                importance=2,
-                source=source,
-                confidence=0.55,
-                volatile=True,
-                metadata={
-                    "automatic_context_eligible": False,
-                    "continuity_only": True,
-                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
-                    "capture": "temporal_continuity_retrievable",
-                },
-            )
-            if added_id:
-                added.append(added_id)
-        if cfg.get("aggressive_capture", True) and len(user_text) >= 24 and self._should_capture_exchange(user_text, final_response, tool_records):
-            outcome = re.sub(r"\s+", " ", final_response)[:900]
-            content = f"Recent exchange. User request: {user_text[:1000]}"
-            if outcome and not outcome.startswith("ERROR_USER"):
-                content += f" Outcome: {outcome}"
-            continuity_only = bool(
-                temporal or self._looks_one_time_action_request(user_text)
-            )
-            added_id = self.add(
-                "short_term",
-                content,
-                subject=self._derive_subject(user_text),
-                tags=["auto", "conversation"],
-                ttl_hours=cfg.get("conversation_ttl_hours", 168),
-                importance=2,
-                source=source,
-                confidence=0.55,
-                volatile=temporal,
-                metadata={
-                    "automatic_context_eligible": not continuity_only,
-                    "continuity_only": continuity_only,
-                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
-                    "capture": "conversation_context_retrievable",
-                },
-            )
-            if added_id:
-                added.append(added_id)
-        for record in (tool_records or [])[-8:]:
-            action = str(record.get("tool", "") or "")
-            if not action or action in {"get_tool_info", "search_memory", "update_memory", "memory_manager"}:
-                continue
-            preview = str(record.get("preview", "") or "")[:1400]
-            status = str(record.get("status", "ok") or "ok")
-            volatile_tool = action in {"get_weather", "internet_search", "email_manager"} or self._looks_live_or_temporal(preview)
-            ttl = 3 if action in {"get_weather", "email_manager"} else cfg.get("tool_memory_ttl_hours", 72)
-            added_id = self.add(
-                "tool",
-                f"Tool {action} returned status={status}. Preview: {preview}",
-                subject=f"{action} {status}",
-                tags=["tool", action],
-                ttl_hours=ttl,
-                importance=3 if status == "error" else 2,
-                source="tool_observation",
-                confidence=0.8 if status != "error" else 0.65,
-                tool_name=action,
-                volatile=volatile_tool,
-                metadata={
-                    "automatic_context_eligible": False,
-                    "continuity_only": True,
-                    "profile_policy_version": self.PROFILE_POLICY_VERSION,
-                    "capture": "tool_continuity_retrievable",
-                },
-            )
-            if added_id:
-                added.append(added_id)
-        if added:
-            logging.info(f"MEMORY | auto_capture | added={len(added)}")
-        return added
-
+        """Deprecated compatibility shim; mechanical turn capture is disabled."""
+        return []
     def tool_search_text(self, query, memory_type="any", max_results=6):
+        if not self._settings().get("enabled", True):
+            return "MEMORY_DISABLED"
         results = self.search(query, memory_types=memory_type, max_results=max_results, max_chars=8000)
         if not results:
             return "NO_MEMORY_RESULTS"

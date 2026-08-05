@@ -287,6 +287,9 @@ class MessagingMixin:
             current_messages.append(message)
 
     def send_message(self, user_text, is_background_task=False, cancel_event=None, attachments=None):
+        self._last_memory_update_result = {
+            "changed": False, "count": 0, "actions": [], "memory_ids": [], "skipped": 0,
+        }
         lock_acquired = self._agent_lock.acquire(blocking=False)
         if not lock_acquired:
             return "ERROR_USER: סמארטי כבר מבצע משימה אחרת. נסה שוב בעוד רגע או בטל את הפעולה הפעילה."
@@ -358,12 +361,6 @@ class MessagingMixin:
                 else:
                     final_response = f"ERROR_USER: חסר מפתח API של {provider_label}. הזן מפתח בהגדרות או בחלון שנפתח כדי להמשיך."
                 return final_response
-            try:
-                if getattr(self, "memory_manager", None):
-                    self.memory_manager.capture_critical_user_details(history_user_text or user_text, source="critical_preflight")
-            except Exception as e:
-                logging.warning(f"Critical memory capture skipped: {e}")
-
             if resume_checkpoint:
                 self.system_prompt = str(resume_checkpoint.get("system_prompt") or getattr(self, "system_prompt", "") or self._load_system_prompt(user_text, log_memory_usage=True))
             else:
@@ -871,16 +868,21 @@ class MessagingMixin:
 
             if final_response and not final_response.startswith("ERROR_USER") and not run_cancel_event.is_set():
                 try:
-                    new_tool_observations = list((getattr(self, "tool_observations", []) or [])[tool_observation_start:])
-                    if getattr(self, "memory_manager", None):
-                        self.memory_manager.auto_capture_turn(
-                            history_user_text or user_text,
-                            final_response,
-                            tool_records=new_tool_observations,
-                            is_background_task=is_background_task,
-                        )
+                    manager = getattr(self, "memory_manager", None)
+                    if manager:
+                        final_response, memory_operations = manager.extract_model_memory_decision(final_response)
+                        if memory_operations and not self._local_fast_mode_enabled(
+                            self.settings.get("api_mode", getattr(self, "mode", ""))
+                        ):
+                            session_id = str(getattr(self._execution_context, "target_session_id", "") or "")
+                            if not session_id and getattr(self, "chat_store", None):
+                                session_id = str((self.chat_store.active_session() or {}).get("id") or "")
+                            self._last_memory_update_result = manager.apply_model_memory_operations(
+                                memory_operations,
+                                session_id=session_id,
+                            )
                 except Exception as e:
-                    logging.warning(f"Memory auto-capture skipped: {e}")
+                    logging.warning(f"Model-authored memory decision skipped: {e}")
 
             if final_response and not final_response.startswith("ERROR_USER"):
                 if self.mode == "gemini":

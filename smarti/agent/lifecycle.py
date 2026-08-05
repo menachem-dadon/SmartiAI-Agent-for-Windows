@@ -50,6 +50,9 @@ class LifecycleMixin:
         self.recent_tool_observations = []
         self.tool_observations = []
         self.conversation_attachments = []
+        self._last_memory_update_result = {
+            "changed": False, "count": 0, "actions": [], "memory_ids": [], "skipped": 0,
+        }
         self._ensure_tools_dir()
         self.audit_logger = AuditLogger(AUDIT_LOG_FILE)
         self.policy_engine = PolicyEngine(self)

@@ -2862,6 +2862,30 @@ class ChatMessageContainer(QWidget):
             self.tts_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             self.tts_btn.clicked.connect(lambda checked=False: self.tts_button_clicked.emit(self))
 
+        self.memory_updated_indicator = None
+        self.memory_updated_icon = None
+        self.memory_updated_label = None
+        if self.show_actions and not is_user:
+            self.memory_updated_indicator = QWidget(self.actions_container)
+            self.memory_updated_indicator.setStyleSheet("background: transparent;")
+            self.memory_updated_indicator.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+            memory_layout = QHBoxLayout(self.memory_updated_indicator)
+            memory_layout.setContentsMargins(2, 0, 2, 0)
+            memory_layout.setSpacing(4)
+            self.memory_updated_icon = QLabel()
+            self.memory_updated_icon.setFixedSize(15, 15)
+            self.memory_updated_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            set_themed_label_icon(
+                self.memory_updated_icon, ("agent_tool_memory_manager",), "", 14,
+            )
+            memory_layout.addWidget(self.memory_updated_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.memory_updated_label = QLabel("הזיכרון עודכן")
+            self.memory_updated_label.setAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            )
+            memory_layout.addWidget(self.memory_updated_label, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.memory_updated_indicator.hide()
+
         if self.show_actions:
             if is_user:
                 actions_layout.addWidget(self.copy_btn)
@@ -2869,6 +2893,7 @@ class ChatMessageContainer(QWidget):
                 actions_layout.addStretch()
             else:
                 actions_layout.addStretch()
+                actions_layout.addWidget(self.memory_updated_indicator, 0, Qt.AlignmentFlag.AlignVCenter)
                 actions_layout.addWidget(self.copy_btn)
                 actions_layout.addWidget(self.tts_btn)
 
@@ -2914,12 +2939,23 @@ class ChatMessageContainer(QWidget):
         if self.copy_btn:
             refresh_themed_button_icon(self.copy_btn)
             self.copy_btn.setStyleSheet(self._button_css(False))
+        if self.memory_updated_icon:
+            refresh_themed_label_icon(self.memory_updated_icon)
+        if self.memory_updated_label:
+            self.memory_updated_label.setStyleSheet(
+                f"color: {MUTED_TEXT_COLOR}; background: transparent; border: none; "
+                "font-size: 11px; font-weight: 500;"
+            )
         if self.user_collapse_btn:
             self.user_collapse_btn.setStyleSheet(self._button_css(False))
             self.update_user_collapse_button_state(*self.bubble.user_collapse_state())
         self.update_tts_button_state(self._tts_active, self._tts_blocked)
         if hasattr(self, "bubble") and self.bubble:
             self.bubble.apply_theme()
+
+    def set_memory_updated(self, updated=True):
+        if self.memory_updated_indicator is not None:
+            self.memory_updated_indicator.setVisible(bool(updated))
 
     def _set_user_collapse_button_icon(self, collapsed=None):
         if not self.user_collapse_btn:
@@ -6265,6 +6301,13 @@ class ChatWindow(QMainWindow):
             if container:
                 container.bubble.set_final_text(result)
                 container.bubble.apply_theme()
+                memory_result = (
+                    self.core.last_memory_update_result()
+                    if hasattr(self.core, "last_memory_update_result") else {}
+                )
+                container.set_memory_updated(
+                    bool(isinstance(memory_result, dict) and memory_result.get("changed"))
+                )
                 container.set_actions_available(True)
                 container.reveal_with_entry_animation()
                 self._schedule_scroll_chat_to_bottom(delays=(50, 160), force=True)
@@ -6875,6 +6918,11 @@ class ChatWindow(QMainWindow):
 
     def on_agent_finished(self, response):
         should_notify = self._should_notify_user()
+        memory_result = (
+            self.core.last_memory_update_result()
+            if hasattr(self.core, "last_memory_update_result") else {}
+        )
+        memory_updated = bool(isinstance(memory_result, dict) and memory_result.get("changed"))
         self.agent_running = False
         self.action_btn.setEnabled(True)
         self.update_action_btn_visuals()
@@ -6890,6 +6938,7 @@ class ChatWindow(QMainWindow):
                 self.current_agent_bubble.show()
                 self.current_agent_bubble.set_final_text(msg)
                 if self.current_agent_container:
+                    self.current_agent_container.set_memory_updated(memory_updated)
                     self.current_agent_container.set_actions_available(True)
                     self.current_agent_container.reveal_with_entry_animation()
             else: self.add_message(msg, is_user=False)
@@ -6899,11 +6948,14 @@ class ChatWindow(QMainWindow):
                 self.current_agent_bubble.set_final_text(response)
                 self.current_agent_bubble.set_canvas_artifacts(response_canvases)
                 if self.current_agent_container:
+                    self.current_agent_container.set_memory_updated(memory_updated)
                     self.current_agent_container.set_actions_available(True)
                     self.current_agent_container.reveal_with_entry_animation()
                 response_container = self.current_agent_container
             else:
                 response_container = self.add_message(response, is_user=False, canvases=response_canvases)
+                if response_container:
+                    response_container.set_memory_updated(memory_updated)
                 
             if should_notify:
                 self.show_response_notification(response)
@@ -7032,8 +7084,10 @@ class ChatWindow(QMainWindow):
                 )
                 if container is not None:
                     history_containers.append(container)
-                if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
-                    container.bubble.restore_agent_process(metadata.get("agent_process"))
+                if role == "assistant" and container:
+                    container.set_memory_updated(bool(metadata.get("memory_updated")))
+                    if isinstance(metadata.get("agent_process"), dict):
+                        container.bubble.restore_agent_process(metadata.get("agent_process"))
             next_index = index + batch_size
             if next_index < len(visible_messages):
                 QTimer.singleShot(5, lambda: add_batch(next_index, batch_size))
@@ -7102,8 +7156,10 @@ class ChatWindow(QMainWindow):
                 )
                 if container is not None:
                     history_containers.append(container)
-                if role == "assistant" and container and isinstance(metadata.get("agent_process"), dict):
-                    container.bubble.restore_agent_process(metadata.get("agent_process"))
+                if role == "assistant" and container:
+                    container.set_memory_updated(bool(metadata.get("memory_updated")))
+                    if isinstance(metadata.get("agent_process"), dict):
+                        container.bubble.restore_agent_process(metadata.get("agent_process"))
             next_index = index + batch_size
             if next_index < len(visible_messages):
                 QTimer.singleShot(8, lambda: add_batch(next_index, batch_size))

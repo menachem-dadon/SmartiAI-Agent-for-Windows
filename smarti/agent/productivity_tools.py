@@ -807,6 +807,11 @@ class ProductivityToolsMixin:
         manager = getattr(self, "memory_manager", None)
         if not manager:
             return "ERROR: Memory manager is not available."
+        if not self.settings.get("memory", {}).get("enabled", True):
+            return (
+                "ERROR: Smarti memory is disabled by the user. Existing memories are retained "
+                "but cannot be retrieved or changed by the model."
+            )
         args = dict(args or {})
         action = str(action or "").strip().lower()
         try:
@@ -835,6 +840,12 @@ class ProductivityToolsMixin:
             if action == "stats":
                 return json.dumps({"ok": True, "stats": manager.memory_stats()}, ensure_ascii=False)
             if action == "add":
+                requested_scope = str(args.get("scope") or "auto").strip().lower()
+                scope = {
+                    "project": "global",
+                    "user": "user:default",
+                    "global": "global",
+                }.get(requested_scope, "")
                 entry_id = manager.add(
                     args.get("memory_type", "long_term"),
                     args.get("content", ""),
@@ -845,8 +856,9 @@ class ProductivityToolsMixin:
                     source="explicit_tool",
                     confidence=0.8,
                     category=args.get("category", ""),
+                    scope=scope,
                     consent_state="approved",
-                    cloud_allowed=True,
+                    cloud_allowed=False,
                     pinned=bool(args.get("pinned", False)),
                 )
                 return json.dumps({"ok": True, "memory_id": entry_id}, ensure_ascii=False)

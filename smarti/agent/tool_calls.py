@@ -247,7 +247,8 @@ class ToolCallMixin:
                 "action", "query", "mode", "content", "memory_type", "subject",
                 "ttl_hours", "importance", "tags", "memory_id", "max_results",
                 "status", "category", "sensitivity", "source",
-                "date_range", "expiry", "pinned", "expected_version", "path", "encrypted"
+                "date_range", "expiry", "pinned", "expected_version", "path", "encrypted",
+                "scope"
             }}
 
         if action == "email_manager":

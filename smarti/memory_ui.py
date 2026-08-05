@@ -15,7 +15,6 @@ MEMORY_TYPE_LABELS = {
 MEMORY_STATUS_LABELS = {
     "active": "זיכרונות פעילים",
     "archive": "ארכיון",
-    "session": "לשיחה הנוכחית",
     "all": "כל הזיכרונות",
 }
 MEMORY_STATUS_BADGES = {
@@ -171,7 +170,7 @@ class MemoryEditDialog(QDialog):
         root.addWidget(heading)
 
         root.addWidget(_field_title("מה סמארטי צריך לזכור?"))
-        _add_help(root, "כתבי עובדה או העדפה קצרה ושימושית. סודות, סיסמאות וקודי אימות אינם נשמרים.")
+        _add_help(root, "אפשר להזין עובדה או העדפה קצרה ושימושית. סודות, סיסמאות וקודי אימות אינם נשמרים.")
         self.content = QTextEdit()
         self.content.setPlainText(str(self.entry.get("content") or ""))
         self.content.setMinimumHeight(130)
@@ -186,7 +185,7 @@ class MemoryEditDialog(QDialog):
             "הקטגוריה עוזרת לסינון וקובעת כללי פרטיות למידע כגון כתובת, טלפון ובריאות.",
         ))
         self.category = _make_combo({k: v for k, v in MEMORY_CATEGORY_LABELS.items() if k}, self.entry.get("category", "general"))
-        self.category.setToolTip("בחרי את הנושא שמתאר את הזיכרון בצורה הטובה ביותר.")
+        self.category.setToolTip("בחירת הנושא שמתאר את הזיכרון בצורה הטובה ביותר.")
         root.addWidget(self.category)
 
         self.advanced_toggle = QPushButton("אפשרויות נוספות")
@@ -326,7 +325,7 @@ class MemoryFilterDialog(QDialog):
         self.setWindowTitle("סינון ומיון זיכרונות")
         self.setModal(True)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.resize(410, 570)
+        self.resize(410, 500)
         self.setMinimumWidth(350)
         self.setStyleSheet(f"QDialog {{ background: {BG_COLOR}; color: {TEXT_COLOR}; }}")
         root = QVBoxLayout(self)
@@ -337,19 +336,11 @@ class MemoryFilterDialog(QDialog):
         root.addWidget(title)
         _add_help(root, "המסננים מצמצמים את הרשימה בלבד ואינם משנים או מוחקים זיכרונות.")
 
-        self.type_filter = self._add_combo(root, "סוג הזיכרון", MEMORY_TYPE_LABELS, filters.get("memory_type", "any"))
         self.category_filter = self._add_combo(root, "קטגוריה", MEMORY_CATEGORY_LABELS, filters.get("category", ""))
         self.sensitivity_filter = self._add_combo(root, "פרטיות", SENSITIVITY_LABELS, filters.get("sensitivity", "any"))
         self.date_filter = self._add_combo(root, "מועד עדכון", DATE_LABELS, filters.get("date_range", "any"))
         self.expiry_filter = self._add_combo(root, "תפוגה", EXPIRY_LABELS, filters.get("expiry", "any"))
         self.sort_filter = self._add_combo(root, "סדר הרשימה", SORT_LABELS, filters.get("sort_by", "updated_desc"))
-
-        root.addWidget(_field_title("מקור", "אפשר לצמצם לזיכרונות שנוצרו משיחה, כלי, ייבוא או הוספה ידנית."))
-        self.source_filter = QLineEdit(str(filters.get("source") or ""))
-        self.source_filter.setPlaceholderText("אפשר להשאיר ריק")
-        self.source_filter.setMinimumHeight(42)
-        self.source_filter.setStyleSheet(LINE_EDIT_CSS)
-        root.addWidget(self.source_filter)
 
         buttons = QHBoxLayout()
         apply_btn = QPushButton("החל")
@@ -374,7 +365,6 @@ class MemoryFilterDialog(QDialog):
 
     def _reset(self):
         for combo, value in (
-            (self.type_filter, "any"),
             (self.category_filter, ""),
             (self.sensitivity_filter, "any"),
             (self.date_filter, "any"),
@@ -382,17 +372,14 @@ class MemoryFilterDialog(QDialog):
             (self.sort_filter, "updated_desc"),
         ):
             combo.setCurrentIndex(max(0, combo.findData(value)))
-        self.source_filter.clear()
 
     def values(self):
         return {
-            "memory_type": self.type_filter.currentData(),
             "category": self.category_filter.currentData(),
             "sensitivity": self.sensitivity_filter.currentData(),
             "date_range": self.date_filter.currentData(),
             "expiry": self.expiry_filter.currentData(),
             "sort_by": self.sort_filter.currentData(),
-            "source": self.source_filter.text().strip(),
         }
 
 
@@ -417,17 +404,22 @@ class MemoryDetailsDialog(QDialog):
         memory_type = MEMORY_TYPE_LABELS.get(entry.get("type"), entry.get("type") or "לא ידוע")
         status = MEMORY_STATUS_LABELS.get(entry.get("status"), entry.get("status") or "לא ידוע")
         metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+        evidence = metadata.get("evidence") if isinstance(metadata.get("evidence"), list) else []
         rows = (
             ("מצב", status),
             ("סוג", memory_type),
             ("קטגוריה", category),
+            ("תחום", entry.get("scope") or "כללי"),
             ("פרטיות", "מידע רגיש ומוצפן" if entry.get("sensitivity") == "sensitive" else "זיכרון רגיל"),
             ("למה נשמר", metadata.get("why_saved") or entry.get("source") or "לא תועד"),
             ("מקור", entry.get("source") or "לא תועד"),
             ("נוצר", entry.get("created_at") or "לא תועד"),
             ("עודכן", entry.get("updated_at") or "לא תועד"),
-            ("שימוש אחרון", entry.get("last_accessed_at") or "טרם"),
+            ("שימוש אחרון", entry.get("last_used_at") or "טרם"),
             ("צורף לאחרונה לבקשה", entry.get("last_injected_at") or "טרם"),
+            ("נבחר / צורף", f"{entry.get('selected_count', 0)} / {entry.get('injection_count', 0)}"),
+            ("מצב אימות", entry.get("validation_state") or metadata.get("validation_state") or "לא אומת"),
+            ("אסמכתאות", str(len(evidence))),
             ("תפוגה", entry.get("expires_at") or "ללא תפוגה"),
             ("חשיבות", f"{entry.get('importance', 3)} מתוך 5"),
             ("מזהה פנימי", entry.get("id") or "לא תועד"),
@@ -464,10 +456,8 @@ class MemoryManagementPage(QWidget):
         self._page_cursor = 0
         self._activation_scheduled = False
         self._filters = {
-            "memory_type": "any",
             "category": "",
             "sensitivity": "any",
-            "source": "",
             "date_range": "any",
             "expiry": "any",
             "sort_by": "updated_desc",
@@ -513,22 +503,50 @@ class MemoryManagementPage(QWidget):
         self.stats_label.setToolTip("מספר הזיכרונות בכל מצב. כל המידע נשמר מקומית.")
         root.addWidget(self.stats_label)
 
+        self.memory_permission_card = QFrame()
+        self.memory_permission_card.setObjectName("MemoryPermissionCard")
+        self.memory_permission_card.setStyleSheet(card_css(10, 12))
+        permission_layout = QVBoxLayout(self.memory_permission_card)
+        permission_layout.setContentsMargins(12, 8, 12, 9)
+        permission_layout.setSpacing(2)
+        self.memory_enabled_checkbox = SmartiCheckBox("שימוש בזיכרון מתמשך")
+        self.memory_enabled_checkbox.setChecked(
+            bool(self.core.settings.get("memory", {}).get("enabled", True))
+        )
+        self.memory_enabled_checkbox.setStyleSheet(CHECKBOX_CSS)
+        self.memory_enabled_checkbox.setToolTip(
+            "הפעלה או השבתה של שליפה וניהול אוטומטי של זיכרונות לפי שיקול דעת המודל"
+        )
+        permission_layout.addWidget(self.memory_enabled_checkbox)
+        self.memory_enabled_description = QLabel(
+            "כשהאפשרות פעילה, סמארטי יכול לשמור, לעדכן, למחוק ולשלוף מידע שימושי לפי "
+            "שיקול דעת המודל. כיבוי האפשרות מפסיק את השימוש בזיכרון ועדכונים חדשים, אך "
+            "אינו מוחק זיכרונות קיימים. למחיקה ניתן להשתמש ברשימה במסך זה או באפשרות "
+            "״מחיקת כל הזיכרונות״ שבתפריט הפעולות."
+        )
+        self.memory_enabled_description.setWordWrap(True)
+        self.memory_enabled_description.setStyleSheet(muted_label_css(11))
+        self.memory_enabled_description.setToolTip(self.memory_enabled_description.text())
+        permission_layout.addWidget(self.memory_enabled_description)
+        self.memory_enabled_checkbox.toggled.connect(self._set_memory_enabled)
+        root.addWidget(self.memory_permission_card)
+
         self.search = QLineEdit()
         self.search.setPlaceholderText("חיפוש בזיכרונות")
         self.search.setClearButtonEnabled(True)
         self.search.setMinimumHeight(42)
         self.search.setStyleSheet(LINE_EDIT_CSS)
-        self.search.setToolTip("חיפוש בתוכן, בכותרת, במקור ובתגיות")
+        self.search.setToolTip("חיפוש בתוכן, בכותרת, בקטגוריה ובתגיות")
         root.addWidget(self.search)
 
         filter_row = QHBoxLayout()
         filter_row.setSpacing(8)
         self.status_filter = _make_combo(MEMORY_STATUS_LABELS, "active")
-        self.status_filter.setToolTip("בחרי אילו זיכרונות להציג לפי מצבם")
+        self.status_filter.setToolTip("בחירת הזיכרונות שיוצגו לפי מצבם")
         filter_row.addWidget(self.status_filter, 1)
         self.filter_btn = QPushButton("סינון ומיון")
         self.filter_btn.setStyleSheet(_memory_button_css())
-        self.filter_btn.setToolTip("סינון לפי סוג, קטגוריה, פרטיות, תאריך, מקור או תפוגה")
+        self.filter_btn.setToolTip("סינון לפי קטגוריה, פרטיות, מועד עדכון או תפוגה")
         self.filter_btn.clicked.connect(self._open_filters)
         filter_row.addWidget(self.filter_btn)
         root.addLayout(filter_row)
@@ -584,6 +602,11 @@ class MemoryManagementPage(QWidget):
 
     def activate(self, force=False):
         """Let the stack transition begin before list construction starts."""
+        enabled = bool(self.core.settings.get("memory", {}).get("enabled", True))
+        if self.memory_enabled_checkbox.isChecked() != enabled:
+            self.memory_enabled_checkbox.blockSignals(True)
+            self.memory_enabled_checkbox.setChecked(enabled)
+            self.memory_enabled_checkbox.blockSignals(False)
         if self._loaded_once and not force and self._signature() == self._last_signature:
             return
         if self._activation_scheduled:
@@ -614,6 +637,17 @@ class MemoryManagementPage(QWidget):
         if self.isVisible() and self.manager and self._signature() != self._last_signature:
             self.load_data(force=True)
 
+    def _set_memory_enabled(self, enabled):
+        memory_settings = self.core.settings.setdefault("memory", {})
+        enabled = bool(enabled)
+        if bool(memory_settings.get("enabled", True)) == enabled:
+            return
+        memory_settings["enabled"] = enabled
+        try:
+            self.core._save_settings()
+        except Exception as exc:
+            logging.warning("Failed saving memory permission setting: %s", exc)
+
     def _clear_cards(self):
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
@@ -640,15 +674,21 @@ class MemoryManagementPage(QWidget):
         )
         self._rows = self.manager.list_entries(
             query=self.search.text(),
-            memory_type=self._filters["memory_type"],
             status=self.status_filter.currentData(),
             category=self._filters["category"],
             sensitivity=self._filters["sensitivity"],
-            source=self._filters["source"],
             date_range=self._filters["date_range"],
             expiry=self._filters["expiry"],
             max_results=500,
             sort_by=self._filters["sort_by"],
+            # This is the user's local management page. Persisted payloads
+            # remain DPAPI-encrypted and programmatic/model-facing reads stay
+            # masked by default, but the owner should not have to reveal their
+            # own data one card at a time. Generic programmatic reads remain
+            # masked; model context still passes through relevance and
+            # sensitive-category routing before any provider request.
+            reveal_sensitive=True,
+            user_authorized=True,
         )
         visible_ids = {str(row.get("id")) for row in self._rows}
         self.selected_ids.intersection_update(visible_ids)
@@ -688,7 +728,7 @@ class MemoryManagementPage(QWidget):
 
     def _active_filter_count(self):
         defaults = {
-            "memory_type": "any", "category": "", "sensitivity": "any", "source": "",
+            "category": "", "sensitivity": "any",
             "date_range": "any", "expiry": "any", "sort_by": "updated_desc",
         }
         return sum(self._filters.get(key) != value for key, value in defaults.items())
@@ -786,15 +826,14 @@ class MemoryManagementPage(QWidget):
         full_subject = ("★ " if entry.get("pinned") else "") + self._display_subject(entry)
         subject = QLabel(full_subject)
         subject.setMinimumWidth(1)
-        subject.setMaximumHeight(40)
         subject.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         subject.setWordWrap(True)
         subject.setToolTip(full_subject)
         subject.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 800; border: none;")
         header.addWidget(subject, 1)
-        badge_text = "מוגן" if entry.get("sensitivity") == "sensitive" else MEMORY_STATUS_BADGES.get(entry.get("status"), entry.get("status", ""))
+        badge_text = MEMORY_STATUS_BADGES.get(entry.get("status"), entry.get("status", ""))
         badge = QLabel(badge_text)
-        badge.setFixedSize(52, 24)
+        badge.setFixedSize(60, 24)
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setStyleSheet(
             f"background: {ACCENT_TINT_STRONG}; color: {ACCENT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
@@ -844,9 +883,6 @@ class MemoryManagementPage(QWidget):
         menu = prepare_popup_menu(QMenu(self))
         edit = menu.addAction("עריכת הזיכרון")
         details = menu.addAction("פרטים: למה ומתי נשמר")
-        reveal = None
-        if entry.get("sensitivity") == "sensitive":
-            reveal = menu.addAction("הצגת התוכן המוגן ל־30 שניות")
         pin = None
         if entry.get("status") != "session":
             pin = menu.addAction("בטל נעיצה" if entry.get("pinned") else "נעץ בראש הרשימה")
@@ -862,9 +898,6 @@ class MemoryManagementPage(QWidget):
             self._edit_memory(entry)
         elif chosen is details:
             MemoryDetailsDialog(entry, self).exec()
-        elif reveal is not None and chosen is reveal:
-            label = self.findChild(QLabel, f"MemoryPreview_{entry.get('id')}")
-            self._reveal(entry, label)
         elif pin is not None and chosen is pin:
             self._toggle_pin(entry)
         elif state_action is not None and chosen is state_action:
@@ -874,12 +907,6 @@ class MemoryManagementPage(QWidget):
                 self._archive_one(entry.get("id"))
         elif chosen is forget:
             self._forget_one(entry.get("id"))
-
-    def _reveal(self, entry, label):
-        revealed = self.manager.get_entry(entry.get("id"), reveal_sensitive=True, user_authorized=True)
-        if revealed and label:
-            label.setText(self._display_content(entry, revealed.get("content")))
-            QTimer.singleShot(30000, lambda: self.load_data(force=True))
 
     def _toggle_pin(self, entry):
         current = self.manager.get_entry(entry.get("id"), reveal_sensitive=True, user_authorized=True)
@@ -1007,7 +1034,7 @@ class MemoryManagementPage(QWidget):
     def _clear_all(self):
         text, ok = QInputDialog.getText(
             self, "מחיקת כל הזיכרונות",
-            "הפעולה מוחקת לצמיתות זיכרונות פעילים, ארכיון ותור בדיקה.\nכדי לאשר יש להקליד: מחק הכול",
+            "הפעולה מוחקת לצמיתות את כל הזיכרונות הפעילים ואת הארכיון.\nכדי לאשר יש להקליד: מחק הכול",
         )
         if not ok or text.strip() != "מחק הכול":
             return

@@ -685,6 +685,11 @@ class ModelContextMixin:
         assistant_text = self._display_assistant_text_for_history(final_response)
         agent_process = self._current_agent_process_metadata()
         assistant_metadata = {"agent_process": agent_process} if agent_process else {}
+        memory_result = getattr(self, "_last_memory_update_result", {})
+        if isinstance(memory_result, dict) and memory_result.get("changed"):
+            assistant_metadata["memory_updated"] = True
+            assistant_metadata["memory_change_count"] = int(memory_result.get("count", 0) or 0)
+            assistant_metadata["memory_change_actions"] = list(memory_result.get("actions", []) or [])[:6]
         if getattr(self, "_pending_canvas_artifacts", None):
             assistant_metadata["canvases"] = copy.deepcopy(self._pending_canvas_artifacts)
         
@@ -718,6 +723,12 @@ class ModelContextMixin:
                 assistant_text,
                 attachment_names=names,
             )
+
+    def last_memory_update_result(self):
+        result = getattr(self, "_last_memory_update_result", {})
+        if not isinstance(result, dict):
+            return {"changed": False, "count": 0, "actions": [], "memory_ids": [], "skipped": 0}
+        return copy.deepcopy(result)
 
     def _load_settings(self):
         if not os.path.exists(SETTINGS_FILE):
@@ -1883,11 +1894,49 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                 "ואלמנטים תחילה והשתמש ב-get_tool_info עם פעולת האוטומציה המדויקת."
             )
         memory_policy = ""
-        if self._builtin_tool_context_enabled("memory_manager"):
+        memory_enabled = bool(
+            getattr(self, "memory_manager", None)
+            and self.settings.get("memory", {}).get("enabled", True)
+        )
+        if memory_enabled and not fast_mode:
             memory_policy = (
-                "שמור בזיכרון רק עובדות משתמש יציבות, העדפות מתמשכות והחלטות פרויקט לשימוש חוזר; "
-                "לא סודות ולא בקשות פעולה חד-פעמיות. זיכרון הוא רמז, לא מקור אמת למצב משתנה, "
-                "ולכן יש לאמת נתון עדכני במקור מתאים."
+                "זיכרון סמנטי הוא החלטה שלך, לא מנגנון מילות-מפתח. ההכרעה אם לעדכן זיכרון היא חלק חובה מכל "
+                "תשובה סופית: אם מידע עומד בקריטריונים של יציבות וערך עתידי, חובה להחזיר פעולת add/update/delete "
+                "מתאימה ואין להמתין לכך שהמשתמש יבקש 'לזכור'. רק כשאין מידע כזה החזר operations ריק. "
+                "בסוף כל תשובה סופית הערך אם נוצר, השתנה "
+                "או התבטל מידע שסביר שיועיל בשיחות עתידיות. שמור העדפות ופרטי משתמש יציבים, ידע עבודה חוזר, "
+                "החלטות שביצעת, ומסקנות שימושיות שלך מתוצאות כלים או חיפוש. אל תשמור תמליל, פלט גולמי, קטעי "
+                "חיפוש, תשובה כללית, הוראה חד-פעמית, עובדה קלה לשחזור או מידע ללא ערך עתידי. לעולם אל תשמור "
+                "סיסמה, אסימון, מפתח אימות, OTP או פרטי תשלום. כתובת, טלפון, דוא״ל, מידע בריאותי ופרטים "
+                "אישיים אחרים מותרים לשמירה מוצפנת גם כשהמשתמש לא אמר במפורש 'זכור', אם לפי שיקול דעתך הם "
+                "יציבים ובעלי ערך עתידי. אמירה ישירה של המשתמש היא ראיה מספקת; אל תמציא או תנחש פרט אישי. "
+                "אל תקרא ל-memory_manager כדי להוסיף, לעדכן או למחוק זיכרון. במקום זאת, רק בתשובה הסופית ולא "
+                "בתגובה שקוראת לכלי, הוסף אחרי הטקסט למשתמש מעטפה פנימית אחת בשורה נפרדת: "
+                "<smarti_memory>{\"operations\":[]}</smarti_memory>. המעטפה תמיד נדרשת, גם כשאין שינוי, והיא "
+                "לא חלק מהתשובה למשתמש. כל פעולה היא add, update או delete, ועד שש פעולות בלבד. "
+                "כל איבר ב-operations חייב להיות אובייקט שטוח עם שדה חובה action. לדוגמה: "
+                "<smarti_memory>{\"operations\":[{\"action\":\"add\",\"content\":\"המשתמש מעדיף תשובות קצרות\","
+                "\"subject\":\"העדפת אורך תשובה\",\"category\":\"preference\",\"scope\":\"user\","
+                "\"memory_type\":\"user\",\"importance\":4,\"confidence\":1,\"source_type\":\"user\","
+                "\"created_at\":\"2026-01-01T12:00:00+02:00\",\"updated_at\":\"2026-01-01T12:00:00+02:00\","
+                "\"expires_at\":null,\"volatile\":false,\"tags\":[\"preference\"],\"recall_policy\":\"always\","
+                "\"retrieval_hints\":[\"סגנון תשובה\",\"אורך תשובה\",\"איך לענות למשתמש\"],\"why_saved\":\"העדפה יציבה\","
+                "\"validity_basis\":\"אמירה ישירה של המשתמש\",\"evidence\":[]}]}</smarti_memory>. "
+                "אסור להשתמש במבנה {\"add\":{...}} ואסור להשמיט את action. "
+                "ב-add ספק content, subject, category מתוך general|preference|address|phone|email|identity|birthday|family|health|work, "
+                "ואל תמציא קטגוריה כללית חלופית כגון personal_information; ספק גם scope=user|global, memory_type=user|long_term, importance=1..5, "
+                "confidence=0..1, source_type=user|assistant|tool|web|decision, created_at, updated_at, expires_at "
+                "(ISO-8601 או null רק למידע עמיד), volatile, tags, recall_policy=always|relevant, retrieval_hints, why_saved, validity_basis ו-evidence. "
+                "בחר always רק להעדפת תגובה לא־רגישה שאמורה להשפיע כמעט על כל תשובה, כגון שפה, אורך, טון או פורמט; "
+                "כל פרט אישי או העדפה תלוית־נושא, כגון אוכל, הם relevant. ב-retrieval_hints ספק 3–8 ניסוחים קצרים ומגוונים של "
+                "המצבים, המושגים או השאלות שבהם הזיכרון עשוי להועיל, כדי לאפשר שליפה סמנטית גם ללא מילות הטקסט המקורי. אפשר לציין "
+                "tool_name. ב-update/delete ספק memory_id מהזיכרון שנשלף, או match מדויק אם המזהה לא ידוע, reason, "
+                "updated_at ורק שדות שבאמת השתנו. לשינוי תוקף מכוון הוסף refresh_validity=true. אל תוסיף מחדש "
+                "עובדה קיימת ואל תרענן זיכרון רק מפני שנזכר שוב. כשמידע סותר או מחליף זיכרון קיים, העדף update; "
+                "מחק רק כשברור שהוא שגוי, בוטל או שהמשתמש ביקש לשכוח. לעובדה משתנה מכלי/רשת ספק evidence "
+                "ותפוגה ממשית. "
+                "אין בסמארטי תחום זיכרון בשם project; ידע על עבודה או מאגר נשמר ב-global. זיכרון שנשלף הוא רמז "
+                "בלבד, ומידע משתנה דורש אימות מחדש."
             )
         planner_policy = ""
         if self._builtin_tool_context_enabled("agent_planner"):

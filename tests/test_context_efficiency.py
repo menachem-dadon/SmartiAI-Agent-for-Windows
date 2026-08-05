@@ -179,6 +179,16 @@ class ContextEfficiencyTests(unittest.TestCase):
         fast_prompt = core._load_system_prompt("בצע משימה")
 
         self.assertLess(len(fast_prompt), len(normal_prompt) * 0.60)
+        self.assertIn("<smarti_memory>", normal_prompt)
+        self.assertIn('"operations":[]', normal_prompt)
+        self.assertIn("כתובת, טלפון, דוא״ל", normal_prompt)
+        self.assertIn("חובה להחזיר פעולת add/update/delete", normal_prompt)
+        self.assertIn("אסור להשתמש במבנה {\"add\":{...}}", normal_prompt)
+        self.assertIn("recall_policy=always|relevant", normal_prompt)
+        self.assertIn("retrieval_hints", normal_prompt)
+        self.assertNotIn("מידע רגיש אחר מותר רק בעקבות בקשת משתמש מפורשת", normal_prompt)
+        self.assertNotIn("<smarti_memory>", fast_prompt)
+        self.assertNotIn('"operations":[]', fast_prompt)
         self.assertIn("FastMode פעיל", fast_prompt)
         self.assertIn("`get_tool_info` schema", fast_prompt)
         self.assertIn("`search_tools` schema", fast_prompt)
@@ -198,6 +208,15 @@ class ContextEfficiencyTests(unittest.TestCase):
 
         self.assertFalse(core._local_fast_mode_enabled())
         self.assertNotIn("FastMode פעיל", core._load_system_prompt("שלום"))
+
+    def test_disabling_memory_removes_the_model_memory_contract(self):
+        core = _prompt_core({"get_tool_info", "memory_manager"})
+        core.settings["memory"]["enabled"] = False
+
+        prompt = core._load_system_prompt("שלום")
+
+        self.assertNotIn("<smarti_memory>", prompt)
+        self.assertNotIn('"operations":[]', prompt)
 
     def test_fast_mode_lists_extension_names_when_catalog_search_is_disabled(self):
         core = _prompt_core({"get_tool_info", "extension_manager"})
@@ -322,11 +341,19 @@ class ContextEfficiencyTests(unittest.TestCase):
             core._current_agent_process_metadata = lambda: {}
             core._chat_context_snapshot = lambda: {}
             core._pending_canvas_artifacts = []
+            core._last_memory_update_result = {
+                "changed": True, "count": 2,
+                "actions": ["update", "delete"], "memory_ids": ["mem_a", "mem_b"],
+            }
 
             session_id = core.chat_store.active_session()["id"]
             core._record_active_chat_turn("בקשה", "תשובה", session_id=session_id)
 
             self.assertEqual(core.chat_store.active_session()["title"], "כותרת רקע")
+            assistant = core.chat_store.active_session()["messages"][-1]
+            self.assertTrue(assistant["metadata"]["memory_updated"])
+            self.assertEqual(2, assistant["metadata"]["memory_change_count"])
+            self.assertEqual(["update", "delete"], assistant["metadata"]["memory_change_actions"])
             self.assertEqual(notifications[0][0], "chat_title_updated")
             core.chat_store.rename_session(session_id, "כותרת ידנית")
             self.assertFalse(core.chat_store.apply_generated_title(session_id, "אסור לדרוס"))
