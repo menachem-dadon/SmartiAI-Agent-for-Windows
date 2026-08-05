@@ -32,6 +32,8 @@ for package in (
     "litellm",
     "markdown",
     "PIL",
+    "fitz",
+    "pymupdf",
     "pyaudio",
     "PyPDF2",
     "pyautogui",

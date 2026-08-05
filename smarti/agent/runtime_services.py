@@ -439,6 +439,18 @@ class RuntimeServicesMixin:
             if email_op == "save_attachments":
                 return "שומר קבצים מצורפים"
             return "מפעיל כלי אימייל"
+        if action == "document_manager":
+            document_op = str(args.get("action") or "").strip()
+            labels = {
+                "doctor": "בודק זמינות מנועי מסמכים",
+                "create": "יוצר ומעצב מסמך Word",
+                "edit": "עורך מסמך Word",
+                "inspect": "בודק מבנה מסמך",
+                "render": "מרנדר מסמך לבדיקה חזותית",
+                "export": "מייצא מסמך",
+                "compare": "משווה מסמכי Word",
+            }
+            return labels.get(document_op, "מפעיל כלי מסמכים")
         if action == "background_task_manager":
             manager_op = str(args.get("action") or "").strip()
             if manager_op == "schedule":

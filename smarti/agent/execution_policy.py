@@ -281,6 +281,7 @@ class ExecutionPolicyMixin:
             "notification_manager": "background_task",
             "memory_manager": "file_write",
             "extension_manager": "mcp_run",
+            "document_manager": "file_write",
         }.get(action, "python_tool_run")
 
     def _policy_decision(self, capability):

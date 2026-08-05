@@ -1359,6 +1359,117 @@ BUILTIN_TOOL_SCHEMAS["browser_automation_manager"] = {
     },
 }
 
+DOCUMENT_MANAGER_ACTIONS = (
+    "doctor", "create", "edit", "inspect", "render", "export", "compare",
+)
+DOCUMENT_MANAGER_PROPERTIES = {
+    "engine": {
+        "type": "string", "enum": ["auto", "com", "python", "libreoffice"],
+        "default": "auto",
+        "description": "auto selects python-docx for portable authoring and Word COM for Word-only features/fidelity. libreoffice is export/render only.",
+    },
+    "path": {"type": "string", "description": "Input document path, or output path alias for create."},
+    "output_path": {"type": "string", "description": "Destination document/export path. Relative paths resolve inside Smarti outputs or the active sandbox."},
+    "other_path": {"type": "string", "description": "Revised document path for compare."},
+    "template_path": {"type": "string", "description": "Optional local DOCX/DOTX template for create."},
+    "document": {
+        "type": "object",
+        "description": (
+            "Structured document plan. Supports metadata, defaults, page, styles, header, footer, settings, and blocks/sections. "
+            "Blocks include paragraph/heading/title/subtitle/quote/callout/list/table/image/page_break/section_break/toc/field/hyperlink/bookmark/header/footer/content_control; "
+            "COM also supports comment/footnote/endnote/text_box/shape/chart/equation/advanced_com. Hebrew he-IL and RTL are defaults."
+        ),
+        "additionalProperties": True,
+    },
+    "operations": {
+        "type": "array",
+        "description": (
+            "Ordered edit operations. Portable: replace_text, append_blocks, delete_paragraph, format_paragraph, set_page_layout, define_style, "
+            "set_header, set_footer, update_fields, set_properties. COM additionally: insert_blocks, format_range, delete_range, comments/notes, shapes/charts/equations, "
+            "track/accept/reject changes, protect/unprotect, insert_file, advanced_com. Selectors support paragraph_index, find+occurrence, bookmark, character start/end, or table_index+row+column."
+        ),
+        "items": {"type": "object", "additionalProperties": True},
+    },
+    "format": {
+        "type": "string",
+        "enum": ["docx", "doc", "dotx", "docm", "dotm", "rtf", "txt", "html", "htm", "mhtml", "odt", "pdf", "xps"],
+        "description": "Export format.",
+    },
+    "output_dir": {"type": "string", "description": "Directory for rendered page PNGs and QA PDF."},
+    "export_formats": {
+        "type": "array", "items": {"type": "string"},
+        "description": "Optional formats to export immediately after create/edit, such as [\"pdf\"].",
+    },
+    "render_after": {"type": "boolean", "default": False, "description": "Render every page to PNG after create/edit for model visual QA."},
+    "dpi": {"type": "integer", "default": 144, "description": "Render DPI, clamped to 72-300."},
+    "page_limit": {"type": "integer", "default": 100, "description": "Maximum pages to render, clamped to 1-500."},
+    "include_pdf": {"type": "boolean", "default": True, "description": "Retain the intermediate/final QA PDF."},
+    "include_text": {"type": "boolean", "default": True, "description": "Include paragraph text in inspect output."},
+    "paragraph_limit": {"type": "integer", "default": 200, "description": "Maximum paragraphs returned by inspect."},
+    "backup": {"type": "boolean", "default": True, "description": "For in-place edits, create a timestamped backup first. Defaults true."},
+    "overwrite": {"type": "boolean", "default": False, "description": "Allow replacing an existing destination. Replaced Word files are backed up."},
+    "visible": {"type": "boolean", "default": False, "description": "Show the isolated Word COM window. This is not UI automation."},
+    "timeout_seconds": {"type": "integer", "default": 180, "description": "COM/office timeout, clamped to 15-1800 seconds."},
+    "allow_advanced_com": {
+        "type": "boolean", "default": False,
+        "description": "Explicitly enable structured advanced_com operations. VBA/macros, OLE, printing, sending, external opens/links, add-ins, and raw code remain blocked.",
+    },
+    "password": {"type": "string", "description": "Optional transient document protection/open password. Never store it in plans or logs."},
+    "revised_author": {"type": "string", "description": "Revision author name for compare output."},
+}
+BUILTIN_TOOL_SCHEMAS["document_manager"] = {
+    "description": (
+        "Full structured Word document manager. Creates and edits Hebrew/RTL DOCX independently with python-docx/OOXML, uses isolated Microsoft Word COM for Word-only features, "
+        "inspects, compares, converts/exports (including PDF/XPS), and renders every page to PNG for model visual QA. No Word UI automation. "
+        "Use get_tool_info(action=...) before each operation; load the built-in document_authoring Skill for planning/design policy on substantial documents."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": DOCUMENT_MANAGER_ACTIONS, "description": "Document operation."},
+            **DOCUMENT_MANAGER_PROPERTIES,
+        },
+        "required": ["action"],
+        "additionalProperties": False,
+    },
+}
+
+DOCUMENT_MANAGER_ACTION_GUIDANCE = {
+    "doctor": "Use {\"action\":\"doctor\"} to detect Word COM, python-docx, LibreOffice, and PyMuPDF without launching Word.",
+    "create": (
+        "Create example: "
+        '{"action":"create","engine":"auto","output_path":"report.docx","document":{'
+        '"metadata":{"title":"דו״ח מסכם","author":"..."},'
+        '"defaults":{"font":"Arial","font_size_pt":11},'
+        '"page":{"size":"A4","orientation":"portrait","margins_cm":{"top":2.5,"bottom":2.5,"left":2,"right":2}},'
+        '"styles":[{"name":"My Heading","type":"paragraph","based_on":"Heading 1","font_size_pt":18,"bold":true,"color":"17365D"}],'
+        '"header":{"text":"שם המסמך"},"footer":{"text":"עמוד","page_number":true,"alignment":"center"},'
+        '"blocks":[{"type":"title","text":"דו״ח מסכם"},{"type":"heading","level":1,"text":"מבוא"},'
+        '{"type":"paragraph","runs":[{"text":"טקסט בעברית "},{"text":"English","rtl":false,"italic":true}]},'
+        '{"type":"table","header_rows":1,"column_widths_cm":[5,9],"rows":[["נושא","פירוט"],["א׳","תוכן"]]},'
+        '{"type":"toc"}]},"export_formats":["pdf"],"render_after":true}. '
+        "Paragraph/run fields include style, font, font_size_pt, bold, italic, underline, strike, color, language, rtl, alignment, spacing, line_spacing, indents, keep/widow/page-break options. "
+        "Lists use items (strings or {text,level,...}) plus ordered. Table cells may be strings or objects with text plus formatting/fill; merges use zero-based from_row/from_column/to_row/to_column. "
+        "Portable blocks: paragraph, heading, title, subtitle, quote, callout, list, table, image, page_break, section_break, toc, field, hyperlink, bookmark, header, footer, content_control. "
+        "COM adds comment, footnote, endnote, text_box, shape, chart, equation, and advanced_com."
+    ),
+    "edit": (
+        "Edit example: "
+        '{"action":"edit","path":"C:\\\\...\\\\report.docx","operations":['
+        '{"op":"replace_text","find":"ישן","replace":"חדש","replace_all":true},'
+        '{"op":"format_paragraph","selector":{"find":"כותרת","occurrence":1},"format":{"color":"17365D","bold":true}},'
+        '{"op":"append_blocks","blocks":[{"type":"heading","level":1,"text":"נספח"}]},{"op":"update_fields"}],"render_after":true}. '
+        "Selectors: paragraph_index; find/text+occurrence; bookmark; character start/end; or table_index+row+column (indices are zero-based). "
+        "COM operations additionally include insert_blocks, format_range, delete_range, add_comment/footnote/endnote/text_box/shape/chart/equation, track_changes, accept/reject changes, protect/unprotect, insert_file, advanced_com. "
+        "advanced_com: {op:'advanced_com',root:'document|application|options',path:[{member:'Sections',index:1},'PageSetup'],mode:'get|set|call',member:'...',value:...,args:[],kwargs:{}} and allow_advanced_com=true. "
+        "Raw code, VBA/macros, OLE, printing, sending, add-ins, external opens/links, SaveAs, and export COM members remain blocked."
+    ),
+    "inspect": "Returns text/style indices, page geometry, tables/shapes, fields, RTL markers, and structural comment/note parts. It does not replace visual QA.",
+    "render": "Exports to PDF and creates page-001.png etc. Analyze every PNG through screen_manager, fix defects, then re-render and inspect every page again.",
+    "export": "Supports Word DOC/DOCX/DOTX/DOCM/DOTM/RTF/TXT/HTML/MHTML/ODT/PDF/XPS through COM, LibreOffice fallback, and python DOCX/TXT. output_path must differ from source.",
+    "compare": "Word COM only: path is original, other_path is revised, output_path receives a Word tracked-comparison DOCX; sources open read-only.",
+}
+
 # Property allowlists used by get_tool_info(action=...) to expose only the
 # parameters relevant to one operation. The canonical full schemas above stay
 # unchanged; missing action or action="full" therefore remains fully backward
@@ -1613,6 +1724,34 @@ TOOL_ACTION_FIELDS = {
         "hotkey": _COMPUTER_TARGET_FIELDS + ("keys", "allow_global_keys"),
         "code": ("code",),
     },
+    "document_manager": {
+        "doctor": (),
+        "create": (
+            "output_path", "path", "engine", "template_path", "document",
+            "overwrite", "visible", "timeout_seconds", "export_formats",
+            "render_after", "output_dir", "dpi", "page_limit",
+            "allow_advanced_com",
+        ),
+        "edit": (
+            "path", "output_path", "engine", "operations", "backup", "overwrite",
+            "visible", "timeout_seconds", "password", "export_formats",
+            "render_after", "output_dir", "dpi", "page_limit",
+            "allow_advanced_com",
+        ),
+        "inspect": ("path", "engine", "include_text", "paragraph_limit", "password"),
+        "render": (
+            "path", "engine", "output_dir", "dpi", "page_limit", "include_pdf",
+            "visible", "timeout_seconds", "password",
+        ),
+        "export": (
+            "path", "output_path", "format", "engine", "overwrite", "visible",
+            "timeout_seconds", "password",
+        ),
+        "compare": (
+            "path", "other_path", "output_path", "overwrite", "visible",
+            "timeout_seconds", "revised_author",
+        ),
+    },
 }
 
 BUILTIN_DYNAMIC_TOOLS.update({
@@ -1628,7 +1767,8 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "search_tools": "Search Smarti's effective catalog before selecting, installing, or creating a tool.",
     "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
     "browser_automation_manager": "Browser automation manager via Smarti's persistent Playwright/CDP Chrome profile: profiles, tabs, accessibility refs, act by ref, screenshots, PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
-    "computer_automation_manager": "Computer automation manager via Windows UI Automation: inspect/list/find UIA elements, then invoke/set/focus them without guessed coordinates."
+    "computer_automation_manager": "Computer automation manager via Windows UI Automation: inspect/list/find UIA elements, then invoke/set/focus them without guessed coordinates.",
+    "document_manager": "Structured Word/DOCX authoring, editing, COM automation, export/conversion, inspection, comparison, and page-PNG visual QA; Hebrew/RTL by default.",
 })
 
 LEGACY_BUILTIN_TOOLS = {
@@ -1657,6 +1797,7 @@ PUBLIC_BUILTIN_TOOLS = [
     "email_manager",
     "browser_automation_manager",
     "computer_automation_manager",
+    "document_manager",
     "extension_manager",
     "create_python_tool"
 ]
@@ -1673,6 +1814,7 @@ TOOL_CATEGORY_LABELS = {
     "visual": "Visual canvas",
     "email": "Email",
     "automation": "Automation",
+    "documents": "Documents",
     "extensions": "Extensions",
     "developer": "Developer"
 }
@@ -1693,6 +1835,7 @@ TOOL_CATEGORIES = {
     "email_manager": "email",
     "browser_automation_manager": "automation",
     "computer_automation_manager": "automation",
+    "document_manager": "documents",
     "extension_manager": "extensions",
     "create_python_tool": "developer"
 }

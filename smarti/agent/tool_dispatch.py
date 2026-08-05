@@ -3,14 +3,29 @@ from .shared import *
 
 
 class ToolDispatchMixin:
+    @classmethod
+    def _redact_tool_args_for_audit(cls, value, key=""):
+        sensitive = ("password", "passwd", "secret", "token", "api_key", "apikey", "authorization")
+        if key and any(marker in str(key).casefold() for marker in sensitive):
+            return "[REDACTED]"
+        if isinstance(value, dict):
+            return {str(item_key): cls._redact_tool_args_for_audit(item, str(item_key)) for item_key, item in value.items()}
+        if isinstance(value, list):
+            return [cls._redact_tool_args_for_audit(item, key) for item in value]
+        if isinstance(value, tuple):
+            return tuple(cls._redact_tool_args_for_audit(item, key) for item in value)
+        return value
+
     def _execute_tool_with_audit(self, action, args_dict):
         started = time.time()
+        safe_args = self._redact_tool_args_for_audit(args_dict or {})
         try:
-            args_hash = hashlib.sha256(json.dumps(args_dict or {}, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
-            args_preview = self._truncate_tool_output(json.dumps(args_dict or {}, ensure_ascii=False, default=str))[:1200]
+            serialized_args = json.dumps(safe_args, sort_keys=True, ensure_ascii=False, default=str)
+            args_hash = hashlib.sha256(serialized_args.encode("utf-8")).hexdigest()[:12]
+            args_preview = self._truncate_tool_output(json.dumps(safe_args, ensure_ascii=False, default=str))[:1200]
         except Exception:
             args_hash = "unknown"
-            args_preview = str(args_dict or "")[:1200]
+            args_preview = str(safe_args or "")[:1200]
         logging.info(f"TOOL START | {action} | args_hash={args_hash} | args={args_preview}")
         if getattr(self, "audit_logger", None):
             self.audit_logger.record("tool_start", {"tool": action, "args_hash": args_hash, "args_preview": args_preview}, self.settings)
@@ -35,7 +50,7 @@ class ToolDispatchMixin:
             context_output = feedback if feedback is not None else message
             if isinstance(context_output, str) and context_output.startswith("IMAGE_BASE64:"):
                 context_output = "[IMAGE_BASE64 omitted from persistent tool context]"
-            self._record_tool_context_event(action, args_dict, status, context_output)
+            self._record_tool_context_event(action, safe_args, status, context_output)
             return feedback, message
         except SmartiCancelled:
             duration_ms = int((time.time() - started) * 1000)
@@ -52,13 +67,13 @@ class ToolDispatchMixin:
                     },
                     self.settings
                 )
-            self._record_tool_context_event(action, args_dict, "cancelled", "CANCELLED_BY_USER")
+            self._record_tool_context_event(action, safe_args, "cancelled", "CANCELLED_BY_USER")
             raise
         except Exception as e:
             logging.exception(f"TOOL CRASH | {action} | args_hash={args_hash}")
             if getattr(self, "audit_logger", None):
                 self.audit_logger.record("tool_crash", {"tool": action, "args_hash": args_hash, "error": str(e)}, self.settings)
-            self._record_tool_context_event(action, args_dict, "crash", str(e))
+            self._record_tool_context_event(action, safe_args, "crash", str(e))
             raise
 
     def execute_tool(self, action, args_dict):
@@ -94,6 +109,8 @@ class ToolDispatchMixin:
                 
             if action == "canvas_manager":
                 return (self.canvas_manager_tool(args_dict), None)
+            elif action == "document_manager":
+                return (self.document_manager_tool(args_dict), None)
             elif action == "search_tools":
                 return (self.search_tools(
                     query=args_dict.get("query", ""),

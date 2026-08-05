@@ -140,6 +140,54 @@ class ExtensionsMixin:
                     "- Use tabs/focus/labels to keep tab state stable in long tasks. Close unused tabs when they add confusion.\n"
                     "- Summarize observations; do not paste large page text, logs, or response bodies into the final answer unless the user asked for them."
                 )
+            },
+            "document_authoring": {
+                "name": "document_authoring",
+                "description": "Professional planning, Hebrew/RTL design, safe editing, export, and render-review workflow for Smarti's document_manager.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string", "description": "Document creation/editing task."},
+                        "path": {"type": "string", "description": "Optional existing document or template path."},
+                        "audience": {"type": "string", "description": "Intended readers and context."},
+                        "deliverables": {"type": "array", "items": {"type": "string"}, "description": "Requested outputs, e.g. docx and pdf."}
+                    },
+                    "additionalProperties": True
+                },
+                "risk": "low",
+                "source": "builtin",
+                "handler": "instructions",
+                "instructions": (
+                    "Use this Skill as the document-authoring and QA playbook. It teaches policy and workflow; it does not replace document_manager or its action-scoped schema.\n\n"
+                    "1. Plan before rendering\n"
+                    "- Identify document type, purpose, audience, reading context, deliverables, source material, factual constraints, and expected length.\n"
+                    "- Build a document plan with metadata, page geometry, a restrained visual system, named styles, header/footer behavior, and semantic blocks.\n"
+                    "- Prefer a coherent template/style system over one-off formatting. Use real headings, real list/field structures, real tables, and Word fields rather than visual imitations.\n"
+                    "- Match form to information: prose for narrative, lists for parallel items, numbered steps for sequence, tables only for genuinely comparable rows/columns, and callouts only for important decisions or warnings.\n\n"
+                    "2. Hebrew and bidi defaults\n"
+                    "- Unless the user asks otherwise, use language he-IL, RTL paragraph reading order, right alignment, A4 portrait, Arial 11 pt body, and professional Hebrew typography.\n"
+                    "- Treat mixed Hebrew/English, punctuation, numbers, URLs, footnotes, tables, headers, and page numbering as explicit bidi QA targets. Do not reverse strings manually.\n"
+                    "- Use RTL at paragraph/table level and bidi font/language properties at run level. Preserve intentional LTR ranges for code, addresses, formulas, and English quotations.\n\n"
+                    "3. Engine choice\n"
+                    "- Start with document_manager doctor when Word/LibreOffice/render availability matters.\n"
+                    "- Use engine=python for portable DOCX creation and ordinary edits: styles, paragraphs, runs, tables, images, sections, headers/footers, fields, TOC placeholders, hyperlinks, bookmarks, and content controls.\n"
+                    "- Use engine=com when Word fidelity or Word-only objects are required: comments, footnotes/endnotes, equations, shapes/text boxes/charts, tracking/revisions, protection, comparison, field/TOC refresh, or advanced Word object-model properties.\n"
+                    "- advanced_com is a structured last-mile escape hatch, never raw Python/VBA. Request its scoped schema, set allow_advanced_com=true, and use it only when a named structured operation cannot express the needed Word feature.\n"
+                    "- Never use computer/UI automation for document work unless the user later explicitly expands scope; this workflow is COM plus independent DOCX generation only.\n\n"
+                    "4. Safe creation and editing\n"
+                    "- For substantial create/edit calls, first request get_tool_info for the exact document_manager action. Keep each edit batch reviewable and deterministic.\n"
+                    "- Existing-document edits should be surgical: locate a paragraph/range/bookmark/table cell, change only the intended content or formatting, and keep backup=true for in-place edits.\n"
+                    "- Never create or run VBA/macros, active OLE/ActiveX, hidden external links, add-ins, printing, email sending, or network-fetched content through the Word tool. Do not place passwords in prose, plans, filenames, or final answers.\n"
+                    "- Use templates when available. Preserve an existing template/document's styles unless the user asks for a redesign.\n\n"
+                    "5. Visual QA loop (mandatory for polished delivery)\n"
+                    "- After every meaningful create/edit batch, call document_manager render. Rendering produces a PDF and one PNG per page.\n"
+                    "- Inspect every page PNG with screen_manager analyze_image; do not spot-check. Look for clipping, overlap, missing Hebrew glyphs, wrong bidi order, table overflow, awkward wrapping, orphan headings, widows, blank pages, distorted images, inconsistent headers/footers, poor hierarchy, density, and excessive empty space.\n"
+                    "- Fix defects with a narrow edit batch, update fields when needed, re-render, and inspect every page again. A structurally valid DOCX has not passed until the latest rendered pages are clean.\n"
+                    "- Comments and some interactive Word features may not appear in PDF; verify those structurally with inspect in addition to visual QA.\n\n"
+                    "6. Export and handoff\n"
+                    "- Export the exact formats requested. Prefer Word COM for fidelity-sensitive PDF/XPS/legacy formats; use LibreOffice only as the documented fallback.\n"
+                    "- Report the DOCX, exports, backup path (when one was created), render/visual-QA status, and any environment-dependent limitation honestly. Do not claim complete visual QA unless every rendered page was inspected after the last edit."
+                )
             }
         }
 

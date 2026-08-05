@@ -1487,6 +1487,14 @@ class ModelContextMixin:
                 )
             if tool_name == "canvas_manager" and canonical_action == "full":
                 info += f"\n\n--- הנחיות שימוש מחייבות עבור canvas_manager ---\n{CANVAS_MANAGER_MODEL_GUIDANCE}"
+            if tool_name == "document_manager":
+                guidance_key = canonical_action if canonical_action != "full" else "create"
+                info += (
+                    "\n\n--- Required document_manager workflow ---\n"
+                    "For substantial authoring, load the built-in Skill `document_authoring` for planning, design, safety, and render-review policy. "
+                    "The action-scoped tool schema remains authoritative. Hebrew he-IL and RTL are defaults; UI automation is not used.\n"
+                    + DOCUMENT_MANAGER_ACTION_GUIDANCE.get(guidance_key, "")
+                )
             if tool_name == "computer_automation_manager" and canonical_action == "full":
                 info += (
                     "\n\nPrimary safe mode: use structured UIA actions, not raw code and not guessed coordinates.\n"

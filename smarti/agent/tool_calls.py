@@ -1519,6 +1519,9 @@ class ToolCallMixin:
         if effective == "memory_operation":
             operation = str((args_dict or {}).get("action") or "").strip().lower()
             return operation not in {"list", "get", "stats"}
+        if effective == "document_manager":
+            operation = str((args_dict or {}).get("action") or "").strip().lower()
+            return operation in {"create", "edit", "render", "export", "compare"}
         return effective in {
             "system_command", "run_project_check", "create_python_tool", "install_mcp",
             "run_mcp", "install_skill", "install_skill_requirements", "run_skill",

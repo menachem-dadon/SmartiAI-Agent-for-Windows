@@ -775,6 +775,7 @@ DEFAULT_MCP_ENV_ALLOWLIST = [
 ]
 
 HIGH_RISK_TOOLS = {
+    "document_manager",
     "system_command", "create_python_tool", "install_mcp", "run_mcp",
     "browser_automation", "computer_automation", "email_manager",
     "capture_screen", "save_screenshot_to_disk", "save_text_file",
@@ -785,6 +786,7 @@ HIGH_RISK_TOOLS = {
 }
 
 CAPABILITY_LABELS = {
+    "office_automation": "אוטומציית Microsoft Word מקומית",
     "file_read": "קריאת קבצים מקומיים",
     "file_search": "חיפוש קבצים ותוכן",
     "file_write": "כתיבת קבצים",
@@ -816,6 +818,7 @@ CAPABILITY_LABELS = {
 }
 
 DEFAULT_POLICY_MATRIX = {
+    "office_automation": "ask",
     "file_read": "ask",
     "file_search": "allow",
     "file_write": "ask",

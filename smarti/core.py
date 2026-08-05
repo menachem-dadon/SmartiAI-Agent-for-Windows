@@ -14,6 +14,7 @@ from .agent.model_context import ModelContextMixin
 from .agent.messaging import MessagingMixin
 from .agent.automation import AutomationMixin
 from .agent.file_tools import FileToolsMixin
+from .agent.document_tools import DocumentToolsMixin
 from .agent.tool_dispatch import ToolDispatchMixin
 from .agent.system_tools import SystemToolsMixin
 from .agent.web_content import WebContentMixin
@@ -35,6 +36,7 @@ class SmartiCore(
     MessagingMixin,
     AutomationMixin,
     FileToolsMixin,
+    DocumentToolsMixin,
     ToolDispatchMixin,
     SystemToolsMixin,
     WebContentMixin,
