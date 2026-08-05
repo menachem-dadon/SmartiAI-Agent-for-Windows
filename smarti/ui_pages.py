@@ -166,6 +166,7 @@ BUILTIN_TOOL_DISPLAY_LABELS = {
     "canvas_manager": "קנבס חזותי",
     "browser_automation_manager": "אוטומציית דפדפן",
     "computer_automation_manager": "אוטומציית מחשב",
+    "document_manager": "יצירה ועריכת מסמכים",
     "create_python_tool": "יצירת כלי Python מותאם",
     "system_command": "הרצת פקודת מערכת",
     "git_status": "בדיקת מצב Git",
@@ -220,6 +221,7 @@ TOOL_CATEGORY_DISPLAY_LABELS = {
     "visual": "קנבס חזותי",
     "email": "דוא\"ל",
     "automation": "אוטומציה",
+    "documents": "מסמכים",
     "extensions": "הרחבות",
     "developer": "מפתחים",
 }

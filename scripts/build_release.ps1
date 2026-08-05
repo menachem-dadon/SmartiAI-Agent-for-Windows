@@ -293,6 +293,7 @@ $VenvPython = Join-Path $BuildVenv "Scripts\python.exe"
 Invoke-Checked -FilePath $VenvPython -Arguments @("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
 Invoke-Checked -FilePath $VenvPython -Arguments @("-m", "pip", "install", "-r", (Join-Path $RepoRoot "requirements.txt"), "-r", (Join-Path $RepoRoot "requirements-build.txt"))
 Invoke-Checked -FilePath $VenvPython -Arguments @("-m", "pip", "check")
+Invoke-Checked -FilePath $VenvPython -Arguments @("-c", "import pymupdf, fitz; print('PyMuPDF visual-QA dependency:', pymupdf.__version__)")
 
 if (-not $SkipRuntime) {
     $prepareArgs = @(

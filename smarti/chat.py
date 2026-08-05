@@ -1347,6 +1347,16 @@ AGENT_TOOL_STAGE_ICON_ALIASES = {
 }
 AGENT_TOOL_STAGE_DISPLAY_NAMES = {
     "context_compaction": "דחיסת הקשר",
+    "document_manager": "יצירה ועריכת מסמכים",
+}
+AGENT_TOOL_ACTION_DISPLAY_NAMES = {
+    ("document_manager", "doctor"): "בדיקת יכולות",
+    ("document_manager", "create"): "יצירת מסמך",
+    ("document_manager", "edit"): "עריכת מסמך",
+    ("document_manager", "inspect"): "בדיקת מסמך",
+    ("document_manager", "render"): "בדיקה חזותית",
+    ("document_manager", "export"): "ייצוא מסמך",
+    ("document_manager", "compare"): "השוואת מסמכים",
 }
 
 def _agent_tool_asset_stem(name):
@@ -1402,6 +1412,9 @@ def _agent_tool_display_name(tool):
     name = action or effective or "tool"
     display_name = AGENT_TOOL_STAGE_DISPLAY_NAMES.get(name)
     if display_name:
+        if manager_action and manager_action != name:
+            action_label = AGENT_TOOL_ACTION_DISPLAY_NAMES.get((name, manager_action), manager_action)
+            return f"{display_name} / {action_label}"
         return display_name
     if manager_action and manager_action != name:
         name = f"{name} / {manager_action}"

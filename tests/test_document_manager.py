@@ -3,8 +3,9 @@ import os
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
-from smarti.agent.document_tools import DocumentToolsMixin
+from smarti.agent.document_tools import DocumentToolsMixin, _WordComSession, _friendly_enum, _WORD_CHART_TYPES
 from smarti.agent.extensions import ExtensionsMixin
 from smarti.agent.tool_dispatch import ToolDispatchMixin
 from smarti.agent.tool_calls import ToolCallMixin
@@ -72,7 +73,10 @@ class DocumentManagerTests(unittest.TestCase):
                     "rows": [["נושא", "פירוט"], ["בדיקה", "תוכן בעברית"]],
                 },
                 {"type": "toc"},
-                {"type": "content_control", "title": "שדה", "tag": "field1", "text": "ערך"},
+                {
+                    "type": "content_control", "control_type": "checkbox",
+                    "title": "אישור", "tag": "approved", "checked": True,
+                },
             ],
         }
 
@@ -104,6 +108,7 @@ class DocumentManagerTests(unittest.TestCase):
         self.assertIn("Arial", styles_xml)
         self.assertIn("w:tblHeader", document_xml)
         self.assertIn("w:sdt", document_xml)
+        self.assertIn("w14:checkbox", document_xml)
         self.assertIn("TOC1", styles_xml)
         self.assertIn("w:tabs", styles_xml)
 
@@ -163,6 +168,75 @@ class DocumentManagerTests(unittest.TestCase):
         self.assertEqual(created.paragraphs[0].style.name, "List Number")
         self.assertEqual(created.tables[0].cell(0, 0)._tc, created.tables[0].cell(0, 1)._tc)
 
+    def test_internal_bookmark_hyperlink_and_friendly_fields(self):
+        path = self._path("links-and-fields.docx")
+        self.tool._python_create_document(path, "", {
+            "blocks": [
+                {"type": "bookmark", "name": "summary_bookmark", "text": "סיכום"},
+                {"type": "hyperlink", "text": "לסיכום", "anchor": "summary_bookmark"},
+                {"type": "field", "field_type": "DATE", "format": "dd/MM/yyyy", "text": "05/08/2026"},
+                {"type": "field", "field_type": "FILENAME", "text": "document.docx"},
+            ],
+        })
+        with zipfile.ZipFile(path, "r") as archive:
+            document_xml = archive.read("word/document.xml").decode("utf-8")
+        self.assertIn('w:name="summary_bookmark"', document_xml)
+        self.assertIn('w:anchor="summary_bookmark"', document_xml)
+        self.assertIn('DATE \\@ "dd/MM/yyyy"', document_xml)
+        self.assertIn("FILENAME", document_xml)
+
+    def test_friendly_com_enums_validate_before_word_launch(self):
+        self.assertEqual(_friendly_enum("column_clustered", _WORD_CHART_TYPES, "chart_type", 51), 51)
+        self.tool._document_validate_blocks([
+            {"type": "content_control", "control_type": "checkbox"},
+            {
+                "type": "chart", "chart_type": "column_clustered",
+                "categories": ["א", "ב"], "series": [{"name": "נתונים", "values": [1, 2]}],
+            },
+        ], "com")
+        with self.assertRaisesRegex(ValueError, "Unsupported chart_type"):
+            self.tool._document_validate_blocks([{"type": "chart", "chart_type": "guess"}], "com")
+
+    def test_post_action_failure_keeps_created_document(self):
+        path = self._path("created-with-render-warning.docx")
+        with mock.patch.object(self.tool, "_document_render", side_effect=RuntimeError("render unavailable")):
+            result = self.tool._document_create({
+                "engine": "python",
+                "output_path": path,
+                "document": {"blocks": [{"type": "paragraph", "text": "נשמר"}]},
+                "render_after": True,
+            }, "python")
+        self.assertEqual(result["status"], "created_with_warnings")
+        self.assertTrue(os.path.isfile(path))
+        self.assertEqual(result["post_action_errors"][0]["stage"], "render")
+        self.assertIn("instead of recreating", result["warnings"][0])
+
+    def test_word_session_layout_printer_is_instance_local(self):
+        session = _WordComSession()
+        client = mock.MagicMock()
+        app = mock.MagicMock()
+        app.ActivePrinter = "Microsoft Print to PDF"
+        client.DispatchEx.return_value = app
+        ole = app.Dialogs.return_value._oleobj_
+        ole.GetIDsOfNames.side_effect = {
+            "Printer": 1, "DoNotSetAsSysDefault": 4, "Execute": 32001,
+        }.get
+        with (
+            mock.patch(
+                "smarti.agent.document_tools._safe_layout_printer",
+                return_value="Microsoft Print to PDF on PORTPROMPT:",
+            ),
+            mock.patch("win32print.GetDefaultPrinter", side_effect=["Network printer", "Network printer"]),
+            mock.patch("win32print.SetDefaultPrinter") as set_default,
+        ):
+            result = session._launch_word_with_layout_printer(client)
+            session.app = result
+            session._configure_layout_printer()
+        self.assertTrue(session.printer_isolated)
+        self.assertIs(result, app)
+        self.assertEqual(ole.Invoke.call_count, 3)
+        set_default.assert_not_called()
+
     def test_schema_catalog_and_skill_expose_workflow(self):
         schema = BUILTIN_TOOL_SCHEMAS["document_manager"]["inputSchema"]
         self.assertEqual(schema["properties"]["action"]["enum"], (
@@ -171,6 +245,9 @@ class DocumentManagerTests(unittest.TestCase):
         self.assertIn("document_manager", PUBLIC_BUILTIN_TOOLS)
         self.assertEqual(TOOL_CATEGORIES["document_manager"], "documents")
         self.assertIn("advanced_com", DOCUMENT_MANAGER_ACTION_GUIDANCE["edit"])
+        self.assertIn("column_clustered", DOCUMENT_MANAGER_ACTION_GUIDANCE["create"])
+        block_schema = schema["properties"]["document"]["properties"]["blocks"]["items"]
+        self.assertIn("checkbox", block_schema["properties"]["control_type"]["description"])
         self.assertIn("render_after", TOOL_ACTION_FIELDS["document_manager"]["create"])
 
         skill = _ExtensionHarness()._builtin_skill_specs()["document_authoring"]

@@ -17,6 +17,66 @@ _WORD_FORMATS = {
     "odt": 23,
 }
 _WORD_FIXED_FORMATS = {"pdf": 17, "xps": 18}
+_WORD_CONTENT_CONTROL_TYPES = {
+    "rich_text": 0,
+    "richtext": 0,
+    "text": 1,
+    "plain_text": 1,
+    "plaintext": 1,
+    "picture": 2,
+    "combo_box": 3,
+    "combobox": 3,
+    "dropdown_list": 4,
+    "dropdown": 4,
+    "building_block_gallery": 5,
+    "date": 6,
+    "group": 7,
+    "checkbox": 8,
+    "check_box": 8,
+    "repeating_section": 9,
+}
+_WORD_CHART_TYPES = {
+    "area": 1,
+    "area_stacked": 76,
+    "area_stacked_100": 77,
+    "bar_clustered": 57,
+    "bar_stacked": 58,
+    "bar_stacked_100": 59,
+    "bubble": 15,
+    "column_clustered": 51,
+    "column_stacked": 52,
+    "column_stacked_100": 53,
+    "doughnut": -4120,
+    "doughnut_exploded": 80,
+    "line": 4,
+    "line_markers": 65,
+    "line_stacked": 63,
+    "line_stacked_100": 64,
+    "pie": 5,
+    "pie_exploded": 69,
+    "radar": -4151,
+    "radar_filled": 82,
+    "radar_markers": 81,
+    "scatter": -4169,
+    "scatter_lines": 74,
+    "scatter_lines_no_markers": 75,
+    "scatter_smooth": 72,
+    "scatter_smooth_no_markers": 73,
+}
+_WORD_LEGEND_POSITIONS = {
+    "bottom": -4107,
+    "corner": 2,
+    "left": -4131,
+    "right": -4152,
+    "top": -4160,
+}
+_SAFE_WORD_FIELD_TYPES = {
+    "AUTHOR", "COMMENTS", "CREATEDATE", "DATE", "FILENAME", "FILESIZE",
+    "KEYWORDS", "LASTSAVEDBY", "NUMCHARS", "NUMPAGES", "NUMWORDS", "PAGE",
+    "PAGEREF", "REF", "REVNUM", "SAVEDATE", "SECTION", "SECTIONPAGES",
+    "SEQ", "STYLEREF", "SUBJECT", "TIME", "TITLE", "TOC",
+}
+_WORD_PRINTER_LOCK = threading.Lock()
 _WORD_BUILTIN_STYLES = {
     "normal": -1,
     "heading1": -2, "heading2": -3, "heading3": -4,
@@ -91,6 +151,129 @@ def _safe_com_result(value, depth=0):
     return {"type": type(value).__name__, "value": str(value)[:1000]}
 
 
+def _friendly_enum(value, values, label, default):
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a friendly name or numeric Office constant.")
+    if isinstance(value, (int, float)) and int(value) == value:
+        return int(value)
+    text = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    if text in values:
+        return values[text]
+    allowed = ", ".join(sorted(values))
+    raise ValueError(f"Unsupported {label} '{value}'. Use a numeric Office constant or one of: {allowed}.")
+
+
+def _bookmark_name(value):
+    clean = re.sub(r"[^A-Za-z0-9_]", "_", str(value or "").strip())[:40]
+    return clean or "bookmark"
+
+
+def _pymupdf_module():
+    try:
+        import pymupdf
+        return pymupdf
+    except Exception:
+        try:
+            import fitz
+            return fitz
+        except Exception as exc:
+            raise RuntimeError(
+                "PyMuPDF is required for PDF inspection and page-PNG visual QA. "
+                "Install Smarti requirements (python -m pip install PyMuPDF)."
+            ) from exc
+
+
+def _safe_layout_printer():
+    """Return a local virtual printer Word can use without contacting a WSD device."""
+    if platform.system() != "Windows":
+        return None
+    try:
+        import win32print
+        flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
+        installed = {
+            str(item[2]).strip().casefold(): str(item[2]).strip()
+            for item in win32print.EnumPrinters(flags)
+            if len(item) > 2 and str(item[2]).strip()
+        }
+        printer_specs = []
+        for name in installed.values():
+            handle = win32print.OpenPrinter(name)
+            try:
+                port = str(win32print.GetPrinter(handle, 2).get("pPortName") or "").strip()
+            finally:
+                win32print.ClosePrinter(handle)
+            printer_specs.append((name, port))
+        # A local null-port driver is ideal for layout: it never prompts for a
+        # file name. XPS/PDF remain fallbacks on systems without OneNote.
+        preferred_names = (
+            "OneNote (Desktop)", "Microsoft XPS Document Writer", "Microsoft Print to PDF",
+        )
+        for name, port in printer_specs:
+            if port.casefold() == "nul:":
+                return f"{name} on {port}"
+        for preferred in preferred_names:
+            for name, port in printer_specs:
+                if name.casefold() == preferred.casefold():
+                    return f"{name} on {port}" if port else name
+    except Exception:
+        logging.debug("Could not enumerate local layout printers.", exc_info=True)
+    return None
+
+
+def _winword_pids():
+    if platform.system() != "Windows":
+        return set()
+    result = set()
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", wintypes.WPARAM),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+        kernel32.Process32FirstW.restype = wintypes.BOOL
+        kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
+        kernel32.Process32NextW.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+        invalid_handle = ctypes.c_void_p(-1).value
+        if snapshot == invalid_handle:
+            return result
+        try:
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(entry)
+            more = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while more:
+                if str(entry.szExeFile).casefold() == "winword.exe":
+                    result.add(int(entry.th32ProcessID))
+                more = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            kernel32.CloseHandle(snapshot)
+    except Exception:
+        logging.debug("Could not enumerate WINWORD processes.", exc_info=True)
+    return result
+
+
 class _WordComSession:
     """Owns one isolated WINWORD instance and only ever kills that instance."""
 
@@ -103,6 +286,9 @@ class _WordComSession:
         self.pid = None
         self.timer = None
         self.timed_out = False
+        self.layout_printer = None
+        self.printer_isolated = False
+        self._word_pids_before = set()
 
     def __enter__(self):
         try:
@@ -113,7 +299,14 @@ class _WordComSession:
         self.pythoncom = pythoncom
         pythoncom.CoInitialize()
         try:
-            self.app = win32com.client.DispatchEx("Word.Application")
+            self._word_pids_before = _winword_pids()
+            self.app = self._launch_word_with_layout_printer(win32com.client)
+            for _attempt in range(10):
+                new_pids = _winword_pids() - self._word_pids_before
+                if len(new_pids) == 1:
+                    self.pid = next(iter(new_pids))
+                    break
+                threading.Event().wait(0.05)
             self.app.Visible = self.visible
             self.app.DisplayAlerts = 0
             # msoAutomationSecurityForceDisable. Never execute document macros.
@@ -123,22 +316,72 @@ class _WordComSession:
                 self.app.Options.SaveInterval = 0
             except Exception:
                 pass
-            try:
-                import win32process
-                _thread_id, self.pid = win32process.GetWindowThreadProcessId(int(self.app.Hwnd))
-            except Exception:
-                self.pid = None
             self.timer = threading.Timer(self.timeout_seconds, self._on_timeout)
             self.timer.daemon = True
             self.timer.start()
             return self
         except Exception:
+            if self.app is not None:
+                try:
+                    self.app.Quit(SaveChanges=0)
+                except Exception:
+                    pass
+                self.app = None
             pythoncom.CoUninitialize()
             raise
 
+    def _launch_word_with_layout_printer(self, win32_client):
+        self.layout_printer = _safe_layout_printer()
+        return win32_client.DispatchEx("Word.Application")
+
+    def _configure_layout_printer(self):
+        """Select a local virtual printer in Word without changing Windows."""
+        if not self.layout_printer:
+            return
+        try:
+            import pythoncom
+            import win32print
+            printer_name = self.layout_printer.split(" on ", 1)[0].strip()
+            with _WORD_PRINTER_LOCK:
+                original_default = win32print.GetDefaultPrinter()
+                dialog = self.app.Dialogs(97)  # wdDialogFilePrintSetup
+                ole = dialog._oleobj_
+                ole.Invoke(
+                    ole.GetIDsOfNames("Printer"), 0,
+                    pythoncom.DISPATCH_PROPERTYPUT, 0,
+                    self.layout_printer,
+                )
+                ole.Invoke(
+                    ole.GetIDsOfNames("DoNotSetAsSysDefault"), 0,
+                    pythoncom.DISPATCH_PROPERTYPUT, 0,
+                    True,
+                )
+                ole.Invoke(
+                    ole.GetIDsOfNames("Execute"), 0,
+                    pythoncom.DISPATCH_METHOD, 1,
+                )
+                current_default = win32print.GetDefaultPrinter()
+                if current_default != original_default:
+                    win32print.SetDefaultPrinter(original_default)
+                    raise RuntimeError("Word changed the Windows default printer unexpectedly; it was restored.")
+                active = str(self.app.ActivePrinter or "").strip()
+                self.printer_isolated = active.casefold().startswith(printer_name.casefold())
+                if not self.printer_isolated:
+                    raise RuntimeError(f"Word kept an unexpected active printer: {active or 'unknown'}")
+        except Exception:
+            logging.warning(
+                "Could not isolate Word layout from the default printer; continuing without printer override.",
+                exc_info=True,
+            )
+
     def _on_timeout(self):
         self.timed_out = True
+        self._terminate_owned_word()
+
+    def _terminate_owned_word(self):
         if not self.pid:
+            return
+        if self.pid not in _winword_pids() or self.pid in self._word_pids_before:
             return
         try:
             import win32api
@@ -156,6 +399,8 @@ class _WordComSession:
         if template_path:
             kwargs["Template"] = template_path
         self.document = self.app.Documents.Add(**kwargs)
+        self._capture_document_pid()
+        self._configure_layout_printer()
         return self.document
 
     def open_document(self, path, read_only=False, password=""):
@@ -171,7 +416,19 @@ class _WordComSession:
         if password:
             kwargs["PasswordDocument"] = password
         self.document = self.app.Documents.Open(**kwargs)
+        self._capture_document_pid()
+        self._configure_layout_printer()
         return self.document
+
+    def _capture_document_pid(self):
+        if self.pid or self.document is None:
+            return
+        try:
+            import win32process
+            hwnd = int(self.document.ActiveWindow.Hwnd)
+            _thread_id, self.pid = win32process.GetWindowThreadProcessId(hwnd)
+        except Exception:
+            pass
 
     def close_document(self, save_changes=False):
         if self.document is None:
@@ -190,8 +447,14 @@ class _WordComSession:
             try:
                 self.app.Quit(SaveChanges=0)
             except Exception:
-                pass
+                logging.warning("Could not close the Smarti-owned Word instance cleanly.", exc_info=True)
         self.app = None
+        if self.pid:
+            for _attempt in range(10):
+                if self.pid not in _winword_pids():
+                    break
+                threading.Event().wait(0.05)
+            self._terminate_owned_word()
         if self.pythoncom is not None:
             try:
                 self.pythoncom.CoUninitialize()
@@ -215,6 +478,7 @@ class DocumentToolsMixin:
                 return _json_text(self._document_doctor())
 
             engine = self._document_choose_engine(action, args)
+            self._document_validate_request(action, args, engine)
             capabilities = ["file_read"] if action in {"inspect", "render", "export", "compare", "edit"} else []
             if action in {"create", "edit", "render", "export", "compare"}:
                 capabilities.append("file_write")
@@ -272,10 +536,11 @@ class DocumentToolsMixin:
         except Exception:
             python_docx = None
         try:
-            import fitz
-            pymupdf = getattr(fitz, "VersionBind", "installed")
+            fitz = _pymupdf_module()
+            pymupdf = getattr(fitz, "VersionBind", None) or getattr(fitz, "__version__", "installed")
         except Exception:
             pymupdf = None
+        printer = self._word_printer_diagnostics()
         return {
             "status": "ok",
             "platform": platform.system(),
@@ -283,6 +548,7 @@ class DocumentToolsMixin:
             "python_docx": python_docx,
             "libreoffice": libreoffice,
             "pymupdf": pymupdf,
+            "word_layout_printer": printer,
             "default_language": "he-IL",
             "default_direction": "rtl",
             "ui_automation": False,
@@ -292,6 +558,22 @@ class DocumentToolsMixin:
                 "existing_document_backup": "enabled-by-default",
             },
         }
+
+    @staticmethod
+    def _word_printer_diagnostics():
+        diagnostics = {
+            "default": None,
+            "isolated_to": _safe_layout_printer(),
+            "changes_windows_default": False,
+        }
+        if platform.system() != "Windows":
+            return diagnostics
+        try:
+            import win32print
+            diagnostics["default"] = win32print.GetDefaultPrinter()
+        except Exception:
+            pass
+        return diagnostics
 
     @staticmethod
     def _word_com_available():
@@ -381,6 +663,110 @@ class DocumentToolsMixin:
             for block in (plan.get("blocks") or [])
         )
 
+    def _document_validate_request(self, action, args, engine):
+        if action == "create":
+            plan = args.get("document") if isinstance(args.get("document"), dict) else {}
+            self._document_validate_blocks(plan.get("blocks") or plan.get("sections") or [], engine)
+        elif action == "edit":
+            for operation in args.get("operations") or []:
+                if not isinstance(operation, dict):
+                    raise ValueError("edit.operations entries must be objects.")
+                op = str(operation.get("op") or operation.get("type") or "").lower()
+                if op in {"append", "append_blocks", "insert", "insert_blocks"}:
+                    self._document_validate_blocks(operation.get("blocks") or [], engine)
+                elif op in {"add_text_box", "add_shape", "add_chart", "add_equation"}:
+                    self._document_validate_blocks([{**operation, "type": op.replace("add_", "")}], engine)
+
+    def _document_validate_blocks(self, blocks, engine):
+        if not isinstance(blocks, list):
+            raise ValueError("document.blocks must be an array.")
+        supported = _PYTHON_BLOCK_TYPES if engine == "python" else _PYTHON_BLOCK_TYPES | _COM_ONLY_BLOCK_TYPES
+        for index, block in enumerate(blocks):
+            if not isinstance(block, dict):
+                raise ValueError(f"document.blocks[{index}] must be an object.")
+            kind = str(block.get("type") or "paragraph").strip().lower()
+            if kind not in supported:
+                suffix = "; use engine='com'" if kind in _COM_ONLY_BLOCK_TYPES else ""
+                raise ValueError(f"Unsupported block type '{kind}' for engine='{engine}'{suffix}.")
+            if kind == "content_control" and engine == "com":
+                _friendly_enum(block.get("control_type"), _WORD_CONTENT_CONTROL_TYPES, "control_type", 0)
+            elif kind == "chart":
+                _friendly_enum(block.get("chart_type"), _WORD_CHART_TYPES, "chart_type", 51)
+                self._validate_chart_data(block)
+            elif kind == "hyperlink":
+                self._hyperlink_target(block.get("url"), block.get("anchor"))
+            elif kind == "field":
+                self._word_field_code(block)
+            for run in block.get("runs") or []:
+                if not isinstance(run, dict):
+                    continue
+                if run.get("hyperlink"):
+                    self._hyperlink_target(run.get("hyperlink"), run.get("anchor"))
+                if run.get("field"):
+                    self._word_field_code({"code": run.get("field")})
+
+    @staticmethod
+    def _validate_chart_data(block):
+        categories = block.get("categories") or []
+        series = block.get("series") or []
+        if categories and not isinstance(categories, list):
+            raise ValueError("chart.categories must be an array.")
+        if series and not isinstance(series, list):
+            raise ValueError("chart.series must be an array.")
+        if block.get("legend_position") is not None:
+            _friendly_enum(block.get("legend_position"), _WORD_LEGEND_POSITIONS, "legend_position", -4107)
+        for index, item in enumerate(series):
+            if not isinstance(item, dict):
+                raise ValueError(f"chart.series[{index}] must be an object.")
+            values = item.get("values") or []
+            if not isinstance(values, list):
+                raise ValueError(f"chart.series[{index}].values must be an array.")
+            if categories and values and len(values) != len(categories):
+                raise ValueError(
+                    f"chart.series[{index}] has {len(values)} values but chart.categories has {len(categories)} entries."
+                )
+
+    @staticmethod
+    def _hyperlink_target(url=None, anchor=None):
+        url = str(url or "").strip()
+        anchor = str(anchor or "").strip()
+        if url.startswith("#") and not anchor:
+            anchor, url = url[1:], ""
+        if anchor:
+            return "", _bookmark_name(anchor)
+        if re.match(r"^(https?|mailto):", url, flags=re.I):
+            return url, ""
+        raise ValueError("Hyperlinks require an http/https/mailto URL or an internal bookmark anchor.")
+
+    @staticmethod
+    def _word_field_code(spec):
+        spec = spec if isinstance(spec, dict) else {}
+        code = str(spec.get("code") or "").strip()
+        field_type = str(spec.get("field_type") or "").strip().upper()
+        if code:
+            match = re.match(r"^\s*([A-Za-z]+)", code)
+            field_type = match.group(1).upper() if match else ""
+            if len(code) > 500 or any(char in code for char in ("\r", "\n", "\x00")):
+                raise ValueError("Word field code is too long or contains invalid control characters.")
+        if field_type not in _SAFE_WORD_FIELD_TYPES:
+            allowed = ", ".join(sorted(_SAFE_WORD_FIELD_TYPES))
+            raise ValueError(f"Unsupported or unsafe Word field type '{field_type or code}'. Allowed: {allowed}.")
+        if code:
+            return code
+        parts = [field_type]
+        target = str(spec.get("bookmark") or spec.get("anchor") or spec.get("target") or "").strip()
+        if field_type in {"REF", "PAGEREF", "STYLEREF", "SEQ"}:
+            if not target:
+                raise ValueError(f"field_type={field_type} requires bookmark/anchor/target.")
+            parts.append(_bookmark_name(target))
+        fmt = str(spec.get("format") or "").replace('"', "").replace("\r", " ").replace("\n", " ")[:100]
+        if fmt:
+            switch = "\\@" if field_type in {"CREATEDATE", "DATE", "SAVEDATE", "TIME"} else "\\#"
+            parts.extend((switch, f'"{fmt}"'))
+        if field_type == "FILENAME" and bool(spec.get("include_path")):
+            parts.append("\\p")
+        return " ".join(parts)
+
     def _document_resolve_path(self, value, *, mode="read", default_name=""):
         text = os.path.expandvars(os.path.expanduser(str(value or "").strip().strip('"')))
         if not text:
@@ -447,7 +833,10 @@ class DocumentToolsMixin:
         else:
             raise ValueError("LibreOffice is an export/render engine; use python or com for create.")
         result.update({"engine": engine, "output_path": output, "replaced_file_backup": replaced_backup})
-        result.update(self._document_post_actions(output, args))
+        post_actions = self._document_post_actions(output, args)
+        result.update(post_actions)
+        if post_actions.get("post_action_errors"):
+            result["status"] = "created_with_warnings"
         return result
 
     def _document_edit(self, args, engine):
@@ -471,11 +860,16 @@ class DocumentToolsMixin:
         else:
             raise ValueError("LibreOffice is an export/render engine; use python or com for edit.")
         result.update({"engine": engine, "output_path": output, "backup_path": backup})
-        result.update(self._document_post_actions(output, args))
+        post_actions = self._document_post_actions(output, args)
+        result.update(post_actions)
+        if post_actions.get("post_action_errors"):
+            result["status"] = "edited_with_warnings"
         return result
 
     def _document_post_actions(self, path, args):
         payload = {}
+        errors = []
+        exported_pdf = None
         exports = args.get("export_formats") or []
         if isinstance(exports, str):
             exports = [exports]
@@ -486,19 +880,36 @@ class DocumentToolsMixin:
                 target = os.path.splitext(path)[0] + "." + fmt
                 if os.path.normcase(target) == os.path.normcase(path):
                     target = os.path.splitext(path)[0] + "-export." + fmt
-                self._document_prepare_output(target, bool(args.get("overwrite")), backup_existing=True)
-                engine = self._document_choose_engine("export", {"path": path, "format": fmt, "engine": "auto"})
-                payload["exports"].append(self._document_export_internal(path, target, fmt, engine, args))
+                try:
+                    self._document_prepare_output(target, bool(args.get("overwrite")), backup_existing=True)
+                    engine = self._document_choose_engine("export", {"path": path, "format": fmt, "engine": "auto"})
+                    export_info = self._document_export_internal(path, target, fmt, engine, args)
+                    payload["exports"].append(export_info)
+                    if fmt == "pdf":
+                        exported_pdf = export_info.get("output_path")
+                except Exception as exc:
+                    logging.exception("Document post-create/edit export failed for format %s", fmt)
+                    errors.append({"stage": "export", "format": fmt, "error": str(exc)[:1000]})
         if args.get("render_after"):
             render_args = {
-                "path": path,
+                "path": exported_pdf or path,
                 "output_dir": args.get("output_dir"),
                 "dpi": args.get("dpi", 144),
                 "include_pdf": True,
                 "page_limit": args.get("page_limit", 100),
             }
-            render_engine = self._document_choose_engine("render", {**render_args, "engine": "auto"})
-            payload["render"] = self._document_render(render_args, render_engine)
+            try:
+                render_engine = self._document_choose_engine("render", {**render_args, "engine": "auto"})
+                payload["render"] = self._document_render(render_args, render_engine)
+            except Exception as exc:
+                logging.exception("Document post-create/edit visual render failed")
+                errors.append({"stage": "render", "error": str(exc)[:1000]})
+        if errors:
+            payload["post_action_errors"] = errors
+            payload["warnings"] = [
+                "The Word document was saved successfully, but one or more requested post-actions failed. "
+                "Use the returned output_path instead of recreating the document."
+            ]
         return payload
 
     # ------------------------- python-docx engine -------------------------
@@ -707,16 +1118,28 @@ class DocumentToolsMixin:
                 if not isinstance(run_spec, dict):
                     run_spec = {"text": str(run_spec)}
                 if run_spec.get("hyperlink"):
-                    self._python_add_hyperlink(paragraph, str(run_spec.get("text") or ""), str(run_spec["hyperlink"]), run_spec, api)
+                    self._python_add_hyperlink(
+                        paragraph,
+                        str(run_spec.get("text") or ""),
+                        str(run_spec["hyperlink"]),
+                        run_spec,
+                        api,
+                    )
                 elif run_spec.get("field"):
-                    self._python_add_field(paragraph, str(run_spec["field"]), str(run_spec.get("text") or ""), api)
+                    self._python_add_field(
+                        paragraph,
+                        self._word_field_code({"code": run_spec["field"]}),
+                        str(run_spec.get("text") or ""),
+                        api,
+                    )
                 else:
                     run = paragraph.add_run(str(run_spec.get("text") or ""))
                     self._python_apply_run(run, run_spec, api)
         elif kind == "hyperlink":
-            self._python_add_hyperlink(paragraph, str(block.get("text") or block.get("url") or ""), str(block.get("url") or ""), block, api)
+            link_text = str(block.get("text") or block.get("url") or block.get("anchor") or "")
+            self._python_add_hyperlink(paragraph, link_text, str(block.get("url") or ""), block, api)
         elif kind == "field":
-            self._python_add_field(paragraph, str(block.get("code") or ""), str(block.get("text") or ""), api)
+            self._python_add_field(paragraph, self._word_field_code(block), str(block.get("text") or ""), api)
         else:
             run = paragraph.add_run(str(block.get("text") or ""))
             self._python_apply_run(run, block, api)
@@ -851,16 +1274,19 @@ class DocumentToolsMixin:
             r_pr.append(rtl)
 
     def _python_add_hyperlink(self, paragraph, text, url, spec, api):
-        if not re.match(r"^(https?|mailto):", url, flags=re.I):
-            raise ValueError("Hyperlinks must use http, https, or mailto.")
+        url, anchor = self._hyperlink_target(url, spec.get("anchor"))
         OxmlElement, qn = api["OxmlElement"], api["qn"]
-        relationship = paragraph.part.relate_to(
-            url,
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
-            is_external=True,
-        )
         hyperlink = OxmlElement("w:hyperlink")
-        hyperlink.set(qn("r:id"), relationship)
+        hyperlink.set(qn("w:history"), "1")
+        if anchor:
+            hyperlink.set(qn("w:anchor"), anchor)
+        else:
+            relationship = paragraph.part.relate_to(
+                url,
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+                is_external=True,
+            )
+            hyperlink.set(qn("r:id"), relationship)
         run = paragraph.add_run(text)
         self._python_apply_run(run, spec, api)
         r_pr = run._r.get_or_add_rPr()
@@ -911,7 +1337,7 @@ class DocumentToolsMixin:
     @staticmethod
     def _python_wrap_bookmark(paragraph, name, api):
         OxmlElement, qn = api["OxmlElement"], api["qn"]
-        clean = re.sub(r"[^A-Za-z0-9_]", "_", name)[:40] or "bookmark"
+        clean = _bookmark_name(name)
         bookmark_id = str(abs(hash((clean, paragraph.text))) % 2000000000)
         start = OxmlElement("w:bookmarkStart")
         start.set(qn("w:id"), bookmark_id)
@@ -1011,7 +1437,12 @@ class DocumentToolsMixin:
                 for item in spec["runs"]:
                     item = item if isinstance(item, dict) else {"text": str(item)}
                     if item.get("field"):
-                        self._python_add_field(paragraph, str(item["field"]), str(item.get("text") or ""), api)
+                        self._python_add_field(
+                            paragraph,
+                            self._word_field_code({"code": item["field"]}),
+                            str(item.get("text") or ""),
+                            api,
+                        )
                     else:
                         run = paragraph.add_run(str(item.get("text") or ""))
                         self._python_apply_run(run, item, api)
@@ -1025,15 +1456,44 @@ class DocumentToolsMixin:
 
     def _python_add_content_control(self, paragraph, spec, api):
         OxmlElement, qn = api["OxmlElement"], api["qn"]
+        control_type = _friendly_enum(
+            spec.get("control_type"), _WORD_CONTENT_CONTROL_TYPES, "control_type", 0
+        )
         sdt = OxmlElement("w:sdt")
         sdt_pr = OxmlElement("w:sdtPr")
         alias = OxmlElement("w:alias")
         alias.set(qn("w:val"), str(spec.get("title") or "Content"))
         tag = OxmlElement("w:tag")
         tag.set(qn("w:val"), str(spec.get("tag") or "smarti"))
-        sdt_pr.extend([alias, tag, OxmlElement("w:text")])
+        sdt_pr.extend([alias, tag])
+        if control_type == 1:
+            sdt_pr.append(OxmlElement("w:text"))
+        elif control_type == 2:
+            sdt_pr.append(OxmlElement("w:picture"))
+        elif control_type in {3, 4}:
+            chooser = OxmlElement("w:comboBox" if control_type == 3 else "w:dropDownList")
+            for raw_item in spec.get("items") or []:
+                item = raw_item if isinstance(raw_item, dict) else {"display": raw_item, "value": raw_item}
+                option = OxmlElement("w:listItem")
+                option.set(qn("w:displayText"), str(item.get("display") or item.get("text") or item.get("value") or ""))
+                option.set(qn("w:value"), str(item.get("value") or item.get("display") or item.get("text") or ""))
+                chooser.append(option)
+            sdt_pr.append(chooser)
+        elif control_type == 6:
+            date = OxmlElement("w:date")
+            date_format = OxmlElement("w:dateFormat")
+            date_format.set(qn("w:val"), str(spec.get("date_format") or "dd/MM/yyyy"))
+            date.append(date_format)
+            sdt_pr.append(date)
+        elif control_type == 8:
+            checkbox = OxmlElement("w14:checkbox")
+            checked = OxmlElement("w14:checked")
+            checked.set(qn("w14:val"), "1" if spec.get("checked") else "0")
+            checkbox.append(checked)
+            sdt_pr.append(checkbox)
         content = OxmlElement("w:sdtContent")
-        run = paragraph.add_run(str(spec.get("text") or spec.get("placeholder") or ""))
+        default_text = "☒" if spec.get("checked") else "☐" if control_type == 8 else ""
+        run = paragraph.add_run(str(spec.get("text") or spec.get("placeholder") or default_text))
         self._python_apply_run(run, spec, api)
         content.append(run._r)
         sdt.extend([sdt_pr, content])
@@ -1284,7 +1744,6 @@ class DocumentToolsMixin:
                 style.Font.Bold = bold
                 style.Font.Color = self._com_rgb(color)
                 style.ParagraphFormat.ReadingOrder = 0
-                style.ParagraphFormat.Alignment = 2
             except Exception:
                 pass
         self._com_prepare_toc_styles(document)
@@ -1301,7 +1760,6 @@ class DocumentToolsMixin:
             try:
                 style = document.Styles(style_ref)
                 style.ParagraphFormat.ReadingOrder = 0
-                style.ParagraphFormat.Alignment = 2
             except Exception:
                 pass
 
@@ -1314,7 +1772,10 @@ class DocumentToolsMixin:
         except Exception:
             style = document.Styles.Add(Name=name, Type=1 if str(spec.get("type") or "paragraph") == "paragraph" else 2)
         self._com_apply_font(style.Font, spec)
-        self._com_apply_paragraph_format(style.ParagraphFormat, spec)
+        # Setting Alignment on a Style.ParagraphFormat can make current Word
+        # builds query/restart the printer-backed layout service. Paragraphs
+        # receive direction/alignment safely when the style is applied.
+        self._com_apply_paragraph_format(style.ParagraphFormat, spec, apply_direction=False)
         if spec.get("based_on"):
             try:
                 style.BaseStyle = self._com_style_ref(spec["based_on"])
@@ -1352,10 +1813,24 @@ class DocumentToolsMixin:
         if spec.get("color"):
             font.Color = self._com_rgb(spec["color"])
 
-    def _com_apply_paragraph_format(self, fmt, spec):
-        alignment = str(spec.get("alignment") or ("right" if spec.get("rtl", True) else "left")).lower()
-        fmt.Alignment = {"left": 0, "center": 1, "right": 2, "justify": 3}.get(alignment, 2)
-        fmt.ReadingOrder = 0 if spec.get("rtl", True) else 1
+    def _com_apply_paragraph_format(self, fmt, spec, apply_direction=True, range_obj=None):
+        if apply_direction:
+            alignment = str(spec.get("alignment") or ("right" if spec.get("rtl", True) else "left")).lower()
+            fmt.ReadingOrder = 0 if spec.get("rtl", True) else 1
+            if range_obj is None:
+                fmt.Alignment = {"left": 0, "center": 1, "right": 2, "justify": 3}.get(alignment, 2)
+            else:
+                import pythoncom
+                command = {
+                    "left": "LeftPara", "center": "CenterPara",
+                    "right": "RightPara", "justify": "JustifyPara",
+                }.get(alignment, "RightPara")
+                range_obj.Select()
+                ole = range_obj.Application.WordBasic._oleobj_
+                ole.Invoke(
+                    ole.GetIDsOfNames(command), 0,
+                    pythoncom.DISPATCH_METHOD, 1,
+                )
         for key, attr in (
             ("space_before_pt", "SpaceBefore"), ("space_after_pt", "SpaceAfter"),
         ):
@@ -1408,17 +1883,35 @@ class DocumentToolsMixin:
                     self._com_apply_font(run_range.Font, item)
                     run_range.LanguageID = 1037
                     if item.get("hyperlink"):
-                        url = str(item["hyperlink"])
-                        if not re.match(r"^(https?|mailto):", url, flags=re.I):
-                            raise ValueError("Hyperlinks must use http, https, or mailto.")
-                        document.Hyperlinks.Add(Anchor=run_range, Address=url, TextToDisplay=text)
+                        url, bookmark = self._hyperlink_target(item.get("hyperlink"), item.get("anchor"))
+                        document.Hyperlinks.Add(
+                            Anchor=run_range,
+                            Address=url,
+                            SubAddress=bookmark,
+                            TextToDisplay=text,
+                        )
+                    elif item.get("field"):
+                        document.Fields.Add(
+                            Range=run_range,
+                            Type=-1,
+                            Text=self._word_field_code({"code": item.get("field")}),
+                            PreserveFormatting=True,
+                        )
             elif kind == "hyperlink":
-                url = str(block.get("url") or "")
-                if not re.match(r"^(https?|mailto):", url, flags=re.I):
-                    raise ValueError("Hyperlinks must use http, https, or mailto.")
-                document.Hyperlinks.Add(Anchor=target, Address=url, TextToDisplay=str(block.get("text") or url))
+                url, bookmark = self._hyperlink_target(block.get("url"), block.get("anchor"))
+                document.Hyperlinks.Add(
+                    Anchor=target,
+                    Address=url,
+                    SubAddress=bookmark,
+                    TextToDisplay=str(block.get("text") or url or bookmark),
+                )
             elif kind == "field":
-                document.Fields.Add(Range=target, Type=-1, Text=str(block.get("code") or ""), PreserveFormatting=True)
+                document.Fields.Add(
+                    Range=target,
+                    Type=-1,
+                    Text=self._word_field_code(block),
+                    PreserveFormatting=True,
+                )
             else:
                 text = str(block.get("text") or "")
                 target.InsertAfter(text)
@@ -1436,10 +1929,12 @@ class DocumentToolsMixin:
             elif block.get("style"):
                 paragraph.Range.Style = self._com_style_ref(block["style"])
             self._com_apply_font(paragraph.Range.Font, block)
-            self._com_apply_paragraph_format(paragraph.Format, block)
+            self._com_apply_paragraph_format(
+                paragraph.Range.ParagraphFormat, block, range_obj=paragraph.Range
+            )
             paragraph.Range.LanguageID = 1037
             if kind == "bookmark":
-                document.Bookmarks.Add(re.sub(r"\W", "_", str(block.get("name") or "bookmark"))[:40], paragraph_range)
+                document.Bookmarks.Add(_bookmark_name(block.get("name")), paragraph_range)
             paragraph.Range.InsertParagraphAfter()
             return
         if kind == "list":
@@ -1459,7 +1954,9 @@ class DocumentToolsMixin:
                 paragraph = list_range.Paragraphs(index)
                 merged = {**block, **item}
                 self._com_apply_font(paragraph.Range.Font, merged)
-                self._com_apply_paragraph_format(paragraph.Format, merged)
+                self._com_apply_paragraph_format(
+                    paragraph.Format, merged, range_obj=paragraph.Range
+                )
                 paragraph.Range.LanguageID = 1037
                 for _level in range(int(_clamp(item.get("level"), 0, 8, 0))):
                     paragraph.Range.ListFormat.ListIndent()
@@ -1490,7 +1987,9 @@ class DocumentToolsMixin:
                     if row_index <= header_rows:
                         merged.setdefault("bold", True)
                     self._com_apply_font(cell.Range.Font, merged)
-                    self._com_apply_paragraph_format(cell.Range.ParagraphFormat, merged)
+                    self._com_apply_paragraph_format(
+                        cell.Range.ParagraphFormat, merged, range_obj=cell.Range
+                    )
                     cell.VerticalAlignment = 1
                     if col_index <= len(widths):
                         cell.Width = self._cm_to_points(widths[col_index - 1])
@@ -1554,17 +2053,38 @@ class DocumentToolsMixin:
             document.Comments.Add(Range=comment_range, Text=str(block.get("text") or ""))
             return
         if kind in {"footnote", "endnote"}:
-            note_range = self._com_select_range(document, block.get("selector") or {})
+            note_range = self._com_note_range(document, block)
             collection = document.Footnotes if kind == "footnote" else document.Endnotes
-            collection.Add(Range=note_range, Text=str(block.get("text") or ""))
+            kwargs = {"Range": note_range, "Text": str(block.get("text") or "")}
+            if block.get("reference_text"):
+                kwargs["Reference"] = str(block.get("reference_text"))
+            collection.Add(**kwargs)
             return
         if kind == "content_control":
-            control = document.ContentControls.Add(Type=int(block.get("control_type") or 0), Range=target)
+            control_type = _friendly_enum(
+                block.get("control_type"), _WORD_CONTENT_CONTROL_TYPES, "control_type", 0
+            )
+            control = document.ContentControls.Add(Type=control_type, Range=target)
             control.Title = str(block.get("title") or "")
             control.Tag = str(block.get("tag") or "")
-            control.Range.Text = str(block.get("text") or block.get("placeholder") or "")
+            if control_type == 8:
+                control.Checked = bool(block.get("checked", False))
+            else:
+                for raw_item in block.get("items") or []:
+                    item = raw_item if isinstance(raw_item, dict) else {"display": raw_item, "value": raw_item}
+                    control.DropdownListEntries.Add(
+                        Text=str(item.get("display") or item.get("text") or item.get("value") or ""),
+                        Value=str(item.get("value") or item.get("display") or item.get("text") or ""),
+                    )
+                if control_type == 6 and block.get("date_format"):
+                    control.DateDisplayFormat = str(block.get("date_format"))
+                text = str(block.get("text") or block.get("placeholder") or "")
+                if text:
+                    control.Range.Text = text
             self._com_apply_font(control.Range.Font, block)
-            self._com_apply_paragraph_format(control.Range.ParagraphFormat, block)
+            self._com_apply_paragraph_format(
+                control.Range.ParagraphFormat, block, range_obj=control.Range
+            )
             control.Range.LanguageID = 1037
             return
         if kind == "text_box":
@@ -1578,7 +2098,10 @@ class DocumentToolsMixin:
             )
             shape.TextFrame.TextRange.Text = str(block.get("text") or "")
             self._com_apply_font(shape.TextFrame.TextRange.Font, block)
-            self._com_apply_paragraph_format(shape.TextFrame.TextRange.ParagraphFormat, block)
+            self._com_apply_paragraph_format(
+                shape.TextFrame.TextRange.ParagraphFormat, block,
+                range_obj=shape.TextFrame.TextRange,
+            )
             return
         if kind == "shape":
             shape = document.Shapes.AddShape(
@@ -1592,7 +2115,10 @@ class DocumentToolsMixin:
             if block.get("text"):
                 shape.TextFrame.TextRange.Text = str(block["text"])
                 self._com_apply_font(shape.TextFrame.TextRange.Font, block)
-                self._com_apply_paragraph_format(shape.TextFrame.TextRange.ParagraphFormat, block)
+                self._com_apply_paragraph_format(
+                    shape.TextFrame.TextRange.ParagraphFormat, block,
+                    range_obj=shape.TextFrame.TextRange,
+                )
             if block.get("fill"):
                 shape.Fill.ForeColor.RGB = self._com_rgb(block["fill"])
             if block.get("line_color"):
@@ -1603,8 +2129,40 @@ class DocumentToolsMixin:
                 shape.Rotation = _clamp(block["rotation"], -360, 360, 0)
             return
         if kind == "chart":
-            chart_type = int(block.get("chart_type") or 51)
-            document.InlineShapes.AddChart2(-1, chart_type, target)
+            chart_type = _friendly_enum(block.get("chart_type"), _WORD_CHART_TYPES, "chart_type", 51)
+            inline_shape = document.InlineShapes.AddChart2(-1, chart_type, target)
+            if block.get("width_cm") is not None:
+                inline_shape.Width = self._cm_to_points(block.get("width_cm"))
+            if block.get("height_cm") is not None:
+                inline_shape.Height = self._cm_to_points(block.get("height_cm"))
+            try:
+                inline_shape.AlternativeText = str(block.get("alt_text") or "")
+                inline_shape.Title = str(block.get("title") or "")
+            except Exception:
+                pass
+            chart = inline_shape.Chart
+            title = str(block.get("title") or "").strip()
+            chart.HasTitle = bool(title)
+            if title:
+                chart.ChartTitle.Text = title
+            series_specs = block.get("series") or []
+            if series_specs:
+                series_collection = chart.SeriesCollection()
+                while int(series_collection.Count) > 0:
+                    series_collection(1).Delete()
+                categories = tuple(block.get("categories") or [])
+                for index, series_spec in enumerate(series_specs, 1):
+                    series = series_collection.NewSeries()
+                    series.Name = str(series_spec.get("name") or f"Series {index}")
+                    series.Values = tuple(series_spec.get("values") or [])
+                    if categories:
+                        series.XValues = categories
+            show_legend = bool(block.get("show_legend", len(series_specs) > 1))
+            chart.HasLegend = show_legend
+            if show_legend and block.get("legend_position") is not None:
+                chart.Legend.Position = _friendly_enum(
+                    block.get("legend_position"), _WORD_LEGEND_POSITIONS, "legend_position", -4107
+                )
             return
         if kind == "equation":
             text = str(block.get("text") or "")
@@ -1626,7 +2184,9 @@ class DocumentToolsMixin:
             story.LinkToPrevious = bool(spec.get("link_to_previous", False))
             story.Range.Text = str(spec.get("text") or "")
             self._com_apply_font(story.Range.Font, spec)
-            self._com_apply_paragraph_format(story.Range.ParagraphFormat, spec)
+            self._com_apply_paragraph_format(
+                story.Range.ParagraphFormat, spec, range_obj=story.Range
+            )
             if spec.get("page_number"):
                 story.Range.InsertAfter(" ")
                 insertion = story.Range.Duplicate
@@ -1678,6 +2238,15 @@ class DocumentToolsMixin:
             return search
         return document.Content.Duplicate
 
+    def _com_note_range(self, document, spec):
+        selector = spec.get("selector") if isinstance(spec, dict) else None
+        if isinstance(selector, dict) and selector:
+            target = self._com_select_range(document, selector)
+        else:
+            target = self._com_end_range(document).Duplicate
+        target.Collapse(0)
+        return target
+
     def _com_apply_operation(self, document, operation, args):
         op = str(operation.get("op") or operation.get("type") or "").lower()
         if op in {"append", "append_blocks"}:
@@ -1707,7 +2276,9 @@ class DocumentToolsMixin:
             target = self._com_select_range(document, operation.get("selector") or {})
             spec = operation.get("format") or operation
             self._com_apply_font(target.Font, spec)
-            self._com_apply_paragraph_format(target.ParagraphFormat, spec)
+            self._com_apply_paragraph_format(
+                target.ParagraphFormat, spec, range_obj=target
+            )
             target.LanguageID = 1037
             return {"op": op, "status": "ok"}
         if op in {"delete", "delete_range", "delete_paragraph"}:
@@ -1754,14 +2325,20 @@ class DocumentToolsMixin:
             document.Unprotect(Password=str(operation.get("password") or ""))
             return {"op": op, "status": "ok"}
         if op in {"add_comment", "add_footnote", "add_endnote"}:
-            target = self._com_select_range(document, operation.get("selector") or {})
             text = str(operation.get("text") or "")
             if op == "add_comment":
+                target = self._com_select_range(document, operation.get("selector") or {})
                 document.Comments.Add(Range=target, Text=text)
             elif op == "add_footnote":
-                document.Footnotes.Add(Range=target, Text=text)
+                kwargs = {"Range": self._com_note_range(document, operation), "Text": text}
+                if operation.get("reference_text"):
+                    kwargs["Reference"] = str(operation.get("reference_text"))
+                document.Footnotes.Add(**kwargs)
             else:
-                document.Endnotes.Add(Range=target, Text=text)
+                kwargs = {"Range": self._com_note_range(document, operation), "Text": text}
+                if operation.get("reference_text"):
+                    kwargs["Reference"] = str(operation.get("reference_text"))
+                document.Endnotes.Add(**kwargs)
             return {"op": op, "status": "ok"}
         if op in {"add_text_box", "add_shape", "add_chart", "add_equation"}:
             block_type = op.replace("add_", "")
@@ -1983,10 +2560,7 @@ class DocumentToolsMixin:
 
     @staticmethod
     def _inspect_pdf(path, args):
-        try:
-            import fitz
-        except Exception as exc:
-            raise RuntimeError("PyMuPDF is required to inspect PDF output.") from exc
+        fitz = _pymupdf_module()
         document = fitz.open(path)
         try:
             return {
@@ -2072,6 +2646,7 @@ class DocumentToolsMixin:
 
     def _document_render(self, args, engine):
         source = self._document_resolve_path(args.get("path"), mode="read")
+        fitz = _pymupdf_module()
         stem = os.path.splitext(os.path.basename(source))[0]
         output_dir = self._document_resolve_path(
             args.get("output_dir"), mode="write",
@@ -2087,10 +2662,6 @@ class DocumentToolsMixin:
             if render_engine == "python":
                 raise ValueError("The python engine can rasterize an existing PDF but cannot render DOCX directly. Use engine='auto', 'com', or 'libreoffice'.")
             export_info = self._document_export_internal(source, pdf_path, "pdf", render_engine, {**args, "overwrite": True})
-        try:
-            import fitz
-        except Exception as exc:
-            raise RuntimeError("PyMuPDF is required to render document pages to PNG for visual QA.") from exc
         dpi = int(_clamp(args.get("dpi"), 72, 300, 144))
         page_limit = int(_clamp(args.get("page_limit"), 1, 500, 100))
         document = fitz.open(pdf_path)

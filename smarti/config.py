@@ -1362,6 +1362,64 @@ BUILTIN_TOOL_SCHEMAS["browser_automation_manager"] = {
 DOCUMENT_MANAGER_ACTIONS = (
     "doctor", "create", "edit", "inspect", "render", "export", "compare",
 )
+DOCUMENT_MANAGER_BLOCK_TYPES = (
+    "paragraph", "heading", "title", "subtitle", "quote", "callout", "list",
+    "table", "image", "page_break", "section_break", "toc", "field",
+    "hyperlink", "bookmark", "header", "footer", "content_control", "comment",
+    "footnote", "endnote", "text_box", "shape", "chart", "equation", "advanced_com",
+)
+DOCUMENT_MANAGER_BLOCK_SCHEMA = {
+    "type": "object",
+    "description": "One structured document block. Properties not listed here remain available for the extensive formatting model described by get_tool_info.",
+    "properties": {
+        "type": {"type": "string", "enum": DOCUMENT_MANAGER_BLOCK_TYPES},
+        "text": {"type": "string"},
+        "runs": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+        "control_type": {
+            "type": ["string", "integer"],
+            "description": (
+                "Content-control kind as a Word numeric constant or friendly name: rich_text, plain_text, picture, combo_box, "
+                "dropdown_list, building_block_gallery, date, group, checkbox, repeating_section."
+            ),
+        },
+        "checked": {"type": "boolean", "description": "Initial checkbox state for control_type=checkbox."},
+        "items": {"type": "array", "description": "List items or content-control choices."},
+        "chart_type": {
+            "type": ["string", "integer"],
+            "description": (
+                "Chart kind as an Excel numeric constant or friendly name, including column_clustered, column_stacked, "
+                "bar_clustered, line, line_markers, pie, doughnut, area, scatter, radar, and their documented variants."
+            ),
+        },
+        "categories": {"type": "array", "description": "Chart category labels."},
+        "series": {
+            "type": "array",
+            "description": "Chart series as [{name, values:[...]}]; value counts must match categories.",
+            "items": {"type": "object", "additionalProperties": True},
+        },
+        "legend_position": {
+            "type": ["string", "integer"],
+            "description": "Chart legend position: bottom, corner, left, right, top, or a numeric Office constant.",
+        },
+        "url": {"type": "string", "description": "External hyperlink URL. Only http, https, and mailto are allowed."},
+        "anchor": {"type": "string", "description": "Internal Word bookmark target for an in-document hyperlink or field."},
+        "name": {"type": "string", "description": "Bookmark, style, or series name depending on block type."},
+        "field_type": {
+            "type": "string",
+            "enum": [
+                "AUTHOR", "COMMENTS", "CREATEDATE", "DATE", "FILENAME", "FILESIZE", "KEYWORDS",
+                "LASTSAVEDBY", "NUMCHARS", "NUMPAGES", "NUMWORDS", "PAGE", "PAGEREF", "REF", "REVNUM",
+                "SAVEDATE", "SECTION", "SECTIONPAGES", "SEQ", "STYLEREF", "SUBJECT", "TIME", "TITLE", "TOC",
+            ],
+            "description": "Safe Word field type; format adds a date/number picture switch where applicable.",
+        },
+        "code": {"type": "string", "description": "Explicit safe Word field code; external/dynamic field families are rejected."},
+        "format": {"type": "string", "description": "Word field display format, for example dd/MM/yyyy."},
+        "reference_text": {"type": "string", "description": "Optional custom footnote/endnote reference mark."},
+        "selector": {"type": "object", "additionalProperties": True},
+    },
+    "additionalProperties": True,
+}
 DOCUMENT_MANAGER_PROPERTIES = {
     "engine": {
         "type": "string", "enum": ["auto", "com", "python", "libreoffice"],
@@ -1379,6 +1437,17 @@ DOCUMENT_MANAGER_PROPERTIES = {
             "Blocks include paragraph/heading/title/subtitle/quote/callout/list/table/image/page_break/section_break/toc/field/hyperlink/bookmark/header/footer/content_control; "
             "COM also supports comment/footnote/endnote/text_box/shape/chart/equation/advanced_com. Hebrew he-IL and RTL are defaults."
         ),
+        "properties": {
+            "metadata": {"type": "object", "additionalProperties": True},
+            "defaults": {"type": "object", "additionalProperties": True},
+            "page": {"type": "object", "additionalProperties": True},
+            "styles": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+            "header": {"type": "object", "additionalProperties": True},
+            "footer": {"type": "object", "additionalProperties": True},
+            "settings": {"type": "object", "additionalProperties": True},
+            "blocks": {"type": "array", "items": DOCUMENT_MANAGER_BLOCK_SCHEMA},
+            "sections": {"type": "array", "items": DOCUMENT_MANAGER_BLOCK_SCHEMA},
+        },
         "additionalProperties": True,
     },
     "operations": {
@@ -1451,7 +1520,9 @@ DOCUMENT_MANAGER_ACTION_GUIDANCE = {
         "Paragraph/run fields include style, font, font_size_pt, bold, italic, underline, strike, color, language, rtl, alignment, spacing, line_spacing, indents, keep/widow/page-break options. "
         "Lists use items (strings or {text,level,...}) plus ordered. Table cells may be strings or objects with text plus formatting/fill; merges use zero-based from_row/from_column/to_row/to_column. "
         "Portable blocks: paragraph, heading, title, subtitle, quote, callout, list, table, image, page_break, section_break, toc, field, hyperlink, bookmark, header, footer, content_control. "
-        "COM adds comment, footnote, endnote, text_box, shape, chart, equation, and advanced_com."
+        "COM adds comment, footnote, endnote, text_box, shape, chart, equation, and advanced_com. "
+        "Use content_control control_type names such as checkbox (checked:true), chart_type names such as column_clustered, "
+        "hyperlink anchor for internal bookmarks, and field_type+format for fields; numeric Office constants also remain supported."
     ),
     "edit": (
         "Edit example: "
