@@ -341,7 +341,31 @@ def _local_path_from_href(value):
         netloc = urllib.parse.unquote(parsed.netloc or "")
         path_part = urllib.parse.unquote(parsed.path or "")
         url_path = f"//{netloc}{path_part}" if netloc and path_part else path_part
-    return _clean_local_path(url_path)
+    local_path = _clean_local_path(url_path)
+    if _is_safe_local_link_path(local_path):
+        return local_path
+
+    # Small/fast models occasionally corrupt one percent-encoded character in
+    # the user-profile portion of a URI even though the artifact basename and
+    # Smarti_Outputs suffix are intact. Recover only inside Smarti's controlled
+    # output directory, and still require the exact target to exist.
+    normalized = decoded.replace("\\", "/")
+    marker = "/smarti_outputs/"
+    marker_index = normalized.casefold().rfind(marker)
+    if marker_index >= 0:
+        relative = normalized[marker_index + len(marker):]
+        relative = relative.split("?", 1)[0].split("#", 1)[0].strip("/")
+        parts = [part for part in relative.split("/") if part not in {"", "."}]
+        if parts and ".." not in parts:
+            output_root = os.path.abspath(OUTPUTS_DIR)
+            candidate = os.path.abspath(os.path.join(output_root, *parts))
+            try:
+                contained = os.path.commonpath((output_root, candidate)) == output_root
+            except ValueError:
+                contained = False
+            if contained and _is_safe_local_link_path(candidate):
+                return candidate
+    return local_path
 
 def _is_safe_local_link_path(path):
     path = str(path or "")
@@ -386,7 +410,23 @@ def _repair_markdown_links(text):
         if not _is_valid_display_href(href):
             return label
         return f"[{label or _display_label_for_href(href)}]({href})"
-    return re.sub(r"\[([^\]]*)\]\(([^)]*)\)", repl, str(text or ""))
+    repaired = re.sub(r"\[([^\]]*)\]\(([^)]*)\)", repl, str(text or ""))
+
+    # A local artifact enclosed in single backticks is usually a model
+    # formatting mistake: Markdown renders it as code, so it cannot be opened.
+    # Promote it to a named link only when it resolves to an existing safe file.
+    def repl_inline_local(match):
+        href = _canonical_display_href(match.group(1))
+        if not _is_valid_display_href(href) or not _local_path_from_href(href):
+            return match.group(0)
+        return f"[{_display_label_for_href(href)}]({href})"
+
+    return re.sub(
+        r"`((?:file:/+|[A-Za-z]:[\\/])[^`\r\n]+)`",
+        repl_inline_local,
+        repaired,
+        flags=re.IGNORECASE,
+    )
 
 def _sanitize_rendered_links(rendered_html, link_color=None, clickable=True):
     style = ""
@@ -1347,16 +1387,6 @@ AGENT_TOOL_STAGE_ICON_ALIASES = {
 }
 AGENT_TOOL_STAGE_DISPLAY_NAMES = {
     "context_compaction": "דחיסת הקשר",
-    "document_manager": "יצירה ועריכת מסמכים",
-}
-AGENT_TOOL_ACTION_DISPLAY_NAMES = {
-    ("document_manager", "doctor"): "בדיקת יכולות",
-    ("document_manager", "create"): "יצירת מסמך",
-    ("document_manager", "edit"): "עריכת מסמך",
-    ("document_manager", "inspect"): "בדיקת מסמך",
-    ("document_manager", "render"): "בדיקה חזותית",
-    ("document_manager", "export"): "ייצוא מסמך",
-    ("document_manager", "compare"): "השוואת מסמכים",
 }
 
 def _agent_tool_asset_stem(name):
@@ -1413,8 +1443,7 @@ def _agent_tool_display_name(tool):
     display_name = AGENT_TOOL_STAGE_DISPLAY_NAMES.get(name)
     if display_name:
         if manager_action and manager_action != name:
-            action_label = AGENT_TOOL_ACTION_DISPLAY_NAMES.get((name, manager_action), manager_action)
-            return f"{display_name} / {action_label}"
+            return f"{display_name} / {manager_action}"
         return display_name
     if manager_action and manager_action != name:
         name = f"{name} / {manager_action}"

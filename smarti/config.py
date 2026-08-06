@@ -1360,7 +1360,7 @@ BUILTIN_TOOL_SCHEMAS["browser_automation_manager"] = {
 }
 
 DOCUMENT_MANAGER_ACTIONS = (
-    "doctor", "create", "edit", "inspect", "render", "export", "compare",
+    "doctor", "create", "edit", "inspect", "render", "visual_qa", "export", "compare",
 )
 DOCUMENT_MANAGER_BLOCK_TYPES = (
     "paragraph", "heading", "title", "subtitle", "quote", "callout", "list",
@@ -1424,7 +1424,7 @@ DOCUMENT_MANAGER_PROPERTIES = {
     "engine": {
         "type": "string", "enum": ["auto", "com", "python", "libreoffice"],
         "default": "auto",
-        "description": "auto selects python-docx for portable authoring and Word COM for Word-only features/fidelity. libreoffice is export/render only.",
+        "description": "Prefer auto: it selects python-docx for portable authoring and Word COM only for Word-only features/fidelity. Explicit engine pinning remains available; libreoffice is export/render only.",
     },
     "path": {"type": "string", "description": "Input document path, or output path alias for create."},
     "output_path": {"type": "string", "description": "Destination document/export path. Relative paths resolve inside Smarti outputs or the active sandbox."},
@@ -1453,9 +1453,10 @@ DOCUMENT_MANAGER_PROPERTIES = {
     "operations": {
         "type": "array",
         "description": (
-            "Ordered edit operations. Portable: replace_text, append_blocks, delete_paragraph, format_paragraph, set_page_layout, define_style, "
-            "set_header, set_footer, update_fields, set_properties. COM additionally: insert_blocks, format_range, delete_range, comments/notes, shapes/charts/equations, "
-            "track/accept/reject changes, protect/unprotect, insert_file, advanced_com. Selectors support paragraph_index, find+occurrence, bookmark, character start/end, or table_index+row+column."
+            "Ordered edit operations. Portable: replace_text (including find/replace strings longer than Word Find's 255-character limit), append_blocks, insert_blocks, "
+            "delete_paragraph, format_paragraph, set_page_layout, define_style, set_header, set_footer, update_fields, set_properties. COM additionally: format_range, "
+            "delete_range, comments/notes, shapes/charts/equations, track/accept/reject changes, protect/unprotect, insert_file, advanced_com. Selectors support "
+            "paragraph_index, find+occurrence, bookmark, character start/end, or table_index+row+column."
         ),
         "items": {"type": "object", "additionalProperties": True},
     },
@@ -1489,7 +1490,7 @@ DOCUMENT_MANAGER_PROPERTIES = {
 BUILTIN_TOOL_SCHEMAS["document_manager"] = {
     "description": (
         "Full structured Word document manager. Creates and edits Hebrew/RTL DOCX independently with python-docx/OOXML, uses isolated Microsoft Word COM for Word-only features, "
-        "inspects, compares, converts/exports (including PDF/XPS), and renders every page to PNG for model visual QA. No Word UI automation. "
+        "inspects, compares, converts/exports (including PDF/XPS), renders every page to PNG, and exposes each rendered page to the model through its own visual_qa action. No Word UI automation. "
         "Use get_tool_info(action=...) before each operation; load the built-in document_authoring Skill for planning/design policy on substantial documents."
     ),
     "inputSchema": {
@@ -1531,12 +1532,14 @@ DOCUMENT_MANAGER_ACTION_GUIDANCE = {
         '{"op":"format_paragraph","selector":{"find":"כותרת","occurrence":1},"format":{"color":"17365D","bold":true}},'
         '{"op":"append_blocks","blocks":[{"type":"heading","level":1,"text":"נספח"}]},{"op":"update_fields"}],"render_after":true}. '
         "Selectors: paragraph_index; find/text+occurrence; bookmark; character start/end; or table_index+row+column (indices are zero-based). "
-        "COM operations additionally include insert_blocks, format_range, delete_range, add_comment/footnote/endnote/text_box/shape/chart/equation, track_changes, accept/reject changes, protect/unprotect, insert_file, advanced_com. "
+        "Portable operations include append_blocks and insert_blocks. Long literal find/replace strings are supported in both Python and COM; COM transparently bypasses Word Find's 255-character parameter limit. "
+        "COM-only operations include format_range, delete_range, add_comment/footnote/endnote/text_box/shape/chart/equation, track_changes, accept/reject changes, protect/unprotect, insert_file, advanced_com. "
         "advanced_com: {op:'advanced_com',root:'document|application|options',path:[{member:'Sections',index:1},'PageSetup'],mode:'get|set|call',member:'...',value:...,args:[],kwargs:{}} and allow_advanced_com=true. "
         "Raw code, VBA/macros, OLE, printing, sending, add-ins, external opens/links, SaveAs, and export COM members remain blocked."
     ),
     "inspect": "Returns text/style indices, page geometry, tables/shapes, fields, RTL markers, and structural comment/note parts. It does not replace visual QA.",
-    "render": "Exports to PDF and creates page-001.png etc. Analyze every PNG through screen_manager, fix defects, then re-render and inspect every page again.",
+    "render": "Exports to PDF and creates page-001.png etc. Review every returned PNG with document_manager action=visual_qa, fix defects, then re-render and review every page again.",
+    "visual_qa": "Supplies one page PNG returned by document_manager render to the model for visual inspection. Call once for every rendered page; this is not a desktop screenshot or Word UI automation.",
     "export": "Supports Word DOC/DOCX/DOTX/DOCM/DOTM/RTF/TXT/HTML/MHTML/ODT/PDF/XPS through COM, LibreOffice fallback, and python DOCX/TXT. output_path must differ from source.",
     "compare": "Word COM only: path is original, other_path is revised, output_path receives a Word tracked-comparison DOCX; sources open read-only.",
 }
@@ -1814,6 +1817,7 @@ TOOL_ACTION_FIELDS = {
             "path", "engine", "output_dir", "dpi", "page_limit", "include_pdf",
             "visible", "timeout_seconds", "password",
         ),
+        "visual_qa": ("path",),
         "export": (
             "path", "output_path", "format", "engine", "overwrite", "visible",
             "timeout_seconds", "password",

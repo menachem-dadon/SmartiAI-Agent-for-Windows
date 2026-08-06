@@ -447,6 +447,7 @@ class RuntimeServicesMixin:
                 "edit": "עורך מסמך Word",
                 "inspect": "בודק מבנה מסמך",
                 "render": "מרנדר מסמך לבדיקה חזותית",
+                "visual_qa": "בודק חזותית עמוד מרונדר",
                 "export": "מייצא מסמך",
                 "compare": "משווה מסמכי Word",
             }

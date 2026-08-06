@@ -1,5 +1,6 @@
 """Focused visual-geometry tests for the Codex quota model menu."""
 import os
+import tempfile
 import time
 import unittest
 from types import SimpleNamespace
@@ -267,6 +268,27 @@ class ContextCompactionUiTests(unittest.TestCase):
 
         self.assertEqual(chat_module._agent_tool_display_name(tool), "דחיסת הקשר")
         self.assertIn("agent_tool_context_compaction", chat_module._agent_tool_icon_names(tool))
+
+    def test_document_manager_tool_row_stays_in_catalog_english(self):
+        tool = {"action": "document_manager", "arguments": {"action": "create"}}
+
+        self.assertEqual(chat_module._agent_tool_display_name(tool), "document_manager / create")
+        self.assertIn("agent_tool_document_manager", chat_module._agent_tool_icon_names(tool))
+
+    def test_malformed_inline_output_uri_is_repaired_to_clickable_artifact(self):
+        with tempfile.TemporaryDirectory() as output_dir:
+            artifact = os.path.join(output_dir, "result.docx")
+            with open(artifact, "wb") as output_file:
+                output_file.write(b"docx")
+            broken = "`file:///C:/Users/%D7%ห/Documents/Smarti_Outputs/result.docx`"
+
+            with mock.patch.object(chat_module, "OUTPUTS_DIR", output_dir):
+                repaired = chat_module._repair_markdown_links(broken)
+                rendered = chat_module._render_markdown_html(broken)
+
+            self.assertNotIn("`", repaired)
+            self.assertIn("[result.docx](file:", repaired)
+            self.assertIn("<a href=", rendered)
 
     def test_compaction_group_is_visible_without_expandable_tool_details(self):
         group = chat_module.AgentToolGroupWidget(450)

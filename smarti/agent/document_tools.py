@@ -77,6 +77,7 @@ _SAFE_WORD_FIELD_TYPES = {
     "SEQ", "STYLEREF", "SUBJECT", "TIME", "TITLE", "TOC",
 }
 _WORD_PRINTER_LOCK = threading.Lock()
+_WORD_FIND_STRING_LIMIT = 255
 _WORD_BUILTIN_STYLES = {
     "normal": -1,
     "heading1": -2, "heading2": -3, "heading3": -4,
@@ -95,6 +96,7 @@ _COM_ONLY_BLOCK_TYPES = {
     "equation", "advanced_com",
 }
 _COM_ONLY_OPERATIONS = {
+    "format", "format_range", "delete", "delete_range",
     "add_comment", "add_footnote", "add_endnote", "add_text_box",
     "add_shape", "add_chart", "add_equation", "track_changes",
     "accept_all_changes", "reject_all_changes", "protect", "unprotect",
@@ -122,6 +124,47 @@ def _clamp(value, minimum, maximum, default):
         return max(minimum, min(maximum, float(value)))
     except Exception:
         return default
+
+
+def _literal_match_spans(text, needle, *, case_sensitive=False, whole_word=False):
+    """Return literal match offsets without relying on Word Find limits."""
+    text = str(text or "")
+    needle = str(needle or "")
+    if not needle:
+        return []
+    pattern = re.escape(needle)
+    if whole_word:
+        pattern = rf"(?<!\w){pattern}(?!\w)"
+    flags = 0 if case_sensitive else re.IGNORECASE
+    return [match.span() for match in re.finditer(pattern, text, flags)]
+
+
+def _merge_nested_spec(spec, *keys):
+    """Flatten common model-friendly wrappers without making them engine-specific."""
+    merged = dict(spec) if isinstance(spec, dict) else {}
+    for key in keys:
+        nested = merged.get(key)
+        if isinstance(nested, dict):
+            merged.update(nested)
+    return merged
+
+
+def _normalized_format_spec(spec):
+    merged = _merge_nested_spec(spec, "format")
+    aliases = {
+        "font_name": "font",
+        "font_size": "font_size_pt",
+        "style_type": "type",
+        "space_before": "space_before_pt",
+        "space_after": "space_after_pt",
+        "left_indent": "left_indent_cm",
+        "right_indent": "right_indent_cm",
+        "first_line_indent": "first_line_indent_cm",
+    }
+    for alias, canonical in aliases.items():
+        if canonical not in merged and alias in merged:
+            merged[canonical] = merged[alias]
+    return merged
 
 
 def _safe_color(value, default="000000"):
@@ -471,11 +514,17 @@ class DocumentToolsMixin:
     def document_manager_tool(self, args):
         args = args if isinstance(args, dict) else {}
         action = str(args.get("action") or "").strip().lower()
-        if action not in {"doctor", "create", "edit", "inspect", "render", "export", "compare"}:
-            return "ERROR: document_manager action must be doctor, create, edit, inspect, render, export, or compare."
+        if action not in {"doctor", "create", "edit", "inspect", "render", "visual_qa", "export", "compare"}:
+            return "ERROR: document_manager action must be doctor, create, edit, inspect, render, visual_qa, export, or compare."
         try:
             if action == "doctor":
                 return _json_text(self._document_doctor())
+            if action == "visual_qa":
+                path = self._document_resolve_path(args.get("path"), mode="read")
+                allowed, error = self._ensure_cloud_upload_allowed(path)
+                if not allowed:
+                    return error
+                return self._document_visual_qa(path)
 
             engine = self._document_choose_engine(action, args)
             self._document_validate_request(action, args, engine)
@@ -518,6 +567,16 @@ class DocumentToolsMixin:
         except Exception as exc:
             logging.exception("document_manager failed")
             return f"ERROR: document_manager {action} failed: {exc}"
+
+    @staticmethod
+    def _document_visual_qa(path):
+        if os.path.splitext(path)[1].lower() != ".png":
+            raise ValueError("visual_qa requires a page PNG produced by document_manager render.")
+        if os.path.getsize(path) > 12 * 1024 * 1024:
+            raise ValueError("Rendered page image is too large for model visual QA (max 12MB).")
+        with open(path, "rb") as image_file:
+            encoded = base64.b64encode(image_file.read()).decode("ascii")
+        return f"IMAGE_BASE64:image/png:{encoded}"
 
     def _document_permission_details(self, action, args, engine):
         paths = [
@@ -1001,9 +1060,10 @@ class DocumentToolsMixin:
                 pass
 
     def _python_set_page_layout(self, document, page, api, sections=None):
+        page = _merge_nested_spec(page, "page", "layout")
         Cm, WD_ORIENT = api["Cm"], api["WD_ORIENT"]
         OxmlElement, qn = api["OxmlElement"], api["qn"]
-        size = str(page.get("size") or "A4").upper()
+        size = str(page.get("size") or page.get("page_size") or "A4").upper()
         orientation = str(page.get("orientation") or "portrait").lower()
         margins = page.get("margins_cm") or {}
         for section in (sections if sections is not None else document.sections):
@@ -1036,8 +1096,16 @@ class DocumentToolsMixin:
                 bidi.set(qn("w:val"), "1")
             elif bidi is not None:
                 section._sectPr.remove(bidi)
+        if "mirror_margins" in page:
+            settings = document.settings.element
+            mirror = settings.find(qn("w:mirrorMargins"))
+            if page.get("mirror_margins") and mirror is None:
+                settings.append(OxmlElement("w:mirrorMargins"))
+            elif not page.get("mirror_margins") and mirror is not None:
+                settings.remove(mirror)
 
     def _python_define_style(self, document, spec, api):
+        spec = _normalized_format_spec(_merge_nested_spec(spec, "style"))
         WD_STYLE_TYPE = api["WD_STYLE_TYPE"]
         name = str(spec.get("name") or "").strip()
         if not name:
@@ -1192,7 +1260,13 @@ class DocumentToolsMixin:
                 style.paragraph_format.left_indent = api["Cm"](0.45 * (level - 1))
 
     def _python_set_paragraph(self, paragraph, spec, api):
+        spec = _normalized_format_spec(spec)
         WD_ALIGN_PARAGRAPH, OxmlElement, qn = api["WD_ALIGN_PARAGRAPH"], api["OxmlElement"], api["qn"]
+        if spec.get("style"):
+            try:
+                paragraph.style = str(spec["style"])
+            except (KeyError, ValueError):
+                pass
         rtl = bool(spec.get("rtl", True))
         alignment = str(spec.get("alignment") or ("right" if rtl else "left")).lower()
         # In WordprocessingML, Word mirrors the physical left/right meaning of
@@ -1220,6 +1294,7 @@ class DocumentToolsMixin:
             p_pr.append(OxmlElement("w:pageBreakBefore"))
 
     def _python_apply_paragraph_format(self, fmt, spec, api):
+        spec = _normalized_format_spec(spec)
         Pt, Cm = api["Pt"], api["Cm"]
         for key, attr in (
             ("space_before_pt", "space_before"), ("space_after_pt", "space_after"),
@@ -1240,6 +1315,7 @@ class DocumentToolsMixin:
             fmt.widow_control = bool(spec["widow_control"])
 
     def _python_apply_font(self, font, spec, api):
+        spec = _normalized_format_spec(spec)
         Pt, RGBColor = api["Pt"], api["RGBColor"]
         if spec.get("font"):
             font.name = str(spec["font"])
@@ -1429,7 +1505,10 @@ class DocumentToolsMixin:
         return paragraph
 
     def _python_set_header_footer(self, document, kind, spec, api):
+        spec = _normalized_format_spec(_merge_nested_spec(spec, "content"))
         for section in document.sections:
+            if "different_first_page" in spec:
+                section.different_first_page_header_footer = bool(spec["different_first_page"])
             story = section.header if kind == "header" else section.footer
             paragraph = story.paragraphs[0]
             paragraph.clear()
@@ -1524,10 +1603,28 @@ class DocumentToolsMixin:
                 new = str(operation.get("replace") if "replace" in operation else operation.get("new") or "")
                 if not old:
                     raise ValueError("replace_text requires find.")
-                counts[op] = counts.get(op, 0) + self._python_replace_text(document, old, new, bool(operation.get("case_sensitive")))
+                counts[op] = counts.get(op, 0) + self._python_replace_text(
+                    document,
+                    old,
+                    new,
+                    bool(operation.get("case_sensitive")),
+                    bool(operation.get("whole_word")),
+                    bool(operation.get("replace_all", True)),
+                )
             elif op in {"append_blocks", "append"}:
                 blocks = operation.get("blocks") or []
                 self._python_add_blocks(document, blocks, api)
+                counts[op] = counts.get(op, 0) + len(blocks)
+            elif op in {"insert_blocks", "insert"}:
+                blocks = operation.get("blocks") or []
+                paragraph = self._python_select_paragraph(document, operation.get("selector") or {})
+                self._python_insert_blocks(
+                    document,
+                    paragraph,
+                    blocks,
+                    str(operation.get("position") or "before").lower(),
+                    api,
+                )
                 counts[op] = counts.get(op, 0) + len(blocks)
             elif op == "delete_paragraph":
                 paragraph = self._python_select_paragraph(document, operation.get("selector") or operation)
@@ -1540,10 +1637,10 @@ class DocumentToolsMixin:
                     self._python_apply_run(run, operation.get("format") or operation, api)
                 counts[op] = counts.get(op, 0) + 1
             elif op == "set_page_layout":
-                self._python_set_page_layout(document, operation.get("page") or operation, api)
+                self._python_set_page_layout(document, operation, api)
                 counts[op] = counts.get(op, 0) + 1
             elif op == "define_style":
-                self._python_define_style(document, operation.get("style") or operation, api)
+                self._python_define_style(document, operation, api)
                 counts[op] = counts.get(op, 0) + 1
             elif op in {"set_header", "set_footer"}:
                 self._python_set_header_footer(document, op.split("_")[1], operation, api)
@@ -1565,6 +1662,30 @@ class DocumentToolsMixin:
                 os.remove(temp)
         return {"status": "edited", "operation_counts": counts}
 
+    def _python_insert_blocks(self, document, paragraph, blocks, position, api):
+        """Build portable blocks with python-docx, then move them beside an anchor."""
+        marker = document.add_paragraph()._p
+        self._python_add_blocks(document, blocks, api)
+        qn = api["qn"]
+        added = []
+        node = marker.getnext()
+        while node is not None and node.tag != qn("w:sectPr"):
+            following = node.getnext()
+            added.append(node)
+            node = following
+        marker.getparent().remove(marker)
+
+        anchor = paragraph._p
+        if position == "before":
+            for node in added:
+                anchor.addprevious(node)
+        elif position == "after":
+            for node in added:
+                anchor.addnext(node)
+                anchor = node
+        else:
+            raise ValueError("insert_blocks position must be 'before' or 'after'.")
+
     def _python_iter_paragraphs(self, document):
         for paragraph in document.paragraphs:
             yield paragraph
@@ -1578,13 +1699,18 @@ class DocumentToolsMixin:
                 for paragraph in story.paragraphs:
                     yield paragraph
 
-    def _python_replace_text(self, document, old, new, case_sensitive=False):
+    def _python_replace_text(self, document, old, new, case_sensitive=False, whole_word=False, replace_all=True):
         count = 0
-        pattern = re.compile(re.escape(old), 0 if case_sensitive else re.IGNORECASE)
+        escaped = re.escape(old)
+        if whole_word:
+            escaped = rf"(?<!\w){escaped}(?!\w)"
+        pattern = re.compile(escaped, 0 if case_sensitive else re.IGNORECASE)
         for paragraph in self._python_iter_paragraphs(document):
             runs = list(paragraph.runs)
             combined = "".join(run.text for run in runs)
             matches = list(pattern.finditer(combined))
+            if matches and not replace_all:
+                matches = matches[:1]
             if not matches:
                 continue
             starts = []
@@ -1607,6 +1733,8 @@ class DocumentToolsMixin:
                         runs[index].text = ""
                     runs[end_index].text = runs[end_index].text[end_offset:]
             count += len(matches)
+            if count and not replace_all:
+                break
         return count
 
     @staticmethod
@@ -1701,7 +1829,8 @@ class DocumentToolsMixin:
                 pass
 
     def _com_set_page_layout(self, document, page, sections=None):
-        size = str(page.get("size") or "A4").upper()
+        page = _merge_nested_spec(page, "page", "layout")
+        size = str(page.get("size") or page.get("page_size") or "A4").upper()
         orientation = str(page.get("orientation") or "portrait").lower()
         margins = page.get("margins_cm") or {}
         selected_sections = sections or [document.Sections(index) for index in range(1, int(document.Sections.Count) + 1)]
@@ -1718,6 +1847,8 @@ class DocumentToolsMixin:
             setup.FooterDistance = self._cm_to_points(page.get("footer_distance_cm", 1.25))
             setup.DifferentFirstPageHeaderFooter = bool(page.get("different_first_page", False))
             setup.OddAndEvenPagesHeaderFooter = bool(page.get("different_odd_even", False))
+            if "mirror_margins" in page:
+                setup.MirrorMargins = bool(page["mirror_margins"])
             try:
                 setup.SectionDirection = 0 if page.get("rtl", True) else 1
             except Exception:
@@ -1764,6 +1895,7 @@ class DocumentToolsMixin:
                 pass
 
     def _com_define_style(self, document, spec):
+        spec = _normalized_format_spec(_merge_nested_spec(spec, "style"))
         name = str(spec.get("name") or "").strip()
         if not name:
             raise ValueError("Style requires a name.")
@@ -1797,6 +1929,7 @@ class DocumentToolsMixin:
         return red | (green << 8) | (blue << 16)
 
     def _com_apply_font(self, font, spec):
+        spec = _normalized_format_spec(spec)
         if spec.get("font"):
             font.Name = str(spec["font"])
             font.NameBi = str(spec["font"])
@@ -1814,6 +1947,7 @@ class DocumentToolsMixin:
             font.Color = self._com_rgb(spec["color"])
 
     def _com_apply_paragraph_format(self, fmt, spec, apply_direction=True, range_obj=None):
+        spec = _normalized_format_spec(spec)
         if apply_direction:
             alignment = str(spec.get("alignment") or ("right" if spec.get("rtl", True) else "left")).lower()
             fmt.ReadingOrder = 0 if spec.get("rtl", True) else 1
@@ -2176,8 +2310,11 @@ class DocumentToolsMixin:
         raise ValueError(f"Unsupported COM block type: {kind}")
 
     def _com_set_header_footer(self, document, kind, spec):
+        spec = _normalized_format_spec(_merge_nested_spec(spec, "content"))
         for section_index in range(1, int(document.Sections.Count) + 1):
             section = document.Sections(section_index)
+            if "different_first_page" in spec:
+                section.PageSetup.DifferentFirstPageHeaderFooter = bool(spec["different_first_page"])
             stories = section.Headers if kind == "header" else section.Footers
             story_type = {"primary": 1, "first": 2, "even": 3}.get(str(spec.get("variant") or "primary").lower(), 1)
             story = stories(story_type)
@@ -2192,6 +2329,57 @@ class DocumentToolsMixin:
                 insertion = story.Range.Duplicate
                 insertion.Collapse(0)
                 story.Range.Fields.Add(Range=insertion, Type=33, PreserveFormatting=True)
+
+    @staticmethod
+    def _com_subrange(base_range, relative_start, relative_end):
+        result = base_range.Duplicate
+        base_start = int(base_range.Start)
+        result.SetRange(base_start + int(relative_start), base_start + int(relative_end))
+        return result
+
+    def _com_find_literal_range(self, base_range, text, *, occurrence=1, case_sensitive=False, whole_word=False):
+        spans = _literal_match_spans(
+            str(base_range.Text or ""),
+            text,
+            case_sensitive=case_sensitive,
+            whole_word=whole_word,
+        )
+        occurrence = max(1, int(occurrence or 1))
+        if len(spans) < occurrence:
+            preview = str(text or "").replace("\r", " ").replace("\n", " ")[:160]
+            raise ValueError(f"Text selector did not match occurrence {occurrence}: {preview}")
+        start, end = spans[occurrence - 1]
+        return self._com_subrange(base_range, start, end)
+
+    def _com_replace_long_literal(
+        self,
+        target,
+        old,
+        new,
+        *,
+        case_sensitive=False,
+        whole_word=False,
+        replace_all=True,
+    ):
+        spans = _literal_match_spans(
+            str(target.Text or ""),
+            old,
+            case_sensitive=case_sensitive,
+            whole_word=whole_word,
+        )
+        if not spans:
+            return 0
+        selected = spans if replace_all else spans[:1]
+        replacement = str(new or "").replace("\r\n", "\r").replace("\n", "\r")
+        # Replace from the end so earlier absolute character positions remain
+        # valid even when replacement lengths differ from their matches.
+        for start, end in reversed(selected):
+            cancellation_check = getattr(self, "_raise_if_cancelled", None)
+            if callable(cancellation_check):
+                cancellation_check()
+            replacement_range = self._com_subrange(target, start, end)
+            replacement_range.Text = replacement
+        return len(selected)
 
     def _com_select_range(self, document, selector):
         selector = selector if isinstance(selector, dict) else {}
@@ -2221,6 +2409,14 @@ class DocumentToolsMixin:
         find_text = str(selector.get("find") or selector.get("text") or "")
         if find_text:
             occurrence = max(1, int(selector.get("occurrence") or 1))
+            if len(find_text) > _WORD_FIND_STRING_LIMIT:
+                return self._com_find_literal_range(
+                    document.Content.Duplicate,
+                    find_text,
+                    occurrence=occurrence,
+                    case_sensitive=bool(selector.get("case_sensitive", False)),
+                    whole_word=bool(selector.get("whole_word", False)),
+                )
             search = document.Content.Duplicate
             for _index in range(occurrence):
                 search.Find.ClearFormatting()
@@ -2265,16 +2461,28 @@ class DocumentToolsMixin:
             if not old:
                 raise ValueError("replace_text requires find.")
             new = str(operation.get("replace") if "replace" in operation else operation.get("new") or "")
+            if len(old) > _WORD_FIND_STRING_LIMIT or len(new) > _WORD_FIND_STRING_LIMIT:
+                count = self._com_replace_long_literal(
+                    target,
+                    old,
+                    new,
+                    case_sensitive=bool(operation.get("case_sensitive", False)),
+                    whole_word=bool(operation.get("whole_word", False)),
+                    replace_all=bool(operation.get("replace_all", True)),
+                )
+                return {"op": op, "matched": bool(count), "count": count, "method": "range"}
             replaced = target.Find.Execute(
                 FindText=old, MatchCase=bool(operation.get("case_sensitive", False)),
                 MatchWholeWord=bool(operation.get("whole_word", False)),
                 ReplaceWith=new, Replace=2 if operation.get("replace_all", True) else 1,
                 Forward=True, Wrap=0,
             )
-            return {"op": op, "matched": bool(replaced)}
+            return {"op": op, "matched": bool(replaced), "method": "word_find"}
         if op in {"format", "format_range", "format_paragraph"}:
             target = self._com_select_range(document, operation.get("selector") or {})
-            spec = operation.get("format") or operation
+            spec = _normalized_format_spec(operation)
+            if spec.get("style"):
+                target.Style = self._com_style_ref(spec["style"])
             self._com_apply_font(target.Font, spec)
             self._com_apply_paragraph_format(
                 target.ParagraphFormat, spec, range_obj=target
@@ -2286,10 +2494,10 @@ class DocumentToolsMixin:
             target.Delete()
             return {"op": op, "status": "ok"}
         if op == "set_page_layout":
-            self._com_set_page_layout(document, operation.get("page") or operation)
+            self._com_set_page_layout(document, operation)
             return {"op": op, "status": "ok"}
         if op == "define_style":
-            self._com_define_style(document, operation.get("style") or operation)
+            self._com_define_style(document, operation)
             return {"op": op, "status": "ok"}
         if op in {"set_header", "set_footer"}:
             self._com_set_header_footer(document, op.split("_")[1], operation)
@@ -2703,7 +2911,7 @@ class DocumentToolsMixin:
             "pages": images,
             "warnings": warnings,
             "visual_qa_required": True,
-            "next_step": "Use screen_manager action=analyze_image on every page PNG, then edit and re-render if any visual defect is found.",
+            "next_step": "Use document_manager action=visual_qa on every page PNG, then edit and re-render if any visual defect is found.",
             "export": export_info,
         }
 

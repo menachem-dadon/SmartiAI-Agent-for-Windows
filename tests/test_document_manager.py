@@ -5,7 +5,13 @@ import unittest
 import zipfile
 from unittest import mock
 
-from smarti.agent.document_tools import DocumentToolsMixin, _WordComSession, _friendly_enum, _WORD_CHART_TYPES
+from smarti.agent.document_tools import (
+    DocumentToolsMixin,
+    _WordComSession,
+    _friendly_enum,
+    _literal_match_spans,
+    _WORD_CHART_TYPES,
+)
 from smarti.agent.extensions import ExtensionsMixin
 from smarti.agent.tool_dispatch import ToolDispatchMixin
 from smarti.agent.tool_calls import ToolCallMixin
@@ -29,6 +35,9 @@ class _DocumentHarness(DocumentToolsMixin):
         return True, None
 
     def _ensure_capabilities_allowed(self, *args, **kwargs):
+        return True, None
+
+    def _ensure_cloud_upload_allowed(self, *args, **kwargs):
         return True, None
 
 
@@ -168,6 +177,99 @@ class DocumentManagerTests(unittest.TestCase):
         self.assertEqual(created.paragraphs[0].style.name, "List Number")
         self.assertEqual(created.tables[0].cell(0, 0)._tc, created.tables[0].cell(0, 1)._tc)
 
+    def test_long_literal_matching_and_com_range_replacement_bypass_word_find(self):
+        old = "Alpha " * 60
+        new = "Beta " * 80
+        text = f"prefix {old} middle {old} suffix"
+        self.assertEqual(len(_literal_match_spans(text, old)), 2)
+        self.assertEqual(_literal_match_spans("cat scatter cat", "cat", whole_word=True), [(0, 3), (12, 15)])
+
+        class MutableRange:
+            def __init__(self, storage, start, end):
+                self.storage = storage
+                self.Start = start
+                self.End = end
+
+            @property
+            def Duplicate(self):
+                return MutableRange(self.storage, self.Start, self.End)
+
+            @property
+            def Text(self):
+                return self.storage["text"][self.Start:self.End]
+
+            @Text.setter
+            def Text(self, value):
+                current = self.storage["text"]
+                self.storage["text"] = current[:self.Start] + value + current[self.End:]
+                self.End = self.Start + len(value)
+
+            def SetRange(self, start, end):
+                self.Start, self.End = start, end
+
+        storage = {"text": text}
+        target = MutableRange(storage, 0, len(text))
+        count = self.tool._com_replace_long_literal(target, old, new)
+        self.assertEqual(count, 2)
+        self.assertEqual(storage["text"], f"prefix {new} middle {new} suffix")
+
+    def test_python_edit_accepts_model_friendly_aliases_and_positioned_blocks(self):
+        api = self.tool._python_imports()
+        source = self._path("source.docx")
+        output = self._path("edited.docx")
+        document = api["docx"].Document()
+        document.add_paragraph("ראשון")
+        document.add_paragraph("אחרון")
+        document.save(source)
+
+        result = self.tool._python_edit_document(source, output, [
+            {
+                "op": "set_page_layout",
+                "layout": {"page_size": "A4", "mirror_margins": True},
+            },
+            {
+                "op": "define_style",
+                "name": "גוף מותאם",
+                "format": {"style_type": "paragraph", "font_name": "Arial", "font_size": 13, "bold": True},
+            },
+            {
+                "op": "format_paragraph",
+                "selector": {"paragraph_index": 0},
+                "format": {"style": "גוף מותאם", "space_after": 8},
+            },
+            {
+                "op": "insert_blocks",
+                "selector": {"paragraph_index": 1},
+                "position": "before",
+                "blocks": [{"type": "paragraph", "text": "באמצע"}],
+            },
+            {
+                "op": "set_header",
+                "content": {"text": "כותרת", "font_name": "Arial", "font_size": 9},
+            },
+        ])
+
+        self.assertEqual(result["operation_counts"]["insert_blocks"], 1)
+        edited = api["docx"].Document(output)
+        self.assertEqual([paragraph.text for paragraph in edited.paragraphs], ["ראשון", "באמצע", "אחרון"])
+        self.assertEqual(edited.paragraphs[0].style.name, "גוף מותאם")
+        self.assertEqual(edited.styles["גוף מותאם"].font.size.pt, 13)
+        self.assertEqual(edited.sections[0].header.paragraphs[0].text, "כותרת")
+        self.assertIsNotNone(edited.settings.element.find(api["qn"]("w:mirrorMargins")))
+
+    def test_auto_engine_uses_capability_map_instead_of_forcing_com(self):
+        with mock.patch.object(self.tool, "_word_com_available", return_value=True):
+            portable = self.tool._document_choose_engine("edit", {
+                "path": "sample.docx",
+                "operations": [{"op": "insert_blocks", "blocks": [{"type": "paragraph", "text": "x"}]}],
+            })
+            word_only = self.tool._document_choose_engine("edit", {
+                "path": "sample.docx",
+                "operations": [{"op": "format_range", "selector": {"start": 0, "end": 1}}],
+            })
+        self.assertEqual(portable, "python")
+        self.assertEqual(word_only, "com")
+
     def test_internal_bookmark_hyperlink_and_friendly_fields(self):
         path = self._path("links-and-fields.docx")
         self.tool._python_create_document(path, "", {
@@ -240,21 +342,29 @@ class DocumentManagerTests(unittest.TestCase):
     def test_schema_catalog_and_skill_expose_workflow(self):
         schema = BUILTIN_TOOL_SCHEMAS["document_manager"]["inputSchema"]
         self.assertEqual(schema["properties"]["action"]["enum"], (
-            "doctor", "create", "edit", "inspect", "render", "export", "compare",
+            "doctor", "create", "edit", "inspect", "render", "visual_qa", "export", "compare",
         ))
         self.assertIn("document_manager", PUBLIC_BUILTIN_TOOLS)
         self.assertEqual(TOOL_CATEGORIES["document_manager"], "documents")
         self.assertIn("advanced_com", DOCUMENT_MANAGER_ACTION_GUIDANCE["edit"])
+        self.assertIn("255-character", DOCUMENT_MANAGER_ACTION_GUIDANCE["edit"])
+        self.assertIn("insert_blocks", schema["properties"]["operations"]["description"])
         self.assertIn("column_clustered", DOCUMENT_MANAGER_ACTION_GUIDANCE["create"])
         block_schema = schema["properties"]["document"]["properties"]["blocks"]["items"]
         self.assertIn("checkbox", block_schema["properties"]["control_type"]["description"])
         self.assertIn("render_after", TOOL_ACTION_FIELDS["document_manager"]["create"])
+        self.assertEqual(TOOL_ACTION_FIELDS["document_manager"]["visual_qa"], ("path",))
 
         skill = _ExtensionHarness()._builtin_skill_specs()["document_authoring"]
         self.assertEqual(skill["handler"], "instructions")
         self.assertIn("Visual QA loop", skill["instructions"])
+        self.assertIn("document_manager visual_qa", skill["instructions"])
+        self.assertIn("screen_manager remains fully available", skill["instructions"])
+        self.assertIn("not a prohibition", skill["instructions"])
         self.assertIn("he-IL", skill["instructions"])
         self.assertIn("UI automation", skill["instructions"])
+        self.assertIn("Prefer engine=auto", skill["instructions"])
+        self.assertIn("Long text replacement alone", skill["instructions"])
 
     def test_com_escape_hatch_blocks_dangerous_members(self):
         self.tool._validate_com_member("PageSetup")
@@ -307,6 +417,16 @@ class DocumentManagerTests(unittest.TestCase):
         self.assertEqual(result["page_count"], 2)
         self.assertTrue(all(os.path.isfile(page["path"]) for page in result["pages"]))
         self.assertTrue(result["visual_qa_required"])
+        self.assertIn("document_manager action=visual_qa", result["next_step"])
+
+    def test_visual_qa_returns_rendered_page_to_the_model(self):
+        page_path = self._path("page-001.png")
+        with open(page_path, "wb") as image_file:
+            image_file.write(b"\x89PNG\r\n\x1a\nvisual-qa-test")
+
+        result = self.tool.document_manager_tool({"action": "visual_qa", "path": page_path})
+
+        self.assertTrue(result.startswith("IMAGE_BASE64:image/png:"))
 
 
 if __name__ == "__main__":
