@@ -4,8 +4,10 @@ import datetime
 import http.server
 import inspect
 import ipaddress
+import json
 import os
 from pathlib import Path
+import re
 import ssl
 import sys
 import tempfile
@@ -41,6 +43,7 @@ from smarti.ssl_compat import (
 )
 from smarti.ui_pages import SSLTrustSettingsCard
 from smarti import updater
+from smarti.common import APP_VERSION
 
 
 class _QuietHandler(http.server.BaseHTTPRequestHandler):
@@ -426,6 +429,77 @@ class SSLTrustUiRoundTripTests(unittest.TestCase):
         self.assertEqual(card.configure_btn.text(), "הגדר")
         self.assertNotIn("isRunning", inspect.getsource(card._run_test))
         card.deleteLater()
+
+
+class ReleaseReadinessTests(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parents[1]
+    RELEASE_VERSION = "0.87.0"
+
+    def test_source_build_docs_and_installer_are_version_synchronized(self):
+        self.assertEqual(APP_VERSION, f"V{self.RELEASE_VERSION}")
+        build_script = (self.ROOT / "scripts" / "build_release.ps1").read_text(encoding="utf-8-sig")
+        installer = (self.ROOT / "packaging" / "smarti.iss").read_text(encoding="utf-8-sig")
+        readme = (self.ROOT / "README.md").read_text(encoding="utf-8-sig")
+        packaging_readme = (self.ROOT / "packaging" / "README.md").read_text(encoding="utf-8-sig")
+        self.assertIn("Assert-AppVersionMatchesRelease", build_script)
+        self.assertIn("/DMyAppVersion=$ReleaseVersion", build_script)
+        self.assertIn("AppVersion={#MyAppVersion}", installer)
+        self.assertIn(f"-Version {self.RELEASE_VERSION}", readme)
+        self.assertIn(f"-Version {self.RELEASE_VERSION}", packaging_readme)
+        runtime_script = (self.ROOT / "scripts" / "prepare_runtime.ps1").read_text(encoding="utf-8-sig")
+        for variable in ("SMARTI_PYTHON_SHA256", "SMARTI_NODE_SHA256", "SMARTI_GET_PIP_SHA256"):
+            self.assertIn(variable, runtime_script)
+
+    def test_private_runtime_downloads_are_pinned_to_sha256(self):
+        config = json.loads((self.ROOT / "packaging" / "runtime-versions.json").read_text(encoding="utf-8-sig"))
+        for name in ("python", "node", "getPip"):
+            self.assertRegex(str(config[name].get("sha256") or ""), r"^[0-9a-f]{64}$", name)
+
+    def test_updater_and_inno_installer_share_the_same_stable_app_id(self):
+        installer = (self.ROOT / "packaging" / "smarti.iss").read_text(encoding="utf-8-sig")
+        match = re.search(r"^AppId=\{\{([0-9A-F-]+)\}", installer, re.MULTILINE)
+        self.assertIsNotNone(match)
+        self.assertIn(match.group(1), updater.INNO_UNINSTALL_KEY)
+
+    def test_version_comparison_handles_v_prefix_and_current_release(self):
+        self.assertFalse(updater.is_newer_version("V0.87.0", "V0.87.0"))
+        self.assertTrue(updater.is_newer_version("0.87.1", "V0.87.0"))
+        self.assertFalse(updater.is_newer_version("0.86.9", "V0.87.0"))
+
+    def test_release_assets_match_installer_and_portable_build_names(self):
+        release = {"assets": [
+            {"name": f"SmartiAI-Agent-for-Windows-{self.RELEASE_VERSION}-win-x64-portable.zip"},
+            {"name": f"SmartiAI-Agent-for-Windows-{self.RELEASE_VERSION}-Setup.exe"},
+        ]}
+        self.assertTrue(updater._select_update_asset(release, "installer")["name"].endswith("-Setup.exe"))
+        self.assertTrue(updater._select_update_asset(release, "portable")["name"].endswith("-portable.zip"))
+
+    def test_current_release_is_not_offered_as_an_update(self):
+        response = mock.Mock()
+        response.json.return_value = {"tag_name": "V0.87.0", "assets": []}
+        response.raise_for_status.return_value = None
+        with mock.patch.object(updater.requests, "get", return_value=response):
+            self.assertIsNone(updater.check_for_updates({}))
+
+    def test_future_release_selects_portable_asset_for_portable_install(self):
+        response = mock.Mock()
+        response.json.return_value = {
+            "tag_name": "V0.88.0",
+            "name": "SmartiAI V0.88.0",
+            "assets": [
+                {"name": "SmartiAI-Agent-for-Windows-0.88.0-Setup.exe", "browser_download_url": "https://example.test/setup.exe"},
+                {"name": "SmartiAI-Agent-for-Windows-0.88.0-win-x64-portable.zip", "browser_download_url": "https://example.test/portable.zip", "digest": "sha256:" + "a" * 64},
+            ],
+        }
+        response.raise_for_status.return_value = None
+        with mock.patch.object(updater.requests, "get", return_value=response), mock.patch.object(
+            updater, "detect_installation_kind", return_value="portable"
+        ):
+            info = updater.check_for_updates({})
+        self.assertEqual(info.version, "0.88.0")
+        self.assertEqual(info.asset_kind, "portable")
+        self.assertTrue(info.asset_name.endswith("-portable.zip"))
+        self.assertEqual(updater._expected_sha256(info.asset_digest), "a" * 64)
 
 
 if __name__ == "__main__":

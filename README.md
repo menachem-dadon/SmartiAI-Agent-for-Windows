@@ -6,7 +6,7 @@ SmartiAI Agent for Windows is a local-first desktop AI agent for practical work 
 
 Smarti is designed to help operate the computer while keeping the user in control. Sensitive actions are visible, configurable, and can require approval before they run.
 
-Current release target: `V0.81.1`.
+Current release target: `V0.87.0`.
 
 ## Highlights
 
@@ -15,7 +15,7 @@ Current release target: `V0.81.1`.
 - Web tools: internet search, webpage reading, browser opening, weather lookup, and website scraping with polite crawl controls.
 - Screen context: screenshot capture, screenshot saving, and local image analysis.
 - Windows control: discover installed applications, open software, inspect UI elements, invoke buttons, set text fields, send keys/hotkeys, use the clipboard, and manage audio mute state.
-- Browser automation through a dedicated Chrome/Selenium session with page-state extraction and form/navigation helpers.
+- Browser automation through Playwright/CDP against Smarti's persistent Chrome profile, with page-state extraction and form/navigation helpers.
 - Email over IMAP/SMTP: search, read, draft, send, reply, forward, archive, trash/delete, move/copy, manage folders, flags, styled RTL/HTML messages, and attachments.
 - Background work: one-time and recurring tasks, reminders, retry/cancel/edit flows, Windows toast notifications, and calendar event file creation.
 - Local memory with user, short-term, long-term, and tool memory buckets, including expiry and Markdown export.
@@ -31,7 +31,7 @@ Current release target: `V0.81.1`.
 | Files | Open, save, read, search, OCR, attach local files to context, and move user files to the Recycle Bin. |
 | Web | Search the internet, read URLs, open browser targets, fetch weather, and scrape websites. |
 | Screen | Capture, save, and analyze screenshots or local images. |
-| Automation | Dedicated Selenium browser automation and structured Windows UI Automation. |
+| Automation | Playwright/CDP browser automation and structured Windows UI Automation. |
 | Email | IMAP/SMTP mailbox search, reading, sending, drafts, replies, forwarding, folders, flags, archiving, deletion, and attachments. |
 | Tasks & Notifications | Background tasks, recurring work, reminders, Windows toasts, calendar events, and Calendar/Clock/settings launch targets. |
 | Memory | Search, add, update, replace, clear, expire, or forget local memories. |
@@ -114,7 +114,7 @@ The repeatable release recipe lives in `scripts/` and `packaging/`. Build artifa
 For the current release:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.81.1
+.\scripts\build_release.ps1 -Version 0.87.0
 ```
 
 The build script:
@@ -122,7 +122,7 @@ The build script:
 - verifies that `APP_VERSION` matches the requested release version;
 - creates or updates the build virtual environment;
 - installs `requirements.txt` and `requirements-build.txt`;
-- prepares private Python and Node runtimes;
+- prepares private Python and Node runtimes and verifies their pinned SHA-256 digests;
 - runs `pip check` for the build environment and private runtime;
 - packages the app with PyInstaller;
 - force-resynchronizes `assets\` into the bundled `_internal\assets` folder and verifies the copied files by SHA-256;
@@ -132,22 +132,22 @@ The build script:
 For a fully clean rebuild:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.81.1 -Clean -ForceRuntime
+.\scripts\build_release.ps1 -Version 0.87.0 -Clean -ForceRuntime
 ```
 
 Release outputs are written to `release\`:
 
-- `SmartiAI-Agent-for-Windows-0.81.1-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.81.1-win-x64-portable.zip`
+- `SmartiAI-Agent-for-Windows-0.87.0-Setup.exe`
+- `SmartiAI-Agent-for-Windows-0.87.0-win-x64-portable.zip`
 
 ## Automatic Updates
 
 Smarti checks GitHub Releases, compares the latest release tag against `APP_VERSION`, and downloads the correct Windows asset for the current install type.
 
-For `V0.81.1`, publish a GitHub release tagged `V0.81.1` or `0.81.1` and attach:
+For `V0.87.0`, publish a GitHub release tagged `V0.87.0` or `0.87.0` and attach:
 
-- `SmartiAI-Agent-for-Windows-0.81.1-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.81.1-win-x64-portable.zip`
+- `SmartiAI-Agent-for-Windows-0.87.0-Setup.exe`
+- `SmartiAI-Agent-for-Windows-0.87.0-win-x64-portable.zip`
 
 Installed copies prefer a setup EXE. Portable copies prefer a portable ZIP. When GitHub provides a release asset digest, Smarti uses it for SHA-256 verification.
 
@@ -208,7 +208,7 @@ SmartiAI Agent for Windows הוא סוכן AI שולחני לעבודה מעשי
 
 סמארטי נועד לעזור להפעיל את המחשב תוך שמירה על שליטה מלאה של המשתמש. פעולות רגישות מוצגות בצורה שקופה, ניתנות להגדרה, ויכולות לדרוש אישור לפני הרצה.
 
-יעד הגרסה הנוכחי: `V0.81.1`.
+יעד הגרסה הנוכחי: `V0.87.0`.
 
 ## יכולות מרכזיות
 
@@ -217,7 +217,7 @@ SmartiAI Agent for Windows הוא סוכן AI שולחני לעבודה מעשי
 - כלי רשת: חיפוש באינטרנט, קריאת דפי אתר, פתיחה בדפדפן, מזג אוויר ו-scraping עם בקרות זחילה מנומסות.
 - הקשר מסך: צילום מסך, שמירת צילום מסך וניתוח תמונות מקומיות.
 - שליטה ב-Windows: גילוי תוכנות מותקנות, פתיחת אפליקציות, בדיקת רכיבי ממשק, לחיצה על כפתורים, מילוי שדות, שליחת מקשים וקיצורים, שימוש בלוח ההעתקה וניהול מצב השתקת שמע.
-- אוטומציית דפדפן דרך סשן Chrome/Selenium ייעודי עם חילוץ מצב דף, ניווט ועבודה עם טפסים.
+- אוטומציית דפדפן דרך Playwright/CDP מול פרופיל Chrome הקבוע של סמארטי, עם חילוץ מצב דף, ניווט ועבודה עם טפסים.
 - ניהול אימייל דרך IMAP/SMTP: חיפוש, קריאה, טיוטות, שליחה, תשובה, העברה, ארכוב, מחיקה, העברה/העתקה בין תיקיות, דגלים, הודעות HTML/RTL וקבצים מצורפים.
 - עבודה ברקע: משימות חד-פעמיות וחוזרות, תזכורות, עריכה/ביטול/הרצה מחדש, התראות Windows ויצירת קבצי אירוע ליומן.
 - זיכרון מקומי עם סוגי זיכרון למשתמש, טווח קצר, טווח ארוך וכלים, כולל תפוגה וייצוא Markdown.
@@ -233,7 +233,7 @@ SmartiAI Agent for Windows הוא סוכן AI שולחני לעבודה מעשי
 | קבצים | פתיחה, שמירה, קריאה, חיפוש, OCR, צירוף קבצים להקשר והעברה לסל המחזור. |
 | רשת | חיפוש באינטרנט, קריאת URL, פתיחה בדפדפן, מזג אוויר ו-scraping. |
 | מסך | צילום, שמירה וניתוח של צילומי מסך או תמונות מקומיות. |
-| אוטומציה | אוטומציית דפדפן Selenium ואוטומציית Windows UI מובנית. |
+| אוטומציה | אוטומציית דפדפן Playwright/CDP ואוטומציית Windows UI מובנית. |
 | אימייל | חיפוש, קריאה, שליחה, טיוטות, תשובות, העברה, תיקיות, דגלים, ארכוב, מחיקה וקבצים מצורפים. |
 | משימות והתראות | משימות רקע, עבודה חוזרת, תזכורות, התראות Windows, אירועי יומן ופתיחת Calendar/Clock/settings. |
 | זיכרון | חיפוש, הוספה, עדכון, החלפה, ניקוי, תפוגה ושכחה של זיכרונות מקומיים. |
@@ -315,7 +315,7 @@ pythonw smarti_core.pyw
 לגרסה הנוכחית:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.81.1
+.\scripts\build_release.ps1 -Version 0.87.0
 ```
 
 סקריפט הבנייה:
@@ -323,31 +323,32 @@ pythonw smarti_core.pyw
 - מוודא ש-`APP_VERSION` תואם לגרסת ההפצה;
 - יוצר או מעדכן את סביבת הבנייה;
 - מתקין את `requirements.txt` ואת `requirements-build.txt`;
-- מכין runtimes פרטיים של Python ו-Node;
+- מכין runtimes פרטיים של Python ו-Node ומאמת את חתימות ה-SHA-256 המקובעות שלהם;
 - מריץ `pip check` לסביבת הבנייה ול-runtime הפרטי;
 - אורז את האפליקציה עם PyInstaller;
+- מסנכרן מחדש את `assets\` אל `_internal\assets` בחבילה ומאמת את הקבצים שהועתקו ב-SHA-256;
 - מאמת את מבנה ההפצה ואורכי הנתיבים;
 - יוצר ZIP נייד, ואם Inno Setup 6 מותקן גם קובץ Setup.
 
 לבנייה נקייה לחלוטין:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.81.1 -Clean -ForceRuntime
+.\scripts\build_release.ps1 -Version 0.87.0 -Clean -ForceRuntime
 ```
 
 התוצרים נכתבים אל `release\`:
 
-- `SmartiAI-Agent-for-Windows-0.81.1-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.81.1-win-x64-portable.zip`
+- `SmartiAI-Agent-for-Windows-0.87.0-Setup.exe`
+- `SmartiAI-Agent-for-Windows-0.87.0-win-x64-portable.zip`
 
 ## עדכונים אוטומטיים
 
 סמארטי בודק את GitHub Releases, משווה את תגית הגרסה האחרונה מול `APP_VERSION`, ומוריד את קובץ Windows המתאים לסוג ההתקנה הנוכחי.
 
-עבור `V0.81.1`, יש לפרסם GitHub Release עם תגית `V0.81.1` או `0.81.1` ולצרף:
+עבור `V0.87.0`, יש לפרסם GitHub Release עם תגית `V0.87.0` או `0.87.0` ולצרף:
 
-- `SmartiAI-Agent-for-Windows-0.81.1-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.81.1-win-x64-portable.zip`
+- `SmartiAI-Agent-for-Windows-0.87.0-Setup.exe`
+- `SmartiAI-Agent-for-Windows-0.87.0-win-x64-portable.zip`
 
 עותקים מותקנים יעדיפו קובץ Setup. עותקים ניידים יעדיפו ZIP נייד. כאשר GitHub מספק digest לקובץ release, סמארטי משתמש בו לאימות SHA-256.
 

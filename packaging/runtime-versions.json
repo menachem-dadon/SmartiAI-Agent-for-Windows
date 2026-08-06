@@ -2,16 +2,16 @@
   "python": {
     "version": "3.12.10",
     "url": "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip",
-    "sha256": ""
+    "sha256": "4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
   },
   "node": {
-    "version": "22.16.0",
-    "url": "https://nodejs.org/dist/v22.16.0/node-v22.16.0-win-x64.zip",
-    "sha256": ""
+    "version": "22.23.2",
+    "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-win-x64.zip",
+    "sha256": "1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97"
   },
   "getPip": {
     "url": "https://bootstrap.pypa.io/get-pip.py",
-    "sha256": ""
+    "sha256": "fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6"
   },
   "extraPythonPackages": [
     "uv>=0.5"

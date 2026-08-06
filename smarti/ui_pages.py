@@ -18,6 +18,28 @@ from PyQt6.QtCore import QRect, QUrl
 from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
 
 
+def _tail_text_file(path, max_lines=160, chunk_size=64 * 1024):
+    """Read only the tail of a potentially large UTF-8 log file."""
+    max_lines = max(1, int(max_lines or 1))
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            position = handle.tell()
+            chunks = []
+            newline_count = 0
+            while position > 0 and newline_count <= max_lines:
+                read_size = min(int(chunk_size), position)
+                position -= read_size
+                handle.seek(position)
+                chunk = handle.read(read_size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+        text = b"".join(reversed(chunks)).decode("utf-8", errors="replace")
+        return text.splitlines()[-max_lines:]
+    except FileNotFoundError:
+        return []
+
+
 def doctor_action_button_css(primary=False):
     """A single 48px visual rhythm for diagnostic scan controls in every theme."""
     background = (
@@ -1351,9 +1373,33 @@ def _is_memory_usage_model_name(model_name):
     return name in {"memory-rag/local", "smarti-memory-rag/local"} or name.startswith("memory-rag/")
 
 
+USAGE_COST_CACHE_FILE = os.path.join(USER_DATA_DIR, "smarti_usage_cost_cache.json")
+USAGE_COST_CACHE_VERSION = 1
+USAGE_COST_CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+# Small built-in first-paint safety net for Smarti's default models that can be
+# newer than the LiteLLM wheel bundled with a release.  A successful background
+# catalog refresh replaces these rates; they are never allowed to replace a
+# newer persisted rate.
+USAGE_PRICING_FALLBACKS = {
+    "gpt-5.6-sol": {
+        "input": 0.000005,
+        "output": 0.000030,
+        "cache_read": 0.0000005,
+        "cache_write": 0.00000625,
+        "_source": "fallback",
+    },
+    "gemini/gemini-3.5-flash-lite": {
+        "input": 0.0000003,
+        "output": 0.0000025,
+        "cache_read": 0.00000003,
+        "cache_write": 0.0000003,
+        "_source": "fallback",
+    },
+}
+
+
 class UsageStatsLoadWorker(QThread):
     ready = pyqtSignal(int, str, object)
-    _cost_suffix_cache = {}
     _litellm_module = None
     _litellm_unavailable = False
 
@@ -1380,15 +1426,32 @@ class UsageStatsLoadWorker(QThread):
             return None
 
     def run(self):
-        payload = {"models": [], "memory": None, "error": ""}
+        self._pricing_cache = self._load_pricing_cache()
+        self._pricing_cache_dirty = False
+        self._pricing_cache_stale = self._pricing_cache_is_stale()
+        self._bundled_model_costs = self._load_bundled_litellm_pricing()
         try:
-            payload["models"], memory_usage = self._load_model_usage()
-            payload["memory"] = self._load_memory_summary(memory_usage)
+            rows, memory_usage, missing_pricing = self._load_model_usage(allow_litellm=False)
+            try:
+                self._save_pricing_cache()
+            except Exception as exc:
+                logging.warning("Usage pricing cache save failed: %s", exc)
+            payload = {
+                "models": rows,
+                "memory": self._load_memory_summary(memory_usage),
+                "error": "",
+            }
         except Exception as exc:
-            payload["error"] = str(exc)
+            self.ready.emit(
+                self.generation,
+                self.timeframe,
+                {"models": [], "memory": None, "error": str(exc)},
+            )
+            return
+
         self.ready.emit(self.generation, self.timeframe, payload)
 
-    def _load_model_usage(self):
+    def _load_model_usage(self, allow_litellm=False, force_pricing_refresh=False):
         usage_data = {}
         if os.path.exists(USAGE_FILE):
             try:
@@ -1436,7 +1499,15 @@ class UsageStatsLoadWorker(QThread):
                 continue
 
         rows = []
+        missing_pricing = False
         for model_name, stats in sorted(aggregated.items(), key=lambda x: x[1]["total"], reverse=True):
+            cost_suffix, pricing_missing = self._cost_suffix(
+                model_name,
+                stats,
+                allow_litellm=allow_litellm,
+                force_refresh=force_pricing_refresh,
+            )
+            missing_pricing = missing_pricing or pricing_missing
             rows.append({
                 "model": model_name,
                 "prompt": int(stats.get("prompt", 0) or 0),
@@ -1444,83 +1515,209 @@ class UsageStatsLoadWorker(QThread):
                 "total": int(stats.get("total", 0) or 0),
                 "cached_prompt": int(stats.get("cached_prompt", 0) or 0),
                 "cache_write_prompt": int(stats.get("cache_write_prompt", 0) or 0),
-                "cost_suffix": self._cost_suffix(model_name, stats),
+                "cost_suffix": cost_suffix,
             })
-        return rows, memory_usage
+        return rows, memory_usage, missing_pricing
 
-    def _cost_suffix(self, model_name, stats):
-        suffix = " | מחיר מוערך: חינמי / לא במאגר"
-        litellm = self._litellm()
-        if litellm is None:
-            return suffix
-        cache_key = None
-        calculated = False
+    @staticmethod
+    def _litellm_model_name(model_name):
+        litellm_model = str(model_name or "")
+        lower_name = litellm_model.lower()
+        if "gemini" in lower_name and not lower_name.startswith("gemini/"):
+            litellm_model = f"gemini/{litellm_model}"
+        elif "claude" in lower_name and not lower_name.startswith("anthropic/"):
+            litellm_model = f"anthropic/{litellm_model}"
+        return litellm_model
+
+    def _load_pricing_cache(self):
+        empty = {"version": USAGE_COST_CACHE_VERSION, "updated_at": "", "models": {}}
         try:
-            litellm_model = str(model_name or "")
-            lower_name = litellm_model.lower()
-            if "gemini" in lower_name:
-                litellm_model = f"gemini/{litellm_model}"
-            elif "claude" in lower_name:
-                litellm_model = f"anthropic/{litellm_model}"
-            prompt_tokens = int(stats.get("prompt", 0) or 0)
-            completion_tokens = int(stats.get("completion", 0) or 0)
-            cached_prompt_tokens = min(
-                prompt_tokens,
-                max(0, int(stats.get("cached_prompt", 0) or 0)),
-            )
-            cache_write_tokens = min(
-                max(0, prompt_tokens - cached_prompt_tokens),
-                max(0, int(stats.get("cache_write_prompt", 0) or 0)),
-            )
-            uncached_prompt_tokens = max(
-                0,
-                prompt_tokens - cached_prompt_tokens - cache_write_tokens,
-            )
-            cache_key = (
-                litellm_model,
-                prompt_tokens,
-                completion_tokens,
-                cached_prompt_tokens,
-                cache_write_tokens,
-            )
-            if cache_key in self._cost_suffix_cache:
-                return self._cost_suffix_cache[cache_key]
-            cost = None
-            model_costs = getattr(litellm, "model_cost", {}) or {}
-            info = model_costs.get(litellm_model)
-            if not info and "/" in litellm_model:
-                info = model_costs.get(litellm_model.split("/", 1)[1])
-            if isinstance(info, dict):
-                input_rate = info.get("input_cost_per_token")
-                output_rate = info.get("output_cost_per_token")
-                if input_rate is not None or output_rate is not None:
-                    cache_read_rate = info.get(
-                        "cache_read_input_token_cost",
-                        info.get("input_cost_per_token_cache_hit", input_rate),
-                    )
-                    cache_write_rate = info.get("cache_creation_input_token_cost", input_rate)
-                    cost = (
-                        uncached_prompt_tokens * float(input_rate or 0)
-                        + cached_prompt_tokens * float(cache_read_rate or input_rate or 0)
-                        + cache_write_tokens * float(cache_write_rate or input_rate or 0)
-                        + completion_tokens * float(output_rate or 0)
-                    )
-            if cost is None:
-                cost = litellm.cost_calculator.cost_per_token(
-                    model=litellm_model,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                )
-            calculated = True
-            if isinstance(cost, (tuple, list)):
-                cost = sum(float(part or 0) for part in cost)
-            if cost and cost > 0:
-                suffix = f" | עלות מוערכת: ${cost:.6f}" if cost < 0.0001 else f" | עלות מוערכת: ${cost:.4f}"
+            with open(USAGE_COST_CACHE_FILE, "r", encoding="utf-8") as handle:
+                cached = json.load(handle)
+            if not isinstance(cached, dict) or int(cached.get("version", 0)) != USAGE_COST_CACHE_VERSION:
+                return empty
+            if not isinstance(cached.get("models"), dict):
+                return empty
+            return cached
         except Exception:
-            pass
-        if cache_key is not None and calculated:
-            self._cost_suffix_cache[cache_key] = suffix
-        return suffix
+            return empty
+
+    @staticmethod
+    def _load_bundled_litellm_pricing():
+        if not LITELLM_INSTALLED:
+            return {}
+        try:
+            spec = importlib.util.find_spec("litellm")
+            origin = Path(spec.origin) if spec and spec.origin else None
+            if origin is None:
+                return {}
+            backup_path = origin.parent / "model_prices_and_context_window_backup.json"
+            with open(backup_path, "r", encoding="utf-8") as handle:
+                prices = json.load(handle)
+            return prices if isinstance(prices, dict) else {}
+        except Exception:
+            return {}
+
+    def _pricing_cache_is_stale(self):
+        if not (self._pricing_cache.get("models") or {}):
+            return True
+        try:
+            updated = datetime.fromisoformat(str(self._pricing_cache.get("updated_at") or ""))
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - updated).total_seconds() >= USAGE_COST_CACHE_MAX_AGE_SECONDS
+        except Exception:
+            return True
+
+    def _save_pricing_cache(self, force=False):
+        if not self._pricing_cache_dirty and not (force and getattr(self, "_pricing_refresh_succeeded", False)):
+            return
+        self._pricing_cache["version"] = USAGE_COST_CACHE_VERSION
+        self._pricing_cache["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        os.makedirs(os.path.dirname(USAGE_COST_CACHE_FILE), exist_ok=True)
+        temp_path = f"{USAGE_COST_CACHE_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(self._pricing_cache, handle, ensure_ascii=False, indent=2)
+            os.replace(temp_path, USAGE_COST_CACHE_FILE)
+            self._pricing_cache_dirty = False
+        finally:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _normalized_cost_value(value):
+        if isinstance(value, (tuple, list)):
+            return sum(float(part or 0) for part in value)
+        return float(value or 0)
+
+    @staticmethod
+    def _pricing_info(model_costs, litellm_model):
+        info = (model_costs or {}).get(litellm_model)
+        if not info and "/" in litellm_model:
+            info = (model_costs or {}).get(litellm_model.split("/", 1)[1])
+        return info if isinstance(info, dict) else None
+
+    @staticmethod
+    def _pricing_entry_from_info(info):
+        if isinstance(info, dict):
+            input_rate = info.get("input_cost_per_token")
+            output_rate = info.get("output_cost_per_token")
+            if input_rate is not None or output_rate is not None:
+                cache_read_rate = info.get("cache_read_input_token_cost")
+                if cache_read_rate is None:
+                    cache_read_rate = info.get("input_cost_per_token_cache_hit")
+                if cache_read_rate is None:
+                    cache_read_rate = input_rate
+                cache_write_rate = info.get("cache_creation_input_token_cost")
+                if cache_write_rate is None:
+                    cache_write_rate = input_rate
+                return {
+                    "input": float(input_rate or 0),
+                    "output": float(output_rate or 0),
+                    "cache_read": float(cache_read_rate or 0),
+                    "cache_write": float(cache_write_rate or 0),
+                }
+        return None
+
+    def _pricing_entry_from_litellm(self, litellm, litellm_model):
+        model_costs = getattr(litellm, "model_cost", {}) or {}
+        info_entry = self._pricing_entry_from_info(self._pricing_info(model_costs, litellm_model))
+        if info_entry is not None:
+            return info_entry
+        try:
+            calculator = litellm.cost_calculator.cost_per_token
+            input_rate = self._normalized_cost_value(calculator(
+                model=litellm_model, prompt_tokens=1, completion_tokens=0,
+            ))
+            output_rate = self._normalized_cost_value(calculator(
+                model=litellm_model, prompt_tokens=0, completion_tokens=1,
+            ))
+            return {
+                "input": input_rate,
+                "output": output_rate,
+                "cache_read": input_rate,
+                "cache_write": input_rate,
+            }
+        except Exception:
+            return {"unpriced": True}
+
+    @staticmethod
+    def _cost_from_pricing_entry(entry, stats):
+        if not isinstance(entry, dict) or entry.get("unpriced"):
+            return 0.0
+        prompt_tokens = int(stats.get("prompt", 0) or 0)
+        completion_tokens = int(stats.get("completion", 0) or 0)
+        cached_prompt_tokens = min(prompt_tokens, max(0, int(stats.get("cached_prompt", 0) or 0)))
+        cache_write_tokens = min(
+            max(0, prompt_tokens - cached_prompt_tokens),
+            max(0, int(stats.get("cache_write_prompt", 0) or 0)),
+        )
+        uncached_prompt_tokens = max(0, prompt_tokens - cached_prompt_tokens - cache_write_tokens)
+        input_rate = float(entry.get("input", 0) or 0)
+        return (
+            uncached_prompt_tokens * input_rate
+            + cached_prompt_tokens * float(entry.get("cache_read", input_rate) or 0)
+            + cache_write_tokens * float(entry.get("cache_write", input_rate) or 0)
+            + completion_tokens * float(entry.get("output", 0) or 0)
+        )
+
+    def _cost_suffix(self, model_name, stats, allow_litellm=False, force_refresh=False):
+        suffix = " | מחיר מוערך: חינמי / לא במאגר"
+        litellm_model = self._litellm_model_name(model_name)
+        models = self._pricing_cache.setdefault("models", {})
+        entry = models.get(litellm_model)
+        # Older builds persisted negative lookups.  Treat them as misses so a
+        # transient catalog failure cannot permanently suppress future costs.
+        if isinstance(entry, dict) and entry.get("unpriced"):
+            models.pop(litellm_model, None)
+            self._pricing_cache_dirty = True
+            entry = None
+        bundled_info = self._pricing_info(
+            getattr(self, "_bundled_model_costs", {}),
+            litellm_model,
+        )
+        bundled_entry = self._pricing_entry_from_info(bundled_info)
+        should_use_bundled = bundled_entry is not None and (
+            entry is None
+            or entry.get("_source") == "fallback"
+            or bool(getattr(self, "_pricing_cache_stale", False))
+        )
+        if should_use_bundled:
+            bundled_entry["_source"] = "bundled"
+            if bundled_entry != entry:
+                models[litellm_model] = bundled_entry
+                self._pricing_cache_dirty = True
+            entry = bundled_entry
+        if entry is None:
+            fallback = USAGE_PRICING_FALLBACKS.get(litellm_model)
+            entry = dict(fallback) if isinstance(fallback, dict) else None
+            if entry is not None:
+                models[litellm_model] = entry
+                self._pricing_cache_dirty = True
+        needs_refresh = entry is None or entry.get("_source") == "fallback"
+        if allow_litellm and (needs_refresh or force_refresh):
+            litellm = self._litellm()
+            if litellm is not None:
+                self._pricing_refresh_succeeded = True
+                refreshed = self._pricing_entry_from_litellm(litellm, litellm_model)
+                # Never downgrade a valid persisted/bundled/fallback price to
+                # an unpriced marker when a remote catalog refresh fails.
+                if isinstance(refreshed, dict) and not refreshed.get("unpriced"):
+                    refreshed.pop("_source", None)
+                    models[litellm_model] = refreshed
+                    if refreshed != entry:
+                        self._pricing_cache_dirty = True
+                    entry = refreshed
+                    needs_refresh = False
+
+        cost = self._cost_from_pricing_entry(entry, stats)
+        if cost > 0:
+            suffix = f" | עלות מוערכת: ${cost:.6f}" if cost < 0.0001 else f" | עלות מוערכת: ${cost:.4f}"
+        return suffix, bool(needs_refresh)
 
     def _load_memory_summary(self, usage_stats):
         if not os.path.exists(MEMORY_FILE):
@@ -1641,7 +1838,10 @@ class UsageStatsPage(QWidget):
         self._clear_content()
         self._add_usage_message("טוען נתוני שימוש...")
         self._usage_generation += 1
-        worker = UsageStatsLoadWorker(self._usage_generation, timeframe, self)
+        # Keep long pricing refreshes owned by the main window so invalidating
+        # this page during a theme change cannot destroy a running QThread.
+        worker_owner = self.main_window if isinstance(self.main_window, QObject) else self
+        worker = UsageStatsLoadWorker(self._usage_generation, timeframe, worker_owner)
         self._usage_workers.append(worker)
         worker.ready.connect(self._on_usage_data_ready)
         worker.finished.connect(lambda w=worker: self._forget_usage_worker(w))
@@ -1966,9 +2166,7 @@ class DeveloperTracePage(QWidget):
         lines.append("\nAudit tail:")
         try:
             if os.path.exists(AUDIT_LOG_FILE):
-                with open(AUDIT_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-                    audit_lines = f.readlines()[-60:]
-                lines.extend([ln.rstrip("\n") for ln in audit_lines])
+                lines.extend(_tail_text_file(AUDIT_LOG_FILE, 60))
             else:
                 lines.append("אין עדיין יומן אודיט.")
         except Exception as e:
@@ -2252,7 +2450,9 @@ class ToolsSettingsPage(QWidget):
             QMessageBox.warning(self, title, str(result))
 
     def install_skill_manually(self):
-        choice, ok = QInputDialog.getItem(self, "התקנת מיומנות", "מקור התקנה:", ["קובץ ZIP", "תיקייה"], 0, False)
+        choice, ok = themed_item_input(
+            self, "התקנת מיומנות", "מקור התקנה:", ["קובץ ZIP", "תיקייה"], 0, False,
+        )
         if not ok:
             return
         if choice == "תיקייה":
@@ -2272,7 +2472,9 @@ class ToolsSettingsPage(QWidget):
         self._show_install_result("התקנת כלי Python", result)
 
     def install_mcp_manually(self):
-        choice, ok = QInputDialog.getItem(self, "הוספת MCP", "מקור התקנה:", ["חבילת npm נעולה", "קובץ JSON"], 0, False)
+        choice, ok = themed_item_input(
+            self, "הוספת MCP", "מקור התקנה:", ["חבילת npm נעולה", "קובץ JSON"], 0, False,
+        )
         if not ok:
             return
         if choice == "קובץ JSON":
@@ -2281,7 +2483,9 @@ class ToolsSettingsPage(QWidget):
                 return
             result = self.core.install_mcp_manual(config_path=path)
         else:
-            package, ok = QInputDialog.getText(self, "הוספת MCP", "שם חבילה עם גרסה, למשל @scope/server@1.2.3:")
+            package, ok = themed_text_input(
+                self, "הוספת MCP", "שם חבילה עם גרסה, למשל @scope/server@1.2.3:"
+            )
             if not ok or not str(package).strip():
                 return
             result = self.core.install_mcp_manual(package=str(package).strip())
@@ -5980,8 +6184,7 @@ class SettingsPage(QWidget):
         try:
             if not os.path.exists(path):
                 return []
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                return [line.rstrip("\n") for line in f.readlines()[-max_lines:]]
+            return _tail_text_file(path, max_lines)
         except Exception as e:
             return [f"ERROR reading {os.path.basename(path)}: {e}"]
 

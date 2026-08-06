@@ -14,7 +14,7 @@ from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, detect_installation_kind, human_size, launch_update_installer
 from .visual_canvas import VisualCanvasPanel, normalize_canvas_artifact, web_canvas_available
-from PyQt6.QtCore import QEvent, QEventLoop
+from PyQt6.QtCore import QEvent, QEventLoop, QRunnable, QThreadPool
 from PyQt6.QtGui import QTextDocument, QTransform
 from PyQt6.QtWidgets import QBoxLayout, QSplitter, QWidgetAction
 
@@ -739,7 +739,11 @@ def _render_markdown_html(text, link_color=None, is_user=False, style_blocks=Tru
             if style_blocks:
                 rendered_html = _style_markdown_blocks(rendered_html, is_user, None)
             rendered_html = _suppress_asset_font_italic_html(rendered_html)
-            return _soft_break_rendered_text(rendered_html)
+            rendered_html = _soft_break_rendered_text(rendered_html)
+            # Local filesystem paths are promoted to anchors by the soft-break
+            # pass above, after the first sanitization.  Sanitize/style once
+            # more so those auto-detected file links receive the theme color.
+            return _sanitize_rendered_links(rendered_html, link_color, clickable_links)
         except Exception:
             pass
     rendered_html = _render_markdown_links_fallback(text, link_color, clickable_links)
@@ -1998,67 +2002,139 @@ class AgentToolGroupWidget(QWidget):
         self.show_thinking()
         self.show()
 
-class CanvasOpenButton(QPushButton):
-    """A themed canvas trigger that wraps naturally, with a strict two-line cap."""
+class CanvasOpenButton(QFrame):
+    """A responsive canvas card with title, timestamp, icon, and open state."""
 
-    MAX_LINES = 2
+    open_requested = pyqtSignal()
+    HEBREW_MONTHS = (
+        "ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני",
+        "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר",
+    )
 
-    def __init__(self, text, parent=None):
-        super().__init__(text, parent)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.setAccessibleName(str(text or "פתח קנבס"))
+    def __init__(self, artifact, parent=None):
+        super().__init__(parent)
+        self.artifact = copy.deepcopy(artifact or {})
+        self.canvas_id = str(self.artifact.get("id") or "")
+        self._active = False
+        self.setObjectName("CanvasOpenCard")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAutoFillBackground(False)
+        self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setMinimumHeight(108)
+        title = str(self.artifact.get("title") or "קנבס של סמארטי")
+        self.setAccessibleName(f"קנבס: {title}")
 
-    def _display_lines(self, width):
-        available = max(80, int(width) - 32)
-        words = str(self.text() or "").split()
-        if not words:
-            return [""]
-        metrics = QFontMetrics(self.font())
-        lines = []
-        current = ""
-        for index, word in enumerate(words):
-            candidate = f"{current} {word}".strip()
-            if not current or metrics.horizontalAdvance(candidate) <= available:
-                current = candidate
-                continue
-            lines.append(current)
-            current = word
-            if len(lines) == self.MAX_LINES - 1:
-                remainder = " ".join([current, *words[index + 1:]])
-                lines.append(metrics.elidedText(remainder, Qt.TextElideMode.ElideRight, available))
-                return lines
-        if current:
-            lines.append(current)
-        return lines[:self.MAX_LINES]
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
 
-    def hasHeightForWidth(self):
-        return True
+        self.open_button = QPushButton("פתיחה")
+        self.open_button.setObjectName("CanvasCardOpenButton")
+        self.open_button.setMinimumWidth(76)
+        self.open_button.setFixedHeight(38)
+        self.open_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.open_button.setToolTip("פתיחת הקנבס לצד השיחה")
+        self.open_button.clicked.connect(self.open_requested)
+        layout.addWidget(
+            self.open_button,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+        )
 
-    def heightForWidth(self, width):
-        line_count = max(1, len(self._display_lines(width)))
-        return max(44, line_count * QFontMetrics(self.font()).lineSpacing() + 20)
+        details = QWidget()
+        details.setObjectName("CanvasCardDetails")
+        details.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setSpacing(5)
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("CanvasCardTitle")
+        self.title_label.setWordWrap(True)
+        self.title_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.meta_label = QLabel(self._format_created_at(self.artifact.get("created_at")))
+        self.meta_label.setObjectName("CanvasCardMeta")
+        self.meta_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute | Qt.AlignmentFlag.AlignVCenter
+        )
+        details_layout.addWidget(self.title_label)
+        details_layout.addWidget(self.meta_label)
+        details_layout.addStretch(1)
+        layout.addWidget(details, 1)
+
+        self.icon_label = QLabel()
+        self.icon_label.setObjectName("CanvasCardIcon")
+        self.icon_label.setFixedSize(30, 30)
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        set_themed_label_icon(
+            self.icon_label,
+            ("canvas_card_icon", "agent_tool_canvas_manager"),
+            "<>",
+            24,
+        )
+        layout.addWidget(
+            self.icon_label,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+        )
+        self.apply_theme()
+
+    @classmethod
+    def _format_created_at(cls, value):
+        try:
+            created = datetime.fromisoformat(str(value or ""))
+        except Exception:
+            return "תאריך לא זמין"
+        month = cls.HEBREW_MONTHS[created.month - 1]
+        return f"\u200f{created.day} ב{month}, \u200e{created.strftime('%H:%M')}\u200f"
+
+    def set_active(self, active):
+        active = bool(active)
+        if self._active == active:
+            return
+        self._active = active
+        self.open_button.setVisible(not active)
+        self.setAccessibleDescription("הקנבס פתוח כעת" if active else "הקנבס סגור")
+        self.apply_theme()
+        self.updateGeometry()
+
+    def is_active(self):
+        return self._active
+
+    def apply_theme(self):
+        refresh_themed_label_icon(self.icon_label)
+        background = (
+            "rgba(53,217,255,0.18)" if CURRENT_THEME == "dark"
+            else "rgba(0,109,155,0.14)"
+        ) if self._active else (
+            GLASS_COLOR if CURRENT_THEME == "dark" else "rgba(6,22,44,0.055)"
+        )
+        open_background = (
+            "rgba(53,217,255,0.22)" if CURRENT_THEME == "dark"
+            else "rgba(56,169,255,0.24)"
+        )
+        border = ACCENT_COLOR if self._active else SOFT_LINE_COLOR
+        self.setStyleSheet(
+            f"QFrame#CanvasOpenCard {{ background: {background}; border: 1px solid {border}; "
+            "border-radius: 26px; }"
+            "QWidget#CanvasCardDetails { background: transparent; border: none; }"
+            f"QLabel#CanvasCardTitle {{ color: {TEXT_COLOR}; background: transparent; border: none; "
+            "font-size: 15px; font-weight: 700; }"
+            f"QLabel#CanvasCardMeta {{ color: {MUTED_TEXT_COLOR}; background: transparent; border: none; "
+            "font-size: 12px; font-weight: 500; }"
+            "QLabel#CanvasCardIcon { background: transparent; border: none; }"
+            f"QPushButton#CanvasCardOpenButton {{ background: {open_background}; color: {TEXT_COLOR}; "
+            f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 19px; padding: 0px 16px; "
+            "font-size: 13px; font-weight: 700; outline: none; }"
+            f"QPushButton#CanvasCardOpenButton:hover {{ background: {HOVER_TINT}; border-color: {ACCENT_COLOR}; }}"
+            f"QPushButton#CanvasCardOpenButton:pressed {{ background: {ACCENT_COLOR}; color: {ACCENT_TEXT_COLOR}; }}"
+        )
 
     def sizeHint(self):
-        width = min(420, max(260, super().sizeHint().width()))
-        return QSize(width, self.heightForWidth(width))
-
-    def minimumSizeHint(self):
-        return QSize(200, self.heightForWidth(240))
-
-    def paintEvent(self, event):
-        option = QStyleOptionButton()
-        self.initStyleOption(option)
-        option.text = ""
-        painter = QPainter(self)
-        self.style().drawControl(QStyle.ControlElement.CE_PushButton, option, painter, self)
-        painter.setPen(option.palette.buttonText().color())
-        text_rect = self.contentsRect().adjusted(16, 8, -16, -8)
-        painter.drawText(
-            text_rect,
-            int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
-            "\n".join(self._display_lines(text_rect.width())),
-        )
-        painter.end()
+        hint = super().sizeHint()
+        return QSize(max(260, hint.width()), max(108, hint.height()))
 
 
 class MessageBubble(QFrame):
@@ -2088,6 +2164,7 @@ class MessageBubble(QFrame):
         self.attachments = normalize_attachments(attachments or [])
         self.canvas_artifacts = [artifact for item in (canvases or []) if (artifact := normalize_canvas_artifact(item))]
         self._canvas_buttons = []
+        self._active_canvas_id = ""
         self.code_blocks = []
         self._user_message_collapsible = False
         self._user_message_collapsed = True
@@ -2206,7 +2283,10 @@ class MessageBubble(QFrame):
 
     def _link_color(self):
         if CURRENT_THEME == "light":
-            return "#006DCC"
+            # The light-theme user bubble is itself blue/turquoise.  Reusing a
+            # blue link color makes anchors disappear into the gradient; the
+            # underlined white link keeps the strongest contrast throughout it.
+            return "#FFFFFF" if self.is_user else "#006DCC"
         if self.is_user:
             return BUBBLE_USER_TEXT
         return ACCENT_PINK_COLOR
@@ -2272,9 +2352,7 @@ class MessageBubble(QFrame):
         for tile in self.findChildren(AttachmentTile):
             tile.apply_theme()
         for button in getattr(self, "_canvas_buttons", []):
-            button.setStyleSheet(self._canvas_button_stylesheet())
-            button.ensurePolished()
-            button.setFixedHeight(button.heightForWidth(button.width() or self.max_w))
+            button.apply_theme()
         self._apply_user_message_collapse_state()
         if self.is_user:
             apply_soft_shadow(self, blur=22, y=7, alpha=30)
@@ -2302,8 +2380,7 @@ class MessageBubble(QFrame):
             tile.setMaximumWidth(self.max_w)
         for button in getattr(self, "_canvas_buttons", []):
             button.setFixedWidth(self.max_w)
-            button.ensurePolished()
-            button.setFixedHeight(button.heightForWidth(self.max_w))
+            button.updateGeometry()
         self._apply_agent_process_width_lock()
         self._refresh_layout()
 
@@ -2469,15 +2546,6 @@ class MessageBubble(QFrame):
             tile.setMaximumWidth(self.max_w)
             self.final_layout.addWidget(tile)
 
-    def _canvas_button_stylesheet(self):
-        border = ACCENT_PINK_COLOR if CURRENT_THEME == "dark" else ACCENT_COLOR
-        return (
-            f"QPushButton {{ background: {ACCENT_TINT}; color: {TEXT_COLOR}; border: 1px solid {border}; "
-            f"border-radius: 17px; padding: 9px 16px; font-size: 14px; font-weight: 800; text-align: center; }}"
-            f"QPushButton:hover {{ background: {ACCENT_TINT_STRONG}; border-color: {ACCENT_COLOR}; }}"
-            f"QPushButton:pressed {{ background: {ACCENT_COLOR}; color: {ACCENT_TEXT_COLOR}; }}"
-        )
-
     def _add_canvas_buttons(self):
         for button in self._canvas_buttons:
             try:
@@ -2492,17 +2560,19 @@ class MessageBubble(QFrame):
         for artifact in self.canvas_artifacts:
             if artifact.get("closed"):
                 continue
-            button = CanvasOpenButton(f"פתח קנבס  •  {artifact.get('title', 'קנבס של סמארטי')}")
-            button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-            button.setStyleSheet(self._canvas_button_stylesheet())
-            button.ensurePolished()
+            button = CanvasOpenButton(artifact)
             button.setFixedWidth(self.max_w)
-            button.setFixedHeight(button.heightForWidth(self.max_w))
-            button.setToolTip("פתיחת הקנבס לצד השיחה")
-            button.clicked.connect(lambda checked=False, item=copy.deepcopy(artifact): self.canvas_open_requested.emit(item))
+            button.set_active(button.canvas_id == self._active_canvas_id)
+            button.open_requested.connect(
+                lambda item=copy.deepcopy(artifact): self.canvas_open_requested.emit(item)
+            )
             self.final_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignRight)
             self._canvas_buttons.append(button)
+
+    def set_active_canvas_id(self, canvas_id=""):
+        self._active_canvas_id = str(canvas_id or "")
+        for button in getattr(self, "_canvas_buttons", []):
+            button.set_active(bool(self._active_canvas_id and button.canvas_id == self._active_canvas_id))
 
     def set_canvas_artifacts(self, canvases):
         self.canvas_artifacts = [artifact for item in (canvases or []) if (artifact := normalize_canvas_artifact(item))]
@@ -2995,6 +3065,10 @@ class ChatMessageContainer(QWidget):
         if hasattr(self, "bubble") and self.bubble:
             self.bubble.apply_theme()
 
+    def set_active_canvas_id(self, canvas_id=""):
+        if hasattr(self, "bubble") and self.bubble:
+            self.bubble.set_active_canvas_id(canvas_id)
+
     def set_memory_updated(self, updated=True):
         if self.memory_updated_indicator is not None:
             self.memory_updated_indicator.setVisible(bool(updated))
@@ -3357,6 +3431,30 @@ class EndElideLabel(QLabel):
         QLabel.setText(self, full_text[:low].rstrip() + suffix)
         self.setToolTip(full_text)
 
+
+class ChatHistorySearchTask(QRunnable):
+    """Run the expensive history corpus scan away from the GUI thread."""
+
+    class Signals(QObject):
+        ready = pyqtSignal(int, str, object, str)
+
+    def __init__(self, generation, core, query):
+        super().__init__()
+        self.generation = int(generation)
+        self.core = core
+        self.query = str(query or "")
+        self.signals = self.Signals()
+
+    def run(self):
+        try:
+            records = self.core.list_chat_sessions(self.query)
+            error = ""
+        except Exception as exc:
+            records = []
+            error = str(exc)
+        self.signals.ready.emit(self.generation, self.query, records, error)
+
+
 class ChatHistoryPage(QWidget):
     def __init__(self, core, main_window):
         super().__init__(getattr(main_window, "stacked_widget", None))
@@ -3366,6 +3464,14 @@ class ChatHistoryPage(QWidget):
         self._open_session_menu_button = None
         self._suppress_session_menu_button = None
         self.search_icon_label = None
+        self._search_generation = 0
+        self._search_tasks = {}
+        self._search_active = False
+        self._search_pending = False
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(40)
+        self._search_timer.timeout.connect(self._start_session_search)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         layout = QVBoxLayout(self)
@@ -3412,7 +3518,7 @@ class ChatHistoryPage(QWidget):
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.setStyleSheet(self._search_line_edit_stylesheet())
         self._refresh_search_icon()
-        self.search_edit.textChanged.connect(self.load_sessions)
+        self.search_edit.textChanged.connect(self._schedule_session_search)
         search_layout.addWidget(self.search_edit, 1)
         layout.addWidget(self.search_frame)
 
@@ -3437,7 +3543,6 @@ class ChatHistoryPage(QWidget):
         self._apply_search_edit_rtl()
         self._refresh_search_icon()
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
-        self.load_sessions()
 
     def _apply_search_edit_rtl(self):
         if not hasattr(self, "search_edit") or self.search_edit is None:
@@ -3507,10 +3612,45 @@ class ChatHistoryPage(QWidget):
             if widget:
                 widget.deleteLater()
 
-    def load_sessions(self):
-        self._clear_rows()
+    def _schedule_session_search(self, _text=""):
+        self._search_generation += 1
+        self._search_timer.start()
+
+    def _start_session_search(self):
+        if self._search_active:
+            self._search_pending = True
+            return
         query = self.search_edit.text().strip() if hasattr(self, "search_edit") else ""
-        records = self.core.list_chat_sessions(query)
+        generation = self._search_generation
+        self._search_active = True
+        self._search_pending = False
+        task = ChatHistorySearchTask(generation, self.core, query)
+        self._search_tasks[generation] = task
+        task.signals.ready.connect(self._on_session_search_ready)
+        QThreadPool.globalInstance().start(task)
+
+    def _on_session_search_ready(self, generation, query, records, error):
+        self._search_tasks.pop(int(generation), None)
+        self._search_active = False
+        current_query = self.search_edit.text().strip() if hasattr(self, "search_edit") else ""
+        if int(generation) == self._search_generation and str(query or "") == current_query:
+            if error:
+                logging.warning("Chat history search failed: %s", error)
+            self._render_sessions(records or [])
+        if self._search_pending:
+            self._search_pending = False
+            QTimer.singleShot(0, self._start_session_search)
+
+    def load_sessions(self):
+        self._search_timer.stop()
+        self._search_generation += 1
+        # Opening or refreshing history can involve thousands of messages.
+        # Keep that database/content scan off the GUI thread as well as typed
+        # searches; an already-running scan is coalesced into one latest pass.
+        self._start_session_search()
+
+    def _render_sessions(self, records):
+        self._clear_rows()
         if not records:
             empty = QLabel("לא נמצאו שיחות")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3707,7 +3847,12 @@ class ChatHistoryPage(QWidget):
         self.load_sessions()
 
     def rename_session(self, session_id, current_title):
-        title, ok = QInputDialog.getText(self, "שינוי שם שיחה", "שם חדש:", text=current_title or DEFAULT_CHAT_TITLE)
+        title, ok = themed_text_input(
+            self,
+            "שינוי שם שיחה",
+            "שם חדש:",
+            current_title or DEFAULT_CHAT_TITLE,
+        )
         if ok and title.strip():
             self.core.rename_chat_session(session_id, title.strip())
             if self.core.active_chat_session().get("id") == session_id:
@@ -4416,6 +4561,7 @@ class ChatWindow(QMainWindow):
         self._update_check_source = None
         self.pending_attachments = []
         self._canvas_expanded = False
+        self._active_canvas_id = ""
         self._compact_window_size = None
         self._pending_canvas_layout = None
         self._canvas_layout_save_scheduled = False
@@ -5526,7 +5672,8 @@ class ChatWindow(QMainWindow):
 
     def apply_theme(self, mode=None, refresh_messages=True):
         apply_app_theme(QApplication.instance(), mode=mode, settings=self.core.settings)
-        refresh_themed_widget_icons(self)
+        if mode is None:
+            refresh_themed_widget_icons(self)
         self.setStyleSheet(
             f"QMainWindow {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, "
             f"stop:0 {MESH_A}, stop:0.45 {MESH_B}, stop:0.72 {MESH_C}, stop:1 {MESH_D}); }}"
@@ -6106,6 +6253,7 @@ class ChatWindow(QMainWindow):
         )
         self.canvas_panel.show_canvas(artifact, allow_remote_images=allow_remote_images)
         self.canvas_panel.show()
+        self._set_active_canvas_card(artifact.get("id"))
         self._schedule_chat_width_refresh()
         self._schedule_scroll_last_user_to_view_top(delays=(0, 100))
 
@@ -6122,7 +6270,13 @@ class ChatWindow(QMainWindow):
         finally:
             self.setUpdatesEnabled(True)
             self.update()
+        self._set_active_canvas_card("")
         self._schedule_chat_width_refresh()
+
+    def _set_active_canvas_card(self, canvas_id=""):
+        self._active_canvas_id = str(canvas_id or "")
+        for container in self.findChildren(ChatMessageContainer):
+            container.set_active_canvas_id(self._active_canvas_id)
 
     def _close_canvas_for_secondary_page(self):
         if self._canvas_expanded:
@@ -6718,6 +6872,7 @@ class ChatWindow(QMainWindow):
             parent=self.chat_widget,
         )
         self._wire_message_container(container)
+        container.set_active_canvas_id(getattr(self, "_active_canvas_id", ""))
         if layout_index is None:
             self.chat_layout.addWidget(container)
         else:

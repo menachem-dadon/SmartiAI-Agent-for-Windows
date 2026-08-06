@@ -17,6 +17,9 @@ from urllib.parse import urlparse
 from PyQt6.QtCore import QObject, Qt, pyqtSignal, pyqtSlot, QUrl
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QStackedLayout, QVBoxLayout, QWidget
 
+from . import ui_styles
+from .ui_styles import set_themed_button_icon
+
 
 CANVAS_SCHEMA_VERSION = 1
 MAX_CANVAS_HTML_CHARS = 220_000
@@ -368,7 +371,11 @@ class VisualCanvasPanel(QFrame):
         self._unavailable_label.setWordWrap(True)
         self._unavailable_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label = QLabel("קנבס")
-        self.close_button = QPushButton("סגור קנבס")
+        self.close_button = QPushButton()
+        self.close_button.setObjectName("CanvasCloseButton")
+        self.close_button.setFixedSize(38, 38)
+        self.close_button.setToolTip("סגירת הקנבס")
+        self.close_button.setAccessibleName("סגירת הקנבס")
         self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_button.clicked.connect(self.close_requested)
 
@@ -388,17 +395,31 @@ class VisualCanvasPanel(QFrame):
         self.apply_theme()
 
     def apply_theme(self, colors=None):
-        colors = colors or {}
-        text = colors.get("text", "#ffffff")
-        muted = colors.get("muted", "#a8b4ca")
-        accent = colors.get("accent", "#35d9ff")
-        line = colors.get("line", "rgba(255,255,255,0.16)")
-        glass = colors.get("glass", "rgba(9,18,38,0.70)")
+        colors = colors or {
+            "text": ui_styles.TEXT_COLOR,
+            "muted": ui_styles.MUTED_TEXT_COLOR,
+            "accent": ui_styles.ACCENT_COLOR,
+            "line": ui_styles.SOFT_LINE_COLOR,
+            "glass": ui_styles.GLASS_STRONG_COLOR,
+        }
+        text = colors.get("text", ui_styles.TEXT_COLOR)
+        muted = colors.get("muted", ui_styles.MUTED_TEXT_COLOR)
+        accent = colors.get("accent", ui_styles.ACCENT_COLOR)
+        line = colors.get("line", ui_styles.SOFT_LINE_COLOR)
+        glass = colors.get("glass", ui_styles.GLASS_STRONG_COLOR)
+        set_themed_button_icon(
+            self.close_button,
+            ("canvas_close_icon", "close"),
+            "×",
+            20,
+            clear_text=True,
+        )
         self.setStyleSheet(
             f"QFrame {{ background: {glass}; border: 1px solid {line}; border-radius: 20px; }}"
             f"QLabel {{ color: {text}; background: transparent; border: none; font-size: 14px; }}"
-            f"QPushButton {{ color: {text}; background: transparent; border: 1px solid {line}; border-radius: 14px; padding: 7px 12px; font-weight: 700; }}"
-            f"QPushButton:hover {{ border-color: {accent}; background: rgba(53,217,255,0.12); }}"
+            f"QPushButton#CanvasCloseButton {{ color: {text}; background: transparent; border: 1px solid {line}; "
+            "border-radius: 19px; padding: 0px; }"
+            f"QPushButton#CanvasCloseButton:hover {{ border-color: {accent}; background: rgba(53,217,255,0.12); }}"
         )
         self.title_label.setStyleSheet(f"color: {text}; font-size: 16px; font-weight: 800; background: transparent; border: none;")
         self._unavailable_label.setStyleSheet(f"color: {muted}; background: transparent; border: none; padding: 24px;")

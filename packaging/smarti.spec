@@ -40,7 +40,6 @@ for package in (
     "pygame",
     "pytesseract",
     "send2trash",
-    "selenium",
     "speech_recognition",
     "truststore",
     "uiautomation",

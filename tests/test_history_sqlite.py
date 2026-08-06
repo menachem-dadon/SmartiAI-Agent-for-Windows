@@ -5,6 +5,7 @@ import threading
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest import mock
 
 from smarti.history import ChatSessionStore, DEFAULT_CHAT_TITLE
 
@@ -134,6 +135,35 @@ class ChatHistorySqliteTests(unittest.TestCase):
             self.assertEqual(older["messages"][0]["content"], "user-032")
             self.assertEqual(older["messages"][-1]["content"], "assistant-043")
             self.assertEqual(len(store.messages(session_id)), 120)
+
+    def test_literal_history_search_uses_fast_sql_path_and_finds_attachments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "chats.json"))
+            session_id = store.active_session()["id"]
+            store.add_turn(
+                "הנה הקובץ",
+                "קיבלתי",
+                session_id=session_id,
+                user_metadata={"attachments": [{"name": "תקציב-087.xlsx"}]},
+            )
+
+            with mock.patch.object(store, "_session", side_effect=AssertionError("literal search must not load every session")):
+                records = store.list_sessions("תקציב-087")
+
+            self.assertEqual([record["id"] for record in records], [session_id])
+            self.assertEqual(records[0]["match_kind"], "content")
+
+    def test_history_search_keeps_fuzzy_typo_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "chats.json"))
+            session_id = store.active_session()["id"]
+            store.add_turn("בקשה", "תשובה", session_id=session_id)
+            store.rename_session(session_id, "Smarti release planning")
+
+            records = store.list_sessions("plannng")
+
+            self.assertEqual([record["id"] for record in records], [session_id])
+            self.assertEqual(records[0]["match_kind"], "title")
 
 
 if __name__ == "__main__":

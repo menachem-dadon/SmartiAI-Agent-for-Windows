@@ -168,7 +168,7 @@ function Prepare-PythonRuntime {
     param($Config)
     $pythonVersion = if ($env:SMARTI_PYTHON_VERSION) { $env:SMARTI_PYTHON_VERSION } else { Get-ConfigValue $Config.python "version" }
     $pythonUrl = if ($env:SMARTI_PYTHON_URL) { $env:SMARTI_PYTHON_URL } else { Get-ConfigValue $Config.python "url" }
-    $pythonSha = Get-ConfigValue $Config.python "sha256"
+    $pythonSha = if ($env:SMARTI_PYTHON_SHA256) { $env:SMARTI_PYTHON_SHA256 } else { Get-ConfigValue $Config.python "sha256" }
     if (-not $pythonVersion -or -not $pythonUrl) { throw "Python runtime version/url is missing." }
 
     $zipPath = Join-Path $CacheDir "python-$pythonVersion-embed-amd64.zip"
@@ -188,8 +188,8 @@ function Prepare-PythonRuntime {
         $pipOk = $false
     }
     if (-not $pipOk) {
-        $getPipUrl = Get-ConfigValue $Config.getPip "url" "https://bootstrap.pypa.io/get-pip.py"
-        $getPipSha = Get-ConfigValue $Config.getPip "sha256"
+        $getPipUrl = if ($env:SMARTI_GET_PIP_URL) { $env:SMARTI_GET_PIP_URL } else { Get-ConfigValue $Config.getPip "url" "https://bootstrap.pypa.io/get-pip.py" }
+        $getPipSha = if ($env:SMARTI_GET_PIP_SHA256) { $env:SMARTI_GET_PIP_SHA256 } else { Get-ConfigValue $Config.getPip "sha256" }
         $getPipPath = Join-Path $CacheDir "get-pip.py"
         Invoke-Download -Url $getPipUrl -OutFile $getPipPath -Sha256 $getPipSha
         Invoke-Checked -FilePath $pythonExe -Arguments @($getPipPath, "--no-warn-script-location")
@@ -208,7 +208,7 @@ function Prepare-NodeRuntime {
     param($Config)
     $nodeVersion = if ($env:SMARTI_NODE_VERSION) { $env:SMARTI_NODE_VERSION } else { Get-ConfigValue $Config.node "version" }
     $nodeUrl = if ($env:SMARTI_NODE_URL) { $env:SMARTI_NODE_URL } else { Get-ConfigValue $Config.node "url" }
-    $nodeSha = Get-ConfigValue $Config.node "sha256"
+    $nodeSha = if ($env:SMARTI_NODE_SHA256) { $env:SMARTI_NODE_SHA256 } else { Get-ConfigValue $Config.node "sha256" }
     if (-not $nodeVersion -or -not $nodeUrl) { throw "Node runtime version/url is missing." }
 
     $zipPath = Join-Path $CacheDir "node-v$nodeVersion-win-x64.zip"

@@ -583,6 +583,79 @@ class ChatSessionStore:
                         "match_kind": "content",
                     })
                 return records
+
+            # Most searches are literal substrings. Let SQLite narrow those in
+            # one pass (including attachment names in metadata) instead of
+            # loading every message of every session and running fuzzy matching
+            # for each keystroke. Fuzzy matching remains the typo fallback.
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            exact_rows = db.execute(
+                """
+                SELECT s.id,
+                       CASE WHEN s.title LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END AS title_match,
+                       MAX(CASE WHEN m.content LIKE ? ESCAPE '\\'
+                                     OR m.metadata_json LIKE ? ESCAPE '\\'
+                                THEN 1 ELSE 0 END) AS content_match
+                FROM sessions s
+                LEFT JOIN messages m ON m.session_id=s.id
+                GROUP BY s.id
+                HAVING title_match=1 OR content_match=1
+                """,
+                (pattern, pattern, pattern),
+            ).fetchall()
+            if exact_rows:
+                match_by_id = {str(item["id"]): item for item in exact_rows}
+                matched_rows = [row for row in rows if str(row["id"]) in match_by_id]
+                matched_ids = [str(row["id"]) for row in matched_rows]
+                placeholders = ",".join("?" for _ in matched_ids)
+                last_rows = db.execute(
+                    f"""
+                    SELECT m.*
+                    FROM messages m
+                    JOIN (
+                        SELECT session_id, MAX(ordinal) AS ordinal
+                        FROM messages
+                        WHERE session_id IN ({placeholders})
+                        GROUP BY session_id
+                    ) latest
+                      ON latest.session_id=m.session_id
+                     AND latest.ordinal=m.ordinal
+                    """,
+                    matched_ids,
+                ).fetchall()
+                last_by_session = {
+                    str(item["session_id"]): self._row_message(item)
+                    for item in last_rows
+                }
+                records = []
+                for row in matched_rows:
+                    session_id = str(row["id"])
+                    match = match_by_id[session_id]
+                    last_message = last_by_session.get(session_id, {})
+                    title_match = bool(match["title_match"])
+                    records.append({
+                        "id": session_id,
+                        "title": str(row["title"] or DEFAULT_CHAT_TITLE),
+                        "created_at": str(row["created_at"] or ""),
+                        "updated_at": str(row["updated_at"] or ""),
+                        "pinned": bool(row["pinned"]),
+                        "message_count": int(row["message_count"] or 0),
+                        "preview": _preview_text(_message_text(last_message)) or "אין הודעות עדיין",
+                        "preview_source": _message_text(last_message),
+                        "title_score": 1.0 if title_match else 0.0,
+                        "content_score": 0.0 if title_match else 1.0,
+                        "match_kind": "title" if title_match else "content",
+                    })
+                records.sort(
+                    key=lambda record: (
+                        0 if record["match_kind"] == "title" else 1,
+                        not record["pinned"],
+                        -_time_score(record.get("updated_at", "")),
+                    )
+                )
+                return records
+
             records = [self._summary_for_session(self._session(db, row["id"]), query=query) for row in rows]
             records = [
                 record

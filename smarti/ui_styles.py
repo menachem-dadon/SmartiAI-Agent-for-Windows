@@ -281,6 +281,18 @@ def app_font(point_size=10, weight=None):
     return font
 
 
+def small_control_font(point_size=10, weight=QFont.Weight.Normal):
+    """Use the configured asset font without heavy grid fitting at small sizes."""
+    font = QFont(resolve_app_font_family(), int(point_size))
+    if weight is not None:
+        font.setWeight(weight)
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    if app_uses_asset_font():
+        font.setItalic(False)
+    return font
+
+
 def app_uses_asset_font():
     resolve_app_font_family()
     return bool(APP_FONT_SOURCE_PATH)
@@ -500,7 +512,7 @@ def _refresh_theme_exports(mode=None, settings=None):
             padding: 8px;
             font-family: {ui_popup_font_family_css()};
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 400;
         }}
         QComboBox QAbstractItemView::item {{
             min-height: 28px; padding: 7px 10px; border-radius: 0px;
@@ -819,7 +831,12 @@ def apply_app_theme(app=None, mode=None, settings=None):
         app.setPalette(palette)
         QToolTip.setPalette(palette)
         QToolTip.setFont(app_font(10, QFont.Weight.Medium))
-        app.setStyleSheet(application_stylesheet())
+        stylesheet = application_stylesheet()
+        # Reassigning an application stylesheet repolishes every descendant.
+        # This structural stylesheet is palette-based, so a palette swap is
+        # enough on theme changes even with a long chat on screen.
+        if app.styleSheet() != stylesheet:
+            app.setStyleSheet(stylesheet)
         install_smarti_tooltips(app)
     return CURRENT_THEME
 
@@ -828,18 +845,17 @@ def application_stylesheet():
     return f"""
         QWidget {{
             font-family: {ui_font_family_css()};
-            color: {TEXT_COLOR};
-            selection-background-color: {ACCENT_TINT_STRONG};
-            selection-color: {TEXT_COLOR};
+            color: palette(window-text);
+            selection-background-color: palette(highlight);
+            selection-color: palette(highlighted-text);
             {asset_font_normal_italic_widget_css()}
         }}
         QMainWindow, QDialog, QMessageBox {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 {MESH_A}, stop:0.45 {MESH_B}, stop:0.72 {MESH_C}, stop:1 {MESH_D});
-            color: {TEXT_COLOR};
+            background-color: palette(window);
+            color: palette(window-text);
         }}
         QLabel {{
-            color: {TEXT_COLOR};
+            color: palette(window-text);
             background: transparent;
         }}
         QTextEdit {{ cursor-move-style: logical; }}
@@ -849,10 +865,10 @@ def application_stylesheet():
             outline: none;
         }}
         QToolTip, QTipLabel {{
-            background: {TOOLTIP_BG_COLOR};
-            background-color: {TOOLTIP_BG_COLOR};
-            color: {TOOLTIP_TEXT_COLOR};
-            border: 1px solid {SOFT_LINE_COLOR};
+            background: palette(tool-tip-base);
+            background-color: palette(tool-tip-base);
+            color: palette(tool-tip-text);
+            border: 1px solid palette(mid);
             border-radius: 5px;
             padding: 6px 8px;
             font-family: {ui_popup_font_family_css()};
@@ -860,13 +876,13 @@ def application_stylesheet():
             font-weight: 600;
         }}
         QMenu {{
-            background-color: {MENU_BG_COLOR};
-            color: {TEXT_COLOR};
-            border: 1px solid {SOFT_LINE_COLOR};
+            background-color: palette(base);
+            color: palette(text);
+            border: 1px solid palette(mid);
             border-radius: 0px;
             font-family: {ui_popup_font_family_css()};
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 400;
             padding: 7px;
         }}
         QMenu::item {{
@@ -883,28 +899,29 @@ def application_stylesheet():
             padding-right: 4px;
         }}
         QMenu::indicator:checked {{
-            image: url("{CHECKMARK_SVG_PATH}");
+            image: none;
         }}
         QMenu::item:selected {{
-            background-color: {ACCENT_TINT_STRONG};
-            color: {TEXT_COLOR};
+            background-color: palette(highlight);
+            color: palette(highlighted-text);
         }}
         QMenu::separator {{
             height: 1px;
-            background: {SOFT_LINE_COLOR};
+            background: palette(mid);
             margin: 7px 10px;
         }}
         QDialogButtonBox QPushButton {{
-            background-color: {ACCENT_TINT};
-            color: {TEXT_COLOR};
-            border: 1px solid {SOFT_LINE_COLOR};
+            background-color: palette(button);
+            color: palette(button-text);
+            border: 1px solid palette(mid);
             border-radius: 20px;
             padding: 10px 16px;
             font-weight: 700;
         }}
         QDialogButtonBox QPushButton:hover {{
-            background-color: {HOVER_TINT};
-            border-color: {LINE_COLOR};
+            background-color: palette(highlight);
+            color: palette(highlighted-text);
+            border-color: palette(highlight);
         }}
     """
 
@@ -917,7 +934,47 @@ def dialog_stylesheet():
             color: {TEXT_COLOR};
         }}
         QLabel {{ color: {TEXT_COLOR}; background: transparent; }}
-    """ + TEXT_EDIT_CSS
+        QDialogButtonBox QPushButton {{
+            background: {ACCENT_TINT}; color: {TEXT_COLOR};
+            border: 1px solid {SOFT_LINE_COLOR}; border-radius: 19px;
+            min-width: 72px; padding: 9px 16px; font-weight: 700;
+        }}
+        QDialogButtonBox QPushButton:hover {{
+            background: {HOVER_TINT}; border-color: {ACCENT_COLOR};
+        }}
+    """ + LINE_EDIT_CSS + COMBOBOX_CSS + TEXT_EDIT_CSS
+
+
+def prepare_themed_input_dialog(dialog):
+    if dialog is None:
+        return dialog
+    dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    dialog.setOkButtonText("אישור")
+    dialog.setCancelButtonText("ביטול")
+    dialog.setStyleSheet(dialog_stylesheet())
+    return dialog
+
+
+def themed_text_input(parent, title, label, text=""):
+    dialog = prepare_themed_input_dialog(QInputDialog(parent))
+    dialog.setWindowTitle(str(title or ""))
+    dialog.setLabelText(str(label or ""))
+    dialog.setTextValue(str(text or ""))
+    accepted = dialog.exec() == QDialog.DialogCode.Accepted
+    return dialog.textValue(), accepted
+
+
+def themed_item_input(parent, title, label, items, current=0, editable=False):
+    dialog = prepare_themed_input_dialog(QInputDialog(parent))
+    dialog.setWindowTitle(str(title or ""))
+    dialog.setLabelText(str(label or ""))
+    dialog.setComboBoxItems([str(item) for item in (items or [])])
+    dialog.setComboBoxEditable(bool(editable))
+    combo = dialog.findChild(QComboBox)
+    if combo is not None and combo.count():
+        combo.setCurrentIndex(max(0, min(int(current), combo.count() - 1)))
+    accepted = dialog.exec() == QDialog.DialogCode.Accepted
+    return dialog.textValue(), accepted
 
 
 def menu_stylesheet():
@@ -929,7 +986,7 @@ def menu_stylesheet():
             border-radius: 0px;
             font-family: {ui_popup_font_family_css()};
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 400;
             padding: 7px;
         }}
         QMenu::item {{ padding: 9px 30px 9px 10px; border-radius: 0px; min-width: 118px; }}
@@ -944,11 +1001,24 @@ def prepare_popup_menu(menu):
     if menu is None:
         return menu
     try:
-        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # Opaque popup windows retain Windows ClearType/subpixel rendering.
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        menu.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        menu.setAutoFillBackground(True)
         menu.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         menu.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
     except Exception:
         pass
+    control_font = small_control_font(10, QFont.Weight.Normal)
+    menu.setFont(control_font)
+    menu._smarti_small_control_font = control_font
+    if not hasattr(menu, "_smarti_action_font_handler"):
+        def apply_action_fonts(target=menu):
+            current_font = getattr(target, "_smarti_small_control_font", target.font())
+            for action in target.actions():
+                action.setFont(current_font)
+        menu._smarti_action_font_handler = apply_action_fonts
+        menu.aboutToShow.connect(apply_action_fonts)
     menu.setStyleSheet(menu_stylesheet())
     return menu
 
