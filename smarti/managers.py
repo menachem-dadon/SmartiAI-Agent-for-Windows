@@ -3400,10 +3400,15 @@ class AuditLogger:
             line = json.dumps(record, ensure_ascii=False, default=str)
             line = redact_sensitive_text(line, settings)
             with self._lock:
-                with open(self.path, "a", encoding="utf-8") as f:
-                    f.write(line + "\n")
+                if os.path.abspath(self.path) == os.path.abspath(UNIFIED_LOG_FILE):
+                    logging.info("AUDIT | %s", line)
+                else:
+                    # Retain deterministic behavior for isolated integrations
+                    # and tests which intentionally supply a custom sink.
+                    with open(self.path, "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
         except Exception as e:
-            logging.warning(f"Audit log failed: {e}")
+            logging.exception("Audit log failed for event=%s: %s", event, e)
 
 
 class PolicyEngine:

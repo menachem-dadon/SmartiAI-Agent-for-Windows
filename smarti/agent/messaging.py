@@ -408,7 +408,11 @@ class MessagingMixin:
                 except Exception:
                     pass
 
-            logging.info(f"\n{'='*40}\nבקשת משתמש חדשה: {user_text}\n{'='*40}")
+            logging.info(
+                "PERSONAL | kind=user_message | chars=%s | content=%s",
+                len(str(user_text or "")),
+                user_text,
+            )
             if getattr(self, "agent_runtime", None):
                 self.agent_runtime.trace("plan", (history_user_text or user_text)[:1000])
 
@@ -535,7 +539,11 @@ class MessagingMixin:
                     context_overflow_compaction_attempts = 0
                     self._log_usage(current_model, usage_dict)
                     self._record_context_token_usage(current_messages, current_model, usage_dict)
-                    logging.info(f"תשובת מודל גולמית:\n{ai_response_text}")
+                    logging.info(
+                        "PERSONAL | kind=model_response | chars=%s | content=%s",
+                        len(str(ai_response_text or "")),
+                        ai_response_text,
+                    )
                 except Exception as e:
                     if isinstance(e, CodexProtocolError):
                         codex_protocol_repair_streak += 1
@@ -549,9 +557,6 @@ class MessagingMixin:
                             "סמארטי שמר נקודת המשך כדי שלא לאבד את המשימה."
                         )
                         checkpoint_should_keep = True
-                    elif "TIMEOUT" in str(e):
-                        checkpoint_should_keep = True
-                        final_response = "ERROR_USER: השרתים אינם מגיבים."
                     elif "CANCELLED_BY_USER" in str(e):
                         final_response = "הפעולה נעצרה לבקשת המשתמש."
                     elif (
@@ -580,10 +585,17 @@ class MessagingMixin:
                         final_response = self._api_error_user_response(e.analysis)
                     elif self._is_budget_exception(e):
                         final_response = self._budget_exception_user_message(e)
-                    elif "RATE_LIMIT_ABORTED" in str(e):
-                        final_response = "ERROR_USER: שרתי ה-AI עמוסים מידי או שחרגת ממגבלת הקצב."
                     else:
-                        final_response = f"ERROR_USER: שגיאת חיבור מול ה-API: {e}"
+                        logging.exception(
+                            "Unclassified provider request failure | provider=%s | model=%s",
+                            self.mode,
+                            current_model,
+                        )
+                        analysis = analyze_api_error(self.mode, current_model, error=e)
+                        checkpoint_should_keep = analysis.category in {"network", "timeout"}
+                        if checkpoint_should_keep:
+                            checkpoint("network_paused", status="paused_network", reason=analysis.category)
+                        final_response = self._api_error_user_response(analysis)
                     break
 
                 ai_response_text = re.sub(r'<\|channel>thought.*?<channel\|>', '', ai_response_text, flags=re.DOTALL)

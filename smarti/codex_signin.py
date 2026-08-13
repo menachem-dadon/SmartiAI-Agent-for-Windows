@@ -176,12 +176,17 @@ class CodexSignInProvider:
         except OSError:
             executable = False
         logging.info(
-            "CODEX CLI | codex_path=%r exists=%s executable=%s command=%r returncode=%r stdout=%r stderr=%r",
+            "CODEX CLI | codex_path=%r exists=%s executable=%s command=%r returncode=%r stdout_chars=%s stderr_chars=%s",
             codex_path,
             path_exists,
             executable,
             list(command),
             returncode,
+            len(str(stdout or "")),
+            len(str(stderr or "")),
+        )
+        logging.info(
+            "PERSONAL | kind=codex_cli_output | stdout=%r | stderr=%r",
             self._redact_cli_output(stdout),
             self._redact_cli_output(stderr),
         )

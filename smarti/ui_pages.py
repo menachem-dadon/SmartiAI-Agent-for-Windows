@@ -14,7 +14,7 @@ from .workers import (
     DiagnosticRepairWorker,
     SSLTrustTestWorker,
 )
-from PyQt6.QtCore import QRect, QUrl
+from PyQt6.QtCore import QRect, QStandardPaths, QUrl
 from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
 
 
@@ -38,6 +38,130 @@ def _tail_text_file(path, max_lines=160, chunk_size=64 * 1024):
         return text.splitlines()[-max_lines:]
     except FileNotFoundError:
         return []
+
+
+def _unified_log_lines(max_lines=500):
+    """Read the unified log across rotations, newest tail only when bounded."""
+    try:
+        limit = int(max_lines or 0)
+    except Exception:
+        limit = 500
+    paths = unified_log_paths()
+    if not paths:
+        return []
+    if limit <= 0:
+        rows = []
+        for path in paths:
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                    rows.extend(handle.read().splitlines())
+            except FileNotFoundError:
+                pass
+        return rows
+    rows = []
+    remaining = limit
+    for path in reversed(paths):
+        if remaining <= 0:
+            break
+        chunk = _tail_text_file(path, remaining)
+        rows[0:0] = chunk
+        remaining = limit - len(rows)
+    return rows[-limit:]
+
+
+_LOG_RECORD_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}")
+_PERSONAL_LOG_FIELDS = {
+    "address", "args", "args_preview", "arguments", "body", "content", "details",
+    "directory", "file", "files", "folder", "input", "instructions", "location",
+    "memory", "message", "output", "path", "paths", "preview", "prompt", "query",
+    "response", "stderr", "stdout", "text", "title", "url", "user_text", "value",
+}
+_TECHNICAL_LOG_FIELDS = {
+    "action", "allowed", "args_hash", "attempt", "category", "changed", "code",
+    "count", "duration_ms", "enabled", "error_code", "error_status", "error_type",
+    "event", "files_count", "http_status", "id", "kind", "manager", "method",
+    "model", "name", "operation", "outcome", "provider", "request_id", "retry",
+    "risk", "skill", "stage", "status", "status_code", "success", "tool", "type",
+}
+_PERSONAL_KEY_VALUE_RE = re.compile(
+    r"(?i)(\b(?:address|args|args_preview|arguments|body|content|details|directory|file|files|"
+    r"folder|input|instructions|location|memory|message|output|path|paths|preview|prompt|"
+    r"query|response|stderr|stdout|text|title|url|user_text|value)=).*?"
+    r"(?=\s+\|\s+[A-Za-z_][\w.-]*=|$)"
+)
+
+
+def _scrub_personal_json(value, key=""):
+    normalized_key = str(key or "").casefold()
+    if normalized_key in _PERSONAL_LOG_FIELDS:
+        return "[HIDDEN PERSONAL CONTENT]"
+    if isinstance(value, dict):
+        return {item_key: _scrub_personal_json(item, item_key) for item_key, item in value.items()}
+    if isinstance(value, list):
+        return [_scrub_personal_json(item, key) for item in value]
+    if isinstance(value, str) and normalized_key and normalized_key not in _TECHNICAL_LOG_FIELDS:
+        return "[HIDDEN PERSONAL CONTENT]"
+    return value
+
+
+def sanitize_log_export_lines(lines, settings=None):
+    """Remove conversational/user payloads while retaining diagnostic metadata."""
+    output = []
+    hiding_legacy_continuation = False
+    for raw_line in lines or []:
+        line = redact_sensitive_text(str(raw_line or ""), settings or {})
+        starts_record = bool(_LOG_RECORD_PREFIX_RE.match(line))
+        if hiding_legacy_continuation and not starts_record:
+            if re.fullmatch(r"\s*=+\s*", line):
+                hiding_legacy_continuation = False
+            continue
+        if starts_record:
+            hiding_legacy_continuation = False
+
+        if "PERSONAL |" in line:
+            before, _, personal = line.partition("PERSONAL |")
+            metadata = personal
+            for marker in (" | content=", " | stdout=", " | stderr="):
+                metadata = metadata.split(marker, 1)[0]
+            output.append(f"{before}PERSONAL | {metadata.strip()} | [HIDDEN PERSONAL CONTENT]")
+            continue
+
+        if "בקשת משתמש חדשה:" in line or "תשובת מודל גולמית:" in line:
+            marker = "בקשת משתמש חדשה:" if "בקשת משתמש חדשה:" in line else "תשובת מודל גולמית:"
+            output.append(line.split(marker, 1)[0] + marker + " [HIDDEN PERSONAL CONTENT]")
+            hiding_legacy_continuation = True
+            continue
+
+        if "TRACE |" in line:
+            line = re.sub(
+                r"(TRACE\s*\|\s*[^|]+\|).*",
+                r"\1 [HIDDEN PERSONAL CONTENT]",
+                line,
+                count=1,
+            )
+
+        if "TOOL START" in line:
+            line = re.sub(r"\s*\|\s*args=.*$", " | args=[HIDDEN PERSONAL CONTENT]", line)
+        if "TOOL FINISH" in line:
+            line = re.sub(r"\s*\|\s*preview=.*$", " | preview=[HIDDEN PERSONAL CONTENT]", line)
+        if "API FAILURE" in line:
+            line = re.sub(r"\s*\|\s*raw=.*$", " | raw=[HIDDEN PERSONAL CONTENT]", line)
+            line = re.sub(r"message=.*?(?=\s\|\s|$)", "message=[HIDDEN PERSONAL CONTENT]", line)
+
+        for event_marker in ("AUDIT |", "SKILL |"):
+            if event_marker not in line:
+                continue
+            prefix, payload_text = line.split(event_marker, 1)
+            try:
+                payload = json.loads(payload_text.strip())
+                scrubbed = json.dumps(_scrub_personal_json(payload), ensure_ascii=False, default=str)
+                line = f"{prefix}{event_marker} {scrubbed}"
+            except Exception:
+                line = f"{prefix}{event_marker} [PERSONAL PAYLOAD HIDDEN]"
+            break
+        line = _PERSONAL_KEY_VALUE_RE.sub(r"\1[HIDDEN PERSONAL CONTENT]", line)
+        output.append(line)
+    return output
 
 
 def doctor_action_button_css(primary=False):
@@ -2160,15 +2284,9 @@ class DeveloperTracePage(QWidget):
         layout.addWidget(self.text)
 
     def load_trace(self):
-        lines = ["Runtime trace:"]
-        for item in self.core.settings.get("_runtime_trace", [])[-60:]:
-            lines.append(f"{item.get('time')} | {item.get('stage')} | {item.get('detail')}")
-        lines.append("\nAudit tail:")
+        lines = ["Unified Smarti log:"]
         try:
-            if os.path.exists(AUDIT_LOG_FILE):
-                lines.extend(_tail_text_file(AUDIT_LOG_FILE, 60))
-            else:
-                lines.append("אין עדיין יומן אודיט.")
+            lines.extend(_unified_log_lines(500) or ["אין עדיין רשומות לוג."])
         except Exception as e:
             lines.append(f"ERROR: {e}")
         self.text.setPlainText("\n".join(lines))
@@ -4122,6 +4240,54 @@ class SettingsPage(QWidget):
         ):
             self.settings_stack.setCurrentWidget(self.settings_home_page)
 
+    def _paste_into_settings_edit(self, edit):
+        clipboard = QApplication.clipboard()
+        text = str(clipboard.text() or "") if clipboard is not None else ""
+        if not text.strip():
+            QMessageBox.information(self, "הדבקה", "לוח ההעתקה אינו מכיל טקסט.")
+            return
+        if hasattr(edit, "clear_secret"):
+            edit.clear_secret()
+        else:
+            edit.clear()
+        edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        edit.setText(text.strip())
+
+    def _make_paste_icon_button(self, edit, tooltip="הדבק מלוח ההעתקה"):
+        button = QPushButton()
+        button.setProperty("smartiPasteButton", True)
+        button.setFixedSize(34, 34)
+        button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        button.setToolTip(tooltip)
+        set_themed_button_icon(
+            button,
+            ("paste_icon", "clipboard_paste_icon", "copy_icon"),
+            "P",
+            19,
+            clear_text=True,
+        )
+        button.setStyleSheet(
+            f"QPushButton {{ background: transparent; border: none; border-radius: 17px; padding: 0px; }}"
+            f"QPushButton:hover {{ background: {HOVER_TINT}; border: none; }}"
+            f"QPushButton:pressed {{ background: {ACCENT_TINT}; border: none; }}"
+        )
+        button.clicked.connect(lambda _=False, target=edit: self._paste_into_settings_edit(target))
+        return button
+
+    def _make_paste_input_row(self, edit, tooltip="הדבק מלוח ההעתקה"):
+        row = QWidget(self)
+        row.setStyleSheet("background: transparent;")
+        row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        edit.setStyleSheet(LINE_EDIT_CSS)
+        edit.setMinimumWidth(0)
+        edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout.addWidget(edit, 1)
+        layout.addWidget(self._make_paste_icon_button(edit, tooltip), 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
+
     def _make_secret_link_row(self, edit, link_label):
         row = QWidget(self)
         row.setStyleSheet("background: transparent;")
@@ -4145,6 +4311,7 @@ class SettingsPage(QWidget):
         set_themed_button_icon(clear_btn, ("delete_icon",), "X", 17, clear_text=True)
         clear_btn.clicked.connect(edit.clear_secret if hasattr(edit, "clear_secret") else edit.clear)
         layout.addWidget(edit, 1)
+        layout.addWidget(self._make_paste_icon_button(edit, "הדבק מפתח מלוח ההעתקה"), 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(clear_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(link_label, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
@@ -4708,6 +4875,10 @@ class SettingsPage(QWidget):
         self.email = QLineEdit(self.core.settings.get("email_address", ""))
         self.pwd = QLineEdit(self.core.settings.get("email_password", ""))
         self.pwd.setEchoMode(QLineEdit.EchoMode.Password)
+        self.email_password_row = self._make_paste_input_row(
+            self.pwd,
+            "הדבק סיסמת אפליקציה מלוח ההעתקה",
+        )
         self.email_from_name = QLineEdit(self.core.settings.get("email_from_name", ""))
         self.email_imap_host = QLineEdit(self.core.settings.get("email_imap_host", ""))
         self.email_imap_port = QLineEdit(str(self.core.settings.get("email_imap_port", 993)))
@@ -5227,7 +5398,7 @@ class SettingsPage(QWidget):
         # Google Drive settings section is intentionally hidden for now.
         self._add_section_header("אימייל", tools)
         self._add_field("כתובת אימייל", self.email, tools, "כתובת האימייל שממנה סמארטי יקרא או ישלח הודעות, אם אישרת שימוש באימייל.", keywords="email address account username login")
-        self._add_field("סיסמת אפליקציה לאימייל", self.pwd, tools, "סיסמת אפליקציה ייעודית לחשבון האימייל. אל תשתמש בסיסמה הראשית של החשבון.", keywords="app password mail secret credentials")
+        self._add_field("סיסמת אפליקציה לאימייל", self.email_password_row, tools, "סיסמת אפליקציה ייעודית לחשבון האימייל. אל תשתמש בסיסמה הראשית של החשבון.", keywords="app password mail secret credentials paste clipboard הדבקה")
         self._add_field("בדיקת חיבור אימייל", self.email_test_row, tools, "בודק התחברות ל-IMAP ול-SMTP לפי הפרטים שהוזנו. הבדיקה לא שולחת הודעה.", keywords="test validate email connection imap smtp login check")
         self._add_field("שם שולח", self.email_from_name, tools, "שם תצוגה אופציונלי שיופיע בשדה From.", keywords="from sender display name")
         self._add_field("IMAP host", self.email_imap_host, tools, "ריק = זיהוי אוטומטי לפי כתובת האימייל.", keywords="incoming mail server gmail outlook yahoo", advanced=True)
@@ -5314,37 +5485,76 @@ class SettingsPage(QWidget):
         refresh_logs_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
         refresh_logs_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         refresh_logs_btn.clicked.connect(self.load_developer_logs)
+        load_older_logs_btn = QPushButton("טען 500 שורות קודמות")
+        load_older_logs_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        load_older_logs_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        load_older_logs_btn.clicked.connect(self.load_older_developer_logs)
+        export_logs_btn = QPushButton()
+        export_logs_btn.setFixedSize(36, 36)
+        export_logs_btn.setStyleSheet(icon_button_css(36))
+        export_logs_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        export_logs_btn.setToolTip("ייצוא הלוג לקובץ טקסט")
+        set_themed_button_icon(
+            export_logs_btn,
+            ("export_log_icon", "export_json_icon", "save_done"),
+            "E",
+            20,
+            clear_text=True,
+        )
+        export_logs_btn.clicked.connect(self.export_developer_log)
         clear_logs_btn = QPushButton("נקה לוג")
         clear_logs_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
         clear_logs_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         clear_logs_btn.clicked.connect(self.clear_selected_developer_log)
-        self.selected_developer_log = getattr(self, "selected_developer_log", "agent")
-        self.developer_log_buttons = {}
+        self.developer_log_line_limit = 500
         developer_log_panel = QWidget()
         developer_log_panel.setStyleSheet("background: transparent;")
         developer_log_panel_layout = QVBoxLayout(developer_log_panel)
         developer_log_panel_layout.setContentsMargins(0, 0, 0, 0)
         developer_log_panel_layout.setSpacing(8)
-        log_actions = QHBoxLayout()
-        log_actions.setSpacing(8)
-        refresh_logs_btn.setMinimumWidth(112)
-        clear_logs_btn.setMinimumWidth(112)
-        log_actions.addWidget(refresh_logs_btn)
-        log_actions.addWidget(clear_logs_btn)
-        log_actions.addStretch()
+        log_actions = QGridLayout()
+        log_actions.setHorizontalSpacing(8)
+        log_actions.setVerticalSpacing(8)
+        refresh_logs_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        load_older_logs_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        clear_logs_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        log_actions.addWidget(refresh_logs_btn, 0, 0)
+        log_actions.addWidget(load_older_logs_btn, 0, 1)
+        log_actions.addWidget(clear_logs_btn, 1, 0)
+        log_actions.addWidget(export_logs_btn, 1, 1, Qt.AlignmentFlag.AlignLeft)
+        log_actions.setColumnStretch(0, 1)
+        log_actions.setColumnStretch(1, 1)
         developer_log_panel_layout.addLayout(log_actions)
-        log_switcher = QGridLayout()
-        log_switcher.setHorizontalSpacing(8)
-        log_switcher.setVerticalSpacing(8)
-        for index, (key, label) in enumerate([("agent", "יומן סוכן"), ("trace", "יומן זמן ריצה"), ("audit", "יומן אבטחה"), ("skills", "יומן מיומנויות")]):
-            btn = QPushButton(label)
-            btn.setMinimumWidth(118)
-            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            btn.clicked.connect(lambda _=None, log_key=key: self.show_developer_log(log_key))
-            self.developer_log_buttons[key] = btn
-            log_switcher.addWidget(btn, index // 2, index % 2)
-        developer_log_panel_layout.addLayout(log_switcher)
+        export_options = QGridLayout()
+        export_options.setHorizontalSpacing(8)
+        export_options.setVerticalSpacing(6)
+        export_options.addWidget(QLabel("טווח ייצוא:"), 0, 0)
+        self.export_log_lines_combo = NoScrollComboBox()
+        for label, value in (
+            ("500 שורות אחרונות", 500),
+            ("1,000 שורות אחרונות", 1000),
+            ("2,500 שורות אחרונות", 2500),
+            ("5,000 שורות אחרונות", 5000),
+            ("10,000 שורות אחרונות", 10000),
+            ("כל הלוגים השמורים", 0),
+        ):
+            self.export_log_lines_combo.addItem(label, value)
+        self.export_log_lines_combo.setCurrentIndex(1)
+        self.export_log_lines_combo.setStyleSheet(COMBOBOX_CSS)
+        self.export_log_lines_combo.setMinimumWidth(190)
+        export_options.addWidget(self.export_log_lines_combo, 0, 1)
+        self.export_redact_personal_cb = SmartiCheckBox("הסתר תוכן אישי")
+        self.export_redact_personal_cb.setChecked(True)
+        self.export_redact_personal_cb.setStyleSheet(CHECKBOX_CSS)
+        self.export_redact_personal_cb.setToolTip(
+            "מסיר מהעותק הודעות, פלטי כלים, זיכרונות ותוכן אישי אחר; נתונים טכניים וקודי שגיאה נשארים."
+        )
+        export_options.addWidget(self.export_redact_personal_cb, 1, 0, 1, 2)
+        export_options.setColumnStretch(1, 1)
+        developer_log_panel_layout.addLayout(export_options)
+        self.developer_log_status = QLabel("")
+        self.developer_log_status.setStyleSheet(muted_label_css(12))
+        developer_log_panel_layout.addWidget(self.developer_log_status)
         self.developer_log_text = QTextEdit()
         self.developer_log_text.setReadOnly(True)
         self.developer_log_text.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
@@ -5360,7 +5570,7 @@ class SettingsPage(QWidget):
         self.developer_log_text.setPalette(log_palette)
         self.developer_log_text.setStyleSheet(LOG_TEXT_CSS)
         developer_log_panel_layout.addWidget(self.developer_log_text)
-        self._add_field("צפייה בלוגים", developer_log_panel, advanced, "צפייה ביומני הסוכן, זמן הריצה, האבטחה והמיומנויות מתוך מסך ההגדרות.", keywords="logs trace audit skills agent developer debug יומן לוגים מיומנויות אבטחה", advanced=True)
+        self._add_field("לוג מאוחד", developer_log_panel, advanced, "צפייה עצלה וייצוא של אירועי הסוכן, ספקי ה-AI, זמן הריצה, האבטחה, האבחון והמיומנויות מקובץ מתחלף אחד.", keywords="logs trace audit skills agent developer debug export privacy יומן לוגים מיומנויות אבטחה ייצוא", advanced=True)
         advanced.addStretch()
         self.load_developer_logs()
 
@@ -6224,24 +6434,19 @@ class SettingsPage(QWidget):
             btn.setStyleSheet(self._developer_log_button_style(key == getattr(self, "selected_developer_log", "agent")))
 
     def show_developer_log(self, key):
-        self.selected_developer_log = key
+        # Compatibility shim for old navigation actions: all event families
+        # now share the unified log.
         self.load_developer_logs()
 
     def _selected_developer_log_label(self):
-        return {
-            "agent": "Agent Log",
-            "trace": "Runtime Trace",
-            "audit": "Audit Log",
-            "skills": "יומן מיומנויות"
-        }.get(getattr(self, "selected_developer_log", "agent"), "Agent Log")
+        return "הלוג המאוחד של סמארטי"
 
     def clear_selected_developer_log(self):
-        selected = getattr(self, "selected_developer_log", "agent")
         label = self._selected_developer_log_label()
         dlg = QMessageBox(self)
         dlg.setWindowTitle("ניקוי לוג")
         dlg.setText(f"לנקות את {label}?")
-        dlg.setInformativeText("הפעולה תמחק את תוכן הלוג הנוכחי בלבד.")
+        dlg.setInformativeText("הפעולה תמחק את הקובץ הפעיל בלבד. קובצי סבב ישנים יישארו עד להחלפתם האוטומטית.")
         dlg.setIcon(QMessageBox.Icon.Warning)
         dlg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         dlg.button(QMessageBox.StandardButton.Yes).setText("נקה")
@@ -6249,19 +6454,8 @@ class SettingsPage(QWidget):
         if dlg.exec() != QMessageBox.StandardButton.Yes:
             return
         try:
-            if selected == "trace":
-                self.core.settings["_runtime_trace"] = []
-                self.core._save_settings()
-            else:
-                path_by_log = {
-                    "agent": AGENT_LOG_FILE,
-                    "audit": AUDIT_LOG_FILE,
-                    "skills": SKILL_LOG_FILE
-                }
-                path = path_by_log.get(selected, AGENT_LOG_FILE)
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("")
-            logging.info(f"DEVELOPER_LOG | cleared | selected={selected}")
+            clear_unified_log_file()
+            logging.info("DEVELOPER_LOG | cleared | selected=unified")
         except Exception as e:
             QMessageBox.warning(self, "שגיאה בניקוי לוג", str(e))
         self.load_developer_logs()
@@ -6277,23 +6471,72 @@ class SettingsPage(QWidget):
         return rows
 
     def load_developer_logs(self):
-        self._refresh_developer_log_buttons()
-        selected = getattr(self, "selected_developer_log", "agent")
-        if selected == "trace":
-            lines = self._runtime_trace_lines()
-        elif selected == "audit":
-            lines = ["=== Audit Log ==="]
-            lines.extend(self._format_audit_tail(180))
-        elif selected == "skills":
-            lines = ["=== יומן מיומנויות ==="]
-            lines.extend(self._tail_file(SKILL_LOG_FILE, 180) or ["אין עדיין רשומות מיומנויות."])
-        else:
-            self.selected_developer_log = "agent"
-            lines = ["=== Agent Log ==="]
-            lines.extend(self._tail_file(AGENT_LOG_FILE, 300) or ["אין עדיין רשומות Agent Log."])
+        limit = max(100, int(getattr(self, "developer_log_line_limit", 500) or 500))
+        log_rows = _unified_log_lines(limit)
+        lines = ["=== SmartiAI Unified Log ==="]
+        lines.extend(log_rows or ["אין עדיין רשומות לוג."])
         if hasattr(self, "developer_log_text"):
             self.developer_log_text.setPlainText("\n".join(lines))
+            if hasattr(self, "developer_log_status"):
+                self.developer_log_status.setText(
+                    f"מוצגות {len(log_rows):,} השורות האחרונות. קבצים ישנים יותר נטענים רק לפי דרישה."
+                )
             QTimer.singleShot(0, self._reset_developer_log_view)
+
+    def load_older_developer_logs(self):
+        self.developer_log_line_limit = min(
+            20_000,
+            max(500, int(getattr(self, "developer_log_line_limit", 500) or 500)) + 500,
+        )
+        self.load_developer_logs()
+
+    def export_developer_log(self):
+        selected_lines = 1000
+        if hasattr(self, "export_log_lines_combo"):
+            selected_lines = int(self.export_log_lines_combo.currentData() or 0)
+        default_name = f"SmartiAI-log-{datetime.now().strftime('%Y-%m-%d-%H%M%S')}.txt"
+        documents_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+        default_path = os.path.join(documents_dir or os.path.expanduser("~"), default_name)
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "ייצוא הלוג של SmartiAI",
+            default_path,
+            "קובץ טקסט (*.txt);;כל הקבצים (*.*)",
+        )
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ".txt"
+        hide_personal = bool(
+            hasattr(self, "export_redact_personal_cb")
+            and self.export_redact_personal_cb.isChecked()
+        )
+        try:
+            rows = _unified_log_lines(selected_lines)
+            if hide_personal:
+                rows = sanitize_log_export_lines(rows, self.core.settings)
+            header = [
+                "SmartiAI Unified Diagnostic Log Export",
+                f"Exported: {datetime.now().isoformat(timespec='seconds')}",
+                f"Application version: {APP_VERSION}",
+                f"Requested lines: {'all retained logs' if selected_lines <= 0 else selected_lines}",
+                f"Exported lines: {len(rows)}",
+                f"Personal content hidden: {'yes' if hide_personal else 'no'}",
+                "",
+            ]
+            with open(path, "w", encoding="utf-8-sig", newline="\n") as handle:
+                handle.write("\n".join(header + rows))
+                handle.write("\n")
+            logging.info(
+                "DEVELOPER_LOG | exported | lines=%s | personal_hidden=%s",
+                len(rows),
+                hide_personal,
+            )
+            logging.info("PERSONAL | kind=log_export_path | content=%s", path)
+            QMessageBox.information(self, "ייצוא לוג", f"הלוג נשמר בהצלחה:\n{path}")
+        except Exception as exc:
+            logging.exception("Developer log export failed: %s", exc)
+            QMessageBox.warning(self, "שגיאה בייצוא לוג", str(exc))
 
     def _reset_developer_log_view(self):
         if not hasattr(self, "developer_log_text"):

@@ -9,6 +9,7 @@ from __future__ import annotations
 import glob
 import importlib.util
 import json
+import logging
 import os
 import re
 import shutil
@@ -47,6 +48,7 @@ from .common import (
     TOOLS_DIR,
     USAGE_FILE,
     USER_DATA_DIR,
+    UNIFIED_LOG_FILE,
     SSL_MODE_CUSTOM_CA,
     SSL_MODE_LEGACY_INSECURE,
     SSL_MODE_SYSTEM,
@@ -103,7 +105,7 @@ class CheckResult:
 class SmartiDiagnostic:
     """Runs bounded diagnostics against the active SmartiCore instance."""
 
-    LOG_FILENAME = "smarti_diagnostic.log"
+    LOG_FILENAME = os.path.basename(UNIFIED_LOG_FILE)
     _SECRET_VALUE_RE = re.compile(
         r"(?i)(api[_ -]?key|token|password|secret|authorization)\s*[:=]\s*([^\s,;]+)"
     )
@@ -112,7 +114,7 @@ class SmartiDiagnostic:
 
     def __init__(self, core):
         self.core = core
-        self.log_path = os.path.join(USER_DATA_DIR, self.LOG_FILENAME)
+        self.log_path = AUDIT_LOG_FILE
         self._cancel_event = threading.Event()
 
     def request_stop(self):
@@ -143,11 +145,15 @@ class SmartiDiagnostic:
                 "category": result.category,
                 "detail": self._redact(result.technical_detail),
             }
-            with open(self.log_path, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            line = json.dumps(payload, ensure_ascii=False)
+            if os.path.abspath(self.log_path) == os.path.abspath(UNIFIED_LOG_FILE):
+                logging.info("DIAGNOSTIC | %s", line)
+            else:
+                with open(self.log_path, "a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
         except Exception:
             # A broken log must never make a repair diagnosis fail.
-            pass
+            logging.exception("Diagnostic result logging failed for id=%s", result.id)
 
     def _result(self, *args, **kwargs):
         if len(args) >= 4:

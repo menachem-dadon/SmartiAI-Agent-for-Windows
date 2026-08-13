@@ -4571,7 +4571,7 @@ class ChatWindow(QMainWindow):
         self.notifications = WindowsNotificationCenter(self)
         self.notifications.reply_requested.connect(self.handle_notification_reply)
         self.notifications.activate_requested.connect(self.handle_notification_activation)
-        self.notifications.attention_cleared.connect(self._clear_taskbar_attention)
+        self.notifications.attention_cleared.connect(self._acknowledge_taskbar_attention)
         self.notifications.conversation_switch_requested.connect(self.handle_conversation_switch_requested)
         self.core_notification_signal.connect(self.handle_core_notification)
         self.core.notification_callback = lambda kind, payload=None: self.core_notification_signal.emit(kind, payload or {})
@@ -6380,8 +6380,11 @@ class ChatWindow(QMainWindow):
         if hasattr(self, "taskbar_attention"):
             self.taskbar_attention.stop()
 
+    def _acknowledge_taskbar_attention(self):
+        if hasattr(self, "taskbar_attention"):
+            self.taskbar_attention.acknowledge_one()
+
     def handle_notification_reply(self, text):
-        self._clear_taskbar_attention()
         self.submit_quick_reply(text)
 
     def handle_notification_activation(self):

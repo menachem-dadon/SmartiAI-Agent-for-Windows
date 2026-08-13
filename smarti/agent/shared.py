@@ -17,6 +17,7 @@ from ..api_errors import (
     ApiRequestError,
     analyze_api_error,
     api_technical_details,
+    api_user_technical_details,
     api_retry_exhausted_analysis,
     api_retry_status_message,
 )

@@ -7,6 +7,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 spec_path = Path(globals().get("__file__", Path(SPECPATH) / "smarti.spec")).resolve()
 repo_root = spec_path.parent.parent
 app_icon = repo_root / "assets" / "smarti.ico"
+app_manifest = repo_root / "packaging" / "smarti.manifest"
 
 datas = [
     (str(repo_root / "assets"), "assets"),
@@ -85,6 +86,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(app_icon),
+    manifest=str(app_manifest),
 )
 
 coll = COLLECT(

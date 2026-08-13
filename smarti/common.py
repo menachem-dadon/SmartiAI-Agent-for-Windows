@@ -21,6 +21,7 @@ import socket
 import requests
 import re
 import logging
+from logging.handlers import RotatingFileHandler
 import warnings
 import sys
 import io
@@ -647,7 +648,8 @@ LEGACY_SKILLS_DIR = os.path.join(APP_DIR, "skills")
 LEGACY_OUTPUTS_DIR = os.path.join(APP_DIR, "Smarti_Outputs")
 LEGACY_MCP_CONFIG_FILE = os.path.join(APP_DIR, "mcp_config.json")
 
-AGENT_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_agent.log")
+UNIFIED_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_agent.log")
+AGENT_LOG_FILE = UNIFIED_LOG_FILE
 SETTINGS_FILE = os.path.join(USER_DATA_DIR, "smarti_settings.json")
 USAGE_FILE = os.path.join(USER_DATA_DIR, "smarti_usage.json")
 MEMORY_FILE = os.path.join(USER_DATA_DIR, "smarti_memory.json")
@@ -662,15 +664,106 @@ ATTACHMENTS_DIR = os.path.join(USER_DATA_DIR, "attachments")
 ASSETS_DIR = SMARTI_RUNTIME.resource_path("assets")
 OUTPUTS_DIR = _resolve_default_outputs_dir()
 MCP_CONFIG_FILE = os.path.join(USER_DATA_DIR, "mcp_config.json")
-SKILL_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_skills.log")
-AUDIT_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_audit.log")
+LEGACY_SKILL_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_skills.log")
+LEGACY_AUDIT_LOG_FILE = os.path.join(USER_DATA_DIR, "smarti_audit.log")
+# New runtime, audit, diagnostic and Skill events share one rotating file.  The
+# legacy constants remain public aliases because several integrations import
+# them directly.
+SKILL_LOG_FILE = UNIFIED_LOG_FILE
+AUDIT_LOG_FILE = UNIFIED_LOG_FILE
 SETTINGS_SCHEMA_VERSION = 2
 APP_VERSION = "V0.87.0"
 LEGAL_AGREEMENT_VERSION = "privacy-disclaimer-2026-06-02-v1"
 LEGAL_AGREEMENT_EFFECTIVE_DATE = "2026-06-02"
 LEGAL_AGREEMENT_TITLE = "מדיניות פרטיות, תנאי שימוש וכתב ויתור - Smarti AI"
 
-logging.basicConfig(filename=AGENT_LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8')
+SMARTI_LOG_MAX_BYTES = 8 * 1024 * 1024
+SMARTI_LOG_BACKUP_COUNT = 5
+
+
+class SmartiLogFormatter(logging.Formatter):
+    """Keep every logging record on one searchable/exportable physical line."""
+
+    def format(self, record):
+        rendered = super().format(record)
+        return rendered.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
+
+
+def configure_unified_logging(path=UNIFIED_LOG_FILE):
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    absolute_path = os.path.abspath(path)
+    for handler in root.handlers:
+        if getattr(handler, "_smarti_unified_handler", False):
+            return handler
+    try:
+        os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
+        handler = RotatingFileHandler(
+            absolute_path,
+            maxBytes=SMARTI_LOG_MAX_BYTES,
+            backupCount=SMARTI_LOG_BACKUP_COUNT,
+            encoding="utf-8",
+            delay=True,
+        )
+        handler._smarti_unified_handler = True
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(SmartiLogFormatter(
+            "%(asctime)s.%(msecs)03d | %(levelname)s | pid=%(process)d | "
+            "thread=%(threadName)s | %(name)s | %(module)s:%(funcName)s:%(lineno)d | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        root.addHandler(handler)
+        logging.captureWarnings(True)
+        return handler
+    except Exception:
+        # Startup must remain possible even when the data directory is
+        # temporarily unavailable.  The early .pyw launcher still captures a
+        # fatal startup traceback separately.
+        return None
+
+
+_SMARTI_UNIFIED_LOG_HANDLER = configure_unified_logging()
+
+
+def unified_log_paths(path=UNIFIED_LOG_FILE):
+    """Return existing rotated logs from oldest to the active file."""
+    paths = []
+    for index in range(SMARTI_LOG_BACKUP_COUNT, 0, -1):
+        candidate = f"{path}.{index}"
+        if os.path.exists(candidate):
+            paths.append(candidate)
+    if os.path.exists(path):
+        paths.append(path)
+    return paths
+
+
+def clear_unified_log_file(path=UNIFIED_LOG_FILE):
+    """Clear the active unified log and all of its retained rotations."""
+    handler = _SMARTI_UNIFIED_LOG_HANDLER
+    if handler is None or os.path.abspath(getattr(handler, "baseFilename", "")) != os.path.abspath(path):
+        with open(path, "w", encoding="utf-8"):
+            pass
+        for index in range(1, SMARTI_LOG_BACKUP_COUNT + 1):
+            try:
+                os.remove(f"{path}.{index}")
+            except FileNotFoundError:
+                pass
+        return
+    handler.acquire()
+    try:
+        if handler.stream is not None:
+            handler.flush()
+            handler.stream.close()
+            handler.stream = None
+        with open(path, "w", encoding="utf-8"):
+            pass
+        for index in range(1, SMARTI_LOG_BACKUP_COUNT + 1):
+            try:
+                os.remove(f"{path}.{index}")
+            except FileNotFoundError:
+                pass
+    finally:
+        handler.release()
 
 def migrate_legacy_runtime_state(include_files=True, include_directories=True):
     if os.path.abspath(USER_DATA_DIR) == os.path.abspath(APP_DIR):
@@ -1372,13 +1465,18 @@ def redact_sensitive_text(text, settings=None):
 
 class SmartiRedactingFilter(logging.Filter):
     def filter(self, record):
+        if getattr(record, "_smarti_redacted", False):
+            return True
         settings = _CURRENT_SETTINGS_REF.get("settings") or {}
         if settings.get("privacy_redact_logs", True):
             record.msg = redact_sensitive_text(record.getMessage(), settings)
             record.args = ()
+        record._smarti_redacted = True
         return True
 
-logging.getLogger().addFilter(SmartiRedactingFilter())
+_SMARTI_LOG_REDACTING_FILTER = SmartiRedactingFilter()
+if _SMARTI_UNIFIED_LOG_HANDLER is not None:
+    _SMARTI_UNIFIED_LOG_HANDLER.addFilter(_SMARTI_LOG_REDACTING_FILTER)
 
 def normalize_bool_text(value):
     return str(value).strip().lower() in {"כן", "true", "yes", "y", "1"}

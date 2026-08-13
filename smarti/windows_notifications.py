@@ -40,6 +40,13 @@ class TaskbarAttentionController(QObject):
         super().__init__(window)
         self.window = window
         self._flashing = False
+        self._unread_count = 0
+        self._taskbar_interface = None
+        self._overlay_failure_logged = False
+
+    @property
+    def unread_count(self):
+        return self._unread_count
 
     def request_attention(self):
         if platform.system() != "Windows" or wintypes is None:
@@ -49,20 +56,208 @@ class TaskbarAttentionController(QObject):
         hwnd = self._window_handle()
         if not hwnd:
             return False
-        if self._flash(hwnd, self.FLASHW_TRAY | self.FLASHW_TIMERNOFG):
+        overlay_updated = self.set_unread_count(self._unread_count + 1)
+        flashed = self._flash(hwnd, self.FLASHW_TRAY | self.FLASHW_TIMERNOFG)
+        if flashed:
             self._flashing = True
-            return True
-        return False
+        return bool(flashed or overlay_updated)
 
     def stop(self):
+        overlay_cleared = self.set_unread_count(0)
         if not self._flashing or platform.system() != "Windows" or wintypes is None:
             self._flashing = False
-            return False
+            return overlay_cleared
         hwnd = self._window_handle()
         self._flashing = False
         if not hwnd:
+            return overlay_cleared
+        return bool(self._flash(hwnd, self.FLASHW_STOP) or overlay_cleared)
+
+    def acknowledge_one(self):
+        """Mark one notification as handled without discarding other unread alerts."""
+        remaining = max(0, self._unread_count - 1)
+        overlay_updated = self.set_unread_count(remaining)
+        if remaining or not self._flashing or platform.system() != "Windows" or wintypes is None:
+            return overlay_updated
+        hwnd = self._window_handle()
+        self._flashing = False
+        return bool((hwnd and self._flash(hwnd, self.FLASHW_STOP)) or overlay_updated)
+
+    def set_unread_count(self, count):
+        try:
+            count = max(0, int(count or 0))
+        except Exception:
+            count = 0
+        self._unread_count = count
+        if platform.system() != "Windows" or wintypes is None:
             return False
-        return self._flash(hwnd, self.FLASHW_STOP)
+        hwnd = self._window_handle()
+        if not hwnd:
+            return False
+        try:
+            return self._set_overlay_badge(hwnd, count)
+        except Exception as exc:
+            if not self._overlay_failure_logged:
+                logging.warning("Taskbar unread badge failed: %s", exc, exc_info=True)
+                self._overlay_failure_logged = True
+            return False
+
+    @staticmethod
+    def _guid(value):
+        import uuid as _uuid
+
+        parsed = _uuid.UUID(str(value))
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_uint32),
+                ("Data2", ctypes.c_uint16),
+                ("Data3", ctypes.c_uint16),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        raw = parsed.bytes
+        return GUID(
+            int.from_bytes(raw[0:4], "big"),
+            int.from_bytes(raw[4:6], "big"),
+            int.from_bytes(raw[6:8], "big"),
+            (ctypes.c_ubyte * 8)(*raw[8:16]),
+        )
+
+    def _ensure_taskbar_interface(self):
+        if self._taskbar_interface:
+            return self._taskbar_interface
+        ole32 = ctypes.windll.ole32
+        try:
+            ole32.CoInitializeEx(None, 0x2)  # apartment-threaded
+        except Exception:
+            pass
+        clsid = self._guid("56FDF344-FD6D-11D0-958A-006097C9A090")
+        iid = self._guid("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF")
+        pointer = ctypes.c_void_p()
+        ole32.CoCreateInstance.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        ole32.CoCreateInstance.restype = ctypes.c_long
+        result = ole32.CoCreateInstance(
+            ctypes.byref(clsid),
+            None,
+            0x1,
+            ctypes.byref(iid),
+            ctypes.byref(pointer),
+        )
+        if result < 0 or not pointer.value:
+            raise OSError(f"CoCreateInstance(ITaskbarList3) failed: 0x{result & 0xFFFFFFFF:08X}")
+        self._taskbar_interface = pointer
+        self._call_taskbar_method(3, [])  # HrInit
+        return pointer
+
+    def _call_taskbar_method(self, index, arguments):
+        pointer = self._taskbar_interface
+        if not pointer:
+            raise RuntimeError("ITaskbarList3 is not initialized")
+        vtable = ctypes.cast(pointer, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        address = vtable[index]
+        argtypes = [ctypes.c_void_p]
+        values = [pointer]
+        for ctype, value in arguments:
+            argtypes.append(ctype)
+            values.append(value)
+        method = ctypes.WINFUNCTYPE(ctypes.c_long, *argtypes)(address)
+        result = method(*values)
+        if result < 0:
+            raise OSError(f"ITaskbarList3 method {index} failed: 0x{result & 0xFFFFFFFF:08X}")
+        return result
+
+    @staticmethod
+    def _badge_hicon(count):
+        size = 32
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(QColor("#E5243B"))
+        painter.setPen(QPen(QColor("#FFFFFF"), 1.5))
+        painter.drawEllipse(2, 2, size - 4, size - 4)
+        label = "99+" if count > 99 else str(max(1, count))
+        font = QFont("Segoe UI", 10 if len(label) <= 2 else 8, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, label)
+        painter.end()
+
+        # CreateIconIndirect preserves the orientation of the Qt-created color
+        # bitmap here. Mirroring it first makes the numeric badge appear upside
+        # down on the Windows taskbar.
+        image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        bits = image.bits()
+        raw = bits.asstring(image.sizeInBytes())
+        gdi32 = ctypes.windll.gdi32
+        user32 = ctypes.windll.user32
+        gdi32.CreateBitmap.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+            wintypes.UINT,
+            ctypes.c_void_p,
+        ]
+        gdi32.CreateBitmap.restype = wintypes.HBITMAP
+        gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        gdi32.DeleteObject.restype = wintypes.BOOL
+        pixel_buffer = ctypes.create_string_buffer(raw)
+        hbm_color = gdi32.CreateBitmap(
+            size,
+            size,
+            1,
+            32,
+            ctypes.cast(pixel_buffer, ctypes.c_void_p),
+        )
+        hbm_mask = gdi32.CreateBitmap(size, size, 1, 1, None)
+        if not hbm_color or not hbm_mask:
+            if hbm_color:
+                gdi32.DeleteObject(hbm_color)
+            if hbm_mask:
+                gdi32.DeleteObject(hbm_mask)
+            raise OSError("Could not create taskbar badge bitmap")
+
+        class ICONINFO(ctypes.Structure):
+            _fields_ = [
+                ("fIcon", wintypes.BOOL),
+                ("xHotspot", wintypes.DWORD),
+                ("yHotspot", wintypes.DWORD),
+                ("hbmMask", wintypes.HBITMAP),
+                ("hbmColor", wintypes.HBITMAP),
+            ]
+
+        icon_info = ICONINFO(True, 0, 0, hbm_mask, hbm_color)
+        user32.CreateIconIndirect.argtypes = [ctypes.POINTER(ICONINFO)]
+        user32.CreateIconIndirect.restype = wintypes.HICON
+        user32.DestroyIcon.argtypes = [wintypes.HICON]
+        user32.DestroyIcon.restype = wintypes.BOOL
+        hicon = user32.CreateIconIndirect(ctypes.byref(icon_info))
+        gdi32.DeleteObject(hbm_color)
+        gdi32.DeleteObject(hbm_mask)
+        if not hicon:
+            raise OSError("Could not create taskbar badge icon")
+        return hicon
+
+    def _set_overlay_badge(self, hwnd, count):
+        self._ensure_taskbar_interface()
+        hicon = self._badge_hicon(count) if count > 0 else 0
+        try:
+            self._call_taskbar_method(18, [
+                (wintypes.HWND, hwnd),
+                (wintypes.HICON, hicon),
+                (wintypes.LPCWSTR, f"{count} התראות שלא נקראו" if count else None),
+            ])
+            return True
+        finally:
+            if hicon:
+                ctypes.windll.user32.DestroyIcon(hicon)
 
     def _window_handle(self):
         try:
@@ -556,7 +751,9 @@ class WindowsNotificationCenter(QObject):
                     cleanup()
 
                 def dismissed(_event_args):
-                    self.attention_cleared.emit()
+                    # A timed-out/dismissed toast is still unread. The taskbar
+                    # badge is cleared only when Smarti is opened or the user
+                    # explicitly handles this notification.
                     cleanup()
 
                 toast.on_activated = activated
@@ -632,7 +829,6 @@ class WindowsNotificationCenter(QObject):
                             self._toaster.remove_toast_group("smartiai-permissions")
                         except Exception:
                             pass
-                    self.attention_cleared.emit()
 
                 toast.on_activated = activated
                 toast.on_dismissed = dismissed
@@ -662,7 +858,6 @@ class WindowsNotificationCenter(QObject):
                 toast.deleteLater()
             except Exception:
                 pass
-            self.attention_cleared.emit()
 
         return PermissionNotificationHandle(cancel, shown=True)
 
@@ -705,7 +900,6 @@ class WindowsNotificationCenter(QObject):
                     cleanup()
 
                 def dismissed(_event_args):
-                    self.attention_cleared.emit()
                     cleanup()
 
                 toast.on_activated = activated
@@ -747,7 +941,6 @@ class WindowsNotificationCenter(QObject):
                     cleanup()
 
                 def dismissed(_event_args):
-                    self.attention_cleared.emit()
                     cleanup()
 
                 toast.on_activated = activated
@@ -765,7 +958,6 @@ class WindowsNotificationCenter(QObject):
             except ValueError: pass
         toast.destroyed.connect(lambda *_: cleanup())
         toast.activated.connect(lambda: (self.attention_cleared.emit(), self.conversation_switch_requested.emit(conversation_id) if conversation_id else self.activate_requested.emit()))
-        toast.dismissed.connect(self.attention_cleared)
         toast.show_toast()
         return False
 
@@ -782,8 +974,9 @@ class WindowsNotificationCenter(QObject):
         toast.destroyed.connect(lambda *_: cleanup())
         toast.reply_submitted.connect(lambda text: (self.attention_cleared.emit(), self.reply_requested.emit(text)))
         toast.activated.connect(lambda: (self.attention_cleared.emit(), self.activate_requested.emit()))
-        toast.dismissed.connect(self.attention_cleared)
         if permission:
-            toast.permission_answered.connect(lambda value: (self.attention_cleared.emit(), permission_callback(value) if permission_callback else None))
+            toast.permission_answered.connect(
+                lambda value: permission_callback(value) if permission_callback else None
+            )
         toast.show_toast()
         return toast

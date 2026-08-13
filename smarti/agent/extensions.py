@@ -339,10 +339,12 @@ class ExtensionsMixin:
                 "skill": name,
                 **payload
             }
-            with open(SKILL_LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+            logging.info(
+                "SKILL | %s",
+                json.dumps(record, ensure_ascii=False, default=str),
+            )
         except Exception as e:
-            logging.warning(f"Skill log failed: {e}")
+            logging.exception("Skill log failed for skill=%s: %s", name, e)
 
     def _emit_skill_step(self, skill_name, text):
         msg = f"Skill {skill_name}: {text}"

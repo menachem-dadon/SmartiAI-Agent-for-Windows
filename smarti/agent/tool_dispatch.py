@@ -26,7 +26,13 @@ class ToolDispatchMixin:
         except Exception:
             args_hash = "unknown"
             args_preview = str(safe_args or "")[:1200]
-        logging.info(f"TOOL START | {action} | args_hash={args_hash} | args={args_preview}")
+        logging.info("TOOL START | action=%s | args_hash=%s", action, args_hash)
+        logging.info(
+            "PERSONAL | kind=tool_arguments | tool=%s | args_hash=%s | content=%s",
+            action,
+            args_hash,
+            args_preview,
+        )
         if getattr(self, "audit_logger", None):
             self.audit_logger.record("tool_start", {"tool": action, "args_hash": args_hash, "args_preview": args_preview}, self.settings)
         try:
@@ -34,7 +40,19 @@ class ToolDispatchMixin:
             status = "error" if str(feedback or message or "").startswith("ERROR") else "ok"
             duration_ms = int((time.time() - started) * 1000)
             preview = self._truncate_tool_output(str(feedback or message or ""))[:1200]
-            logging.info(f"TOOL FINISH | {action} | status={status} | duration_ms={duration_ms} | preview={preview}")
+            logging.info(
+                "TOOL FINISH | action=%s | status=%s | duration_ms=%s | args_hash=%s",
+                action,
+                status,
+                duration_ms,
+                args_hash,
+            )
+            logging.info(
+                "PERSONAL | kind=tool_output | tool=%s | args_hash=%s | content=%s",
+                action,
+                args_hash,
+                preview,
+            )
             if getattr(self, "audit_logger", None):
                 self.audit_logger.record(
                     "tool_finish",

@@ -28,6 +28,29 @@ PROVIDER_LABELS = {
 }
 
 
+PROVIDER_CODE_HINTS = {
+    "invalid_api_key": "המפתח עצמו לא התקבל אצל הספק",
+    "authentication_error": "האימות מול הספק נכשל",
+    "permission_error": "החשבון אומת אך אינו מורשה לבצע את הבקשה",
+    "permission_denied": "החשבון אומת אך אינו מורשה לבצע את הבקשה",
+    "insufficient_quota": "מכסת החשבון או יתרת החיוב הסתיימה",
+    "resource_exhausted": "מכסת המשאב או קצב הבקשות נוצלו",
+    "rate_limit_exceeded": "מגבלת הקצב של הספק נחצתה",
+    "rate_limit_error": "מגבלת הקצב של הספק נחצתה",
+    "model_not_found": "המודל המבוקש לא נמצא או אינו זמין לחשבון",
+    "not_found_error": "המודל או המשאב המבוקש לא נמצא",
+    "context_length_exceeded": "מספר הטוקנים עבר את חלון ההקשר של המודל",
+    "request_too_large": "גודל הבקשה עבר את המגבלה של הספק",
+    "invalid_argument": "הספק דחה פרמטר או מבנה בבקשה",
+    "invalid_request_error": "הספק דחה פרמטר או מבנה בבקשה",
+    "failed_precondition": "נדרשת הגדרה נוספת בחשבון או בפרויקט אצל הספק",
+    "unsupported_parameter": "המודל אינו תומך באחד הפרמטרים שנשלחו",
+    "overloaded_error": "השרת של הספק עמוס כרגע",
+    "service_unavailable": "השירות של הספק אינו זמין כרגע",
+    "internal_server_error": "הספק נתקל בתקלה פנימית",
+}
+
+
 @dataclass
 class ApiErrorAnalysis:
     provider: str = ""
@@ -259,18 +282,30 @@ def _status_note(status_code):
     return f" (קוד {status_code})" if status_code else ""
 
 
-def _message_for(category, label, status_code=None):
+def _provider_code_note(fields):
+    fields = fields or {}
+    for key in ("status", "code", "type"):
+        value = str(fields.get(key, "") or "").strip()
+        normalized = value.casefold().replace("-", "_").replace(" ", "_")
+        hint = PROVIDER_CODE_HINTS.get(normalized)
+        if hint:
+            return f" קוד הספק {value} מציין ש{hint}."
+    return ""
+
+
+def _message_for(category, label, status_code=None, fields=None):
     note = _status_note(status_code)
+    code_note = _provider_code_note(fields)
     if category == "auth":
-        return f"מפתח ה-API של {label} נדחה. בדרך כלל זה אומר שהמפתח שגוי, נמחק, פג תוקף או שייך לחשבון אחר. פתח את ההגדרות והדבק מפתח תקין{note}."
+        return f"מפתח ה-API של {label} נדחה. בדרך כלל זה אומר שהמפתח שגוי, נמחק, פג תוקף או שייך לחשבון אחר. פתח את ההגדרות והדבק מפתח תקין{note}.{code_note}"
     if category == "permission":
-        return f"לחשבון או למפתח של {label} אין הרשאה להשתמש במודל, באזור או במשאב שנבחר. בדוק הרשאות אצל הספק או בחר מודל אחר{note}."
+        return f"לחשבון או למפתח של {label} אין הרשאה להשתמש במודל, באזור או במשאב שנבחר. בדוק הרשאות אצל הספק או בחר מודל אחר{note}.{code_note}"
     if category == "billing_quota":
-        return f"לחשבון של {label} אין כרגע יתרת שימוש זמינה, או שמכסת החיוב/הקרדיט נוצלה. צריך להוסיף קרדיט, להפעיל חיוב או להמתין לאיפוס המכסה{note}."
+        return f"לחשבון של {label} אין כרגע יתרת שימוש זמינה, או שמכסת החיוב/הקרדיט נוצלה. צריך להוסיף קרדיט, להפעיל חיוב או להמתין לאיפוס המכסה{note}.{code_note}"
     if category == "rate_limit":
-        return f"{label} מגביל כרגע את קצב הבקשות. סמארטי ימתין וינסה שוב אוטומטית{note}."
+        return f"{label} מגביל כרגע את קצב הבקשות. סמארטי ימתין וינסה שוב אוטומטית{note}.{code_note}"
     if category == "server_overload":
-        return f"יש עומס או תקלה זמנית בצד {label}. סמארטי ימתין וינסה שוב אוטומטית{note}."
+        return f"יש עומס או תקלה זמנית בצד {label}. סמארטי ימתין וינסה שוב אוטומטית{note}.{code_note}"
     if category == "timeout":
         return f"השרת של {label} לא החזיר תשובה בזמן. זה יכול לקרות בגלל עומס זמני או חיבור איטי/מסונן{note}."
     if category == "network":
@@ -278,11 +313,11 @@ def _message_for(category, label, status_code=None):
     if category == "ssl":
         return f"שגיאת SSL מול {label}. בדרך כלל זה מצביע על סינון רשת, Proxy או אנטי-וירוס שמחליף תעודות."
     if category == "request_too_large":
-        return f"הבקשה גדולה מדי עבור {label}. נסה לפתוח שיחה חדשה, לקצר את ההודעה או לבחור מודל עם חלון הקשר גדול יותר{note}."
+        return f"הבקשה גדולה מדי עבור {label}. נסה לפתוח שיחה חדשה, לקצר את ההודעה או לבחור מודל עם חלון הקשר גדול יותר{note}.{code_note}"
     if category == "model_unavailable":
-        return f"המודל שנבחר לא זמין בחשבון של {label}, לא קיים, או לא נתמך כרגע. בחר מודל אחר בהגדרות{note}."
+        return f"המודל שנבחר לא זמין בחשבון של {label}, לא קיים, או לא נתמך כרגע. בחר מודל אחר בהגדרות{note}.{code_note}"
     if category == "invalid_request":
-        return f"הבקשה שנשלחה אל {label} לא התקבלה. לרוב זה קורה כשמודל לא תומך בפרמטר מסוים או כשהיסטוריית השיחה בפורמט לא מתאים. נסה לבחור מודל אחר או לפתוח שיחה חדשה{note}."
+        return f"הבקשה שנשלחה אל {label} לא התקבלה. לרוב זה קורה כשמודל לא תומך בפרמטר מסוים או כשהיסטוריית השיחה בפורמט לא מתאים. נסה לבחור מודל אחר או לפתוח שיחה חדשה{note}.{code_note}"
     if category == "content_blocked":
         return f"{label} חסם את הבקשה בגלל מדיניות בטיחות או תוכן. נסה לנסח את הבקשה אחרת{note}."
     if category == "provider_setup":
@@ -370,10 +405,10 @@ def _classify(status_code, blob, retry_after):
         return "permission", "none"
     if status_code == 402:
         return "billing_quota", "none"
-    if status_code == 429 or _contains_any(blob, rate_terms):
-        return "rate_limit", "delayed"
     if account_billing or quota_exhausted:
         return "billing_quota", "none"
+    if status_code == 429 or _contains_any(blob, rate_terms):
+        return "rate_limit", "delayed"
     if status_code == 413 or _contains_any(blob, too_large_terms):
         return "request_too_large", "none"
     if _contains_any(blob, setup_terms):
@@ -421,7 +456,7 @@ def analyze_api_error(provider, model="", response=None, error=None, user_messag
         )
     ).lower()
     category, retry_action = _classify(status_code, blob, retry_after)
-    user_message = user_message_override or _message_for(category, label, status_code)
+    user_message = user_message_override or _message_for(category, label, status_code, fields)
     request_id = fields.get("request_id") or headers.get("request-id") or headers.get("x-request-id") or ""
     return ApiErrorAnalysis(
         provider=provider,
@@ -491,6 +526,38 @@ def api_technical_details(analysis, limit=420):
     if len(compact) > limit:
         compact = compact[:limit].rstrip() + "..."
     return compact
+
+
+def api_user_technical_details(analysis):
+    """Readable provider diagnostics for chat without exposing request content."""
+    if not analysis:
+        return []
+    provider_line = f"ספק: {analysis.provider_label}"
+    if analysis.model:
+        provider_line += f" | מודל: {analysis.model}"
+    provider_line += f" | קטגוריה: {analysis.category}"
+    codes = []
+    if analysis.status_code:
+        codes.append(f"HTTP {analysis.status_code}")
+    if analysis.error_code:
+        codes.append(f"קוד ספק: {analysis.error_code}")
+    if analysis.error_status:
+        codes.append(f"סטטוס ספק: {analysis.error_status}")
+    if analysis.error_type:
+        codes.append(f"סוג שגיאה: {analysis.error_type}")
+    if analysis.param:
+        codes.append(f"פרמטר: {analysis.param}")
+    rows = [provider_line]
+    if codes:
+        rows.append(" | ".join(codes))
+    if analysis.request_id:
+        rows.append(f"מזהה בקשה אצל הספק: {analysis.request_id}")
+    if analysis.retry_after is not None:
+        try:
+            rows.append(f"המתנה שהתבקשה: {int(round(float(analysis.retry_after)))} שניות")
+        except Exception:
+            rows.append(f"המתנה שהתבקשה: {analysis.retry_after}")
+    return rows
 
 
 def api_validation_message(analysis):

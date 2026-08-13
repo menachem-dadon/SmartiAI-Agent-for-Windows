@@ -823,6 +823,68 @@ def install_smarti_tooltips(app):
     controller.apply_theme()
 
 
+def apply_windows_rounded_corners(widget):
+    """Explicitly request Windows 11 rounded corners for every top-level Qt surface."""
+    if platform.system() != "Windows" or widget is None:
+        return False
+    try:
+        if not isinstance(widget, QWidget) or not widget.isWindow():
+            return False
+        hwnd = int(widget.winId())
+        if not hwnd:
+            return False
+        preference = ctypes.c_int(2)  # DWMWCP_ROUND
+        result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            ctypes.c_void_p(hwnd),
+            ctypes.c_uint(33),  # DWMWA_WINDOW_CORNER_PREFERENCE
+            ctypes.byref(preference),
+            ctypes.sizeof(preference),
+        )
+        return int(result) >= 0
+    except Exception:
+        return False
+
+
+class WindowsRoundedCornerController(QObject):
+    def __init__(self, app):
+        super().__init__(app)
+        self._applied_handles = set()
+
+    def apply_to(self, widget):
+        try:
+            if not isinstance(widget, QWidget) or not widget.isWindow():
+                return
+            hwnd = int(widget.winId())
+            if not hwnd or hwnd in self._applied_handles:
+                return
+            if apply_windows_rounded_corners(widget):
+                self._applied_handles.add(hwnd)
+        except Exception:
+            pass
+
+    def eventFilter(self, obj, event):
+        if event.type() in {
+            QEvent.Type.Show,
+            QEvent.Type.WinIdChange,
+            QEvent.Type.PolishRequest,
+        }:
+            QTimer.singleShot(0, lambda target=obj: self.apply_to(target))
+        return False
+
+
+def install_windows_rounded_corners(app):
+    if not app or platform.system() != "Windows":
+        return None
+    controller = getattr(app, "_smarti_rounded_corner_controller", None)
+    if controller is None:
+        controller = WindowsRoundedCornerController(app)
+        app.installEventFilter(controller)
+        app._smarti_rounded_corner_controller = controller
+    for widget in app.topLevelWidgets():
+        controller.apply_to(widget)
+    return controller
+
+
 def apply_app_theme(app=None, mode=None, settings=None):
     set_ui_theme(mode, settings)
     app = app or QApplication.instance()
@@ -838,6 +900,7 @@ def apply_app_theme(app=None, mode=None, settings=None):
         if app.styleSheet() != stylesheet:
             app.setStyleSheet(stylesheet)
         install_smarti_tooltips(app)
+        install_windows_rounded_corners(app)
     return CURRENT_THEME
 
 

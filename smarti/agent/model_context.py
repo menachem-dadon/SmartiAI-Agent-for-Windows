@@ -2304,10 +2304,57 @@ CWD: {current_dir}
 
     def _api_error_user_response(self, analysis):
         message = str(getattr(analysis, "user_message", "") or "התקבלה שגיאת API.").strip()
-        details = redact_sensitive_text(api_technical_details(analysis), self.settings)
-        if details:
-            return f"ERROR_USER: {message}\nפרטים טכניים: {details}"
+        detail_rows = [
+            redact_sensitive_text(row, self.settings)
+            for row in api_user_technical_details(analysis)
+            if str(row or "").strip()
+        ]
+        if detail_rows:
+            return f"ERROR_USER: {message}\nפרטים טכניים:\n" + "\n".join(f"• {row}" for row in detail_rows)
         return f"ERROR_USER: {message}"
+
+    def _log_api_request_success(self, request_id, provider, model, purpose, attempt, started_at, result):
+        response_text = ""
+        usage = {}
+        if isinstance(result, tuple) and len(result) >= 2:
+            response_text = str(result[0] or "")
+            usage = result[1] if isinstance(result[1], dict) else {}
+        duration_ms = int(max(0.0, time.monotonic() - started_at) * 1000)
+        logging.info(
+            "API SUCCESS | request_id=%s | provider=%s | model=%s | purpose=%s | "
+            "attempt=%s | duration_ms=%s | response_chars=%s | prompt_tokens=%s | "
+            "completion_tokens=%s | cached_prompt_tokens=%s | reasoning_tokens=%s",
+            request_id,
+            provider,
+            model,
+            purpose,
+            attempt,
+            duration_ms,
+            len(response_text),
+            usage.get("prompt", 0),
+            usage.get("completion", 0),
+            usage.get("cached_prompt", 0),
+            usage.get("reasoning", 0),
+        )
+        return result
+
+    def _log_api_request_failure(self, request_id, provider, model, purpose, attempt, started_at, analysis, error):
+        duration_ms = int(max(0.0, time.monotonic() - started_at) * 1000)
+        logging.error(
+            "API FAILURE | request_id=%s | provider=%s | model=%s | purpose=%s | "
+            "attempt=%s | duration_ms=%s | category=%s | retry=%s | technical=%s | raw=%s",
+            request_id,
+            provider,
+            model,
+            purpose,
+            attempt,
+            duration_ms,
+            getattr(analysis, "category", "unknown"),
+            getattr(analysis, "retry_action", "none"),
+            api_technical_details(analysis, limit=1200),
+            str(getattr(analysis, "raw_message", "") or "")[:1200],
+            exc_info=(type(error), error, error.__traceback__),
+        )
 
     def _handle_api_request_with_retry(
         self,
@@ -2350,7 +2397,21 @@ CWD: {current_dir}
         wait_times = [15, 30, 30] if retry_wait_times is None else list(retry_wait_times)
         max_retries = len(wait_times)
         network_reconnect_allowed = retry_wait_times is None
+        request_log_id = uuid.uuid4().hex[:12]
+        logging.info(
+            "API REQUEST | request_id=%s | provider=%s | model=%s | purpose=%s | "
+            "native_tools=%s | configured_retries=%s | timeout_seconds=%s",
+            request_log_id,
+            request_mode,
+            current_model,
+            request_purpose,
+            len(native_specs),
+            max_retries,
+            self._provider_request_timeout(request_mode),
+        )
         while retries <= max_retries:
+            attempt_number = retries + immediate_retries + 1
+            attempt_started = time.monotonic()
             try:
                 self._raise_if_cancelled()
                 usage_dict = {}
@@ -2360,6 +2421,13 @@ CWD: {current_dir}
                     provider_mode=request_mode,
                     system_prompt=request_system_prompt,
                     include_warning=request_purpose == "agent",
+                )
+                logging.info(
+                    "API ATTEMPT | request_id=%s | attempt=%s | messages=%s | estimated_chars=%s",
+                    request_log_id,
+                    attempt_number,
+                    len(request_messages),
+                    sum(len(self._message_text_for_budget(message)) for message in request_messages),
                 )
                 if request_mode == CODEX_SIGNIN_PROVIDER:
                     codex_provider = getattr(self, "codex_signin_provider", None)
@@ -2372,7 +2440,7 @@ CWD: {current_dir}
                         codex_timeout = int(self.settings.get("codex_request_timeout_seconds", 1800) or 1800)
                     except Exception:
                         codex_timeout = 1800
-                    return codex_provider.complete(
+                    result = codex_provider.complete(
                         request_messages,
                         current_model,
                         timeout=max(60, codex_timeout),
@@ -2382,6 +2450,10 @@ CWD: {current_dir}
                         ),
                         cancel_event=getattr(getattr(self, "_execution_context", None), "cancel_event", None),
                         purpose=request_purpose,
+                    )
+                    return self._log_api_request_success(
+                        request_log_id, request_mode, current_model, request_purpose,
+                        attempt_number, attempt_started, result,
                     )
                 if request_mode == "gemini":
                     api_key = self._ensure_secret_loaded("gemini_api_key")
@@ -2464,8 +2536,13 @@ CWD: {current_dir}
                         elif not part.get('thought', False):
                             ai_response_text += part.get('text', '')
                     if native_calls:
-                        return self._canonical_native_tool_response(native_calls, ai_response_text), usage_dict
-                    return ai_response_text.strip(), usage_dict
+                        result = self._canonical_native_tool_response(native_calls, ai_response_text), usage_dict
+                    else:
+                        result = ai_response_text.strip(), usage_dict
+                    return self._log_api_request_success(
+                        request_log_id, request_mode, current_model, request_purpose,
+                        attempt_number, attempt_started, result,
+                    )
                 elif request_mode == "local" or is_openai_compatible_provider(request_mode):
                     request_client = self._openai_compatible_client_for_request(request_mode)
                     if request_client is None:
@@ -2589,8 +2666,13 @@ CWD: {current_dir}
                             })
                     response_text = str(getattr(response_message, "content", "") or "").strip()
                     if native_calls:
-                        return self._canonical_native_tool_response(native_calls, response_text), usage_dict
-                    return response_text, usage_dict
+                        result = self._canonical_native_tool_response(native_calls, response_text), usage_dict
+                    else:
+                        result = response_text, usage_dict
+                    return self._log_api_request_success(
+                        request_log_id, request_mode, current_model, request_purpose,
+                        attempt_number, attempt_started, result,
+                    )
                 elif request_mode == "anthropic":
                     api_key = self._ensure_secret_loaded("anthropic_api_key")
                     url = get_url(URL_ANTHROPIC)
@@ -2714,8 +2796,13 @@ CWD: {current_dir}
                             text_parts.append(str(block.get("text", "") or ""))
                     response_text = "\n".join(part for part in text_parts if part).strip()
                     if native_calls:
-                        return self._canonical_native_tool_response(native_calls, response_text), usage_dict
-                    return response_text, usage_dict
+                        result = self._canonical_native_tool_response(native_calls, response_text), usage_dict
+                    else:
+                        result = response_text, usage_dict
+                    return self._log_api_request_success(
+                        request_log_id, request_mode, current_model, request_purpose,
+                        attempt_number, attempt_started, result,
+                    )
             except SmartiCancelled:
                 raise Exception("CANCELLED_BY_USER")
             except CodexProtocolError:
@@ -2736,6 +2823,16 @@ CWD: {current_dir}
                     )
                 else:
                     analysis = analyze_api_error(request_mode, current_model, error=e)
+                self._log_api_request_failure(
+                    request_log_id,
+                    request_mode,
+                    current_model,
+                    request_purpose,
+                    attempt_number,
+                    attempt_started,
+                    analysis,
+                    e,
+                )
                 if analysis.category == "ssl" or isinstance(e, requests.exceptions.SSLError):
                     analysis.user_message = self._friendly_ssl_error(e)
                     analysis.retry_action = "none"
@@ -2757,6 +2854,10 @@ CWD: {current_dir}
                         raise ApiRequestError(api_retry_exhausted_analysis(analysis))
                 if analysis.retry_action == "immediate" and immediate_retries < 1:
                     immediate_retries += 1
+                    logging.warning(
+                        "API RETRY | request_id=%s | action=immediate | next_attempt=%s | category=%s",
+                        request_log_id, attempt_number + 1, analysis.category,
+                    )
                     if report_status:
                         report_status(api_retry_status_message(analysis, 0, retries + immediate_retries + 1))
                     continue
@@ -2768,6 +2869,11 @@ CWD: {current_dir}
                         wait_seconds = float(wait_times[retries])
                     if wait_seconds > 180:
                         raise ApiRequestError(api_retry_exhausted_analysis(analysis, wait_too_long=True))
+                    logging.warning(
+                        "API RETRY | request_id=%s | action=delayed | wait_seconds=%s | "
+                        "next_attempt=%s | category=%s",
+                        request_log_id, wait_seconds, attempt_number + 1, analysis.category,
+                    )
                     if report_status:
                         report_status(api_retry_status_message(analysis, wait_seconds, retries + immediate_retries + 1))
                     def tick_retry_status(remaining, analysis=analysis, attempt=retries + immediate_retries + 1):
