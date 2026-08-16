@@ -259,6 +259,19 @@ class ContextEfficiencyTests(unittest.TestCase):
         self.assertIn("Available Skills Catalog", prompt)
         self.assertLess(len(prompt), 18000)
 
+    def test_background_routing_policy_explains_all_three_conversation_contracts(self):
+        core = _prompt_core({"background_task_manager"})
+
+        prompt = core._load_system_prompt("תזמן מעקב שבועי")
+        schema_description = BUILTIN_TOOL_SCHEMAS["background_task_manager"][
+            "inputSchema"
+        ]["properties"]["conversation_mode"]["description"]
+
+        self.assertIn("שיחת המקור שממנה תוזמנה המשימה", prompt)
+        self.assertIn("שיחה חדשה בכל מחזור", prompt)
+        self.assertIn("שיחה ייעודית תיווצר בהרצה הראשונה", prompt)
+        self.assertIn("not whichever chat is active later", schema_description)
+
     def test_canvas_uses_compact_base_policy_but_full_policy_remains_on_demand(self):
         core = _prompt_core({
             "get_tool_info",
@@ -366,6 +379,7 @@ class ContextEfficiencyTests(unittest.TestCase):
             core.settings = copy.deepcopy(DEFAULT_SETTINGS)
             core.settings["api_mode"] = "local"
             core.settings["local_fast_mode_enabled"] = True
+            core.settings["conversation_title_generation_mode"] = "local"
             core.chat_store = ChatSessionStore(str(Path(directory) / "chats.json"))
             core.generate_conversation_title = mock.Mock(
                 side_effect=AssertionError("FastMode must not request a title")

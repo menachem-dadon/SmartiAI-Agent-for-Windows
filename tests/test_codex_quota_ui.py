@@ -8,7 +8,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint
+from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtWidgets import QApplication, QLabel, QMainWindow, QMenu, QPushButton, QStackedWidget, QWidgetAction
 
 from smarti import chat as chat_module
@@ -16,7 +16,7 @@ from smarti import ui_pages
 from smarti import ui_styles
 from smarti.chat import ChatHistoryPage, ChatWindow, CodexQuotaWidget
 from smarti.ui_controls import SearchableModelComboBox
-from smarti.ui_pages import SettingsPage
+from smarti.ui_pages import ResponsiveTaskCard, SettingsPage, TaskCenterPage
 
 
 class _PopupHost(QMainWindow):
@@ -271,6 +271,53 @@ class ChatHistoryRegressionTests(unittest.TestCase):
         self.app.processEvents()
         self.assertLessEqual(abs(indicator.geometry().center().y() - menu_button.geometry().center().y()), 1)
 
+    def test_history_rows_share_active_geometry_and_activity_sits_by_ellipsis(self):
+        active = self.page._compact_session_row(
+            {
+                "id": "running-session",
+                "title": "כותרת רצה",
+                "updated_at": "2026-08-13T20:00:00",
+                "message_count": 3,
+                "runtime_status": "running",
+                "unread_count": 0,
+            },
+            active_id="running-session",
+        )
+        quiet = self.page._compact_session_row(
+            {
+                "id": "quiet-session",
+                "title": "כותרת שקטה",
+                "updated_at": "2026-08-13T20:00:00",
+                "message_count": 2,
+                "runtime_status": "idle",
+                "unread_count": 0,
+            },
+            active_id="running-session",
+        )
+        for row in (active, quiet):
+            row.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            row.resize(520, 68)
+            row.show()
+        self.app.processEvents()
+
+        active_title = next(label for label in active.findChildren(QLabel) if label.text() == "כותרת רצה")
+        quiet_title = next(label for label in quiet.findChildren(QLabel) if label.text() == "כותרת שקטה")
+        activity = active.findChild(chat_module.ConversationActivityIndicator)
+        quiet_activity = quiet.findChild(chat_module.ConversationActivityIndicator)
+        menu = active.findChild(QPushButton, "SessionActionsButton")
+
+        self.assertEqual(active.height(), 68)
+        self.assertEqual(quiet.height(), 68)
+        self.assertIn("border-radius: 12px", active.styleSheet())
+        self.assertIn("border-radius: 12px", quiet.styleSheet())
+        self.assertGreater(activity.geometry().left(), menu.geometry().right())
+        self.assertLess(activity.geometry().right(), active_title.geometry().left())
+        self.assertEqual(active_title.geometry().right(), quiet_title.geometry().right())
+        self.assertFalse(quiet_activity.isVisible())
+
+        active.deleteLater()
+        quiet.deleteLater()
+
     def test_typing_history_search_is_debounced_and_runs_once(self):
         records = []
         self.page.core = SimpleNamespace(
@@ -283,6 +330,8 @@ class ChatHistoryRegressionTests(unittest.TestCase):
         self.page.search_edit.setText("אב")
         self.page.search_edit.setText("אבג")
         self.assertEqual(self.page.core.list_chat_sessions.call_count, 0)
+        self.assertFalse(self.page.loading_frame.isHidden())
+        self.assertIs(self.page.history_stack.currentWidget(), self.page.loading_frame)
 
         deadline = time.monotonic() + 2.0
         while self.page.core.list_chat_sessions.call_count < 1 and time.monotonic() < deadline:
@@ -291,6 +340,77 @@ class ChatHistoryRegressionTests(unittest.TestCase):
 
         self.assertEqual(self.page.core.list_chat_sessions.call_count, 1)
         self.assertEqual(self.page.core.list_chat_sessions.call_args.args, ("אבג",))
+        deadline = time.monotonic() + 2.0
+        while not self.page.loading_frame.isHidden() and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.assertTrue(self.page.loading_frame.isHidden())
+        self.assertIs(self.page.history_stack.currentWidget(), self.page.scroll)
+
+    def test_history_rows_are_built_behind_loading_page_then_revealed_together(self):
+        records = [
+            {
+                "id": f"session-{index}",
+                "title": f"שיחה {index}",
+                "updated_at": "2026-08-15T12:00:00",
+                "message_count": 1,
+                "runtime_status": "idle",
+                "unread_count": 0,
+            }
+            for index in range(55)
+        ]
+        self.page.core = SimpleNamespace(active_chat_session=lambda: {"id": ""})
+        self.page.loading_frame.show()
+        self.page.history_stack.setCurrentWidget(self.page.loading_frame)
+
+        self.page._render_sessions(records)
+
+        self.assertIs(self.page.history_stack.currentWidget(), self.page.loading_frame)
+        deadline = time.monotonic() + 2.0
+        while self.page.history_stack.currentWidget() is not self.page.scroll and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.005)
+        self.assertIs(self.page.history_stack.currentWidget(), self.page.scroll)
+        self.assertEqual(
+            len(self.page.content.findChildren(chat_module.ClickableSessionFrame)),
+            len(records),
+        )
+
+    def test_task_center_card_expands_to_all_wrapped_content(self):
+        task = {
+            "id": "long-task",
+            "status": "scheduled",
+            "repeat": "interval",
+            "interval_minutes": 1440,
+            "conversation_mode": "dedicated",
+            "run_at": "2026-08-16T12:00:00",
+            "prompt": "הוראה מפורטת מאוד למשימת רקע מחזורית. " * 18,
+            "last_result": "תוצאת ההרצה הקודמת נשמרת כאן במלואה לצורך בדיקה. " * 7,
+        }
+        core = SimpleNamespace(
+            settings={"background_tasks": [task]},
+            cancel_background_task=lambda _task_id: "OK",
+            retry_background_task=lambda _task_id, _delay: "OK",
+        )
+        task_page = TaskCenterPage(core, self.main_window)
+        self.stack.addWidget(task_page)
+        self.stack.setCurrentWidget(task_page)
+        self.stack.resize(535, 542)
+        self.stack.show()
+        task_page.load_tasks()
+        for _ in range(30):
+            self.app.processEvents()
+
+        card = task_page.content.findChild(ResponsiveTaskCard)
+        labels = card.findChildren(QLabel)
+        body = next(label for label in labels if label.text().startswith("הוראה מפורטת"))
+        result = next(label for label in labels if label.text().startswith("תוצאת ההרצה"))
+
+        self.assertGreater(card.minimumHeight(), 320)
+        self.assertGreaterEqual(body.height(), body.heightForWidth(body.width()))
+        self.assertGreaterEqual(result.height(), result.heightForWidth(result.width()))
+        self.assertGreater(task_page.scroll.verticalScrollBar().maximum(), 0)
+        task_page.deleteLater()
 
 
 class ThemeAndCanvasRegressionTests(unittest.TestCase):

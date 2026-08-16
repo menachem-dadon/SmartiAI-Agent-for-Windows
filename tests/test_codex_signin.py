@@ -414,6 +414,41 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.assertEqual(parsed["pre_text"], "אני בודק מידע עדכני ברשת.")
         self.assertEqual(len(parsed["tool_calls"]), 1)
 
+    def test_tool_request_is_not_dropped_when_codex_emits_a_later_final_message(self):
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
+        )
+        tool_turn = json.dumps({
+            "kind": "tool_calls",
+            "tool_calls": [{
+                "name": "document_manager",
+                "arguments_json": json.dumps({"action": "create", "path": "demo.docx"}),
+            }],
+            "final_answer": None,
+            "progress_report": "יוצר את המסמך.",
+        }, ensure_ascii=False)
+        premature_final = json.dumps({
+            "kind": "final",
+            "tool_calls": None,
+            "final_answer": "התחלתי ליצור את המסמך.",
+            "progress_report": None,
+        }, ensure_ascii=False)
+        stdout = "\n".join((
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": tool_turn}}, ensure_ascii=False),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": premature_final}}, ensure_ascii=False),
+            json.dumps({"type": "turn.completed", "usage": {"input_tokens": 5, "output_tokens": 3}}),
+        ))
+        self.provider._run = mock.Mock(return_value=(0, stdout, ""))
+
+        response, _usage = self.provider.complete(
+            [{"role": "user", "content": "צור מסמך"}],
+            model="gpt-5.6-luna",
+        )
+
+        report, wire_format = response.split("\n", 1)
+        self.assertEqual(report, "יוצר את המסמך.")
+        self.assertEqual(json.loads(wire_format)["tool_calls"][0]["name"], "document_manager")
+
     def test_schema_rejects_non_object_tool_arguments(self):
         with self.assertRaises(CodexSignInError):
             self.provider._decode_structured_turn(json.dumps({

@@ -63,6 +63,7 @@ class ModelDefaultAndProvenanceTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_fresh_defaults_use_the_three_exact_models(self):
+        self.assertEqual(DEFAULT_SETTINGS["conversation_title_generation_mode"], "ai")
         expected = {
             "gemini": "gemini-3.6-flash",
             "openai": "gpt-5.6-sol",

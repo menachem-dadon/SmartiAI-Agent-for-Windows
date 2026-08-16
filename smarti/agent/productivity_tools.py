@@ -3,6 +3,19 @@ from .shared import *
 
 
 class ProductivityToolsMixin:
+    def _current_origin_session_id(self):
+        store = getattr(self, "chat_store", None)
+        if store is None:
+            return ""
+        session_id = str(
+            getattr(getattr(self, "_execution_context", None), "target_session_id", "")
+            or ""
+        ).strip()
+        if session_id and store.has_session(session_id):
+            return session_id
+        active = store.active_session_metadata()
+        return str((active or {}).get("id") or "").strip()
+
     def search_internet(self, query):
         api = self._ensure_secret_loaded("tavily_api_key")
         if not api:
@@ -221,6 +234,7 @@ class ProductivityToolsMixin:
                 conversation_mode = "current"
 
             run_at_dt = datetime.now() + timedelta(minutes=delay)
+            origin_session_id = self._current_origin_session_id()
             task = {
                 "id": str(uuid.uuid4())[:8],
                 "prompt": args_dict.get("prompt", ""),
@@ -231,7 +245,9 @@ class ProductivityToolsMixin:
                 "interval_minutes": interval if repeat == "interval" else None,
                 "days_of_week": days_of_week if repeat == "weekly" else None,
                 "conversation_mode": conversation_mode,
-                "target_conversation_id": None,
+                "target_conversation_id": (
+                    origin_session_id if conversation_mode == "current" else None
+                ),
                 "policy_snapshot": self.background_scheduler.policy_snapshot() if getattr(self, "background_scheduler", None) else self._normalize_policy_matrix(),
                 "history": [],
                 "status": "scheduled",
@@ -260,6 +276,7 @@ class ProductivityToolsMixin:
             if not message:
                 return "ERROR: Missing reminder message."
             run_at_dt = datetime.now() + timedelta(minutes=delay)
+            origin_session_id = self._current_origin_session_id()
             task = {
                 "id": str(uuid.uuid4())[:8],
                 "kind": "reminder",
@@ -271,6 +288,8 @@ class ProductivityToolsMixin:
                 "anchor_run_at": run_at_dt.isoformat(timespec="seconds"),
                 "repeat": repeat,
                 "interval_minutes": interval if repeat == "interval" else None,
+                "conversation_mode": "current",
+                "target_conversation_id": origin_session_id,
                 "policy_snapshot": self.background_scheduler.policy_snapshot() if getattr(self, "background_scheduler", None) else self._normalize_policy_matrix(),
                 "history": [],
                 "status": "scheduled",
@@ -576,6 +595,7 @@ class ProductivityToolsMixin:
                 "body": args["body"],
                 "kind": args["kind"],
                 "open_button": args["open_button"],
+                "session_id": self._current_origin_session_id(),
             }):
                 return "SUCCESS: התראת Windows נשלחה."
             return "ERROR: ערוץ ההתראות של הממשק אינו זמין כרגע."
@@ -703,7 +723,16 @@ class ProductivityToolsMixin:
             if "conversation_mode" in params:
                 mode = str(params["conversation_mode"]).strip().lower()
                 if mode in {"current", "new", "dedicated"}:
+                    previous_mode = str(task.get("conversation_mode") or "current").strip().lower()
                     task["conversation_mode"] = mode
+                    if mode == "current":
+                        task["target_conversation_id"] = self._current_origin_session_id()
+                    elif mode == "new":
+                        task["target_conversation_id"] = None
+                    elif previous_mode != "dedicated":
+                        # Re-editing an already dedicated task must not break
+                        # its accumulated conversation continuity.
+                        task["target_conversation_id"] = None
                 else:
                     return f"ERROR: Invalid conversation_mode: {mode}"
             

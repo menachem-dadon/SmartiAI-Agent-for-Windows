@@ -832,7 +832,8 @@ MODEL_PROVIDER_SECRET_KEYS = {
 SENSITIVE_SETTING_KEYS = MODEL_PROVIDER_SECRET_KEYS | {
     "tavily_api_key", "email_password", "email_address",
     "google_drive_client_id", "google_drive_client_secret",
-    "google_drive_refresh_token", "google_drive_access_token"
+    "google_drive_refresh_token", "google_drive_access_token",
+    "local_gateway_token",
 }
 KEYRING_SERVICE = "SmartiAI"
 SECRET_PREFIX = "DPAPI:"

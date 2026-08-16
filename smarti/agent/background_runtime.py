@@ -237,7 +237,7 @@ class BackgroundRuntimeMixin:
             generation = int(task.get("generation", 0) or 0)
         def worker():
             rescheduled = False
-            target_session_id = None
+            target_session_id = str(task.get("target_conversation_id") or "").strip() or None
             try:
                 run_at = datetime.fromisoformat(task["run_at"])
                 delay = max(0, (run_at - datetime.now()).total_seconds())
@@ -266,122 +266,124 @@ class BackgroundRuntimeMixin:
                         rescheduled = True
                     return
 
-                # Sleep is done, now we attempt to run!
-                # Let's acquire the agent lock with timeout.
-                acquired = self._agent_lock.acquire(timeout=60)
-                if not acquired:
-                    self._mark_background_task(task_id, "failed", "ERROR: Could not acquire agent lock (agent busy).")
+                current = self._get_background_task(task_id)
+                if not current or current.get("status") != "scheduled" or int(current.get("generation", 0) or 0) != generation:
                     return
-                try:
-                    current = self._get_background_task(task_id)
-                    if not current or current.get("status") != "scheduled" or int(current.get("generation", 0) or 0) != generation:
-                        return
-                    current["status"] = "running"
-                    current["started_at"] = datetime.now().isoformat(timespec="seconds")
-                    self._save_settings()
-                    
-                    self._execution_context.policy_snapshot = current.get("policy_snapshot", {})
-                    self._execution_context.current_task_id = task_id
-                    
-                    # 1. Resolve target conversation session ID
-                    mode = current.get("conversation_mode") or "current"
-                    if mode == "current":
-                        active_sess = self.chat_store.active_session()
+                current["status"] = "running"
+                current["started_at"] = datetime.now().isoformat(timespec="seconds")
+
+                mode = str(current.get("conversation_mode") or "current").strip().lower()
+                if mode not in {"current", "new", "dedicated"}:
+                    mode = "current"
+                if mode == "current":
+                    target_session_id = current.get("target_conversation_id")
+                    if not target_session_id or not self.chat_store.has_session(target_session_id):
+                        active_sess = self.chat_store.active_session_metadata()
                         target_session_id = active_sess.get("id") if active_sess else None
-                    elif mode == "new":
-                        session = self.chat_store.create_session(set_active=False)
-                        target_session_id = session.get("id")
-                    elif mode == "dedicated":
-                        target_session_id = current.get("target_conversation_id")
-                        exists = False
-                        if target_session_id:
-                            with self.chat_store._lock:
-                                exists = self.chat_store.has_session(target_session_id)
-                        if not exists:
-                            session = self.chat_store.create_session(set_active=False)
-                            target_session_id = session.get("id")
-                            current["target_conversation_id"] = target_session_id
-                            self._save_settings()
-                    
-                    # Store target_session_id in execution context so step callback can use it!
-                    self._execution_context.target_session_id = target_session_id
-                    
-                    # Backup original active session
-                    original_sess = self.chat_store.active_session()
-                    original_session_id = original_sess.get("id") if original_sess else None
-                    
-                    # If target is different from active session, activate it!
-                    if target_session_id and target_session_id != original_session_id:
-                        self.activate_chat_session(target_session_id)
-                    
-                    if current.get("kind") == "reminder":
-                        title = str(current.get("title") or "תזכורת מסמארטי").strip()
-                        message = str(current.get("message") or current.get("prompt") or "").strip()
-                        res = f"{title}\n\n{message}".strip()
-                    else:
-                        prompt_text = current.get('prompt', '')
-                        # Emit start callback/signal
-                        if getattr(self, "background_task_start_callback", None):
-                            try:
-                                self.background_task_start_callback(target_session_id or "", task_id, prompt_text)
-                            except Exception:
-                                pass
-                        
-                        res = self.send_message(prompt_text, is_background_task=True, cancel_event=cancel_event)
-                        
-                        # Record the active chat turn manually for background task!
-                        try:
-                            self._record_active_chat_turn(prompt_text, res, attachments=None, is_background_task=True, session_id=target_session_id)
-                        except Exception as e:
-                            logging.warning(f"Failed to record background chat turn: {e}")
-                    
-                    # Restore original active session
-                    if original_session_id and original_session_id != self.chat_store.active_session().get("id"):
-                        self.activate_chat_session(original_session_id)
-                    
-                    current = self._get_background_task(task_id) or current
-                    if int(current.get("generation", 0) or 0) != generation:
-                        return
-                    if cancel_event.is_set() or current.get("status") == "cancelling":
-                        self._mark_background_task(task_id, "cancelled", res or "Cancelled.")
-                        if getattr(self, "background_task_finish_callback", None):
-                            try: self.background_task_finish_callback(target_session_id or "", task_id, "Cancelled.", False)
-                            except Exception: pass
-                        return
-                    
-                    success = bool(res and "ERROR" not in res)
-                    
-                    # Emit finish callback/signal
+                        current["target_conversation_id"] = target_session_id
+                elif mode == "new":
+                    target_session_id = self.chat_store.create_session(set_active=False).get("id")
+                else:
+                    target_session_id = current.get("target_conversation_id")
+                    if not target_session_id or not self.chat_store.has_session(target_session_id):
+                        target_session_id = self.chat_store.create_session(set_active=False).get("id")
+                        current["target_conversation_id"] = target_session_id
+                self._save_settings()
+
+                prompt_text = str(current.get("prompt") or current.get("message") or "")
+                if current.get("kind") == "reminder":
+                    title = str(current.get("title") or "תזכורת מסמארטי").strip()
+                    prompt_text = f"{title}\n\n{prompt_text}".strip()
+                if getattr(self, "background_task_start_callback", None):
+                    try:
+                        self.background_task_start_callback(target_session_id or "", task_id, prompt_text)
+                    except Exception:
+                        pass
+
+                run_metadata = {
+                    "task_id": task_id,
+                    "policy_snapshot": copy.deepcopy(current.get("policy_snapshot") or {}),
+                    "background_kind": str(current.get("kind") or "agent"),
+                }
+                if current.get("kind") == "reminder":
+                    handle = self.run_manager.complete_immediate(
+                        target_session_id,
+                        prompt_text,
+                        source="background_reminder",
+                        metadata=run_metadata,
+                    )
+                else:
+                    handle = self.run_manager.submit(
+                        target_session_id,
+                        prompt_text,
+                        source="background_scheduler",
+                        is_background_task=True,
+                        cancel_event=cancel_event,
+                        metadata=run_metadata,
+                    )
+                while not handle.done_event.wait(0.25):
+                    if cancel_event.is_set():
+                        self.run_manager.cancel(handle.run_id)
+                res = handle.response or handle.error or "Cancelled."
+
+                current = self._get_background_task(task_id) or current
+                if int(current.get("generation", 0) or 0) != generation:
+                    return
+                if cancel_event.is_set() or current.get("status") == "cancelling" or handle.status == "cancelled":
+                    self._mark_background_task(task_id, "cancelled", res)
                     if getattr(self, "background_task_finish_callback", None):
                         try:
-                            self.background_task_finish_callback(target_session_id or "", task_id, res, success)
+                            self.background_task_finish_callback(target_session_id or "", task_id, "Cancelled.", False)
                         except Exception:
                             pass
-                    
-                    if success and current.get("repeat") in {"interval", "weekly"}:
-                        if self._reschedule_recurring_background_task(current, datetime.now(), res, history_status="scheduled"):
-                            if self._background_threads.get(task_id) is threading.current_thread():
-                                self._background_threads.pop(task_id, None)
-                            self._schedule_background_task_thread(current)
-                            rescheduled = True
-                        else:
-                            self._mark_background_task(task_id, "done", res)
+                    return
+
+                success = handle.status == "completed"
+                if getattr(self, "background_task_finish_callback", None):
+                    try:
+                        self.background_task_finish_callback(target_session_id or "", task_id, res, success)
+                    except Exception:
+                        pass
+                if success and current.get("repeat") in {"interval", "weekly"}:
+                    if self._reschedule_recurring_background_task(current, datetime.now(), res, history_status="scheduled"):
+                        if self._background_threads.get(task_id) is threading.current_thread():
+                            self._background_threads.pop(task_id, None)
+                        self._schedule_background_task_thread(current)
+                        rescheduled = True
                     else:
-                        self._mark_background_task(task_id, "done" if success else "failed", res)
-                        
-                    if res and "ERROR" not in res:
-                        if self.settings.get("read_aloud_all"): self.speak_text(res)
-                    if res and "ERROR" not in res:
-                        self._emit_notification("background_task_finished", {"task": dict(current), "result": res, "session_id": target_session_id or ""})
-                finally:
-                    self._agent_lock.release()
+                        self._mark_background_task(task_id, "done", res)
+                else:
+                    self._mark_background_task(task_id, "done" if success else "failed", res)
+                if success and self.settings.get("read_aloud_all"):
+                    self.speak_text(res)
+                current = self._get_background_task(task_id) or current
+                self._emit_notification(
+                    "background_task_finished",
+                    {
+                        "task": dict(current),
+                        "result": res,
+                        "session_id": target_session_id or "",
+                        "success": success,
+                    },
+                )
             except Exception as e:
                 logging.exception("Background task crashed unexpectedly.")
                 self._recover_after_agent_crash()
-                self._mark_background_task(task_id, "failed", f"ERROR: {e}")
+                error_text = f"ERROR: {e}"
+                self._mark_background_task(task_id, "failed", error_text)
                 if getattr(self, "background_task_finish_callback", None):
-                    try: self.background_task_finish_callback(target_session_id or "", task_id, f"ERROR: {e}", False)
+                    try: self.background_task_finish_callback(target_session_id or "", task_id, error_text, False)
                     except Exception: pass
+                current = self._get_background_task(task_id) or task
+                self._emit_notification(
+                    "background_task_finished",
+                    {
+                        "task": dict(current),
+                        "result": error_text,
+                        "session_id": target_session_id or "",
+                        "success": False,
+                    },
+                )
             finally:
                 if not rescheduled:
                     if self._background_threads.get(task_id) is threading.current_thread():

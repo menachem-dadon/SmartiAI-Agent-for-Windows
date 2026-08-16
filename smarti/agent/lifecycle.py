@@ -1,8 +1,46 @@
 """SmartiCore startup, extension catalog, trust, and basic path helpers."""
 from .shared import *
+from contextlib import contextmanager
 
 
 class LifecycleMixin:
+    _RUN_LOCAL_FIELDS = frozenset({
+        "mode", "universal_client", "_universal_client_key",
+        "codex_signin_provider",
+        "system_prompt", "gemini_history", "universal_history",
+        "recent_tool_observations", "tool_observations",
+        "conversation_attachments", "conversation_summary",
+        "tool_context_transcript", "_last_memory_update_result",
+        "_pending_canvas_artifacts", "_current_agent_process_events",
+        "_current_agent_process_started_at", "status_callback",
+        "print_callback", "ask_user_callback", "api_key_callback",
+        "step_callback",
+        "_held_resource_locks",
+    })
+
+    def __getattribute__(self, name):
+        if name in LifecycleMixin._RUN_LOCAL_FIELDS:
+            try:
+                execution_context = object.__getattribute__(self, "_execution_context")
+                values = getattr(execution_context, "run_values", None)
+                if isinstance(values, dict) and name in values:
+                    return values[name]
+            except (AttributeError, RuntimeError):
+                pass
+        return super().__getattribute__(name)
+
+    def __setattr__(self, name, value):
+        if name in LifecycleMixin._RUN_LOCAL_FIELDS:
+            try:
+                execution_context = object.__getattribute__(self, "_execution_context")
+                values = getattr(execution_context, "run_values", None)
+                if isinstance(values, dict):
+                    values[name] = value
+                    return
+            except (AttributeError, RuntimeError):
+                pass
+        super().__setattr__(name, value)
+
     def _migrate_legacy_runtime_state(self):
         migrate_legacy_runtime_state()
 
@@ -33,6 +71,12 @@ class LifecycleMixin:
         self._execution_context = threading.local()
         self._background_threads = {}
         self._agent_lock = threading.RLock()
+        self._conversation_locks = {}
+        self._conversation_locks_guard = threading.RLock()
+        self._resource_locks = {
+            "browser": threading.Lock(),
+            "computer": threading.Lock(),
+        }
         self._background_lock = threading.RLock()
         self._active_process_lock = threading.RLock()
         self._tool_context_lock = threading.RLock()
@@ -45,11 +89,14 @@ class LifecycleMixin:
         self._pending_title_lock = threading.RLock()
         self._usage_lock = threading.RLock()
         self._active_processes = set()
+        self._active_processes_by_run = {}
         self._foreground_cancel_event = None
         self.cancel_event = threading.Event()
         self.recent_tool_observations = []
         self.tool_observations = []
         self.conversation_attachments = []
+        self.conversation_summary = ""
+        self.tool_context_transcript = []
         self._last_memory_update_result = {
             "changed": False, "count": 0, "actions": [], "memory_ids": [], "skipped": 0,
         }
@@ -92,6 +139,210 @@ class LifecycleMixin:
         self._execute_tool_impl = self.execute_tool
         self.execute_tool = self._execute_tool_with_audit
         self._background_resume_done = False
+        from ..run_manager import ConversationRunManager
+        self.run_manager = ConversationRunManager(self)
+        self.local_gateway = None
+        if self.settings.get("local_gateway_enabled", True):
+            try:
+                token = self._ensure_secret_loaded("local_gateway_token")
+                if not token:
+                    token = secrets.token_urlsafe(32)
+                    self.settings["local_gateway_token"] = token
+                    self._save_settings()
+                from ..local_gateway import SmartiLocalGateway
+                self.local_gateway = SmartiLocalGateway(
+                    self,
+                    token,
+                    port=self.settings.get("local_gateway_port", 8765),
+                )
+                self.local_gateway.start()
+            except Exception:
+                logging.exception("Local gateway initialization failed")
+
+    def local_gateway_credentials(self):
+        gateway = getattr(self, "local_gateway", None)
+        if not gateway:
+            return None
+        return {
+            "base_url": f"http://127.0.0.1:{gateway.port}/v1",
+            "token": str(gateway.token or ""),
+        }
+
+    def shutdown_runtime(self):
+        gateway = getattr(self, "local_gateway", None)
+        if gateway:
+            gateway.stop()
+        manager = getattr(self, "run_manager", None)
+        if manager:
+            manager.shutdown(wait=False)
+        self.shutdown_title_generation()
+
+    def _conversation_lock(self, session_id):
+        identifier = str(session_id or "__legacy__")
+        with self._conversation_locks_guard:
+            return self._conversation_locks.setdefault(identifier, threading.RLock())
+
+    def capture_run_model_snapshot(self, provider_mode=None, model_name=None):
+        """Freeze provider objects and model identity for one submitted run."""
+        provider_mode = normalize_provider_name(
+            provider_mode
+            or getattr(self, "mode", "")
+            or self.settings.get("api_mode", "gemini")
+        )
+        current_mode = normalize_provider_name(getattr(self, "mode", ""))
+        snapshot = {
+            "mode": provider_mode,
+            "model_name": str(
+                model_name
+                or self.settings.get(f"selected_{provider_mode}_model")
+                or provider_default_model(provider_mode)
+                or "Local"
+            ),
+            "universal_client": None,
+            "_universal_client_key": "",
+            "codex_signin_provider": None,
+        }
+        if provider_mode == current_mode:
+            snapshot["universal_client"] = getattr(self, "universal_client", None)
+            snapshot["_universal_client_key"] = str(
+                getattr(self, "_universal_client_key", "") or ""
+            )
+            snapshot["codex_signin_provider"] = getattr(
+                self, "codex_signin_provider", None
+            )
+        elif provider_mode == CODEX_SIGNIN_PROVIDER:
+            try:
+                snapshot["codex_signin_provider"] = CodexSignInProvider(USER_DATA_DIR)
+            except Exception:
+                logging.exception("Could not prepare the submitted Codex runtime")
+        return snapshot
+
+    def _build_run_values(
+        self, session_id, callbacks=None, exclude_run_id=None,
+        runtime_snapshot=None,
+    ):
+        session = self.chat_store.session_metadata(session_id) or {}
+        context = session.get("context", {}) if isinstance(session, dict) else {}
+        base_prompt = object.__getattribute__(self, "system_prompt")
+        snapshot = runtime_snapshot if isinstance(runtime_snapshot, dict) else {}
+        run_mode = normalize_provider_name(
+            snapshot.get("mode")
+            or object.__getattribute__(self, "mode")
+            or self.settings.get("api_mode", "gemini")
+        )
+        values = {
+            "mode": run_mode,
+            "universal_client": snapshot.get("universal_client"),
+            "_universal_client_key": str(snapshot.get("_universal_client_key") or ""),
+            "codex_signin_provider": snapshot.get("codex_signin_provider"),
+            "system_prompt": str(context.get("system_prompt") or base_prompt or ""),
+            "gemini_history": [],
+            "universal_history": [],
+            "recent_tool_observations": copy.deepcopy(context.get("recent_tool_observations", [])),
+            "tool_observations": copy.deepcopy(context.get("tool_observations", [])),
+            "conversation_attachments": normalize_attachments(context.get("conversation_attachments", [])),
+            "conversation_summary": str(context.get("conversation_summary", "") or ""),
+            "tool_context_transcript": copy.deepcopy(context.get("tool_context_transcript", [])),
+            "_last_memory_update_result": {
+                "changed": False, "count": 0, "actions": [], "memory_ids": [], "skipped": 0,
+            },
+            "_pending_canvas_artifacts": [],
+            "_current_agent_process_events": [],
+            "_current_agent_process_started_at": time.time(),
+            "status_callback": None,
+            "print_callback": None,
+            "ask_user_callback": None,
+            "api_key_callback": None,
+            "step_callback": None,
+            "_held_resource_locks": [],
+        }
+        saved_mode = normalize_provider_name(context.get("mode", ""))
+        messages = self.chat_store.messages(session_id)
+        if exclude_run_id:
+            messages = [
+                message for message in messages
+                if str((message.get("metadata") or {}).get("run_id") or "") != str(exclude_run_id)
+            ]
+        if run_mode == "gemini":
+            history = context.get("gemini_history") if saved_mode == "gemini" else None
+            if not isinstance(history, list):
+                history = self._messages_to_provider_history(messages, provider_mode=run_mode)
+            values["gemini_history"] = copy.deepcopy(history)
+        else:
+            history = context.get("universal_history") if saved_mode != "gemini" else None
+            if not isinstance(history, list) or not history:
+                history = self._messages_to_provider_history(messages, provider_mode=run_mode)
+            history = [copy.deepcopy(item) for item in history if isinstance(item, dict) and item.get("role") != "system"]
+            history.insert(0, {"role": "system", "content": values["system_prompt"]})
+            values["universal_history"] = history
+        if isinstance(callbacks, dict):
+            for name in ("status_callback", "print_callback", "ask_user_callback", "api_key_callback", "step_callback"):
+                if name in callbacks:
+                    values[name] = callbacks[name]
+        return values
+
+    @contextmanager
+    def bind_run_context(
+        self, run_id, session_id, cancel_event=None, callbacks=None,
+        runtime_snapshot=None,
+    ):
+        """Bind all mutable conversation state to the current worker thread."""
+        execution_context = self._execution_context
+        previous = {
+            "run_values": getattr(execution_context, "run_values", None),
+            "run_id": getattr(execution_context, "run_id", None),
+            "target_session_id": getattr(execution_context, "target_session_id", None),
+            "cancel_event": getattr(execution_context, "cancel_event", None),
+            "model_name": getattr(execution_context, "model_name", None),
+        }
+        execution_context.run_values = self._build_run_values(
+            session_id,
+            callbacks=callbacks,
+            exclude_run_id=run_id,
+            runtime_snapshot=runtime_snapshot,
+        )
+        execution_context.run_id = str(run_id or "")
+        execution_context.target_session_id = str(session_id or "")
+        execution_context.cancel_event = cancel_event or threading.Event()
+        execution_context.model_name = str(
+            (runtime_snapshot or {}).get("model_name")
+            or self.settings.get(f"selected_{self.mode}_model")
+            or provider_default_model(self.mode)
+            or "Local"
+        )
+        try:
+            self.system_prompt = self._load_system_prompt()
+            yield execution_context.run_values
+        finally:
+            held = list(getattr(execution_context, "run_values", {}).get("_held_resource_locks", []))
+            for lock in reversed(held):
+                try:
+                    lock.release()
+                except RuntimeError:
+                    pass
+            for name, value in previous.items():
+                if value is None:
+                    try:
+                        delattr(execution_context, name)
+                    except AttributeError:
+                        pass
+                else:
+                    setattr(execution_context, name, value)
+
+    @contextmanager
+    def run_resource_guard(self, resource_name):
+        """Lease a singleton desktop resource for the lifetime of a managed run."""
+        lock = self._resource_locks.setdefault(str(resource_name), threading.Lock())
+        values = getattr(self._execution_context, "run_values", None)
+        if isinstance(values, dict):
+            held = values.setdefault("_held_resource_locks", [])
+            if lock not in held:
+                lock.acquire()
+                held.append(lock)
+            yield
+            return
+        with lock:
+            yield
 
     def set_callbacks(self, status_cb, print_cb, ask_user_cb=None, step_cb=None, api_key_cb=None):
         self.status_callback = status_cb

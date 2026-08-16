@@ -4,17 +4,19 @@ from .shared import *
 
 class AutomationMixin:
     def run_browser_action(self, payload):
-        return self.browser_controller.run(payload if isinstance(payload, dict) else {"action": "snapshot"})
+        with self.run_resource_guard("browser"):
+            return self.browser_controller.run(payload if isinstance(payload, dict) else {"action": "snapshot"})
 
     def run_computer_automation(self, payload):
         if not self.settings.get("enable_computer_control", False):
             return "ERROR: Computer automation is disabled."
-        if isinstance(payload, dict):
-            args = copy.deepcopy(payload)
-            if str(args.get("code", "") or "").strip() and not str(args.get("action", "") or "").strip():
-                return self._run_computer_automation_code(str(args.get("code", "")))
-            return self._run_computer_automation_action(args)
-        return self._run_computer_automation_code(str(payload or ""))
+        with self.run_resource_guard("computer"):
+            if isinstance(payload, dict):
+                args = copy.deepcopy(payload)
+                if str(args.get("code", "") or "").strip() and not str(args.get("action", "") or "").strip():
+                    return self._run_computer_automation_code(str(args.get("code", "")))
+                return self._run_computer_automation_action(args)
+            return self._run_computer_automation_code(str(payload or ""))
 
     def _run_computer_automation_code(self, code):
         safe_code = self._prepare_automation_code(code)

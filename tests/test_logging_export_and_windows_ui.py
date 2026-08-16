@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -174,11 +175,12 @@ class WindowsAttentionAndPackagingTests(unittest.TestCase):
             def isActiveWindow(self):
                 return False
 
-            def winId(self):
-                return 123
+            def windowHandle(self):
+                return SimpleNamespace(winId=lambda: 123)
 
         window = Window()
         controller = windows_notifications.TaskbarAttentionController(window)
+        controller._cached_hwnd = 123
         with (
             mock.patch.object(windows_notifications.platform, "system", return_value="Windows"),
             mock.patch.object(controller, "_set_overlay_badge", return_value=True) as overlay,
@@ -194,6 +196,46 @@ class WindowsAttentionAndPackagingTests(unittest.TestCase):
         self.assertEqual(controller.unread_count, 0)
         self.assertEqual([call.args[1] for call in overlay.call_args_list], [1, 2, 1, 0])
 
+    def test_taskbar_projection_does_not_force_native_window_creation(self):
+        state = {"created": False, "widget_win_id_calls": 0, "window_win_id_calls": 0}
+
+        class WindowHandle:
+            def winId(self):
+                state["window_win_id_calls"] += 1
+                return 123
+
+        class Window(QObject):
+            def testAttribute(self, _attribute):
+                return state["created"]
+
+            def winId(self):
+                state["widget_win_id_calls"] += 1
+                raise AssertionError("QWidget.winId must never be called by taskbar projection")
+
+            def windowHandle(self):
+                if not state["created"]:
+                    return None
+                return WindowHandle()
+
+        controller = windows_notifications.TaskbarAttentionController(Window())
+        with (
+            mock.patch.object(windows_notifications.platform, "system", return_value="Windows"),
+            mock.patch.object(controller, "_set_overlay_badge", return_value=True) as overlay,
+        ):
+            self.assertFalse(controller.sync_unread_count(4))
+            self.assertEqual(controller.unread_count, 4)
+            self.assertEqual(state["widget_win_id_calls"], 0)
+            self.assertEqual(state["window_win_id_calls"], 0)
+            overlay.assert_not_called()
+
+            state["created"] = True
+            self.assertEqual(controller.capture_window_handle(), 123)
+            self.assertTrue(controller.sync_unread_count(4))
+
+        self.assertEqual(state["widget_win_id_calls"], 0)
+        self.assertEqual(state["window_win_id_calls"], 1)
+        overlay.assert_called_once_with(123, 4)
+
     def test_fallback_toast_dismissal_does_not_clear_unread_badge(self):
         center = windows_notifications.WindowsNotificationCenter()
         acknowledged = []
@@ -205,6 +247,40 @@ class WindowsAttentionAndPackagingTests(unittest.TestCase):
 
         toast.activated.emit()
         self.assertEqual(acknowledged, [True])
+        toast.deleteLater()
+
+    def test_fallback_toast_opens_its_source_conversation(self):
+        center = windows_notifications.WindowsNotificationCenter()
+        opened = []
+        generic = []
+        center.conversation_switch_requested.connect(opened.append)
+        center.activate_requested.connect(lambda: generic.append(True))
+
+        toast = center._show_fallback(
+            "title", "body", conversation_id="source-session"
+        )
+        toast.activated.emit()
+
+        self.assertEqual(opened, ["source-session"])
+        self.assertEqual(generic, [])
+        toast.deleteLater()
+
+    def test_fallback_quick_reply_is_bound_to_its_source_conversation(self):
+        center = windows_notifications.WindowsNotificationCenter()
+        routed = []
+        generic = []
+        center.conversation_reply_requested.connect(
+            lambda session_id, text: routed.append((session_id, text))
+        )
+        center.reply_requested.connect(generic.append)
+
+        toast = center._show_fallback(
+            "title", "body", reply=True, conversation_id="source-session"
+        )
+        toast.reply_submitted.emit("continue")
+
+        self.assertEqual(routed, [("source-session", "continue")])
+        self.assertEqual(generic, [])
         toast.deleteLater()
 
     def test_fallback_permission_answer_acknowledges_only_once(self):
@@ -225,11 +301,38 @@ class WindowsAttentionAndPackagingTests(unittest.TestCase):
     def test_rounded_corner_controller_applies_to_top_level_windows(self):
         widget = QWidget()
         controller = ui_styles.WindowsRoundedCornerController(self.app)
-        with mock.patch.object(ui_styles, "apply_windows_rounded_corners", return_value=True) as apply:
+        with (
+            mock.patch.object(ui_styles, "_safe_top_level_hwnd", return_value=123),
+            mock.patch.object(ui_styles, "apply_windows_rounded_corners", return_value=True) as apply,
+        ):
             controller.apply_to(widget)
             controller.apply_to(widget)
 
-        apply.assert_called_once_with(widget)
+        apply.assert_called_once_with(widget, hwnd=123)
+        widget.deleteLater()
+
+    def test_rounded_corner_projection_never_calls_qwidget_win_id(self):
+        class GuardedWidget(QWidget):
+            def winId(self):
+                raise AssertionError("QWidget.winId must never be called")
+
+        widget = GuardedWidget()
+        widget.show()
+        self.app.processEvents()
+        with mock.patch.object(ui_styles.platform, "system", return_value="Windows"):
+            hwnd = ui_styles._safe_top_level_hwnd(widget)
+
+        self.assertGreater(hwnd, 0)
+        widget.close()
+        widget.deleteLater()
+
+    def test_rounded_corner_projection_skips_short_lived_tool_windows(self):
+        widget = QWidget(None, ui_styles.Qt.WindowType.Tool)
+        widget.show()
+        self.app.processEvents()
+        with mock.patch.object(ui_styles.platform, "system", return_value="Windows"):
+            self.assertEqual(ui_styles._safe_top_level_hwnd(widget), 0)
+        widget.close()
         widget.deleteLater()
 
     def test_packaged_executable_embeds_modern_windows_manifest(self):

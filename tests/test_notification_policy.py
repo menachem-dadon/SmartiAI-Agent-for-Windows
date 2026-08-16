@@ -200,6 +200,62 @@ class NotificationManagerPolicyTests(unittest.TestCase):
             }],
         )
 
+    def test_notifications_and_background_tasks_capture_the_origin_conversation(self):
+        core = _NotificationCore(approval=True)
+        core.chat_store = mock.Mock()
+        core.chat_store.has_session.return_value = True
+        core.chat_store.active_session_metadata.return_value = {"id": "active-session"}
+        core._execution_context.target_session_id = "source-session"
+        core.settings["policy_matrix"]["notification_send"] = "allow"
+
+        result = core.notification_manager({
+            "action": "send_toast",
+            "title": "עדכון",
+            "body": "הושלם",
+        })
+        reminder_result = core.schedule_reminder(5, "להתקשר")
+        task_result = core.schedule_background_task({
+            "delay_minutes": 5,
+            "prompt": "בדיקה",
+            "conversation_mode": "current",
+        })
+
+        self.assertTrue(result.startswith("SUCCESS:"), result)
+        self.assertTrue(reminder_result.startswith("SUCCESS:"), reminder_result)
+        self.assertTrue(task_result.startswith("SUCCESS:"), task_result)
+        self.assertEqual(
+            core.emitted_notifications[-1][1]["session_id"], "source-session"
+        )
+        self.assertEqual(
+            [task["target_conversation_id"] for task in core.settings["background_tasks"]],
+            ["source-session", "source-session"],
+        )
+
+    def test_editing_an_existing_dedicated_task_preserves_its_conversation(self):
+        core = _NotificationCore(approval=True)
+        task = {
+            "id": "dedicated-1",
+            "prompt": "monitor",
+            "repeat": "once",
+            "interval_minutes": None,
+            "conversation_mode": "dedicated",
+            "target_conversation_id": "persistent-session",
+            "run_at": "2026-08-15T12:00:00",
+            "status": "scheduled",
+            "history": [],
+            "generation": 0,
+        }
+        core.settings["background_tasks"] = [task]
+
+        result = core.edit_background_task({
+            "id": task["id"],
+            "prompt": "monitor with updated wording",
+            "conversation_mode": "dedicated",
+        })
+
+        self.assertTrue(result.startswith("SUCCESS:"), result)
+        self.assertEqual(task["target_conversation_id"], "persistent-session")
+
     def test_calendar_write_and_open_use_one_combined_approval(self):
         core = _NotificationCore(approval=True)
         core.settings["policy_matrix"]["calendar_write"] = "ask"

@@ -27,6 +27,7 @@ tests/*
 !tests/test_notification_policy.py
 !tests/test_document_manager.py
 !tests/test_logging_export_and_windows_ui.py
+!tests/test_conversation_runs.py
 
 
 # Virtual environments and build artifacts

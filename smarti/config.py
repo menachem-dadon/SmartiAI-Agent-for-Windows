@@ -116,7 +116,7 @@ BUILTIN_TOOL_SCHEMAS = {
                 "conversation_mode": {
                     "type": "string",
                     "enum": ["current", "new", "dedicated"],
-                    "description": "אופן ניתוב השיחה: current (שיחה נוכחית), new (שיחה חדשה בכל הרצה), dedicated (שיחה קבועה ייעודית למשימה זו)"
+                    "description": "אופן ניתוב השיחה: current מחזיר כל הרצה לשיחת המקור שממנה המשימה תוזמנה; new יוצר שיחה חדשה ונקייה בכל הרצה; dedicated יוצר שיחה ייעודית חדשה בהרצה הראשונה ומשתמש בה שוב בכל המחזורים הבאים."
                 }
             },
             "required": ["delay_minutes", "prompt"]
@@ -1025,7 +1025,7 @@ BUILTIN_TOOL_SCHEMAS["background_task_manager"] = {
             "conversation_mode": {
                 "type": "string",
                 "enum": ["current", "new", "dedicated"],
-                "description": "Routing mode: current (same chat), new (new chat each run), dedicated (same persistent run chat)."
+                "description": "Routing contract: current returns every run to the origin chat captured when scheduled (not whichever chat is active later); new creates a clean chat for every run; dedicated creates a separate chat on the first run and reuses it for every later cycle and retry."
             },
             "id": {"type": "string", "description": "Task id for cancel/retry/edit."}
         },
@@ -1983,6 +1983,9 @@ DEFAULT_SETTINGS = {
         "anthropic": {},
     },
     "local_server_url": "http://localhost:1234/v1",
+    # Generate a concise, distinctive title as soon as the first turn starts.
+    # "local" remains available for users who prefer zero extra model calls.
+    "conversation_title_generation_mode": "ai",
     # Opt-in only: a local endpoint does not imply a small model or weak hardware.
     "local_fast_mode_enabled": False,
     "shopping_list": [],
@@ -2147,6 +2150,9 @@ DEFAULT_SETTINGS = {
     "mcp_package_configs": {},
     "mcp_package_aliases": {},
     "max_concurrent_agents": 1,
+    "approval_wait_timeout_seconds": 86400,
+    "local_gateway_enabled": True,
+    "local_gateway_port": 8765,
     "ssl_trust_mode": SSL_MODE_SYSTEM,
     "ssl_custom_ca_path": "",
     "ssl_filter_setup_completed": False,

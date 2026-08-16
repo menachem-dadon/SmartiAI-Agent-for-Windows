@@ -14,7 +14,7 @@ class _ClosingConnection(sqlite3.Connection):
             self.close()
 
 
-CHAT_HISTORY_SCHEMA_VERSION = 2
+CHAT_HISTORY_SCHEMA_VERSION = 3
 DEFAULT_CHAT_TITLE = "שיחה חדשה"
 DEFAULT_WELCOME_MESSAGE = (
     "שלום, אני סמארטי - סוכן AI למחשב Windows. אני יכול לענות, לחפש מידע, "
@@ -142,6 +142,11 @@ class ChatSessionStore:
         connection.execute("PRAGMA busy_timeout=15000")
         return connection
 
+    def _ensure_column(self, db, table, column, declaration):
+        columns = {str(row["name"]) for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+        if str(column) not in columns:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
     def _initialize(self):
         with self._lock, self._connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
@@ -154,6 +159,7 @@ class ChatSessionStore:
                 );
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
+                    workspace_id TEXT,
                     title TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -174,12 +180,98 @@ class ChatSessionStore:
                     extra_json TEXT NOT NULL DEFAULT '{}',
                     UNIQUE(session_id, ordinal)
                 );
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    root_path TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE IF NOT EXISTS runs (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+                    source TEXT NOT NULL DEFAULT 'desktop',
+                    status TEXT NOT NULL,
+                    user_text TEXT NOT NULL DEFAULT '',
+                    attachments_json TEXT NOT NULL DEFAULT '[]',
+                    response_text TEXT NOT NULL DEFAULT '',
+                    error_text TEXT NOT NULL DEFAULT '',
+                    queued_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    cancel_requested INTEGER NOT NULL DEFAULT 0,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE IF NOT EXISTS run_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                    sequence INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(run_id, sequence)
+                );
+                CREATE TABLE IF NOT EXISTS attention_items (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL DEFAULT 'response',
+                    created_at TEXT NOT NULL,
+                    read_at TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    UNIQUE(run_id, kind)
+                );
+                CREATE TABLE IF NOT EXISTS read_receipts (
+                    actor_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    last_seen_event_id INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(actor_id, session_id)
+                );
+                CREATE TABLE IF NOT EXISTS approvals (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    title TEXT NOT NULL DEFAULT '',
+                    prompt TEXT NOT NULL DEFAULT '',
+                    risk_level TEXT NOT NULL DEFAULT 'normal',
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    payload_hash TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    resolved_at TEXT,
+                    decision_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE IF NOT EXISTS idempotency_keys (
+                    scope TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    response_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    PRIMARY KEY(scope, key)
+                );
                 CREATE INDEX IF NOT EXISTS idx_sessions_updated
                     ON sessions(pinned DESC, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_messages_session_ordinal
                     ON messages(session_id, ordinal);
+                CREATE INDEX IF NOT EXISTS idx_runs_session_status
+                    ON runs(session_id, status, queued_at);
+                CREATE INDEX IF NOT EXISTS idx_runs_status_queued
+                    ON runs(status, queued_at);
+                CREATE INDEX IF NOT EXISTS idx_run_events_run_sequence
+                    ON run_events(run_id, sequence);
+                CREATE INDEX IF NOT EXISTS idx_attention_unread
+                    ON attention_items(read_at, session_id);
+                CREATE INDEX IF NOT EXISTS idx_approvals_pending
+                    ON approvals(status, session_id);
                 """
             )
+            self._ensure_column(db, "sessions", "workspace_id", "TEXT")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at DESC)")
             db.execute(
                 "INSERT OR REPLACE INTO store_meta(key, value) VALUES('schema_version', ?)",
                 (str(CHAT_HISTORY_SCHEMA_VERSION),),
@@ -194,6 +286,15 @@ class ChatSessionStore:
             "INSERT OR REPLACE INTO store_meta(key, value) VALUES(?, ?)",
             (str(key), str(value)),
         )
+
+    def _ensure_session(self, db, session_id=None, set_active=False):
+        target = str(session_id or "")
+        if target and db.execute("SELECT 1 FROM sessions WHERE id=?", (target,)).fetchone():
+            return target
+        target = self._create_session_row(db, session_id=target or None)
+        if set_active:
+            self._set_meta(db, "active_session_id", target)
+        return target
 
     def _normalize_message(self, message, fallback_time):
         if not isinstance(message, dict):
@@ -224,10 +325,11 @@ class ChatSessionStore:
                 messages.append(normalized)
         known = {
             "id", "title", "created_at", "updated_at", "pinned",
-            "title_generated", "title_user_edited", "messages", "context",
+            "title_generated", "title_user_edited", "messages", "context", "workspace_id",
         }
         return {
             "id": str(session.get("id") or uuid.uuid4().hex),
+            "workspace_id": str(session.get("workspace_id") or ""),
             "title": _clean_title(session.get("title") or DEFAULT_CHAT_TITLE),
             "created_at": created,
             "updated_at": updated,
@@ -244,12 +346,13 @@ class ChatSessionStore:
         db.execute(
             f"""
             {command} INTO sessions(
-                id, title, created_at, updated_at, pinned, title_generated,
+                id, workspace_id, title, created_at, updated_at, pinned, title_generated,
                 title_user_edited, context_json, extra_json
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                session["id"], session["title"], session["created_at"], session["updated_at"],
+                session["id"], session.get("workspace_id") or None,
+                session["title"], session["created_at"], session["updated_at"],
                 int(session["pinned"]), int(session["title_generated"]),
                 int(session["title_user_edited"]), _json_dumps(session["context"]),
                 _json_dumps(session.get("extra", {})),
@@ -329,6 +432,7 @@ class ChatSessionStore:
         result = _json_loads(row["extra_json"], {})
         result.update({
             "id": str(row["id"]),
+            "workspace_id": str(row["workspace_id"] or ""),
             "title": str(row["title"] or DEFAULT_CHAT_TITLE),
             "created_at": str(row["created_at"] or ""),
             "updated_at": str(row["updated_at"] or ""),
@@ -354,10 +458,11 @@ class ChatSessionStore:
         row = db.execute("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1").fetchone()
         return str(row["id"]) if row else ""
 
-    def _create_session_row(self, db, session_id=None):
+    def _create_session_row(self, db, session_id=None, workspace_id=None):
         now = _now_iso()
         session = {
             "id": str(session_id or uuid.uuid4().hex),
+            "workspace_id": str(workspace_id or ""),
             "title": DEFAULT_CHAT_TITLE,
             "created_at": now,
             "updated_at": now,
@@ -420,7 +525,7 @@ class ChatSessionStore:
         self.ensure_active_session()
         return self.session_metadata()
 
-    def create_session(self, set_active=True):
+    def create_session(self, set_active=True, workspace_id=None):
         with self._lock, self._connect() as db:
             active_id = self._active_id(db)
             if set_active and active_id:
@@ -439,7 +544,7 @@ class ChatSessionStore:
                         (DEFAULT_CHAT_TITLE, now, active_id),
                     )
                     return self._session(db, active_id)
-            session_id = self._create_session_row(db)
+            session_id = self._create_session_row(db, workspace_id=workspace_id)
             if set_active:
                 self._set_meta(db, "active_session_id", session_id)
             return self._session(db, session_id)
@@ -456,6 +561,28 @@ class ChatSessionStore:
             target = str(session_id or self._active_id(db))
             session = self._session(db, target)
             return session.get("messages", []) if session else []
+
+    def append_message(self, role, content, metadata=None, session_id=None, created_at=None):
+        """Append one durable message without requiring a complete user/assistant turn."""
+        normalized_role = str(role or "assistant").strip().lower()
+        if normalized_role not in {"user", "assistant", "system"}:
+            normalized_role = "assistant"
+        with self._lock, self._connect() as db:
+            target = self._ensure_session(db, session_id, set_active=not bool(session_id))
+            ordinal = int(db.execute(
+                "SELECT COALESCE(MAX(ordinal), -1) + 1 AS next FROM messages WHERE session_id=?",
+                (target,),
+            ).fetchone()["next"])
+            now = str(created_at or _now_iso())
+            db.execute(
+                """
+                INSERT INTO messages(session_id, ordinal, role, content, created_at, metadata_json)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (target, ordinal, normalized_role, str(content or ""), now, _json_dumps(_json_object(metadata))),
+            )
+            db.execute("UPDATE sessions SET updated_at=? WHERE id=?", (now, target))
+            return ordinal
 
     def messages_page(self, session_id=None, before_ordinal=None, limit=32):
         """Read one chronological page, newest first when no cursor is supplied."""
@@ -535,37 +662,101 @@ class ChatSessionStore:
             "match_kind": "title" if title_score >= max(0.55, content_score) else "content",
         }
 
-    def list_sessions(self, query=""):
+    def _enrich_session_records(self, db, records):
+        """Add orthogonal execution and attention state to sidebar records."""
+        if not records:
+            return records
+        identifiers = [str(record.get("id") or "") for record in records]
+        placeholders = ",".join("?" for _ in identifiers)
+        active_states = {"queued", "running", "waiting_for_approval", "cancelling"}
+        rows = db.execute(
+            f"""
+            SELECT session_id, status, queued_at
+            FROM runs
+            WHERE session_id IN ({placeholders})
+              AND status IN ('queued', 'running', 'waiting_for_approval', 'cancelling')
+            ORDER BY queued_at
+            """,
+            identifiers,
+        ).fetchall()
+        priority = {"waiting_for_approval": 4, "cancelling": 3, "running": 2, "queued": 1}
+        status_by_session = {}
+        count_by_session = {}
+        for row in rows:
+            session_id = str(row["session_id"])
+            status = str(row["status"])
+            count_by_session[session_id] = count_by_session.get(session_id, 0) + 1
+            current = status_by_session.get(session_id, "")
+            if priority.get(status, 0) > priority.get(current, 0):
+                status_by_session[session_id] = status
+        unread_rows = db.execute(
+            f"""
+            SELECT session_id, COUNT(*) AS unread_count
+            FROM attention_items
+            WHERE read_at IS NULL AND session_id IN ({placeholders})
+            GROUP BY session_id
+            """,
+            identifiers,
+        ).fetchall()
+        unread_by_session = {
+            str(row["session_id"]): int(row["unread_count"] or 0)
+            for row in unread_rows
+        }
+        for record in records:
+            session_id = str(record.get("id") or "")
+            status = status_by_session.get(session_id, "idle")
+            record["runtime_status"] = status
+            record["active_run_count"] = count_by_session.get(session_id, 0)
+            record["unread_count"] = unread_by_session.get(session_id, 0)
+            record["needs_input"] = status == "waiting_for_approval"
+            record["is_busy"] = status in active_states
+        return records
+
+    def list_sessions(self, query="", include_preview=True):
         query = str(query or "").strip()
         with self._lock, self._connect() as db:
             rows = db.execute(
                 """
-                SELECT s.*, COUNT(m.id) AS message_count
+                SELECT s.id, s.title, s.created_at, s.updated_at, s.pinned,
+                       (
+                           SELECT COUNT(*)
+                           FROM messages counted
+                           WHERE counted.session_id=s.id
+                       ) AS message_count
                 FROM sessions s
-                LEFT JOIN messages m ON m.session_id=s.id
-                GROUP BY s.id
-                HAVING COUNT(m.id) > 0
+                WHERE EXISTS(
+                    SELECT 1 FROM messages m WHERE m.session_id=s.id
+                ) OR EXISTS(
+                    SELECT 1 FROM runs r
+                    WHERE r.session_id=s.id
+                      AND r.status IN ('queued', 'running', 'waiting_for_approval', 'cancelling')
+                ) OR EXISTS(
+                    SELECT 1 FROM attention_items a
+                    WHERE a.session_id=s.id AND a.read_at IS NULL
+                )
                 ORDER BY s.pinned DESC, s.updated_at DESC
                 """
             ).fetchall()
             if not query:
-                last_rows = db.execute(
-                    """
-                    SELECT m.*
-                    FROM messages m
-                    JOIN (
-                        SELECT session_id, MAX(ordinal) AS ordinal
-                        FROM messages
-                        GROUP BY session_id
-                    ) latest
-                      ON latest.session_id=m.session_id
-                     AND latest.ordinal=m.ordinal
-                    """
-                ).fetchall()
-                last_by_session = {
-                    str(item["session_id"]): self._row_message(item)
-                    for item in last_rows
-                }
+                last_by_session = {}
+                if include_preview:
+                    last_rows = db.execute(
+                        """
+                        SELECT m.*
+                        FROM messages m
+                        JOIN (
+                            SELECT session_id, MAX(ordinal) AS ordinal
+                            FROM messages
+                            GROUP BY session_id
+                        ) latest
+                          ON latest.session_id=m.session_id
+                         AND latest.ordinal=m.ordinal
+                        """
+                    ).fetchall()
+                    last_by_session = {
+                        str(item["session_id"]): self._row_message(item)
+                        for item in last_rows
+                    }
                 records = []
                 for row in rows:
                     last_message = last_by_session.get(str(row["id"]), {})
@@ -576,13 +767,16 @@ class ChatSessionStore:
                         "updated_at": str(row["updated_at"] or ""),
                         "pinned": bool(row["pinned"]),
                         "message_count": int(row["message_count"] or 0),
-                        "preview": _preview_text(_message_text(last_message)) or "אין הודעות עדיין",
-                        "preview_source": _message_text(last_message),
+                        "preview": (
+                            _preview_text(_message_text(last_message)) or "אין הודעות עדיין"
+                            if include_preview else ""
+                        ),
+                        "preview_source": _message_text(last_message) if include_preview else "",
                         "title_score": 0.0,
                         "content_score": 0.0,
                         "match_kind": "content",
                     })
-                return records
+                return self._enrich_session_records(db, records)
 
             # Most searches are literal substrings. Let SQLite narrow those in
             # one pass (including attachment names in metadata) instead of
@@ -609,25 +803,27 @@ class ChatSessionStore:
                 matched_rows = [row for row in rows if str(row["id"]) in match_by_id]
                 matched_ids = [str(row["id"]) for row in matched_rows]
                 placeholders = ",".join("?" for _ in matched_ids)
-                last_rows = db.execute(
-                    f"""
-                    SELECT m.*
-                    FROM messages m
-                    JOIN (
-                        SELECT session_id, MAX(ordinal) AS ordinal
-                        FROM messages
-                        WHERE session_id IN ({placeholders})
-                        GROUP BY session_id
-                    ) latest
-                      ON latest.session_id=m.session_id
-                     AND latest.ordinal=m.ordinal
-                    """,
-                    matched_ids,
-                ).fetchall()
-                last_by_session = {
-                    str(item["session_id"]): self._row_message(item)
-                    for item in last_rows
-                }
+                last_by_session = {}
+                if include_preview:
+                    last_rows = db.execute(
+                        f"""
+                        SELECT m.*
+                        FROM messages m
+                        JOIN (
+                            SELECT session_id, MAX(ordinal) AS ordinal
+                            FROM messages
+                            WHERE session_id IN ({placeholders})
+                            GROUP BY session_id
+                        ) latest
+                          ON latest.session_id=m.session_id
+                         AND latest.ordinal=m.ordinal
+                        """,
+                        matched_ids,
+                    ).fetchall()
+                    last_by_session = {
+                        str(item["session_id"]): self._row_message(item)
+                        for item in last_rows
+                    }
                 records = []
                 for row in matched_rows:
                     session_id = str(row["id"])
@@ -641,8 +837,11 @@ class ChatSessionStore:
                         "updated_at": str(row["updated_at"] or ""),
                         "pinned": bool(row["pinned"]),
                         "message_count": int(row["message_count"] or 0),
-                        "preview": _preview_text(_message_text(last_message)) or "אין הודעות עדיין",
-                        "preview_source": _message_text(last_message),
+                        "preview": (
+                            _preview_text(_message_text(last_message)) or "אין הודעות עדיין"
+                            if include_preview else ""
+                        ),
+                        "preview_source": _message_text(last_message) if include_preview else "",
                         "title_score": 1.0 if title_match else 0.0,
                         "content_score": 0.0 if title_match else 1.0,
                         "match_kind": "title" if title_match else "content",
@@ -654,7 +853,7 @@ class ChatSessionStore:
                         -_time_score(record.get("updated_at", "")),
                     )
                 )
-                return records
+                return self._enrich_session_records(db, records)
 
             records = [self._summary_for_session(self._session(db, row["id"]), query=query) for row in rows]
             records = [
@@ -670,7 +869,7 @@ class ChatSessionStore:
                     -_time_score(record.get("updated_at", "")),
                 )
             )
-            return records
+            return self._enrich_session_records(db, records)
 
     def should_generate_title_for_next_turn(self, session_id=None):
         with self._lock, self._connect() as db:
@@ -797,6 +996,78 @@ class ChatSessionStore:
             )
             return bool(result.rowcount)
 
+    def apply_provisional_title(self, session_id, title):
+        """Show a collision-free first-turn title while an AI title is generated."""
+        cleaned = _clean_title(title)
+        if not cleaned or cleaned == DEFAULT_CHAT_TITLE:
+            return ""
+        target = str(session_id or "")
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT title_user_edited, title_generated FROM sessions WHERE id=?",
+                (target,),
+            ).fetchone()
+            if not row or row["title_user_edited"] or row["title_generated"]:
+                return ""
+            existing = {
+                str(item["title"] or "").strip().casefold()
+                for item in db.execute(
+                    "SELECT title FROM sessions WHERE id<>?",
+                    (target,),
+                ).fetchall()
+            }
+            candidate = cleaned
+            suffix_index = 2
+            while candidate.casefold() in existing:
+                suffix = f" ({suffix_index})"
+                candidate = cleaned[: max(1, 64 - len(suffix))].rstrip() + suffix
+                suffix_index += 1
+            result = db.execute(
+                """
+                UPDATE sessions
+                SET title=?, updated_at=?
+                WHERE id=? AND title_user_edited=0 AND title_generated=0
+                """,
+                (candidate, _now_iso(), target),
+            )
+            return candidate if result.rowcount else ""
+
+    def apply_initial_title(self, session_id, title):
+        """Assign an immediate, collision-free title from the first user turn."""
+        cleaned = _clean_title(title)
+        if not cleaned or cleaned == DEFAULT_CHAT_TITLE:
+            return ""
+        target = str(session_id or "")
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT title_user_edited, title_generated FROM sessions WHERE id=?",
+                (target,),
+            ).fetchone()
+            if not row or row["title_user_edited"] or row["title_generated"]:
+                return ""
+            existing = {
+                str(item["title"] or "").strip().casefold()
+                for item in db.execute(
+                    "SELECT title FROM sessions WHERE id<>?",
+                    (target,),
+                ).fetchall()
+            }
+            candidate = cleaned
+            suffix_index = 2
+            while candidate.casefold() in existing:
+                suffix = f" ({suffix_index})"
+                candidate = (cleaned[: max(1, 64 - len(suffix))].rstrip() + suffix)
+                suffix_index += 1
+            result = db.execute(
+                """
+                UPDATE sessions
+                SET title=?, title_generated=1, updated_at=?
+                WHERE id=? AND title_user_edited=0 AND title_generated=0
+                """,
+                (candidate, _now_iso(), target),
+            )
+            return candidate if result.rowcount else ""
+
     def rename_session(self, session_id, title):
         cleaned = _clean_title(title)
         with self._lock, self._connect() as db:
@@ -831,6 +1102,467 @@ class ChatSessionStore:
             if self._active_id(db) == session_id:
                 replacement = self._latest_id(db) or self._create_session_row(db)
                 self._set_meta(db, "active_session_id", replacement)
+            return True
+
+    # ------------------------------------------------------------------
+    # Durable execution ledger
+
+    def create_workspace(self, title="", root_path="", metadata=None, workspace_id=None):
+        now = _now_iso()
+        identifier = str(workspace_id or uuid.uuid4().hex)
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO workspaces(id, title, root_path, created_at, updated_at, metadata_json)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    identifier,
+                    str(title or DEFAULT_CHAT_TITLE),
+                    str(root_path or ""),
+                    now,
+                    now,
+                    _json_dumps(_json_object(metadata)),
+                ),
+            )
+        return identifier
+
+    def list_workspaces(self):
+        with self._lock, self._connect() as db:
+            rows = db.execute("SELECT * FROM workspaces ORDER BY updated_at DESC").fetchall()
+            return [
+                {
+                    "id": str(row["id"]),
+                    "title": str(row["title"] or ""),
+                    "root_path": str(row["root_path"] or ""),
+                    "created_at": str(row["created_at"] or ""),
+                    "updated_at": str(row["updated_at"] or ""),
+                    "metadata": _json_loads(row["metadata_json"], {}),
+                }
+                for row in rows
+            ]
+
+    def assign_session_workspace(self, session_id, workspace_id=None):
+        with self._lock, self._connect() as db:
+            workspace_value = str(workspace_id or "")
+            if workspace_value and not db.execute(
+                "SELECT 1 FROM workspaces WHERE id=?", (workspace_value,)
+            ).fetchone():
+                return False
+            result = db.execute(
+                "UPDATE sessions SET workspace_id=?, updated_at=? WHERE id=?",
+                (workspace_value or None, _now_iso(), str(session_id or "")),
+            )
+            return bool(result.rowcount)
+
+    def create_run(
+        self, session_id, user_text="", attachments=None, source="desktop",
+        metadata=None, workspace_id=None, run_id=None,
+    ):
+        identifier = str(run_id or uuid.uuid4().hex)
+        now = _now_iso()
+        with self._lock, self._connect() as db:
+            target = self._ensure_session(db, session_id, set_active=not bool(session_id))
+            resolved_workspace_id = str(workspace_id or "")
+            if not resolved_workspace_id:
+                session_row = db.execute(
+                    "SELECT workspace_id FROM sessions WHERE id=?",
+                    (target,),
+                ).fetchone()
+                resolved_workspace_id = str(session_row["workspace_id"] or "") if session_row else ""
+            db.execute(
+                """
+                INSERT INTO runs(
+                    id, session_id, workspace_id, source, status, user_text,
+                    attachments_json, queued_at, updated_at, metadata_json
+                ) VALUES(?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+                """,
+                (
+                    identifier,
+                    target,
+                    resolved_workspace_id or None,
+                    str(source or "desktop"),
+                    str(user_text or ""),
+                    _json_dumps(list(attachments or [])),
+                    now,
+                    now,
+                    _json_dumps(_json_object(metadata)),
+                ),
+            )
+            db.execute("UPDATE sessions SET updated_at=? WHERE id=?", (now, target))
+            self._append_run_event_locked(db, identifier, "run_queued", {"source": str(source or "desktop")}, now)
+        return identifier
+
+    def _append_run_event_locked(self, db, run_id, event_type, payload=None, created_at=None):
+        sequence = int(db.execute(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 AS next FROM run_events WHERE run_id=?",
+            (str(run_id or ""),),
+        ).fetchone()["next"])
+        now = str(created_at or _now_iso())
+        cursor = db.execute(
+            """
+            INSERT INTO run_events(run_id, sequence, event_type, payload_json, created_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (str(run_id or ""), sequence, str(event_type or "event"), _json_dumps(_json_object(payload)), now),
+        )
+        return int(cursor.lastrowid), sequence
+
+    def append_run_event(self, run_id, event_type, payload=None):
+        with self._lock, self._connect() as db:
+            if not db.execute("SELECT 1 FROM runs WHERE id=?", (str(run_id or ""),)).fetchone():
+                return None
+            event_id, sequence = self._append_run_event_locked(db, run_id, event_type, payload)
+            return {"id": event_id, "sequence": sequence}
+
+    def transition_run(
+        self, run_id, status, response_text=None, error_text=None,
+        metadata_patch=None, expected_statuses=None,
+    ):
+        status = str(status or "").strip().lower()
+        allowed = {
+            "queued", "running", "waiting_for_approval", "cancelling",
+            "completed", "failed", "cancelled", "interrupted",
+        }
+        if status not in allowed:
+            raise ValueError(f"Unsupported run status: {status}")
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT * FROM runs WHERE id=?", (str(run_id or ""),)).fetchone()
+            if not row:
+                return False
+            current = str(row["status"] or "")
+            if expected_statuses and current not in {str(item) for item in expected_statuses}:
+                return False
+            now = _now_iso()
+            updates = ["status=?", "updated_at=?"]
+            values = [status, now]
+            if status == "running" and not row["started_at"]:
+                updates.append("started_at=?")
+                values.append(now)
+            if status in {"completed", "failed", "cancelled", "interrupted"}:
+                updates.append("finished_at=?")
+                values.append(now)
+            if response_text is not None:
+                updates.append("response_text=?")
+                values.append(str(response_text or ""))
+            if error_text is not None:
+                updates.append("error_text=?")
+                values.append(str(error_text or ""))
+            if isinstance(metadata_patch, dict):
+                metadata = _json_loads(row["metadata_json"], {})
+                metadata.update(copy.deepcopy(metadata_patch))
+                updates.append("metadata_json=?")
+                values.append(_json_dumps(metadata))
+            values.append(str(run_id or ""))
+            db.execute(f"UPDATE runs SET {', '.join(updates)} WHERE id=?", tuple(values))
+            self._append_run_event_locked(
+                db,
+                run_id,
+                f"run_{status}",
+                {"previous_status": current},
+                now,
+            )
+            return True
+
+    def request_run_cancel(self, run_id):
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT status FROM runs WHERE id=?", (str(run_id or ""),)).fetchone()
+            if not row or str(row["status"]) in {"completed", "failed", "cancelled", "interrupted"}:
+                return False
+            now = _now_iso()
+            status = "cancelled" if str(row["status"]) == "queued" else "cancelling"
+            finished = now if status == "cancelled" else None
+            db.execute(
+                "UPDATE runs SET cancel_requested=1, status=?, updated_at=?, finished_at=COALESCE(?, finished_at) WHERE id=?",
+                (status, now, finished, str(run_id or "")),
+            )
+            self._append_run_event_locked(db, run_id, "cancel_requested", {"status": status}, now)
+            return True
+
+    def _run_record(self, row):
+        if not row:
+            return None
+        return {
+            "id": str(row["id"]),
+            "session_id": str(row["session_id"]),
+            "workspace_id": str(row["workspace_id"] or ""),
+            "source": str(row["source"] or "desktop"),
+            "status": str(row["status"] or ""),
+            "user_text": str(row["user_text"] or ""),
+            "attachments": _json_loads(row["attachments_json"], []),
+            "response_text": str(row["response_text"] or ""),
+            "error_text": str(row["error_text"] or ""),
+            "queued_at": str(row["queued_at"] or ""),
+            "started_at": str(row["started_at"] or ""),
+            "finished_at": str(row["finished_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+            "cancel_requested": bool(row["cancel_requested"]),
+            "metadata": _json_loads(row["metadata_json"], {}),
+        }
+
+    def run(self, run_id):
+        with self._lock, self._connect() as db:
+            return self._run_record(db.execute("SELECT * FROM runs WHERE id=?", (str(run_id or ""),)).fetchone())
+
+    def list_runs(self, session_id=None, statuses=None, limit=100):
+        clauses = []
+        values = []
+        if session_id:
+            clauses.append("session_id=?")
+            values.append(str(session_id))
+        if statuses:
+            normalized = [str(item) for item in statuses]
+            clauses.append(f"status IN ({','.join('?' for _ in normalized)})")
+            values.extend(normalized)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        values.append(max(1, min(1000, int(limit or 100))))
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                f"SELECT * FROM runs {where} ORDER BY queued_at DESC LIMIT ?",
+                tuple(values),
+            ).fetchall()
+            return [self._run_record(row) for row in rows]
+
+    def run_events(self, run_id, after_sequence=0, limit=500):
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM run_events
+                WHERE run_id=? AND sequence>?
+                ORDER BY sequence LIMIT ?
+                """,
+                (str(run_id or ""), int(after_sequence or 0), max(1, min(2000, int(limit or 500)))),
+            ).fetchall()
+            return [
+                {
+                    "id": int(row["id"]),
+                    "run_id": str(row["run_id"]),
+                    "sequence": int(row["sequence"]),
+                    "event_type": str(row["event_type"]),
+                    "payload": _json_loads(row["payload_json"], {}),
+                    "created_at": str(row["created_at"] or ""),
+                }
+                for row in rows
+            ]
+
+    def recover_incomplete_runs(self):
+        """Make crash state explicit and return queued work that is safe to resume."""
+        with self._lock, self._connect() as db:
+            now = _now_iso()
+            stale = db.execute(
+                "SELECT id FROM runs WHERE status IN ('running', 'waiting_for_approval', 'cancelling')"
+            ).fetchall()
+            for row in stale:
+                run_id = str(row["id"])
+                db.execute(
+                    "UPDATE runs SET status='interrupted', finished_at=?, updated_at=?, error_text=? WHERE id=?",
+                    (now, now, "Smarti stopped before this run completed.", run_id),
+                )
+                self._append_run_event_locked(db, run_id, "run_interrupted", {"reason": "runtime_restart"}, now)
+                db.execute(
+                    """
+                    UPDATE approvals
+                    SET status='cancelled', resolved_at=?, decision_json=?
+                    WHERE run_id=? AND status='pending'
+                    """,
+                    (now, _json_dumps({"reason": "runtime_restart"}), run_id),
+                )
+                session_row = db.execute("SELECT session_id FROM runs WHERE id=?", (run_id,)).fetchone()
+                if session_row:
+                    db.execute(
+                        """
+                        INSERT OR IGNORE INTO attention_items(
+                            id, session_id, run_id, kind, created_at, metadata_json
+                        ) VALUES(?, ?, ?, 'interrupted', ?, ?)
+                        """,
+                        (
+                            uuid.uuid4().hex,
+                            str(session_row["session_id"]),
+                            run_id,
+                            now,
+                            _json_dumps({"reason": "runtime_restart"}),
+                        ),
+                    )
+            queued = db.execute("SELECT * FROM runs WHERE status='queued' ORDER BY queued_at").fetchall()
+            return [self._run_record(row) for row in queued]
+
+    # ------------------------------------------------------------------
+    # Attention, read receipts, and approvals
+
+    def create_attention(self, session_id, run_id=None, kind="response", metadata=None):
+        now = _now_iso()
+        identifier = uuid.uuid4().hex
+        with self._lock, self._connect() as db:
+            target = self._ensure_session(db, session_id)
+            try:
+                db.execute(
+                    """
+                    INSERT INTO attention_items(id, session_id, run_id, kind, created_at, metadata_json)
+                    VALUES(?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        identifier,
+                        target,
+                        str(run_id) if run_id else None,
+                        str(kind or "response"),
+                        now,
+                        _json_dumps(_json_object(metadata)),
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                row = db.execute(
+                    "SELECT id FROM attention_items WHERE run_id=? AND kind=?",
+                    (str(run_id or ""), str(kind or "response")),
+                ).fetchone()
+                return str(row["id"]) if row else ""
+        return identifier
+
+    def mark_session_read(self, session_id, actor_id="desktop"):
+        now = _now_iso()
+        with self._lock, self._connect() as db:
+            target = str(session_id or "")
+            if not db.execute("SELECT 1 FROM sessions WHERE id=?", (target,)).fetchone():
+                return 0
+            result = db.execute(
+                "UPDATE attention_items SET read_at=? WHERE session_id=? AND read_at IS NULL",
+                (now, target),
+            )
+            last_event = db.execute(
+                """
+                SELECT COALESCE(MAX(e.id), 0) AS event_id
+                FROM run_events e JOIN runs r ON r.id=e.run_id
+                WHERE r.session_id=?
+                """,
+                (target,),
+            ).fetchone()["event_id"]
+            db.execute(
+                """
+                INSERT INTO read_receipts(actor_id, session_id, last_seen_event_id, updated_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(actor_id, session_id) DO UPDATE SET
+                    last_seen_event_id=excluded.last_seen_event_id,
+                    updated_at=excluded.updated_at
+                """,
+                (str(actor_id or "desktop"), target, int(last_event or 0), now),
+            )
+            return int(result.rowcount or 0)
+
+    def unread_count(self, session_id=None):
+        with self._lock, self._connect() as db:
+            if session_id:
+                row = db.execute(
+                    "SELECT COUNT(*) AS count FROM attention_items WHERE read_at IS NULL AND session_id=?",
+                    (str(session_id),),
+                ).fetchone()
+            else:
+                row = db.execute("SELECT COUNT(*) AS count FROM attention_items WHERE read_at IS NULL").fetchone()
+            return int(row["count"] or 0)
+
+    def create_approval(
+        self, run_id, session_id, title="", prompt="", risk_level="normal",
+        payload=None, payload_hash="", expires_at=None, approval_id=None,
+    ):
+        identifier = str(approval_id or uuid.uuid4().hex)
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO approvals(
+                    id, run_id, session_id, status, title, prompt, risk_level,
+                    payload_json, payload_hash, created_at, expires_at
+                ) VALUES(?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    identifier, str(run_id), str(session_id), str(title or ""),
+                    str(prompt or ""), str(risk_level or "normal"),
+                    _json_dumps(_json_object(payload)), str(payload_hash or ""),
+                    _now_iso(), str(expires_at) if expires_at else None,
+                ),
+            )
+        return identifier
+
+    def resolve_approval(self, approval_id, decision, decision_metadata=None):
+        normalized = str(decision or "").strip().lower()
+        if normalized not in {"approved", "denied", "cancelled", "expired"}:
+            raise ValueError("Unsupported approval decision")
+        with self._lock, self._connect() as db:
+            result = db.execute(
+                """
+                UPDATE approvals
+                SET status=?, resolved_at=?, decision_json=?
+                WHERE id=? AND status='pending'
+                """,
+                (
+                    normalized, _now_iso(), _json_dumps(_json_object(decision_metadata)),
+                    str(approval_id or ""),
+                ),
+            )
+            return bool(result.rowcount)
+
+    def pending_approvals(self, session_id=None):
+        values = []
+        where = "status='pending'"
+        if session_id:
+            where += " AND session_id=?"
+            values.append(str(session_id))
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                f"SELECT * FROM approvals WHERE {where} ORDER BY created_at",
+                tuple(values),
+            ).fetchall()
+            return [
+                {
+                    "id": str(row["id"]),
+                    "run_id": str(row["run_id"]),
+                    "session_id": str(row["session_id"]),
+                    "status": str(row["status"]),
+                    "title": str(row["title"] or ""),
+                    "prompt": str(row["prompt"] or ""),
+                    "risk_level": str(row["risk_level"] or "normal"),
+                    "payload": _json_loads(row["payload_json"], {}),
+                    "payload_hash": str(row["payload_hash"] or ""),
+                    "created_at": str(row["created_at"] or ""),
+                    "expires_at": str(row["expires_at"] or ""),
+                }
+                for row in rows
+            ]
+
+    def idempotency_response(self, scope, key):
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT response_json, expires_at FROM idempotency_keys WHERE scope=? AND key=?",
+                (str(scope or "default"), str(key or "")),
+            ).fetchone()
+            if not row:
+                return None
+            expires_at = str(row["expires_at"] or "")
+            if expires_at:
+                try:
+                    if datetime.fromisoformat(expires_at) <= datetime.now():
+                        db.execute(
+                            "DELETE FROM idempotency_keys WHERE scope=? AND key=?",
+                            (str(scope or "default"), str(key or "")),
+                        )
+                        return None
+                except Exception:
+                    pass
+            return _json_loads(row["response_json"], {})
+
+    def save_idempotency_response(self, scope, key, response, ttl_hours=24):
+        if not str(key or "").strip():
+            return False
+        now = datetime.now()
+        expires_at = (now + timedelta(hours=max(1, int(ttl_hours or 24)))).isoformat(timespec="seconds")
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT OR IGNORE INTO idempotency_keys(scope, key, response_json, created_at, expires_at)
+                VALUES(?, ?, ?, ?, ?)
+                """,
+                (
+                    str(scope or "default"), str(key), _json_dumps(_json_object(response)),
+                    now.isoformat(timespec="seconds"), expires_at,
+                ),
+            )
             return True
 
     def export_session(self, session_id, target_path):

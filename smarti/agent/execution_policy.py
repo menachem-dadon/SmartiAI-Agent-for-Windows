@@ -56,12 +56,19 @@ class ExecutionPolicyMixin:
             return
         with self._active_process_lock:
             self._active_processes.add(proc)
+            run_id = str(getattr(self._execution_context, "run_id", "") or "")
+            if run_id:
+                self._active_processes_by_run.setdefault(run_id, set()).add(proc)
 
     def _unregister_active_process(self, proc):
         if not proc:
             return
         with self._active_process_lock:
             self._active_processes.discard(proc)
+            for run_id, processes in list(self._active_processes_by_run.items()):
+                processes.discard(proc)
+                if not processes:
+                    self._active_processes_by_run.pop(run_id, None)
 
     def _terminate_process_tree(self, proc):
         if not proc or proc.poll() is not None:
@@ -82,9 +89,12 @@ class ExecutionPolicyMixin:
             except Exception:
                 pass
 
-    def _terminate_active_processes(self):
+    def _terminate_active_processes(self, run_id=None):
         with self._active_process_lock:
-            processes = list(self._active_processes)
+            if run_id:
+                processes = list(self._active_processes_by_run.get(str(run_id), set()))
+            else:
+                processes = list(self._active_processes)
         for proc in processes:
             self._terminate_process_tree(proc)
 
@@ -133,9 +143,20 @@ class ExecutionPolicyMixin:
         self._raise_if_cancelled()
         done = threading.Event()
         result_box = {}
+        inherited_context = {
+            name: getattr(self._execution_context, name, None)
+            for name in (
+                "run_values", "run_id", "target_session_id", "cancel_event",
+                "is_background", "policy_snapshot", "current_task_id",
+                "current_task_objective", "loop_iteration",
+            )
+        }
 
         def runner():
             try:
+                for name, value in inherited_context.items():
+                    if value is not None:
+                        setattr(self._execution_context, name, value)
                 result_box["result"] = func()
             except BaseException as e:
                 result_box["error"] = e
@@ -150,6 +171,19 @@ class ExecutionPolicyMixin:
         return result_box.get("result")
 
     def _request_user_approval(self, title, text, *, risk="medium"):
+        run_id = str(getattr(self._execution_context, "run_id", "") or "")
+        session_id = str(getattr(self._execution_context, "target_session_id", "") or "")
+        if run_id and session_id and getattr(self, "run_manager", None):
+            if self.status_callback:
+                self.status_callback("ממתין לאישור משתמש...")
+            return self.run_manager.request_approval(
+                run_id,
+                session_id,
+                title,
+                text,
+                risk_level=risk,
+                callback=self.ask_user_callback,
+            )
         if self._is_background_context():
             logging.warning(f"Background task attempted a gated action ({risk}): {title}")
             return False
@@ -526,10 +560,10 @@ class ExecutionPolicyMixin:
             "output": self._truncate_tool_output(output_text)[:per_output_limit],
         }
         with self._tool_context_guard():
-            transcript = self.settings.setdefault("tool_context_transcript", [])
+            transcript = getattr(self, "tool_context_transcript", [])
             if not isinstance(transcript, list):
                 transcript = []
-                self.settings["tool_context_transcript"] = transcript
+                self.tool_context_transcript = transcript
             transcript.append(entry)
             try:
                 max_entries = max(40, int(self.settings.get("max_tool_context_entries", 400) or 400))
@@ -593,7 +627,7 @@ class ExecutionPolicyMixin:
         )
 
     def _tool_context_prompt(self, query=""):
-        transcript = self.settings.get("tool_context_transcript", [])
+        transcript = getattr(self, "tool_context_transcript", [])
         if not isinstance(transcript, list) or not transcript:
             return "No tool calls have been recorded in this conversation yet."
         try:

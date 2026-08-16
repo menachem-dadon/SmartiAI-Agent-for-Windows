@@ -2136,6 +2136,32 @@ def format_interval_hebrew(interval_minutes):
     else:
         return f"כל {', '.join(parts[:-1])} {last_formatted}"
 
+
+class ResponsiveTaskCard(QFrame):
+    """Word-wrapped task card whose height follows its current viewport width."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._height_sync_pending = False
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+    def _sync_height_for_width(self):
+        self._height_sync_pending = False
+        width = max(1, self.width())
+        desired = self.heightForWidth(width) if self.hasHeightForWidth() else -1
+        if desired < 0 and self.layout() is not None:
+            desired = self.layout().sizeHint().height()
+        desired = max(0, int(desired))
+        if desired and self.minimumHeight() != desired:
+            self.setMinimumHeight(desired)
+            self.updateGeometry()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._height_sync_pending:
+            self._height_sync_pending = True
+            QTimer.singleShot(0, self._sync_height_for_width)
+
 class TaskCenterPage(QWidget):
     def __init__(self, core, main_window):
         super().__init__(getattr(main_window, "stacked_widget", None))
@@ -2185,7 +2211,7 @@ class TaskCenterPage(QWidget):
             self.content_layout.addWidget(empty)
             return
         for task in reversed(tasks[-40:]):
-            card = QFrame()
+            card = ResponsiveTaskCard()
             card.setStyleSheet(card_css(12, 8))
             card_layout = QVBoxLayout(card)
             
@@ -2201,8 +2227,8 @@ class TaskCenterPage(QWidget):
                 freq_str = f"שבועית בימים: {', '.join(days_list)}"
             
             conv_mode = task.get("conversation_mode", "current")
-            conv_names = {"current": "שיחה נוכחית", "new": "שיחה חדשה בכל פעם", "dedicated": "שיחה ייעודית קבועה"}
-            conv_str = conv_names.get(conv_mode, "שיחה נוכחית")
+            conv_names = {"current": "שיחת המקור", "new": "שיחה חדשה בכל פעם", "dedicated": "שיחה ייעודית קבועה"}
+            conv_str = conv_names.get(conv_mode, "שיחת המקור")
             
             status_hebrew = {"scheduled": "מתוזמן", "running": "רץ כעת", "cancelling": "בביטול", "done": "הושלם", "failed": "נכשל", "cancelled": "בוטל"}
             status_str = status_hebrew.get(task.get("status", ""), task.get("status", ""))
@@ -4682,6 +4708,17 @@ class SettingsPage(QWidget):
         # Compatibility alias for existing integrations and tests.
         self.codex_reasoning_effort_combo = self.reasoning_effort_combo
         self.reasoning_effort_combo.setStyleSheet(COMBOBOX_CSS)
+        self.conversation_title_mode_combo = NoScrollComboBox()
+        self.conversation_title_mode_combo.addItem("המודל יוצר כותרת יפה וייחודית", "ai")
+        self.conversation_title_mode_combo.addItem("כותרת מיידית ללא פנייה למודל", "local")
+        title_mode = str(
+            self.core.settings.get("conversation_title_generation_mode", "ai") or "ai"
+        ).strip().lower()
+        title_mode_index = self.conversation_title_mode_combo.findData(
+            title_mode if title_mode in {"ai", "local"} else "ai"
+        )
+        self.conversation_title_mode_combo.setCurrentIndex(max(0, title_mode_index))
+        self.conversation_title_mode_combo.setStyleSheet(COMBOBOX_CSS)
         
         self.api_key_edit = MaskedSecretLineEdit()
         self.api_key_edit.setPlaceholderText("מפתח גישה לספק המודל")
@@ -5334,6 +5371,14 @@ class SettingsPage(QWidget):
             keywords="codex openai gemini anthropic reasoning effort thinking level budget",
         )
         self.codex_reasoning_effort_field_container.setVisible(False)
+        self._add_field(
+            "יצירת כותרת לשיחה",
+            self.conversation_title_mode_combo,
+            ai,
+            "כבר בתחילת השיחה סמארטי מציג שם זמני ייחודי. כברירת מחדל המודל יוצר במקביל כותרת יפה ומדויקת על בסיס הבקשה הראשונה; אפשר לבחור בכותרת מקומית כדי לחסוך פנייה נוספת למודל.",
+            keywords="conversation chat title ai automatic local unique כותרת שיחה אוטומטית מודל",
+            setting_id="conversation_title_generation_mode",
+        )
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.", keywords="local server url lm studio ollama localhost endpoint base url")
         self.local_fast_mode_field_container = self._add_checkbox(
             self.local_fast_mode_cb,
@@ -5834,7 +5879,13 @@ class SettingsPage(QWidget):
             )
 
     def _register_autosave_handlers(self):
-        combos = [self.provider_combo, self.tts_voice_combo, self.codex_reasoning_effort_combo, self.skill_unknown_scan_combo]
+        combos = [
+            self.provider_combo,
+            self.tts_voice_combo,
+            self.codex_reasoning_effort_combo,
+            self.conversation_title_mode_combo,
+            self.skill_unknown_scan_combo,
+        ]
         combos.extend(self.policy_combos.values())
         for combo in combos:
             combo.currentIndexChanged.connect(lambda _=None: self._schedule_autosave())
@@ -6227,6 +6278,10 @@ class SettingsPage(QWidget):
         else:
             self.core.mark_secret_for_deletion("tavily_api_key")
         self.core.settings["local_server_url"] = self.local_url.text().strip() or "http://localhost:1234/v1"
+        title_mode = str(self.conversation_title_mode_combo.currentData() or "ai").strip().lower()
+        self.core.settings["conversation_title_generation_mode"] = (
+            title_mode if title_mode in {"ai", "local"} else "ai"
+        )
         self.core.settings["local_fast_mode_enabled"] = self.local_fast_mode_cb.isChecked()
         self.core.settings["email_address"] = self.email.text()
         self.core.settings["email_password"] = self.pwd.text().replace(" ", "")

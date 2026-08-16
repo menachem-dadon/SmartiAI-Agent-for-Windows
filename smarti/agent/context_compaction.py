@@ -594,10 +594,13 @@ class ContextCompactionMixin:
                 old,
                 task_state=None,
                 current_model=current_model,
-                existing_summary=str(self.settings.get("conversation_summary") or ""),
+                existing_summary=str(getattr(self, "conversation_summary", "") or ""),
                 scope="conversation_history",
             )
-            self.settings["conversation_summary"] = summary
+            self.conversation_summary = summary
+            execution_context = getattr(self, "_execution_context", None)
+            if not isinstance(getattr(execution_context, "run_values", None), dict):
+                self.settings["conversation_summary"] = summary
             if self.mode == "gemini":
                 self.gemini_history = kept
                 after_messages = kept

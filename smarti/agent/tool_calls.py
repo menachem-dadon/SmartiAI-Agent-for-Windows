@@ -1588,8 +1588,20 @@ class ToolCallMixin:
         background_flag = getattr(self._execution_context, "is_background", False)
         policy_snapshot = getattr(self._execution_context, "policy_snapshot", None)
         loop_iteration = getattr(self._execution_context, "loop_iteration", None)
+        run_values = getattr(self._execution_context, "run_values", None)
+        run_id = getattr(self._execution_context, "run_id", None)
+        target_session_id = getattr(self._execution_context, "target_session_id", None)
+        cancel_event = getattr(self._execution_context, "cancel_event", None)
 
         def run_one(call):
+            if run_values is not None:
+                self._execution_context.run_values = run_values
+            if run_id is not None:
+                self._execution_context.run_id = run_id
+            if target_session_id is not None:
+                self._execution_context.target_session_id = target_session_id
+            if cancel_event is not None:
+                self._execution_context.cancel_event = cancel_event
             self._execution_context.is_background = background_flag
             self._execution_context.loop_iteration = loop_iteration
             if policy_snapshot is not None:

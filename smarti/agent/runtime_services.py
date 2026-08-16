@@ -520,7 +520,13 @@ class RuntimeServicesMixin:
         display_action = self._short_step_value(action.replace("_", " "), 36)
         return f"מפעיל {display_action}"
 
-    def request_cancel(self):
+    def request_cancel(self, run_id=None, session_id=None):
+        if run_id and getattr(self, "run_manager", None):
+            cancelled = self.run_manager.cancel(run_id)
+            self._terminate_active_processes(run_id=run_id)
+            return cancelled
+        if session_id and getattr(self, "run_manager", None):
+            return self.run_manager.cancel_session(session_id)
         self.cancel_event.set()
         if self._foreground_cancel_event:
             self._foreground_cancel_event.set()

@@ -286,13 +286,23 @@ class MessagingMixin:
             current_messages.append({"role": "assistant", "content": ai_response_text})
             current_messages.append(message)
 
-    def send_message(self, user_text, is_background_task=False, cancel_event=None, attachments=None):
+    def send_message(
+        self, user_text, is_background_task=False, cancel_event=None, attachments=None,
+        session_id=None, run_id=None, persist_turn=True,
+    ):
         self._last_memory_update_result = {
             "changed": False, "count": 0, "actions": [], "memory_ids": [], "skipped": 0,
         }
-        lock_acquired = self._agent_lock.acquire(blocking=False)
+        target_session_id = str(
+            session_id
+            or getattr(self._execution_context, "target_session_id", "")
+            or ((self.chat_store.active_session_metadata() or {}).get("id") if getattr(self, "chat_store", None) else "")
+            or "__legacy__"
+        )
+        conversation_lock = self._conversation_lock(target_session_id)
+        lock_acquired = conversation_lock.acquire(blocking=False)
         if not lock_acquired:
-            return "ERROR_USER: סמארטי כבר מבצע משימה אחרת. נסה שוב בעוד רגע או בטל את הפעולה הפעילה."
+            return "ERROR_USER: כבר מתבצעת פעולה בשיחה הזאת. אפשר להמשיך לעבוד בשיחה אחרת בינתיים."
         missing_context_value = object()
         previous_background_flag = getattr(self._execution_context, "is_background", False)
         previous_policy_snapshot = getattr(self._execution_context, "policy_snapshot", None)
@@ -321,7 +331,7 @@ class MessagingMixin:
                 sleep_prevention_active = self._set_system_sleep_prevention(True)
             user_text = str(user_text or "")
             attachments = normalize_attachments(attachments or [])
-            if not is_background_task and not attachments and self._is_resume_request(user_text):
+            if not is_background_task and not run_id and not attachments and self._is_resume_request(user_text):
                 resume_checkpoint = self._load_task_checkpoint()
                 if resume_checkpoint:
                     if self.status_callback:
@@ -350,12 +360,12 @@ class MessagingMixin:
                 self._execution_context.current_task_id = str((resume_checkpoint or {}).get("task_id") or uuid.uuid4().hex[:12])
                 checkpoint_task_id = self._execution_context.current_task_id
             self._execution_context.current_task_objective = (history_user_text or user_text)[:700]
-            if not is_background_task:
+            if not is_background_task and not run_id:
                 self._foreground_cancel_event = run_cancel_event
                 self.cancel_event = run_cancel_event
             if not self._ensure_active_provider_api_key():
-                provider_label = self._provider_display_name(self.settings.get("api_mode", getattr(self, "mode", "")))
-                if normalize_provider_name(self.settings.get("api_mode", "")) == CODEX_SIGNIN_PROVIDER:
+                provider_label = self._provider_display_name(getattr(self, "mode", ""))
+                if normalize_provider_name(getattr(self, "mode", "")) == CODEX_SIGNIN_PROVIDER:
                     detail = str(getattr(self, "_codex_connection_message", "") or "לא מחובר עם ChatGPT / Codex.")
                     final_response = f"ERROR_USER: {detail} יש לפתוח את ההגדרות וללחוץ על 'התחבר עם ChatGPT / Codex'."
                 else:
@@ -385,7 +395,12 @@ class MessagingMixin:
             except Exception:
                 configured_total_timeout = 0
             total_timeout = None if configured_total_timeout <= 0 else max(5, configured_total_timeout)
-            current_model = self.settings.get(f'selected_{self.mode}_model') or provider_default_model(self.mode) or "Local"
+            current_model = str(
+                getattr(self._execution_context, "model_name", "")
+                or self.settings.get(f'selected_{self.mode}_model')
+                or provider_default_model(self.mode)
+                or "Local"
+            )
             if resume_checkpoint:
                 current_model = str(resume_checkpoint.get("current_model") or current_model)
                 try:
@@ -457,7 +472,7 @@ class MessagingMixin:
                     phase=phase,
                     status=status,
                     reason=reason,
-                    is_background_task=is_background_task,
+                    is_background_task=is_background_task or bool(run_id),
                 )
 
             def process_reports_enabled():
@@ -896,6 +911,13 @@ class MessagingMixin:
                 except Exception as e:
                     logging.warning(f"Model-authored memory decision skipped: {e}")
 
+            if not str(final_response or "").strip() and not run_cancel_event.is_set():
+                logging.warning("Model turn ended without user-visible content.")
+                final_response = (
+                    "ERROR_USER: המודל סיים את הבקשה בלי להחזיר תשובה. "
+                    "אפשר לנסות שוב; פרטי הריצה נשמרו בלוגים."
+                )
+
             if final_response and not final_response.startswith("ERROR_USER"):
                 if self.mode == "gemini":
                     self.gemini_history.append({"role": "user", "content": history_user_text or user_text})
@@ -924,13 +946,18 @@ class MessagingMixin:
             final_response = f"ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}"
             return final_response
         finally:
-            if not is_background_task and final_response and not chat_turn_recorded:
+            if persist_turn and not is_background_task and final_response and not chat_turn_recorded:
                 try:
-                    self._record_active_chat_turn(user_text, final_response, attachments=attachments)
+                    self._record_active_chat_turn(
+                        user_text,
+                        final_response,
+                        attachments=attachments,
+                        session_id=target_session_id if target_session_id != "__legacy__" else None,
+                    )
                     chat_turn_recorded = True
                 except Exception as e:
                     logging.warning(f"Chat turn persistence failed: {e}")
-            if not is_background_task and checkpoint_task_id and not checkpoint_should_keep:
+            if not is_background_task and not run_id and checkpoint_task_id and not checkpoint_should_keep:
                 self._clear_task_checkpoint(checkpoint_task_id)
             if self.status_callback:
                 self.status_callback("")
@@ -977,12 +1004,12 @@ class MessagingMixin:
                     pass
             else:
                 self._execution_context.cancel_event = previous_cancel_event
-            if not is_background_task and self._foreground_cancel_event is run_cancel_event:
+            if not is_background_task and not run_id and self._foreground_cancel_event is run_cancel_event:
                 self._foreground_cancel_event = None
             if sleep_prevention_active:
                 self._set_system_sleep_prevention(False)
             if lock_acquired:
                 try:
-                    self._agent_lock.release()
+                    conversation_lock.release()
                 except RuntimeError:
                     pass

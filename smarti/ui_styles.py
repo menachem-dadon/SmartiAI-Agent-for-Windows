@@ -1,5 +1,11 @@
 """Theme tokens, stylesheet snippets, and generated UI assets."""
 from .common import *
+import weakref
+
+try:
+    from PyQt6 import sip as _qt_sip
+except ImportError:  # pragma: no cover - PyQt always provides sip in production.
+    _qt_sip = None
 
 # ==========================================
 # Smarti premium UI design system
@@ -823,14 +829,41 @@ def install_smarti_tooltips(app):
     controller.apply_theme()
 
 
-def apply_windows_rounded_corners(widget):
-    """Explicitly request Windows 11 rounded corners for every top-level Qt surface."""
+def _qt_object_is_deleted(value):
+    try:
+        return value is None or (_qt_sip is not None and _qt_sip.isdeleted(value))
+    except Exception:
+        return True
+
+
+def _safe_top_level_hwnd(widget):
+    """Return an existing native handle without forcing QWidget creation."""
+    if platform.system() != "Windows" or _qt_object_is_deleted(widget):
+        return 0
+    try:
+        if not isinstance(widget, QWidget) or not widget.isWindow() or not widget.isVisible():
+            return 0
+        # Menus, tooltips, tray popups and splash surfaces are short-lived.
+        # Applying DWM attributes to them after an event-loop hop can race
+        # Qt's native window teardown.
+        if widget.windowType() not in {Qt.WindowType.Window, Qt.WindowType.Dialog}:
+            return 0
+        if not widget.testAttribute(Qt.WidgetAttribute.WA_WState_Created):
+            return 0
+        window_handle = widget.windowHandle()
+        if _qt_object_is_deleted(window_handle):
+            return 0
+        return int(window_handle.winId())
+    except (RuntimeError, TypeError, ValueError):
+        return 0
+
+
+def apply_windows_rounded_corners(widget, hwnd=None):
+    """Request Windows 11 corners only for an already-created stable window."""
     if platform.system() != "Windows" or widget is None:
         return False
     try:
-        if not isinstance(widget, QWidget) or not widget.isWindow():
-            return False
-        hwnd = int(widget.winId())
+        hwnd = int(hwnd or _safe_top_level_hwnd(widget))
         if not hwnd:
             return False
         preference = ctypes.c_int(2)  # DWMWCP_ROUND
@@ -852,23 +885,35 @@ class WindowsRoundedCornerController(QObject):
 
     def apply_to(self, widget):
         try:
-            if not isinstance(widget, QWidget) or not widget.isWindow():
-                return
-            hwnd = int(widget.winId())
+            hwnd = _safe_top_level_hwnd(widget)
             if not hwnd or hwnd in self._applied_handles:
                 return
-            if apply_windows_rounded_corners(widget):
+            if apply_windows_rounded_corners(widget, hwnd=hwnd):
                 self._applied_handles.add(hwnd)
         except Exception:
             pass
 
+    def _apply_weak_target(self, target_ref):
+        try:
+            target = target_ref()
+        except Exception:
+            return
+        if not _qt_object_is_deleted(target):
+            self.apply_to(target)
+
     def eventFilter(self, obj, event):
-        if event.type() in {
-            QEvent.Type.Show,
-            QEvent.Type.WinIdChange,
-            QEvent.Type.PolishRequest,
-        }:
-            QTimer.singleShot(0, lambda target=obj: self.apply_to(target))
+        if event.type() == QEvent.Type.Show:
+            try:
+                if (
+                    isinstance(obj, QWidget)
+                    and not _qt_object_is_deleted(obj)
+                    and obj.isWindow()
+                    and obj.windowType() in {Qt.WindowType.Window, Qt.WindowType.Dialog}
+                ):
+                    target_ref = weakref.ref(obj)
+                    QTimer.singleShot(0, lambda ref=target_ref: self._apply_weak_target(ref))
+            except (RuntimeError, TypeError):
+                pass
         return False
 
 

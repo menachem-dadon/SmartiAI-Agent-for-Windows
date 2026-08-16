@@ -43,6 +43,7 @@ class TaskbarAttentionController(QObject):
         self._unread_count = 0
         self._taskbar_interface = None
         self._overlay_failure_logged = False
+        self._cached_hwnd = 0
 
     @property
     def unread_count(self):
@@ -61,6 +62,18 @@ class TaskbarAttentionController(QObject):
         if flashed:
             self._flashing = True
         return bool(flashed or overlay_updated)
+
+    def sync_unread_count(self, count, flash=False):
+        """Project the durable unread ledger onto the taskbar without inventing alerts."""
+        updated = self.set_unread_count(count)
+        if not flash or platform.system() != "Windows" or wintypes is None:
+            return updated
+        if not self.window or self.window.isActiveWindow():
+            return updated
+        hwnd = self._window_handle()
+        flashed = bool(hwnd and self._flash(hwnd, self.FLASHW_TRAY | self.FLASHW_TIMERNOFG))
+        self._flashing = self._flashing or flashed
+        return bool(updated or flashed)
 
     def stop(self):
         overlay_cleared = self.set_unread_count(0)
@@ -101,6 +114,26 @@ class TaskbarAttentionController(QObject):
                 logging.warning("Taskbar unread badge failed: %s", exc, exc_info=True)
                 self._overlay_failure_logged = True
             return False
+
+    def capture_window_handle(self):
+        """Cache the stable native handle after the top-level show event."""
+        if platform.system() != "Windows" or wintypes is None:
+            return 0
+        try:
+            test_attribute = getattr(self.window, "testAttribute", None)
+            if callable(test_attribute) and not test_attribute(
+                Qt.WidgetAttribute.WA_WState_Created
+            ):
+                return 0
+            window_handle = self.window.windowHandle()
+            if window_handle is None:
+                return 0
+            hwnd = int(window_handle.winId())
+            if hwnd:
+                self._cached_hwnd = hwnd
+            return hwnd
+        except Exception:
+            return 0
 
     @staticmethod
     def _guid(value):
@@ -260,10 +293,11 @@ class TaskbarAttentionController(QObject):
                 ctypes.windll.user32.DestroyIcon(hicon)
 
     def _window_handle(self):
-        try:
-            return int(self.window.winId())
-        except Exception:
-            return 0
+        # Do not query either QWidget or QWindow while a notification or menu
+        # transition is in progress. Two real dumps crashed in QWidget.winId()
+        # from precisely that path. showEvent captures the stable handle once;
+        # every later taskbar projection is a pure integer/Win32 operation.
+        return int(self._cached_hwnd or 0)
 
     def _flash(self, hwnd, flags):
         class FLASHWINFO(ctypes.Structure):
@@ -581,6 +615,7 @@ class PermissionNotificationHandle:
 
 class WindowsNotificationCenter(QObject):
     reply_requested = pyqtSignal(str)
+    conversation_reply_requested = pyqtSignal(str, str)
     activate_requested = pyqtSignal()
     attention_cleared = pyqtSignal()
     conversation_switch_requested = pyqtSignal(str)
@@ -710,7 +745,24 @@ class WindowsNotificationCenter(QObject):
             return query.split("action=", 1)[1].split("&", 1)[0]
         return query
 
-    def show_response(self, response):
+    def _open_conversation_or_app(self, conversation_id=""):
+        conversation_id = str(conversation_id or "").strip()
+        if conversation_id:
+            self.conversation_switch_requested.emit(conversation_id)
+        else:
+            self.activate_requested.emit()
+
+    def _emit_reply(self, text, conversation_id=""):
+        text = str(text or "").strip()
+        if not text:
+            return
+        conversation_id = str(conversation_id or "").strip()
+        if conversation_id:
+            self.conversation_reply_requested.emit(conversation_id, text)
+        else:
+            self.reply_requested.emit(text)
+
+    def show_response(self, response, conversation_id=""):
         title = "סמארטי השיב"
         body = self._plain_text(response, 360) or "התשובה מוכנה."
         if self._ensure_native():
@@ -744,10 +796,10 @@ class WindowsNotificationCenter(QObject):
                     reply = str(inputs.get("replyText") or inputs.get("reply") or "").strip()
                     if action == "reply" and reply:
                         self.attention_cleared.emit()
-                        self.reply_requested.emit(reply)
+                        self._emit_reply(reply, conversation_id)
                     else:
                         self.attention_cleared.emit()
-                        self.activate_requested.emit()
+                        self._open_conversation_or_app(conversation_id)
                     cleanup()
 
                 def dismissed(_event_args):
@@ -762,10 +814,12 @@ class WindowsNotificationCenter(QObject):
                 return True
             except Exception as exc:
                 logging.warning("Native response toast failed: %s", exc)
-        self._show_fallback(title, body, reply=True)
+        self._show_fallback(title, body, reply=True, conversation_id=conversation_id)
         return False
 
-    def show_permission_request(self, title, details, risk="medium", callback=None):
+    def show_permission_request(
+        self, title, details, risk="medium", callback=None, conversation_id=""
+    ):
         heading = "בקשת הרשאה"
         body = self._plain_text(f"{title}\n{details}", 620) or str(title or heading)
         if self._ensure_native():
@@ -811,7 +865,7 @@ class WindowsNotificationCenter(QObject):
                     elif action == "deny":
                         settle(False)
                     else:
-                        self.activate_requested.emit()
+                        self._open_conversation_or_app(conversation_id)
                         settle(None)
 
                 def dismissed(_event_args):
@@ -846,7 +900,13 @@ class WindowsNotificationCenter(QObject):
             if callback:
                 callback(value)
 
-        toast = self._show_fallback(heading, body, permission=True, permission_callback=settle)
+        toast = self._show_fallback(
+            heading,
+            body,
+            permission=True,
+            permission_callback=settle,
+            conversation_id=conversation_id,
+        )
 
         def cancel():
             if settled["done"]:
@@ -861,7 +921,9 @@ class WindowsNotificationCenter(QObject):
 
         return PermissionNotificationHandle(cancel, shown=True)
 
-    def show_notice(self, title, body, *, kind="default", open_button=True):
+    def show_notice(
+        self, title, body, *, kind="default", open_button=True, conversation_id=""
+    ):
         title = self._plain_text(title, 90) or SMARTI_APP_DISPLAY_NAME
         body = self._plain_text(body, 520) or "יש עדכון מסמארטי."
         if self._ensure_native():
@@ -896,7 +958,7 @@ class WindowsNotificationCenter(QObject):
 
                 def activated(_event_args):
                     self.attention_cleared.emit()
-                    self.activate_requested.emit()
+                    self._open_conversation_or_app(conversation_id)
                     cleanup()
 
                 def dismissed(_event_args):
@@ -908,7 +970,7 @@ class WindowsNotificationCenter(QObject):
                 return True
             except Exception as exc:
                 logging.warning("Native notice toast failed: %s", exc)
-        self._show_fallback(title, body)
+        self._show_fallback(title, body, conversation_id=conversation_id)
         return False
 
     def show_background_task_notification(self, title, body, conversation_id):
@@ -931,13 +993,11 @@ class WindowsNotificationCenter(QObject):
                     toast.AddAction(api["ToastButton"]("פתח שיחה", f"action=switch&id={conversation_id}"))
                 cleanup = self._track_native_toast(toast)
 
-                def activated(event_args):
-                    arguments = self._event_arguments(event_args)
+                def activated(_event_args):
                     self.attention_cleared.emit()
-                    if "action=switch" in arguments and conversation_id:
-                        self.conversation_switch_requested.emit(conversation_id)
-                    else:
-                        self.activate_requested.emit()
+                    # The toast body produces empty activation arguments on
+                    # Windows. Its source conversation is still authoritative.
+                    self._open_conversation_or_app(conversation_id)
                     cleanup()
 
                 def dismissed(_event_args):
@@ -957,11 +1017,22 @@ class WindowsNotificationCenter(QObject):
             try: self._fallback_toasts.remove(toast)
             except ValueError: pass
         toast.destroyed.connect(lambda *_: cleanup())
-        toast.activated.connect(lambda: (self.attention_cleared.emit(), self.conversation_switch_requested.emit(conversation_id) if conversation_id else self.activate_requested.emit()))
+        toast.activated.connect(
+            lambda: (self.attention_cleared.emit(), self._open_conversation_or_app(conversation_id))
+        )
         toast.show_toast()
         return False
 
-    def _show_fallback(self, title, body, *, reply=False, permission=False, permission_callback=None):
+    def _show_fallback(
+        self,
+        title,
+        body,
+        *,
+        reply=False,
+        permission=False,
+        permission_callback=None,
+        conversation_id="",
+    ):
         toast = SmartiGlassToast(title, body, reply=reply, permission=permission)
         self._fallback_toasts.append(toast)
 
@@ -972,8 +1043,12 @@ class WindowsNotificationCenter(QObject):
                 pass
 
         toast.destroyed.connect(lambda *_: cleanup())
-        toast.reply_submitted.connect(lambda text: (self.attention_cleared.emit(), self.reply_requested.emit(text)))
-        toast.activated.connect(lambda: (self.attention_cleared.emit(), self.activate_requested.emit()))
+        toast.reply_submitted.connect(
+            lambda text: (self.attention_cleared.emit(), self._emit_reply(text, conversation_id))
+        )
+        toast.activated.connect(
+            lambda: (self.attention_cleared.emit(), self._open_conversation_or_app(conversation_id))
+        )
         if permission:
             toast.permission_answered.connect(
                 lambda value: permission_callback(value) if permission_callback else None

@@ -3455,6 +3455,56 @@ class ChatHistorySearchTask(QRunnable):
         self.signals.ready.emit(self.generation, self.query, records, error)
 
 
+class ConversationActivityIndicator(QWidget):
+    """Compact sidebar projection of run state and unread responses."""
+
+    def __init__(self, runtime_status="idle", unread_count=0, parent=None):
+        super().__init__(parent)
+        self.runtime_status = str(runtime_status or "idle")
+        self.unread_count = max(0, int(unread_count or 0))
+        self.angle = 0
+        self.setFixedSize(24, 24)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._advance)
+        if self.runtime_status in {"queued", "running", "cancelling"}:
+            self._timer.start()
+        if self.runtime_status == "waiting_for_approval":
+            self.setToolTip("סמארטי ממתין לאישור")
+        elif self.runtime_status in {"queued", "running", "cancelling"}:
+            self.setToolTip("סמארטי עובד בשיחה הזאת")
+        elif self.unread_count:
+            self.setToolTip("התקבלה תשובה חדשה")
+
+    def _advance(self):
+        self.angle = (self.angle + 5) % 360
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        center = self.rect().center()
+        if self.runtime_status in {"queued", "running", "cancelling"}:
+            pen = QPen(QColor(ACCENT_COLOR), 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            rect = QRectF(4.0, 4.0, 16.0, 16.0)
+            painter.drawArc(rect, int((90 - self.angle) * 16), int(-245 * 16))
+        elif self.runtime_status == "waiting_for_approval":
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#f59e0b"))
+            painter.drawEllipse(QRectF(5.0, 5.0, 14.0, 14.0))
+            painter.setPen(QPen(QColor("white"), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawLine(center.x(), 8, center.x(), 13)
+            painter.drawPoint(center.x(), 17)
+        elif self.unread_count:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(ACCENT_COLOR))
+            painter.drawEllipse(QRectF(7.0, 7.0, 10.0, 10.0))
+
+
 class ChatHistoryPage(QWidget):
     def __init__(self, core, main_window):
         super().__init__(getattr(main_window, "stacked_widget", None))
@@ -3465,6 +3515,7 @@ class ChatHistoryPage(QWidget):
         self._suppress_session_menu_button = None
         self.search_icon_label = None
         self._search_generation = 0
+        self._render_generation = 0
         self._search_tasks = {}
         self._search_active = False
         self._search_pending = False
@@ -3522,6 +3573,20 @@ class ChatHistoryPage(QWidget):
         search_layout.addWidget(self.search_edit, 1)
         layout.addWidget(self.search_frame)
 
+        self.loading_frame = QFrame()
+        self.loading_frame.setStyleSheet("QFrame { background: transparent; border: none; }")
+        loading_layout = QHBoxLayout(self.loading_frame)
+        loading_layout.setContentsMargins(4, 0, 4, 0)
+        loading_layout.setSpacing(7)
+        loading_layout.addStretch()
+        self.loading_label = QLabel("טוען שיחות…")
+        self.loading_label.setStyleSheet(muted_label_css(13))
+        loading_layout.addWidget(self.loading_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.loading_indicator = ConversationActivityIndicator("running", parent=self.loading_frame)
+        loading_layout.addWidget(self.loading_indicator, 0, Qt.AlignmentFlag.AlignVCenter)
+        loading_layout.addStretch()
+        self.loading_frame.hide()
+
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -3533,7 +3598,12 @@ class ChatHistoryPage(QWidget):
         self.content_layout.setSpacing(10)
         self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll.setWidget(self.content)
-        layout.addWidget(self.scroll, 1)
+        self.history_stack = QStackedWidget()
+        self.history_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
+        self.history_stack.addWidget(self.scroll)
+        self.history_stack.addWidget(self.loading_frame)
+        self.history_stack.setCurrentWidget(self.scroll)
+        layout.addWidget(self.history_stack, 1)
 
     def apply_theme(self):
         refresh_back_button_icon(self.back_btn)
@@ -3542,6 +3612,7 @@ class ChatHistoryPage(QWidget):
         self.search_edit.setStyleSheet(self._search_line_edit_stylesheet())
         self._apply_search_edit_rtl()
         self._refresh_search_icon()
+        self.loading_label.setStyleSheet(muted_label_css(13))
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
 
     def _apply_search_edit_rtl(self):
@@ -3614,6 +3685,9 @@ class ChatHistoryPage(QWidget):
 
     def _schedule_session_search(self, _text=""):
         self._search_generation += 1
+        self._render_generation += 1
+        self.loading_frame.show()
+        self.history_stack.setCurrentWidget(self.loading_frame)
         self._search_timer.start()
 
     def _start_session_search(self):
@@ -3644,12 +3718,17 @@ class ChatHistoryPage(QWidget):
     def load_sessions(self):
         self._search_timer.stop()
         self._search_generation += 1
+        self._render_generation += 1
+        self.loading_frame.show()
+        self.history_stack.setCurrentWidget(self.loading_frame)
         # Opening or refreshing history can involve thousands of messages.
         # Keep that database/content scan off the GUI thread as well as typed
         # searches; an already-running scan is coalesced into one latest pass.
         self._start_session_search()
 
     def _render_sessions(self, records):
+        self._render_generation += 1
+        render_generation = self._render_generation
         self._clear_rows()
         if not records:
             empty = QLabel("לא נמצאו שיחות")
@@ -3657,11 +3736,28 @@ class ChatHistoryPage(QWidget):
             empty.setStyleSheet(muted_label_css(14) + " padding: 24px;")
             self.content_layout.addWidget(empty)
             self.content_layout.addStretch()
+            self.history_stack.setCurrentWidget(self.scroll)
+            self.loading_frame.hide()
             return
         active_id = self.core.active_chat_session().get("id", "")
-        for record in records:
-            self.content_layout.addWidget(self._session_row(record, active_id))
-        self.content_layout.addStretch()
+
+        def add_batch(index=0, batch_size=24):
+            if render_generation != self._render_generation:
+                return
+            next_index = min(len(records), index + batch_size)
+            for record in records[index:next_index]:
+                self.content_layout.addWidget(self._session_row(record, active_id))
+            if next_index < len(records):
+                QTimer.singleShot(0, lambda: add_batch(next_index, batch_size))
+                return
+            self.content_layout.addStretch()
+            # Build every row while the results page is hidden, then swap the
+            # two complete pages atomically. This avoids the expanding-list
+            # effect during progressive widget construction.
+            self.history_stack.setCurrentWidget(self.scroll)
+            self.loading_frame.hide()
+
+        QTimer.singleShot(0, add_batch)
 
     def _icon_button(self, tooltip, filenames, fallback_text="", danger=False):
         btn = QPushButton()
@@ -3683,8 +3779,23 @@ class ChatHistoryPage(QWidget):
         row = ClickableSessionFrame(session_id)
         row.clicked.connect(self.open_session)
         row.setMinimumWidth(0)
-        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        row.setStyleSheet(card_css(4, 8))
+        row.setFixedHeight(68)
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        if record.get("id") == active_id:
+            row.setObjectName("ActiveConversationRow")
+            row.setStyleSheet(
+                f"QFrame#ActiveConversationRow {{ background: {ACCENT_TINT_STRONG}; border: 1px solid {ACCENT_COLOR}; "
+                "border-radius: 12px; padding: 0px; }} "
+                "QFrame#ActiveConversationRow QLabel { background: transparent; border: none; }"
+            )
+        else:
+            row.setObjectName("ConversationRow")
+            row.setStyleSheet(
+                f"QFrame#ConversationRow {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:1, "
+                f"stop:0 {GLASS_STRONG_COLOR}, stop:1 {CARD_GRADIENT_END}); "
+                f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: 12px; padding: 0px; }} "
+                "QFrame#ConversationRow QLabel { background: transparent; border: none; }"
+            )
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(10, 7, 8, 7)
         row_layout.setSpacing(8)
@@ -3702,15 +3813,6 @@ class ChatHistoryPage(QWidget):
         title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         title.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: 800; border: none;")
         title_row.addWidget(title, 1)
-
-        if record.get("id") == active_id:
-            active = QLabel("פעילה")
-            active.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            active.setStyleSheet(
-                f"background: {GLASS_COLOR}; color: {ACCENT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
-                "border-radius: 9px; padding: 2px 7px; font-size: 10px; font-weight: 800;"
-            )
-            title_row.addWidget(active)
         content_layout.addLayout(title_row)
 
         # Last-message preview is intentionally omitted to keep history rows compact.
@@ -3719,6 +3821,11 @@ class ChatHistoryPage(QWidget):
         meta.setMinimumWidth(0)
         meta.setStyleSheet(f"color: {SUBTLE_TEXT_COLOR}; font-size: 11px; border: none;")
         content_layout.addWidget(meta)
+        indicator = ConversationActivityIndicator(
+            record.get("runtime_status", "idle"),
+            record.get("unread_count", 0),
+            row,
+        )
         row_layout.addLayout(content_layout, 1)
 
         if record.get("pinned"):
@@ -3736,6 +3843,14 @@ class ChatHistoryPage(QWidget):
                 f"color: {ACCENT_COLOR}; background: transparent; border: none; font-size: 14px;"
             )
             row_layout.addWidget(pinned_indicator, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # In RTL order the menu is the left-most control. Keep activity next
+        # to it so the title column starts at exactly the same x-position for
+        # running, unread and quiet conversations.
+        if record.get("runtime_status") != "idle" or record.get("unread_count", 0):
+            row_layout.addWidget(indicator, 0, Qt.AlignmentFlag.AlignVCenter)
+        else:
+            indicator.hide()
 
         menu_btn = self._icon_button("פעולות", ("menu_icon",), fallback_text="⋮")
         menu_btn.setObjectName("SessionActionsButton")
@@ -3834,13 +3949,12 @@ class ChatHistoryPage(QWidget):
         self.load_sessions()
 
     def open_session(self, session_id):
-        if self.main_window.agent_running:
-            QMessageBox.information(self, "שיחה פעילה", "אי אפשר להחליף שיחה בזמן שסמארטי עדיין עובד.")
-            return
         if self.core.activate_chat_session(session_id):
             self.main_window.load_active_chat_session()
+            self.main_window.sync_active_run_state()
             self.main_window.refresh_chat_title()
             self.main_window.stacked_widget.setCurrentWidget(self.main_window.chat_page)
+            self.main_window.mark_active_session_read()
 
     def set_pinned(self, session_id, pinned):
         self.core.set_chat_session_pinned(session_id, pinned)
@@ -3872,8 +3986,8 @@ class ChatHistoryPage(QWidget):
             QMessageBox.warning(self, "שגיאת יצוא", str(e))
 
     def delete_session(self, session_id):
-        if self.main_window.agent_running and self.core.active_chat_session().get("id") == session_id:
-            QMessageBox.information(self, "שיחה פעילה", "אי אפשר למחוק את השיחה הפעילה בזמן שסמארטי עובד.")
+        if self.core.run_manager.session_is_busy(session_id):
+            QMessageBox.information(self, "שיחה בתהליך", "יש לעצור את הפעולה בשיחה לפני מחיקתה.")
             return
         answer = QMessageBox.question(
             self,
@@ -4499,6 +4613,9 @@ class ChatWindow(QMainWindow):
     background_task_start_signal = pyqtSignal(str, str, str)
     background_task_step_signal = pyqtSignal(str, object)
     background_task_finish_signal = pyqtSignal(str, str, str, bool)
+    run_event_signal = pyqtSignal(object)
+    run_confirm_request_signal = pyqtSignal(object)
+    run_api_key_request_signal = pyqtSignal(object)
 
     def format_model_name(self, name):
         name = str(name).replace("-", " ").replace("_", " ")
@@ -4535,6 +4652,10 @@ class ChatWindow(QMainWindow):
         self.agent_running = False
         self.current_agent_bubble = None
         self.current_agent_container = None
+        self._run_views = {}
+        self._run_subscription = None
+        self._presented_approval_ids = set()
+        self._notified_approval_ids = set()
         self._last_user_anchor_container = None
         self._chat_auto_scroll_enabled = False
         self._suppress_chat_scroll_tracking = False
@@ -4570,6 +4691,9 @@ class ChatWindow(QMainWindow):
         self.taskbar_attention = TaskbarAttentionController(self)
         self.notifications = WindowsNotificationCenter(self)
         self.notifications.reply_requested.connect(self.handle_notification_reply)
+        self.notifications.conversation_reply_requested.connect(
+            self.handle_notification_conversation_reply
+        )
         self.notifications.activate_requested.connect(self.handle_notification_activation)
         self.notifications.attention_cleared.connect(self._acknowledge_taskbar_attention)
         self.notifications.conversation_switch_requested.connect(self.handle_conversation_switch_requested)
@@ -4582,10 +4706,20 @@ class ChatWindow(QMainWindow):
         self.background_task_start_signal.connect(self.handle_background_task_start)
         self.background_task_step_signal.connect(self.handle_background_task_step)
         self.background_task_finish_signal.connect(self.handle_background_task_finish)
+        self.run_event_signal.connect(self.on_run_event)
+        self.run_confirm_request_signal.connect(self._handle_run_confirm_request)
+        self.run_api_key_request_signal.connect(self._handle_run_api_key_request)
+        self._run_subscription = self.core.run_manager.subscribe(
+            lambda event: self.run_event_signal.emit(event)
+        )
+        self._initial_runtime_projection_pending = True
         
-        self.core.background_task_start_callback = lambda sess_id, task_id, prompt: self.background_task_start_signal.emit(sess_id, task_id, prompt)
-        self.core.background_task_step_callback = lambda task_id, event: self.background_task_step_signal.emit(task_id, event)
-        self.core.background_task_finish_callback = lambda sess_id, task_id, res, ok: self.background_task_finish_signal.emit(sess_id, task_id, res, ok)
+        # Background work now reaches the UI through the same durable run-event
+        # stream as foreground conversations. Legacy callbacks stay available
+        # for third-party integrations, but the desktop does not render twice.
+        self.core.background_task_start_callback = None
+        self.core.background_task_step_callback = None
+        self.core.background_task_finish_callback = None
         
         icon_path = os.path.join(ASSETS_DIR, "logo.png")
         if os.path.exists(icon_path):
@@ -4669,7 +4803,7 @@ class ChatWindow(QMainWindow):
         app = QApplication.instance()
         if app:
             app.aboutToQuit.connect(self.unregister_voice_hotkey)
-            app.aboutToQuit.connect(self.core.shutdown_title_generation)
+            app.aboutToQuit.connect(self.core.shutdown_runtime)
 
         if SPEECH_INSTALLED and KEYBOARD_INSTALLED:
             QTimer.singleShot(1500, self.register_voice_hotkey)
@@ -6362,13 +6496,13 @@ class ChatWindow(QMainWindow):
         return []
 
     def bring_to_front(self):
-        self._clear_taskbar_attention()
         if hasattr(self, "quick_reply_toast"):
             self.quick_reply_toast.hide()
         self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive)
         self.show()
         self.activateWindow()
         self.raise_()
+        QTimer.singleShot(0, self.mark_active_session_read)
         if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
             QTimer.singleShot(0, self.voice_overlay.position_near_owner)
 
@@ -6376,25 +6510,53 @@ class ChatWindow(QMainWindow):
         if self._should_notify_user() and hasattr(self, "taskbar_attention"):
             self.taskbar_attention.request_attention()
 
+    def sync_taskbar_unread_count(self, flash=False):
+        if not hasattr(self, "taskbar_attention"):
+            return 0
+        count = self.core.chat_store.unread_count()
+        self.taskbar_attention.sync_unread_count(count, flash=bool(flash))
+        return count
+
     def _clear_taskbar_attention(self):
         if hasattr(self, "taskbar_attention"):
             self.taskbar_attention.stop()
+            self.taskbar_attention.set_unread_count(self.core.chat_store.unread_count())
 
     def _acknowledge_taskbar_attention(self):
-        if hasattr(self, "taskbar_attention"):
-            self.taskbar_attention.acknowledge_one()
+        self.sync_taskbar_unread_count()
+
+    def mark_active_session_read(self):
+        try:
+            if hasattr(self, "stacked_widget") and hasattr(self, "chat_page"):
+                if self.stacked_widget.currentWidget() is not self.chat_page:
+                    return 0
+            session_id = str((self.core.active_chat_session_metadata() or {}).get("id") or "")
+            if not session_id:
+                return 0
+            changed = self.core.chat_store.mark_session_read(session_id)
+            self.sync_taskbar_unread_count()
+            if changed and self.history_page is not None:
+                self.history_page.load_sessions()
+            return changed
+        except Exception:
+            logging.exception("Could not mark the active conversation as read")
+            return 0
 
     def handle_notification_reply(self, text):
         self.submit_quick_reply(text)
 
+    def handle_notification_conversation_reply(self, session_id, text):
+        if not self._open_conversation_from_notification(session_id):
+            return
+        self.submit_quick_reply(text)
+
     def handle_notification_activation(self):
-        self._clear_taskbar_attention()
         self.bring_to_front()
 
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
-            self._clear_taskbar_attention()
+            QTimer.singleShot(0, self.mark_active_session_read)
             self._refresh_codex_quota_if_active(min_age=15)
         if event.type() in (QEvent.Type.ActivationChange, QEvent.Type.WindowStateChange):
             if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
@@ -6417,12 +6579,12 @@ class ChatWindow(QMainWindow):
     def _plain_notification_text(self, text, limit=520):
         return markdown_to_plain_text(text, limit=limit, fallback="סמארטי השיב.")
 
-    def show_response_notification(self, response):
+    def show_response_notification(self, response, session_id=""):
         tray_preview = self._plain_notification_text(response, 240)
-        self._request_taskbar_attention()
+        self.sync_taskbar_unread_count(flash=True)
         try:
             if hasattr(self, "notifications"):
-                self.notifications.show_response(response)
+                self.notifications.show_response(response, session_id)
                 return
             self.tray_icon.showMessage(SMARTI_APP_DISPLAY_NAME, tray_preview, QSystemTrayIcon.MessageIcon.Information, 7000)
         except Exception as e:
@@ -6446,6 +6608,7 @@ class ChatWindow(QMainWindow):
                 payload.get("body") or payload.get("message") or "",
                 kind=payload.get("kind") or "default",
                 open_button=payload.get("open_button", True),
+                conversation_id=payload.get("session_id") or "",
             )
             return
         if kind == "background_task_finished":
@@ -6459,13 +6622,25 @@ class ChatWindow(QMainWindow):
             if not is_reminder and active_sess_id == session_id and not self._should_notify_user():
                 return
             
-            self._request_taskbar_attention()
-            title = task.get("title") or ("תזכורת מסמארטי" if is_reminder else "משימת רקע הסתיימה")
-            body = result or task.get("message") or task.get("prompt") or "המשימה הסתיימה."
-            if not is_reminder and session_id:
+            self.sync_taskbar_unread_count(flash=True)
+            success = payload.get("success", True) is not False
+            title = task.get("title") or (
+                "תזכורת מסמארטי"
+                if is_reminder
+                else ("משימת רקע הסתיימה" if success else "משימת רקע נכשלה")
+            )
+            body = result or task.get("message") or task.get("prompt") or (
+                "המשימה הסתיימה." if success else "משימת הרקע נכשלה."
+            )
+            if session_id:
                 self.notifications.show_background_task_notification(title, body, session_id)
             else:
-                self.notifications.show_notice(title, body, kind="reminder" if is_reminder else "default")
+                self.notifications.show_notice(
+                    title,
+                    body,
+                    kind="reminder" if is_reminder else "default",
+                    conversation_id=session_id,
+                )
 
     def handle_background_task_start(self, session_id, task_id, prompt):
         active_sess = self.core.active_chat_session()
@@ -6511,15 +6686,20 @@ class ChatWindow(QMainWindow):
                 container.reveal_with_entry_animation()
                 self._schedule_scroll_chat_to_bottom(delays=(50, 160), force=True)
 
+    def _open_conversation_from_notification(self, session_id):
+        session_id = str(session_id or "").strip()
+        if not session_id or not self.core.activate_chat_session(session_id):
+            return False
+        self.load_active_chat_session()
+        self.sync_active_run_state()
+        self.refresh_chat_title()
+        self.stacked_widget.setCurrentWidget(self.chat_page)
+        self.mark_active_session_read()
+        self.bring_to_front()
+        return True
+
     def handle_conversation_switch_requested(self, session_id):
-        if self.agent_running:
-            QMessageBox.information(self, "שיחה פעילה", "אי אפשר להחליף שיחה בזמן שסמארטי עדיין עובד.")
-            return
-        if self.core.activate_chat_session(session_id):
-            self.load_active_chat_session()
-            self.refresh_chat_title()
-            self.stacked_widget.setCurrentWidget(self.chat_page)
-            self.bring_to_front()
+        self._open_conversation_from_notification(session_id)
 
     def submit_quick_reply(self, text):
         text = str(text or "").strip()
@@ -6549,6 +6729,17 @@ class ChatWindow(QMainWindow):
         # The native frame margins only become final after the first show on
         # Windows. Align once more then so no edge can slip under the taskbar.
         self._schedule_canvas_taskbar_alignment()
+        # Project durable run/unread state only after Qt has created the native
+        # top-level window. Scheduling these from __init__ can run re-entrantly
+        # while complex child widgets are still being constructed.
+        if getattr(self, "_initial_runtime_projection_pending", False):
+            self._initial_runtime_projection_pending = False
+            QTimer.singleShot(0, self._initialize_runtime_projection)
+
+    def _initialize_runtime_projection(self):
+        self.taskbar_attention.capture_window_handle()
+        self.sync_active_run_state()
+        self.sync_taskbar_unread_count()
 
     def eventFilter(self, watched, event):
         if hasattr(self, "scroll") and watched in (self.scroll.viewport(), self.scroll.verticalScrollBar()):
@@ -6849,7 +7040,8 @@ class ChatWindow(QMainWindow):
         self.action_btn.setGraphicsEffect(None)
 
     def cancel_agent(self):
-        self.core.request_cancel()
+        session_id = self._active_session_id()
+        self.core.request_cancel(session_id=session_id)
         self.status_lbl.setText("עוצר מיד...")
         self.action_btn.setEnabled(False)
         self.update_action_btn_visuals()
@@ -6966,32 +7158,273 @@ class ChatWindow(QMainWindow):
         self.input_field.setEnabled(False)
         self.agent_running = True
         self.update_action_btn_visuals()
-        
+
+        session_id = str((self.core.active_chat_session_metadata() or {}).get("id") or "")
         available_width = self.scroll.viewport().width() or self.width()
-        self.current_agent_container = ChatMessageContainer(
+        container = ChatMessageContainer(
             "",
             is_user=False,
             parent_width=available_width,
             parent=self.chat_widget,
         )
-        self._wire_message_container(self.current_agent_container)
-        self.current_agent_bubble = self.current_agent_container.bubble
-        self.chat_layout.addWidget(self.current_agent_container)
-        self.current_agent_container.hide() 
+        self._wire_message_container(container)
+        bubble = container.bubble
+        self.chat_layout.addWidget(container)
+        container.hide()
+        self.current_agent_container = container
+        self.current_agent_bubble = bubble
         self._schedule_scroll_last_user_to_view_top()
-        pending_bubble = self.current_agent_bubble
+
+        handle = self.core.run_manager.submit(
+            session_id,
+            text,
+            attachments=attachments,
+            source="desktop_voice" if is_voice else "desktop",
+            callbacks={
+                "ask_user_callback": self._request_run_confirmation,
+                "api_key_callback": self._request_run_api_key,
+            },
+            metadata={"is_voice": bool(is_voice)},
+        )
+        self._run_views[handle.run_id] = {
+            "session_id": session_id,
+            "container": container,
+            "bubble": bubble,
+            "is_voice": bool(is_voice),
+        }
         QTimer.singleShot(
             self.INITIAL_THINKING_DELAY_MS,
-            lambda bubble=pending_bubble: self._show_delayed_initial_thinking(bubble),
+            lambda pending=bubble: self._show_delayed_initial_thinking(pending),
         )
-        
-        self.agent_thread = AgentWorker(self.core, text, attachments=attachments)
-        self.agent_thread.status_signal.connect(lambda s: self.status_lbl.setText(s))
-        self.agent_thread.ask_confirm_signal.connect(self.show_confirm_dialog) 
-        self.agent_thread.api_key_required_signal.connect(self.show_api_key_dialog)
-        self.agent_thread.step_signal.connect(self.on_agent_step)
-        self.agent_thread.finished_signal.connect(self.on_agent_finished)
-        self.agent_thread.start()
+
+    def _request_run_confirmation(self, title, text, risk="medium"):
+        request = {
+            "title": str(title or ""),
+            "text": str(text or ""),
+            "risk": str(risk or "medium"),
+            "event": threading.Event(),
+            "result": False,
+        }
+        self.run_confirm_request_signal.emit(request)
+        while not request["event"].wait(0.1):
+            pass
+        return bool(request.get("result"))
+
+    def _handle_run_confirm_request(self, request):
+        try:
+            self.sync_taskbar_unread_count(flash=self._should_notify_user())
+            dialog = ActionConfirmDialog(
+                request.get("title", ""),
+                request.get("text", ""),
+                request.get("risk", "medium"),
+                self,
+            )
+            request["result"] = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            request["event"].set()
+
+    def _request_run_api_key(self, secret_key, provider_label, title, message, help_url):
+        request = {
+            "secret_key": secret_key,
+            "provider_label": provider_label,
+            "title": title,
+            "message": message,
+            "help_url": help_url,
+            "event": threading.Event(),
+            "result": "",
+        }
+        self.run_api_key_request_signal.emit(request)
+        while not request["event"].wait(0.1):
+            pass
+        return str(request.get("result") or "")
+
+    def _handle_run_api_key_request(self, request):
+        try:
+            dialog = ApiKeyRequiredDialog(
+                request.get("secret_key", ""),
+                request.get("provider_label", ""),
+                request.get("title", ""),
+                request.get("message", ""),
+                request.get("help_url", ""),
+                self,
+            )
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                request["result"] = dialog.api_key()
+        finally:
+            request["event"].set()
+
+    def _active_session_id(self):
+        return str((self.core.active_chat_session_metadata() or {}).get("id") or "")
+
+    def sync_active_run_state(self):
+        session_id = self._active_session_id()
+        self.agent_running = bool(session_id and self.core.run_manager.session_is_busy(session_id))
+        if hasattr(self, "input_field"):
+            self.input_field.setEnabled(not self.agent_running)
+        if hasattr(self, "action_btn"):
+            self.action_btn.setEnabled(True)
+            self.update_action_btn_visuals()
+        if not self.agent_running and hasattr(self, "status_lbl"):
+            self.status_lbl.setText("")
+        return self.agent_running
+
+    def on_run_event(self, event):
+        event = event if isinstance(event, dict) else {}
+        event_type = str(event.get("event_type") or "")
+        run_id = str(event.get("run_id") or "")
+        session_id = str(event.get("session_id") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        active = session_id == self._active_session_id()
+        view = self._run_views.get(run_id) if active else None
+        try:
+            event_sequence = int(event.get("sequence", 0) or 0)
+        except (TypeError, ValueError):
+            event_sequence = 0
+        last_sequence = int((view or {}).get("last_sequence", 0) or 0)
+        already_replayed = bool(
+            view and event_sequence and event_sequence <= last_sequence
+        )
+
+        if event_type == "run_status" and active and not already_replayed:
+            status = str(payload.get("value") or "")
+            self.status_lbl.setText(status)
+        elif event_type == "run_step" and view and not already_replayed:
+            value = payload.get("value")
+            bubble = view.get("bubble")
+            container = view.get("container")
+            if bubble and bubble.handle_agent_event(value):
+                bubble.show()
+                if container:
+                    container.reveal_with_entry_animation()
+        elif event_type == "approval_requested":
+            if self.history_page is not None:
+                self.history_page.load_sessions()
+            visible_now = bool(
+                active
+                and self.isVisible()
+                and self.isActiveWindow()
+                and self.stacked_widget.currentWidget() is self.chat_page
+            )
+            if visible_now and not payload.get("interactive_callback"):
+                QTimer.singleShot(0, lambda item=copy.deepcopy(payload): self._present_durable_approval(item))
+            elif not payload.get("interactive_callback"):
+                self._show_durable_approval_notification(session_id, payload)
+            if not visible_now:
+                self.sync_taskbar_unread_count(flash=True)
+        elif event_type == "run_finished":
+            self._finish_managed_run(run_id, session_id, payload, view)
+
+        if view is not None and event_sequence:
+            view["last_sequence"] = max(last_sequence, event_sequence)
+
+        self.sync_active_run_state()
+        if self.history_page is not None and event_type in {
+            "run_available", "run_started", "run_finished", "approval_requested"
+        }:
+            self.history_page.load_sessions()
+
+    def _finish_managed_run(self, run_id, session_id, payload, view):
+        response = str(payload.get("response") or payload.get("error") or "")
+        run_record = self.core.chat_store.run(run_id) or {}
+        is_background_run = str(run_record.get("source") or "").startswith("background")
+        is_active = session_id == self._active_session_id()
+        visible_now = bool(
+            is_active
+            and self.isVisible()
+            and self.isActiveWindow()
+            and self.stacked_widget.currentWidget() is self.chat_page
+        )
+        if is_active and view:
+            bubble = view.get("bubble")
+            container = view.get("container")
+            display = (
+                f"שגיאה: {response.replace('ERROR_USER:', '').strip()}"
+                if response.startswith("ERROR_USER:") else response
+            )
+            if bubble:
+                bubble.show()
+                bubble.set_final_text(display)
+            if container:
+                container.set_actions_available(True)
+                container.reveal_with_entry_animation()
+        elif is_active:
+            self.load_active_chat_session()
+
+        if visible_now:
+            self.core.chat_store.mark_session_read(session_id)
+            self.sync_taskbar_unread_count()
+        else:
+            self.sync_taskbar_unread_count(flash=True)
+            if response and hasattr(self, "notifications") and not is_background_run:
+                self.notifications.show_background_task_notification(
+                    "סמארטי השיב",
+                    self._plain_notification_text(response, 520),
+                    session_id,
+                )
+        if is_active and response and not response.startswith("ERROR_USER:"):
+            if self.core.settings.get("read_aloud_all", False) or (
+                self.core.settings.get("read_aloud_voice_only", True)
+                and bool((view or {}).get("is_voice"))
+            ):
+                self.start_message_tts((view or {}).get("container"))
+        self._run_views.pop(run_id, None)
+        # A run from another conversation may finish while the user is
+        # watching an active run here. Never clear that conversation's live
+        # UI references on behalf of the off-screen run.
+        if view and self.current_agent_bubble is view.get("bubble"):
+            self.current_agent_bubble = None
+        if view and self.current_agent_container is view.get("container"):
+            self.current_agent_container = None
+        if is_active:
+            self.refresh_chat_title()
+            self._schedule_scroll_chat_to_bottom(delays=(0, 80, 220), force=True)
+
+    def _present_durable_approval(self, approval):
+        approval_id = str((approval or {}).get("approval_id") or (approval or {}).get("id") or "")
+        if not approval_id or approval_id in self._presented_approval_ids:
+            return
+        self._presented_approval_ids.add(approval_id)
+        try:
+            dialog = ActionConfirmDialog(
+                approval.get("title", ""),
+                approval.get("prompt", ""),
+                approval.get("risk_level", "medium"),
+                self,
+            )
+            approved = dialog.exec() == QDialog.DialogCode.Accepted
+            self.core.run_manager.resolve_approval(approval_id, approved)
+        finally:
+            self._presented_approval_ids.discard(approval_id)
+
+    def _show_durable_approval_notification(self, session_id, approval):
+        approval_id = str(
+            (approval or {}).get("approval_id") or (approval or {}).get("id") or ""
+        )
+        if (
+            not approval_id
+            or approval_id in self._notified_approval_ids
+            or not hasattr(self, "notifications")
+        ):
+            return
+        self._notified_approval_ids.add(approval_id)
+
+        def answered(value):
+            if value is not None:
+                self.core.run_manager.resolve_approval(approval_id, bool(value))
+
+        self.notifications.show_permission_request(
+            approval.get("title", ""),
+            approval.get("prompt", ""),
+            approval.get("risk_level", "medium"),
+            callback=answered,
+            conversation_id=session_id,
+        )
+
+    def _surface_pending_approvals(self):
+        session_id = self._active_session_id()
+        pending = self.core.chat_store.pending_approvals(session_id=session_id)
+        if pending:
+            self._present_durable_approval(pending[0])
 
     def _show_delayed_initial_thinking(self, bubble):
         """Reveal a non-blocking response indicator only for a still-running request."""
@@ -7067,9 +7500,15 @@ class ChatWindow(QMainWindow):
             state["notification_value"] = value
 
         if notify_user:
-            self._request_taskbar_attention()
+            self.sync_taskbar_unread_count(flash=True)
             try:
-                notification_handle["value"] = self.notifications.show_permission_request(title, text, risk, callback=answered)
+                notification_handle["value"] = self.notifications.show_permission_request(
+                    title,
+                    text,
+                    risk,
+                    callback=answered,
+                    conversation_id=self._active_session_id(),
+                )
             except Exception:
                 notification_handle["value"] = None
 
@@ -7111,6 +7550,7 @@ class ChatWindow(QMainWindow):
                 title or "נדרשת הגדרת מפתח API",
                 message or f"סמארטי צריך מפתח עבור {provider_label}.",
                 kind="important",
+                conversation_id=self._active_session_id(),
             )
         dlg = ApiKeyRequiredDialog(secret_key, provider_label, title, message, help_url, self)
         self.agent_thread.api_key_result = dlg.api_key() if dlg.exec() == QDialog.DialogCode.Accepted else ""
@@ -7158,7 +7598,7 @@ class ChatWindow(QMainWindow):
                     response_container.set_memory_updated(memory_updated)
                 
             if should_notify:
-                self.show_response_notification(response)
+                self.show_response_notification(response, self._active_session_id())
                 
             if self.core.settings.get("read_aloud_all", False) or (self.core.settings.get("read_aloud_voice_only", True) and getattr(self, 'current_request_is_voice', False)):
                 self.start_message_tts(response_container)
@@ -7180,6 +7620,9 @@ class ChatWindow(QMainWindow):
         self._last_user_anchor_container = None
         self._history_older_button = None
         self._history_page_loading = False
+        self._run_views = {}
+        self.current_agent_bubble = None
+        self.current_agent_container = None
         while self.chat_layout.count():
             item = self.chat_layout.takeAt(0)
             widget = item.widget()
@@ -7333,6 +7776,9 @@ class ChatWindow(QMainWindow):
         if not visible_messages:
             self._set_welcome_visible(True, refresh_text=True)
             self.refresh_chat_title()
+            self._restore_active_run_placeholders()
+            self.sync_active_run_state()
+            QTimer.singleShot(0, self._surface_pending_approvals)
             return
 
         self._set_welcome_visible(False)
@@ -7372,16 +7818,95 @@ class ChatWindow(QMainWindow):
             self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum())
             for container in history_containers:
                 container.reveal_deferred_actions()
+            self._restore_active_run_placeholders()
+            self.sync_active_run_state()
+            QTimer.singleShot(0, self._surface_pending_approvals)
 
         QTimer.singleShot(0, add_batch)
 
+    def _restore_active_run_placeholders(self):
+        session_id = self._active_session_id()
+        runs = self.core.chat_store.list_runs(
+            session_id=session_id,
+            statuses={"queued", "running", "waiting_for_approval", "cancelling"},
+            limit=20,
+        )
+        for run in reversed(runs):
+            run_id = str(run.get("id") or "")
+            if not run_id or run_id in self._run_views:
+                continue
+            available_width = self.scroll.viewport().width() or self.width()
+            container = ChatMessageContainer(
+                "",
+                is_user=False,
+                parent_width=available_width,
+                parent=self.chat_widget,
+            )
+            self._wire_message_container(container)
+            bubble = container.bubble
+            self.chat_layout.addWidget(container)
+            self._run_views[run_id] = {
+                "session_id": session_id,
+                "container": container,
+                "bubble": bubble,
+                "is_voice": bool((run.get("metadata") or {}).get("is_voice")),
+                "last_sequence": 0,
+            }
+            restored_progress = self._restore_run_progress(
+                run_id, bubble, view=self._run_views[run_id]
+            )
+            if not restored_progress:
+                bubble.show_initial_thinking()
+            bubble.show()
+            container.finish_entry_without_animation()
+            self.current_agent_container = container
+            self.current_agent_bubble = bubble
+
+    def _restore_run_progress(self, run_id, bubble, view=None):
+        """Replay every durable process event before subscribing to new ones."""
+        restored_progress = False
+        after_sequence = 0
+        while True:
+            events = self.core.chat_store.run_events(
+                run_id,
+                after_sequence=after_sequence,
+                limit=2000,
+            )
+            if not events:
+                break
+            for event in events:
+                after_sequence = max(
+                    after_sequence,
+                    int(event.get("sequence", 0) or 0),
+                )
+                event_type = str(event.get("event_type") or "")
+                payload = (
+                    event.get("payload")
+                    if isinstance(event.get("payload"), dict)
+                    else {}
+                )
+                if (
+                    event_type == "run_step"
+                    and bubble.handle_agent_event(payload.get("value"))
+                ):
+                    restored_progress = True
+                elif event_type == "run_status":
+                    status = str(payload.get("value") or "")
+                    if status:
+                        self.status_lbl.setText(status)
+            if isinstance(view, dict):
+                view["last_sequence"] = max(
+                    int(view.get("last_sequence", 0) or 0), after_sequence
+                )
+            if len(events) < 2000:
+                break
+        return restored_progress
+
     def start_new_chat(self):
-        if self.agent_running:
-            QMessageBox.information(self, "שיחה פעילה", "אי אפשר להתחיל שיחה חדשה בזמן שסמארטי עדיין עובד.")
-            return
         self.core.start_new_chat_session()
         logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה ---\n{'='*50}")
         self.load_active_chat_session()
+        self.sync_active_run_state()
         self.stacked_widget.setCurrentWidget(self.chat_page)
         self.refresh_chat_title()
         if self.history_page is not None:

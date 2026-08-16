@@ -686,8 +686,14 @@ class CodexSignInProvider:
             return Path(handle.name)
 
     @staticmethod
-    def _parse_jsonl_execution(stdout: str) -> tuple[str, dict]:
-        """Extract the final agent message and token usage from ``codex exec --json``."""
+    def _parse_jsonl_execution(stdout: str, prefer_tool_calls=True) -> tuple[str, dict]:
+        """Extract the actionable agent message and usage from ``codex exec --json``.
+
+        Codex can emit a schema-valid tool request followed by another
+        ``agent_message`` in the same turn.  The host must execute that tool
+        request before accepting a later final answer; choosing only the last
+        message silently drops the requested work.
+        """
         messages = []
         usage = {}
         for line in str(stdout or "").splitlines():
@@ -718,7 +724,21 @@ class CodexSignInProvider:
                     }
                     if cached_input_tokens:
                         usage["cached_prompt"] = cached_input_tokens
-        return (messages[-1] if messages else ""), usage
+        selected = messages[-1] if messages else ""
+        for message in messages if prefer_tool_calls else ():
+            try:
+                payload = json.loads(message)
+            except (TypeError, ValueError):
+                continue
+            if (
+                isinstance(payload, dict)
+                and str(payload.get("kind") or "").strip().lower() == "tool_calls"
+                and isinstance(payload.get("tool_calls"), list)
+                and payload.get("tool_calls")
+            ):
+                selected = message
+                break
+        return selected, usage
 
     @staticmethod
     def _decode_structured_turn(value: str) -> str:
@@ -837,7 +857,10 @@ class CodexSignInProvider:
             if self._looks_like_auth_error(detail):
                 raise CodexSignInError("האסימון פג או שהחשבון דורש התחברות מחדש עם ChatGPT / Codex.")
             raise CodexSignInError("Codex לא השלים את הבקשה. יש לבדוק את החיבור, המודל ומגבלות החשבון.")
-        response, usage = self._parse_jsonl_execution(stdout)
+        response, usage = self._parse_jsonl_execution(
+            stdout,
+            prefer_tool_calls=purpose == "agent",
+        )
         if not response:
             raise CodexProtocolError("Codex החזיר פלט מובנה בלי תשובה סופית.", stdout)
         if purpose == "agent":

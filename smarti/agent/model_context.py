@@ -83,9 +83,10 @@ class ModelContextMixin:
         elif self.mode == "anthropic":
             self.universal_history = [{"role": "system", "content": self.system_prompt}]
 
-    def _messages_to_provider_history(self, messages):
+    def _messages_to_provider_history(self, messages, provider_mode=None):
         messages = messages or []
-        if self.mode == "gemini":
+        mode = normalize_provider_name(provider_mode or self.mode)
+        if mode == "gemini":
             history = []
             for message in messages:
                 metadata = message.get("metadata", {}) if isinstance(message.get("metadata"), dict) else {}
@@ -121,8 +122,8 @@ class ModelContextMixin:
             "system_prompt": getattr(self, "system_prompt", ""),
             "gemini_history": copy.deepcopy(getattr(self, "gemini_history", [])),
             "universal_history": copy.deepcopy(getattr(self, "universal_history", [])),
-            "conversation_summary": self.settings.get("conversation_summary", ""),
-            "tool_context_transcript": copy.deepcopy(self.settings.get("tool_context_transcript", [])),
+            "conversation_summary": getattr(self, "conversation_summary", ""),
+            "tool_context_transcript": copy.deepcopy(getattr(self, "tool_context_transcript", [])),
             "recent_tool_observations": copy.deepcopy(getattr(self, "recent_tool_observations", [])),
             "tool_observations": copy.deepcopy(getattr(self, "tool_observations", [])),
             "conversation_attachments": copy.deepcopy(getattr(self, "conversation_attachments", [])),
@@ -233,9 +234,9 @@ class ModelContextMixin:
             if mode != normalize_provider_name(getattr(self, "mode", "")):
                 self.setup_model()
         context = checkpoint.get("context") if isinstance(checkpoint.get("context"), dict) else {}
-        self.settings["conversation_summary"] = str(context.get("conversation_summary", "") or "")
+        self.conversation_summary = str(context.get("conversation_summary", "") or "")
         transcript = context.get("tool_context_transcript", [])
-        self.settings["tool_context_transcript"] = copy.deepcopy(transcript if isinstance(transcript, list) else [])
+        self.tool_context_transcript = copy.deepcopy(transcript if isinstance(transcript, list) else [])
         self.recent_tool_observations = copy.deepcopy(context.get("recent_tool_observations", []) if isinstance(context.get("recent_tool_observations", []), list) else [])
         self.tool_observations = copy.deepcopy(context.get("tool_observations", []) if isinstance(context.get("tool_observations", []), list) else [])
         self.conversation_attachments = normalize_attachments(context.get("conversation_attachments", []) if isinstance(context.get("conversation_attachments", []), list) else [])
@@ -308,9 +309,9 @@ class ModelContextMixin:
             return
         session = store.active_session_metadata()
         context = session.get("context", {}) if isinstance(session, dict) else {}
-        self.settings["conversation_summary"] = str(context.get("conversation_summary", "") or "")
+        self.conversation_summary = str(context.get("conversation_summary", "") or "")
         transcript = context.get("tool_context_transcript", [])
-        self.settings["tool_context_transcript"] = copy.deepcopy(transcript if isinstance(transcript, list) else [])
+        self.tool_context_transcript = copy.deepcopy(transcript if isinstance(transcript, list) else [])
         self.recent_tool_observations = copy.deepcopy(context.get("recent_tool_observations", []) if isinstance(context.get("recent_tool_observations", []), list) else [])
         self.tool_observations = copy.deepcopy(context.get("tool_observations", []) if isinstance(context.get("tool_observations", []), list) else [])
         self.conversation_attachments = normalize_attachments(context.get("conversation_attachments", []) if isinstance(context.get("conversation_attachments", []), list) else [])
@@ -344,8 +345,8 @@ class ModelContextMixin:
         self.recent_tool_observations = []
         self.tool_observations = []
         self.conversation_attachments = []
-        self.settings["tool_context_transcript"] = []
-        self.settings["conversation_summary"] = ""
+        self.tool_context_transcript = []
+        self.conversation_summary = ""
         self.system_prompt = self._load_system_prompt()
         if getattr(self, "mode", "") != "gemini":
             self.universal_history = [{"role": "system", "content": self.system_prompt}]
@@ -476,7 +477,9 @@ class ModelContextMixin:
         self._pending_canvas_artifacts = pending
 
     def list_chat_sessions(self, query=""):
-        return self.chat_store.list_sessions(query)
+        # The history screen does not render message previews. Avoid loading
+        # potentially multi-megabyte final answers merely to discard them.
+        return self.chat_store.list_sessions(query, include_preview=False)
 
     def rename_chat_session(self, session_id, title):
         return self.chat_store.rename_session(session_id, title)
@@ -519,8 +522,9 @@ class ModelContextMixin:
             or "Local"
         )
         title_system_prompt = (
-            "תפקידך לתת כותרת טבעית ומדויקת לשיחה. החזר כותרת בלבד, בעברית, "
-            "ללא מרכאות או קישוט, ועד 7 מילים. ייצג את מטרת השיחה העיקרית."
+            "תפקידך ליצור כותרת יפה, טבעית, מדויקת ומובחנת לשיחה. החזר כותרת בלבד, בעברית, "
+            "ללא מרכאות או קישוט, ועד 7 מילים. העדף פרטים ספציפיים מהבקשה והימנע מכותרות "
+            "כלליות כמו 'שאלה חדשה' או 'עזרה למשתמש'."
         )
         try:
             if request_mode == "gemini":
@@ -578,16 +582,24 @@ class ModelContextMixin:
         user_text,
         assistant_text,
         attachment_names=None,
+        provider_mode=None,
+        current_model=None,
     ):
         session_id = str(session_id or "").strip()
-        provider_mode = normalize_provider_name(getattr(self, "mode", ""))
-        if session_id and self._local_fast_mode_enabled(provider_mode):
+        provider_mode = normalize_provider_name(
+            provider_mode or self.settings.get("api_mode", getattr(self, "mode", ""))
+        )
+        title_mode = str(
+            self.settings.get("conversation_title_generation_mode", "ai") or "ai"
+        ).strip().lower()
+        if session_id and title_mode == "local":
             title = self._local_fast_conversation_title(user_text, attachment_names)
-            applied = bool(title) and self.chat_store.apply_generated_title(session_id, title)
+            applied_title = self.chat_store.apply_initial_title(session_id, title) if title else ""
+            applied = bool(applied_title)
             if applied:
                 self._emit_notification(
                     "chat_title_updated",
-                    {"session_id": session_id, "title": title},
+                    {"session_id": session_id, "title": applied_title},
                 )
             return bool(applied)
         executor = getattr(self, "_title_executor", None)
@@ -600,8 +612,9 @@ class ModelContextMixin:
                 return False
             pending.add(session_id)
             self._pending_title_sessions = pending
-        current_model = (
-            self.settings.get(f"selected_{provider_mode}_model")
+        current_model = str(
+            current_model
+            or self.settings.get(f"selected_{provider_mode}_model")
             or provider_default_model(provider_mode)
             or "Local"
         )
@@ -618,11 +631,12 @@ class ModelContextMixin:
                     current_model=current_model,
                 )
                 if title:
-                    applied = self.chat_store.apply_generated_title(session_id, title)
-                    if applied:
+                    applied_title = self.chat_store.apply_initial_title(session_id, title)
+                    applied = bool(applied_title)
+                    if applied_title:
                         self._emit_notification(
                             "chat_title_updated",
-                            {"session_id": session_id, "title": title},
+                            {"session_id": session_id, "title": applied_title},
                         )
             except Exception:
                 logging.exception("Background conversation title generation failed.")
@@ -723,6 +737,54 @@ class ModelContextMixin:
                 assistant_text,
                 attachment_names=names,
             )
+
+    def _record_run_assistant_message(
+        self, session_id, run_id, user_text, final_response, attachments=None,
+        is_background_task=False, should_title=False,
+    ):
+        """Persist the assistant half of a run whose user message is already durable."""
+        target_session_id = str(session_id or "")
+        if not target_session_id or not getattr(self, "chat_store", None):
+            return False
+        assistant_text = self._display_assistant_text_for_history(final_response)
+        agent_process = self._current_agent_process_metadata()
+        is_error = str(final_response or "").startswith("ERROR_USER:")
+        metadata = {
+            "run_id": str(run_id or ""),
+            "run_status": "failed" if is_error else "completed",
+            "is_error": is_error,
+        }
+        if agent_process:
+            metadata["agent_process"] = agent_process
+        memory_result = getattr(self, "_last_memory_update_result", {})
+        if isinstance(memory_result, dict) and memory_result.get("changed"):
+            metadata["memory_updated"] = True
+            metadata["memory_change_count"] = int(memory_result.get("count", 0) or 0)
+            metadata["memory_change_actions"] = list(memory_result.get("actions", []) or [])[:6]
+        if getattr(self, "_pending_canvas_artifacts", None):
+            metadata["canvases"] = copy.deepcopy(self._pending_canvas_artifacts)
+        if is_background_task:
+            metadata.update({"is_background_task": True, "triggered_by_background": True})
+        if assistant_text.strip():
+            self.chat_store.append_message(
+                "assistant",
+                assistant_text,
+                metadata,
+                session_id=target_session_id,
+            )
+        if should_title and assistant_text.strip() and not metadata["is_error"]:
+            names = [
+                item.get("name", "")
+                for item in normalize_attachments(attachments or [])
+                if isinstance(item, dict) and item.get("name")
+            ]
+            self._schedule_conversation_title(
+                target_session_id,
+                user_text,
+                assistant_text,
+                attachment_names=names,
+            )
+        return True
 
     def last_memory_update_result(self):
         result = getattr(self, "_last_memory_update_result", {})
@@ -932,7 +994,13 @@ class ModelContextMixin:
         return False
 
     def _ensure_active_provider_api_key(self):
-        provider = normalize_provider_name(self.settings.get("api_mode", getattr(self, "mode", "gemini")) or "gemini")
+        # Managed runs keep their submitted provider in thread-local runtime
+        # state. A later UI model switch must not redirect the in-flight run.
+        provider = normalize_provider_name(
+            getattr(self, "mode", "")
+            or self.settings.get("api_mode", "gemini")
+            or "gemini"
+        )
         if provider == CODEX_SIGNIN_PROVIDER:
             codex_provider = getattr(self, "codex_signin_provider", None)
             if codex_provider is None:
@@ -1606,7 +1674,7 @@ class ModelContextMixin:
             if getattr(self, "memory_manager", None)
             else (self.settings.get("user_memory", "") or "No memory manager available.")
         )
-        conversation_summary = self.settings.get("conversation_summary", "").strip() or "אין סיכום שיחה קודם."
+        conversation_summary = str(getattr(self, "conversation_summary", "") or "").strip() or "אין סיכום שיחה קודם."
         attachments_context = attachment_manifest_text(getattr(self, "conversation_attachments", [])) or "No files attached in this conversation."
         canvas_context = canvas_context_for_model(self.active_canvas_artifacts())
         if self.web_canvas_enabled():
@@ -1879,8 +1947,12 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
         background_policy = ""
         if self._builtin_tool_context_enabled("background_task_manager"):
             background_policy = (
-                "למשימה עתידית יש לתזמן בלבד ולא לבצע מיד. בחר conversation_mode=current להמשך "
-                "השיחה, new להרצה נקייה, או dedicated לרצף קבוע של אותה משימה."
+                "למשימה עתידית יש לתזמן בלבד ולא לבצע מיד. conversation_mode הוא חוזה ניתוב: "
+                "בחר current כשההרצה היא המשך ישיר של בקשת המשתמש וצריכה לחזור לשיחת המקור שממנה "
+                "תוזמנה המשימה, בלי קשר לשיחה שתהיה פעילה בזמן ההרצה; בחר new כשהרצות עצמאיות ואינן "
+                "צריכות הקשר ממחזורים קודמים, כדי ליצור שיחה חדשה בכל מחזור; בחר dedicated למשימה "
+                "מחזורית שצריכה רצף והקשר בין המחזורים אך שיחה נפרדת משיחת המקור — שיחה ייעודית תיווצר "
+                "בהרצה הראשונה וכל המחזורים והניסיונות החוזרים ימשיכו בה."
             )
         notification_policy = ""
         if self._builtin_tool_context_enabled("notification_manager"):
