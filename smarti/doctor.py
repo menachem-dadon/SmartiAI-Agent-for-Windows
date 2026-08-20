@@ -788,9 +788,10 @@ class SmartiDiagnostic:
         settings = getattr(self.core, "settings", {}) or {}
         enabled = bool(settings.get("enable_browser_automation", False))
         chrome = getattr(self.core, "_chrome_executable", lambda: None)()
+        embedded_available = callable(getattr(self.core, "embedded_browser_activate_callback", None))
         playwright_available = importlib.util.find_spec("playwright") is not None
         profile_dir = getattr(self.core, "_automation_browser_profile_dir", lambda: "")()
-        if not chrome:
+        if not chrome and not embedded_available:
             return self._result(
                 "browser.automation", STATUS_ERROR if enabled else STATUS_SKIPPED,
                 "אוטומציית הדפדפן אינה זמינה כי Google Chrome לא נמצא." if enabled else "אוטומציית הדפדפן כבויה, ו‑Google Chrome לא נמצא לבדיקת מוכנות.",
@@ -801,8 +802,8 @@ class SmartiDiagnostic:
         if not playwright_available:
             return self._result(
                 "browser.automation", STATUS_ERROR if enabled else STATUS_WARNING,
-                "ספריית Playwright חסרה, ולכן Smarti לא יכול להתחבר ל‑Chrome דרך CDP.",
-                f"enabled={enabled}; chrome={chrome}; playwright_available=false; profile_exists={os.path.isdir(profile_dir)}",
+                "ספריית Playwright חסרה, ולכן Smarti לא יכול להתחבר לדפדפן המובנה דרך CDP.",
+                f"enabled={enabled}; embedded_available={embedded_available}; fallback_browser={chrome}; playwright_available=false; profile_exists={os.path.isdir(profile_dir)}",
                 RepairAction("open_settings", "פתיחת הגדרות אוטומציה", "בדקי את התקנת Smarti או הפעילי מחדש את המתקין כדי לשחזר רכיבים חסרים.", "medium"),
                 category="browser", title_he="דפדפן האוטומציה",
             )
@@ -816,24 +817,24 @@ class SmartiDiagnostic:
         if not enabled and browser_ready:
             return self._result(
                 "browser.automation", STATUS_WARNING,
-                "אוטומציית הדפדפן כבויה, אך Chrome הייעודי של Smarti עדיין פועל ברקע. אפשר לסגור רק את הפרופיל הייעודי הזה.",
-                f"enabled=false; chrome_found=true; playwright_available=true; profile_exists={os.path.isdir(profile_dir)}; smarti_browser_ready=true",
-                RepairAction("close_orphaned_browser", "סגירת Chrome הייעודי", "ייסגר רק Chrome שפועל עם פרופיל האוטומציה והפורט של Smarti; חלונות Chrome האישיים שלך לא ייסגרו.", "medium"),
+                "אוטומציית הדפדפן כבויה, אך Smarti Browser עדיין מוכן ברקע.",
+                f"enabled=false; embedded_available={embedded_available}; fallback_browser={bool(chrome)}; playwright_available=true; profile_exists={os.path.isdir(profile_dir)}; smarti_browser_ready=true",
+                RepairAction("close_orphaned_browser", "סגירת דפדפן האוטומציה", "ייסגר רק דפדפן חלופי שהופעל בידי Smarti; פרופילי דפדפן אישיים אינם חלק מהפעולה.", "medium"),
                 category="browser", title_he="דפדפן האוטומציה",
             )
         if not enabled:
             return self._result(
                 "browser.automation", STATUS_SKIPPED,
-                "רכיבי Chrome ו‑Playwright זמינים, אבל אוטומציית הדפדפן כבויה לפי בחירתך. לא הופעל דפדפן בבדיקה זו.",
-                f"enabled=false; chrome_found=true; playwright_available=true; profile_exists={os.path.isdir(profile_dir)}; smarti_browser_ready=false",
+                "רכיבי Smarti Browser ו‑Playwright זמינים, אבל אוטומציית הדפדפן כבויה לפי בחירתך. לא הופעל דפדפן בבדיקה זו.",
+                f"enabled=false; embedded_available={embedded_available}; fallback_browser={bool(chrome)}; playwright_available=true; profile_exists={os.path.isdir(profile_dir)}; smarti_browser_ready=false",
                 RepairAction("open_settings", "פתיחת הגדרות אוטומציה", "אפשר להפעיל את היכולת רק אם היא נחוצה לך.", "low"),
                 category="browser", title_he="דפדפן האוטומציה",
             )
         if not include_network:
             return self._result(
                 "browser.automation", STATUS_PASS,
-                "רכיבי Chrome ו‑Playwright זמינים. בדיקה מהירה לא מפעילה את פרופיל האוטומציה.",
-                f"enabled=true; chrome_found=true; playwright_available=true; profile_dir={profile_dir or '<unknown>'}; connection_check=skipped",
+                "רכיבי Smarti Browser ו‑Playwright זמינים. בדיקה מהירה לא מפעילה את פרופיל האוטומציה.",
+                f"enabled=true; embedded_available={embedded_available}; fallback_browser={bool(chrome)}; playwright_available=true; profile_dir={profile_dir or '<unknown>'}; connection_check=skipped",
                 category="browser", title_he="דפדפן האוטומציה",
             )
         pw = None
@@ -851,21 +852,21 @@ class SmartiDiagnostic:
             if callable(version):
                 version = version()
             lifecycle_note = (
-                "Chrome נפתח רק לצורך הבדיקה וייסגר מיד בסיומה."
-                if started_by_doctor else "Chrome כבר היה פעיל לפני הבדיקה ולכן נשאר פתוח."
+                "דפדפן האוטומציה אותחל רק לצורך הבדיקה."
+                if started_by_doctor else "Smarti Browser כבר היה מוכן לפני הבדיקה ונשאר פעיל."
             )
             return self._result(
                 "browser.automation", STATUS_PASS,
-                f"המערכת התחברה ל‑Chrome הייעודי דרך Playwright/CDP בהצלחה. לא נפתח אתר ולא נקרא תוכן משתמש. {lifecycle_note}",
-                f"enabled=true; chrome_version={version}; profile_dir={profile_dir or '<unknown>'}; playwright_cdp=ok; started_by_doctor={started_by_doctor}",
+                f"המערכת התחברה ל‑Smarti Browser דרך Playwright/CDP בהצלחה. לא נפתח אתר ולא נקרא תוכן משתמש. {lifecycle_note}",
+                f"enabled=true; browser_version={version}; profile_dir={profile_dir or '<unknown>'}; playwright_cdp=ok; started_by_doctor={started_by_doctor}",
                 category="browser", title_he="דפדפן האוטומציה",
             )
         except Exception as exc:
             return self._result(
                 "browser.automation", STATUS_ERROR,
-                "הדפדפן Chrome נמצא, אבל Smarti לא הצליח להתחבר לפרופיל האוטומציה שלו דרך Playwright/CDP.",
+                "Smarti לא הצליח להתחבר לפרופיל הדפדפן המובנה דרך Playwright/CDP.",
                 f"enabled=true; profile_dir={profile_dir or '<unknown>'}; playwright_cdp={type(exc).__name__}: {self._redact(exc)}",
-                RepairAction("reset_browser_profile", "איפוס פרופיל האוטומציה", "פרופיל Smarti יועבר לתיקיית גיבוי וייבנה מחדש; לא יימחקו קובצי Chrome האישיים שלך.", "high"),
+                RepairAction("reset_browser_profile", "איפוס פרופיל האוטומציה", "פרופיל Smarti יועבר לתיקיית גיבוי וייבנה מחדש; פרופילי דפדפן אחרים במחשב לא ישתנו.", "high"),
                 category="browser", title_he="דפדפן האוטומציה",
             )
         finally:
@@ -875,8 +876,8 @@ class SmartiDiagnostic:
                 except Exception:
                     pass
             # Keep an already active user automation session intact, but never
-            # leave a visible Chrome window behind when Diagnostic opened it only
-            # for this probe.
+            # leave a fallback browser process behind when Diagnostic opened it
+            # only for this probe. The embedded profile remains owned by the UI.
             if started_by_doctor:
                 try:
                     getattr(self.core, "_close_automation_browser")()
@@ -1551,7 +1552,7 @@ class SmartiDiagnostic:
             if not callable(close):
                 raise RuntimeError("ממשק סגירת דפדפן האוטומציה אינו זמין")
             close()
-            return "Chrome הייעודי של Smarti נסגר. דפדפנים אישיים אינם חלק מפעולה זו."
+            return "דפדפן האוטומציה של Smarti נסגר. פרופילי דפדפן אישיים אינם חלק מפעולה זו."
         if action_id == "reset_browser_profile":
             return self._reset_browser_profile()
         if action_id == "disable_web_canvas":

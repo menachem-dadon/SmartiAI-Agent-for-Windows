@@ -63,13 +63,24 @@ def _create_instance_server():
     return None
 
 def main():
+    if "--smarti-webengine-probe" in sys.argv:
+        from .webengine_probe import run_probe
+        raise SystemExit(run_probe())
     try:
         ensure_windows_notification_identity()
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(SMARTI_APP_AUMID)
     except Exception:
         pass
 
-    prepare_webengine_runtime()
+    webengine_healthy = True
+    if os.name == "nt":
+        # Qt WebEngine is the real in-process Smarti Browser.  Probe it in a
+        # disposable child first because a broken Chromium/graphics runtime can
+        # terminate the process below Python's exception boundary.
+        from .webengine_probe import probe_webengine_runtime
+        webengine_healthy = probe_webengine_runtime()
+    if webengine_healthy:
+        prepare_webengine_runtime()
     register_canvas_scheme()
     app = QApplication(sys.argv)
     app.setApplicationName(SMARTI_APP_DISPLAY_NAME)

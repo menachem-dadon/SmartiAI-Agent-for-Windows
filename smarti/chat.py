@@ -14,7 +14,16 @@ from .history import DEFAULT_CHAT_TITLE
 from .windows_notifications import TaskbarAttentionController, WindowsNotificationCenter
 from .updater import UpdateCheckWorker, UpdateDownloadWorker, UpdateInfo, detect_installation_kind, human_size, launch_update_installer
 from .visual_canvas import VisualCanvasPanel, normalize_canvas_artifact, web_canvas_available
-from PyQt6.QtCore import QEvent, QEventLoop, QRunnable, QThreadPool
+from .workspace_ui import (
+    BrowserPreviewCard,
+    ManagementCenterPage,
+    WorkspaceBrowserPanel,
+    WorkspacePreferencesPage,
+    WorkspaceSidebar,
+    WorkspaceWorkbench,
+    WorkspaceWindowTitleBar,
+)
+from PyQt6.QtCore import QAbstractAnimation, QEvent, QEventLoop, QEasingCurve, QRunnable, QThreadPool, QVariantAnimation
 from PyQt6.QtGui import QTextDocument, QTransform
 from PyQt6.QtWidgets import QBoxLayout, QSplitter, QWidgetAction
 
@@ -2154,6 +2163,7 @@ class MessageBubble(QFrame):
             QSizePolicy.Policy.Preferred,
         )
         self.main_layout = QVBoxLayout(self)
+        self.main_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
         if self.is_user:
             self.main_layout.setContentsMargins(20, 16, 20, 16)
             self.max_w = max(220, int(parent_width * 0.76) - 30)
@@ -2174,6 +2184,7 @@ class MessageBubble(QFrame):
         self.steps_layout = QVBoxLayout(self.steps_container)
         self.steps_layout.setContentsMargins(0, 0, 0, 8)
         self.steps_layout.setSpacing(8)
+        self.steps_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
 
         # Kept separate from the agent-process groups so a direct model answer
         # can show the familiar shimmer before there are tools or reports.
@@ -2243,6 +2254,7 @@ class MessageBubble(QFrame):
         self.final_layout = QVBoxLayout(self.final_content)
         self.final_layout.setContentsMargins(0, 0, 0, 0)
         self.final_layout.setSpacing(8)
+        self.final_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute)
         
         self.main_layout.addWidget(self.steps_container)
         self.main_layout.addWidget(self.final_content)
@@ -2931,12 +2943,13 @@ class ChatMessageContainer(QWidget):
 
         bubble_row = QHBoxLayout()
         bubble_row.setContentsMargins(0, 0, 0, 0)
-        bubble_row.setDirection(QBoxLayout.Direction.LeftToRight)
-        if is_user:
-            bubble_row.addWidget(self.bubble, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute)
-            bubble_row.addStretch()
-        else:
-            bubble_row.addWidget(self.bubble, 1)
+        bubble_row.setDirection(QBoxLayout.Direction.RightToLeft)
+        bubble_row.addWidget(
+            self.bubble,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute,
+        )
+        bubble_row.addStretch(1)
         layout.addLayout(bubble_row)
 
         self.actions_container = QWidget()
@@ -2947,6 +2960,7 @@ class ChatMessageContainer(QWidget):
         actions_layout = QHBoxLayout(self.actions_container)
         actions_layout.setContentsMargins(12, 0, 12, 0)
         actions_layout.setSpacing(6)
+        actions_layout.setDirection(QBoxLayout.Direction.RightToLeft)
 
         self.copy_btn = None
         if self.show_actions:
@@ -3004,10 +3018,10 @@ class ChatMessageContainer(QWidget):
                 actions_layout.addWidget(self.user_collapse_btn)
                 actions_layout.addStretch()
             else:
-                actions_layout.addStretch()
-                actions_layout.addWidget(self.memory_updated_indicator, 0, Qt.AlignmentFlag.AlignVCenter)
                 actions_layout.addWidget(self.copy_btn)
                 actions_layout.addWidget(self.tts_btn)
+                actions_layout.addWidget(self.memory_updated_indicator, 0, Qt.AlignmentFlag.AlignVCenter)
+                actions_layout.addStretch()
 
         if not self.show_actions or not self._actions_available:
             self.actions_container.setFixedHeight(0)
@@ -3519,6 +3533,9 @@ class ChatHistoryPage(QWidget):
         self._search_tasks = {}
         self._search_active = False
         self._search_pending = False
+        self._rendered_session_order = []
+        self._rendered_session_signatures = {}
+        self._has_rendered_sessions = False
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(40)
@@ -3539,6 +3556,7 @@ class ChatHistoryPage(QWidget):
         top_bar.addWidget(back_btn)
 
         title = QLabel("שיחות")
+        self.title_label = title
         title.setStyleSheet(page_title_css(19))
         top_bar.addWidget(title)
         top_bar.addStretch()
@@ -3719,8 +3737,11 @@ class ChatHistoryPage(QWidget):
         self._search_timer.stop()
         self._search_generation += 1
         self._render_generation += 1
-        self.loading_frame.show()
-        self.history_stack.setCurrentWidget(self.loading_frame)
+        # Ordinary run/message updates keep the current rows visible.  The
+        # background query will replace only rows whose metadata changed.
+        if not self._has_rendered_sessions:
+            self.loading_frame.show()
+            self.history_stack.setCurrentWidget(self.loading_frame)
         # Opening or refreshing history can involve thousands of messages.
         # Keep that database/content scan off the GUI thread as well as typed
         # searches; an already-running scan is coalesced into one latest pass.
@@ -3729,35 +3750,88 @@ class ChatHistoryPage(QWidget):
     def _render_sessions(self, records):
         self._render_generation += 1
         render_generation = self._render_generation
-        self._clear_rows()
+        active_id = self.core.active_chat_session().get("id", "")
+        order = [str(record.get("id") or "") for record in records]
+        signatures = {
+            str(record.get("id") or ""): self._session_signature(record, active_id)
+            for record in records
+        }
+
+        if self._has_rendered_sessions and order == self._rendered_session_order and records:
+            for index, record in enumerate(records):
+                session_id = str(record.get("id") or "")
+                if signatures.get(session_id) == self._rendered_session_signatures.get(session_id):
+                    continue
+                item = self.content_layout.itemAt(index)
+                old_row = item.widget() if item is not None else None
+                new_row = self._session_row(record, active_id)
+                if old_row is not None:
+                    self.content_layout.replaceWidget(old_row, new_row)
+                    old_row.hide()
+                    old_row.deleteLater()
+                else:
+                    self.content_layout.insertWidget(index, new_row)
+            self._rendered_session_signatures = signatures
+            self.history_stack.setCurrentWidget(self.scroll)
+            self.loading_frame.hide()
+            return
+
+        staging_content = QWidget()
+        staging_content.setStyleSheet("background: transparent;")
+        staging_layout = QVBoxLayout(staging_content)
+        staging_layout.setContentsMargins(0, 4, 0, 4)
+        staging_layout.setSpacing(10)
+        staging_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
         if not records:
             empty = QLabel("לא נמצאו שיחות")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet(muted_label_css(14) + " padding: 24px;")
-            self.content_layout.addWidget(empty)
-            self.content_layout.addStretch()
-            self.history_stack.setCurrentWidget(self.scroll)
-            self.loading_frame.hide()
+            staging_layout.addWidget(empty)
+            staging_layout.addStretch()
+            self._commit_session_staging(staging_content, staging_layout, order, signatures)
             return
-        active_id = self.core.active_chat_session().get("id", "")
 
         def add_batch(index=0, batch_size=24):
             if render_generation != self._render_generation:
+                staging_content.deleteLater()
                 return
             next_index = min(len(records), index + batch_size)
             for record in records[index:next_index]:
-                self.content_layout.addWidget(self._session_row(record, active_id))
+                staging_layout.addWidget(self._session_row(record, active_id))
             if next_index < len(records):
                 QTimer.singleShot(0, lambda: add_batch(next_index, batch_size))
                 return
-            self.content_layout.addStretch()
-            # Build every row while the results page is hidden, then swap the
-            # two complete pages atomically. This avoids the expanding-list
-            # effect during progressive widget construction.
-            self.history_stack.setCurrentWidget(self.scroll)
-            self.loading_frame.hide()
+            staging_layout.addStretch()
+            self._commit_session_staging(staging_content, staging_layout, order, signatures)
 
         QTimer.singleShot(0, add_batch)
+
+    @staticmethod
+    def _session_signature(record, active_id):
+        fields = {
+            key: record.get(key)
+            for key in (
+                "id", "title", "updated_at", "message_count", "pinned",
+                "runtime_status", "unread_count",
+            )
+        }
+        fields["active"] = str(record.get("id") or "") == str(active_id or "")
+        return json.dumps(fields, ensure_ascii=False, sort_keys=True, default=str)
+
+    def _commit_session_staging(self, content, layout, order, signatures):
+        old_content = self.content
+        self.scroll.takeWidget()
+        self.content = content
+        self.content_layout = layout
+        self.scroll.setWidget(content)
+        if old_content is not None:
+            old_content.deleteLater()
+        self._rendered_session_order = list(order)
+        self._rendered_session_signatures = dict(signatures)
+        self._has_rendered_sessions = True
+        self.history_stack.setCurrentWidget(self.scroll)
+        self.loading_frame.hide()
 
     def _icon_button(self, tooltip, filenames, fallback_text="", danger=False):
         btn = QPushButton()
@@ -4616,6 +4690,7 @@ class ChatWindow(QMainWindow):
     run_event_signal = pyqtSignal(object)
     run_confirm_request_signal = pyqtSignal(object)
     run_api_key_request_signal = pyqtSignal(object)
+    embedded_browser_activate_signal = pyqtSignal(str)
 
     def format_model_name(self, name):
         name = str(name).replace("-", " ").replace("_", " ")
@@ -4637,16 +4712,20 @@ class ChatWindow(QMainWindow):
                 return title
         except Exception:
             pass
-        return SMARTI_APP_DISPLAY_NAME
+        return DEFAULT_CHAT_TITLE
 
     def refresh_chat_title(self):
         title = self.active_chat_title()
         if hasattr(self, "title_label"):
             self.title_label.setText(title)
-        self.setWindowTitle(f"{SMARTI_APP_DISPLAY_NAME} - {title}" if title != SMARTI_APP_DISPLAY_NAME else SMARTI_APP_DISPLAY_NAME)
+        # The active title belongs inside the conversation header.  Keeping it
+        # out of the native/taskbar caption avoids the dated duplicated-title
+        # strip shown by the old wide layout.
+        self.setWindowTitle(SMARTI_APP_DISPLAY_NAME)
 
     def __init__(self, core):
         super().__init__()
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.core = core
         self.core.start_new_chat_session()
         self.agent_running = False
@@ -4687,6 +4766,8 @@ class ChatWindow(QMainWindow):
         self._pending_canvas_layout = None
         self._canvas_layout_save_scheduled = False
         self._canvas_taskbar_alignment_scheduled = False
+        self._workspace_manual_sidebar_state = None
+        self._workspace_initial_maximize_pending = False
         self._background_task_containers = {}
         self.taskbar_attention = TaskbarAttentionController(self)
         self.notifications = WindowsNotificationCenter(self)
@@ -4748,19 +4829,18 @@ class ChatWindow(QMainWindow):
         self.core.tts_status_callback = lambda is_playing: self.tts_status_signal.emit(is_playing)
         
         self.setWindowTitle(SMARTI_APP_DISPLAY_NAME)
-        self.setMinimumSize(380, 680)
+        self.setMinimumSize(720, 560)
         available = QApplication.primaryScreen().availableGeometry() if QApplication.primaryScreen() else None
         if available:
-            target_w = min(450, max(380, available.width() - 40))
-            target_h = min(760, max(680, available.height() - 60))
+            target_w = min(1380, max(920, available.width() - 72))
+            target_h = min(900, max(620, available.height() - 72))
             self.resize(target_w, target_h)
             self.move(
                 available.x() + max(0, (available.width() - target_w) // 2),
-                available.bottom() - target_h + 1
+                available.y() + max(0, (available.height() - target_h) // 2),
             )
-            self._schedule_canvas_taskbar_alignment()
         else:
-            self.resize(450, 760) 
+            self.resize(1180, 760)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         apply_app_theme(QApplication.instance(), settings=self.core.settings)
         self.setStyleSheet(
@@ -4768,12 +4848,16 @@ class ChatWindow(QMainWindow):
             f"stop:0 {MESH_A}, stop:0.45 {MESH_B}, stop:0.72 {MESH_C}, stop:1 {MESH_D}); }}"
         )
         
+        self.central_shell = QWidget()
+        self.central_shell.setObjectName("SmartiCentralShell")
+        central_layout = QVBoxLayout(self.central_shell)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        self.window_title_bar = WorkspaceWindowTitleBar(self, self.central_shell)
+        central_layout.addWidget(self.window_title_bar)
         self.stacked_widget = AnimatedStackedWidget()
-        self.setCentralWidget(self.stacked_widget)
-        
-        self.chat_page = MeshGradientWidget()
-        self.setup_chat_page()
-        self.stacked_widget.addWidget(self.chat_page)
+        central_layout.addWidget(self.stacked_widget, 1)
+        self.setCentralWidget(self.central_shell)
         
         self.settings_page = None
         self.tools_page = None
@@ -4784,6 +4868,14 @@ class ChatWindow(QMainWindow):
         self.history_page = None
         self.doctor_page = None
         self.about_page = None
+        self.management_center_page = None
+
+        self.chat_page = MeshGradientWidget()
+        self.setup_chat_page()
+        self.stacked_widget.addWidget(self.chat_page)
+
+        ui_preferences = self.core.settings.setdefault("ui_preferences", {})
+        self._workspace_initial_maximize_pending = bool(ui_preferences.get("workspace_start_maximized", True))
         
         logging.info(f"\n{'='*50}\n--- תחילת שיחה חדשה (הפעלת תוכנה) ---\n{'='*50}")
         self.load_active_chat_session()
@@ -4804,6 +4896,7 @@ class ChatWindow(QMainWindow):
         if app:
             app.aboutToQuit.connect(self.unregister_voice_hotkey)
             app.aboutToQuit.connect(self.core.shutdown_runtime)
+            app.aboutToQuit.connect(self.workbench.shutdown)
 
         if SPEECH_INSTALLED and KEYBOARD_INSTALLED:
             QTimer.singleShot(1500, self.register_voice_hotkey)
@@ -5475,18 +5568,18 @@ class ChatWindow(QMainWindow):
                 return 0, 220
             return 0, max(128, min(available, 260))
         if available <= 0:
-            return 168, 168
+            return 188, 204
         if available < 216:
             autonomy_width = max(86, int(available * 0.54))
             return max(48, available - autonomy_width), autonomy_width
-        autonomy_width = min(152, max(128, int(available * 0.42)))
+        autonomy_width = min(210, max(188, int(available * 0.42)))
         model_width = max(88, available - autonomy_width)
         if model_width > 210:
             extra = model_width - 210
             model_width = 210
-            autonomy_width = min(152, autonomy_width + extra)
+            autonomy_width = min(210, autonomy_width + extra)
         if model_width + autonomy_width > available:
-            autonomy_width = max(104, min(autonomy_width, available - 72))
+            autonomy_width = max(128, min(autonomy_width, available - 72))
             model_width = max(48, available - autonomy_width)
         return int(model_width), int(autonomy_width)
 
@@ -5504,9 +5597,9 @@ class ChatWindow(QMainWindow):
             self._fit_quick_input_button(
                 self.autonomy_quick_btn,
                 text,
-                min(152, autonomy_width),
+                min(204, autonomy_width),
                 autonomy_width,
-                min(118, autonomy_width),
+                min(150, autonomy_width),
             )
 
     def _fit_header_model_button(self, label):
@@ -5602,8 +5695,8 @@ class ChatWindow(QMainWindow):
         self._popup_menu_near_button(
             menu,
             self.favorite_model_btn,
-            center_horizontally=True,
-            anchor_below=True,
+            center_horizontally=False,
+            anchor_below=False,
         )
 
     def _select_favorite_model(self, provider, model):
@@ -5786,7 +5879,28 @@ class ChatWindow(QMainWindow):
         self._set_menu_button_icon()
         self._set_update_button_icon()
         self._set_attach_button_icon()
+        self._refresh_workspace_toggle_icon()
         self._refresh_menu_action_icons()
+
+    def _refresh_workspace_toggle_icon(self, opening=None):
+        if not hasattr(self, "workspace_toggle_btn"):
+            return
+        is_open = bool(opening) if opening is not None else bool(
+            hasattr(self, "workbench") and self.workbench.is_open()
+        )
+        names = (
+            ("workbench_close_icon", "workspace_workbench_close_icon")
+            if is_open else
+            ("workbench_open_icon", "workspace_workbench_open_icon")
+        )
+        set_themed_button_icon(
+            self.workspace_toggle_btn,
+            names,
+            "→" if is_open else "←",
+            22,
+            clear_text=True,
+        )
+        self.workspace_toggle_btn.setToolTip("כיווץ אזור העבודה" if is_open else "פתיחת אזור העבודה")
 
     def _set_attach_button_icon(self):
         if not hasattr(self, "attach_btn"):
@@ -5814,8 +5928,10 @@ class ChatWindow(QMainWindow):
         )
         if hasattr(self, "chat_page"):
             self.chat_page.setStyleSheet(self._chat_page_stylesheet())
+        if hasattr(self, "window_title_bar"):
+            self.window_title_bar.apply_theme()
         if hasattr(self, "chat_splitter"):
-            self.chat_splitter.setStyleSheet(f"QSplitter::handle {{ background: {SOFT_LINE_COLOR}; margin: 18px 0; border-radius: 3px; }}")
+            self.chat_splitter.setStyleSheet("QSplitter::handle { background: transparent; border: none; }")
         if hasattr(self, "canvas_panel"):
             self.canvas_panel.apply_theme({
                 "text": TEXT_COLOR,
@@ -5824,10 +5940,21 @@ class ChatWindow(QMainWindow):
                 "line": SOFT_LINE_COLOR,
                 "glass": GLASS_STRONG_COLOR,
             })
+        if hasattr(self, "workbench"):
+            self.workbench.apply_theme()
+        if hasattr(self, "workspace_sidebar"):
+            self.workspace_sidebar.apply_theme()
+        if hasattr(self, "browser_preview_card"):
+            self.browser_preview_card.apply_theme()
+        if getattr(self, "management_center_page", None) is not None:
+            self.management_center_page.apply_theme()
         if hasattr(self, "top_bar"):
             self.top_bar.setStyleSheet(self._top_bar_stylesheet())
         if hasattr(self, "menu_btn"):
             self.menu_btn.setStyleSheet(self._menu_button_stylesheet())
+        if hasattr(self, "workspace_toggle_btn"):
+            self.workspace_toggle_btn.setStyleSheet(self._menu_button_stylesheet())
+            self._refresh_workspace_toggle_icon()
         if hasattr(self, "update_btn"):
             self.update_btn.setStyleSheet(self._update_button_stylesheet())
             apply_soft_shadow(self.update_btn, blur=26, y=7, alpha=72)
@@ -5908,6 +6035,12 @@ class ChatWindow(QMainWindow):
         QTimer.singleShot(0, apply_batch)
 
     def invalidate_themed_pages(self):
+        if getattr(self, "management_center_page", None) is not None:
+            self.stacked_widget.removeWidget(self.management_center_page)
+            self.management_center_page.deleteLater()
+            self.management_center_page = None
+            for attr in ("tools_page", "usage_page", "memory_page", "task_center_page", "trace_page", "doctor_page", "settings_page"):
+                setattr(self, attr, None)
         for attr in ("tools_page", "usage_page", "memory_page", "task_center_page", "trace_page", "history_page", "about_page"):
             page = getattr(self, attr, None)
             if page is not None:
@@ -5918,23 +6051,34 @@ class ChatWindow(QMainWindow):
     def setup_chat_page(self):
         self.chat_page.setObjectName("ChatPage")
         self.chat_page.setStyleSheet(self._chat_page_stylesheet())
-        main_layout = QVBoxLayout(self.chat_page)
+        root_layout = QHBoxLayout(self.chat_page)
+        root_layout.setDirection(QBoxLayout.Direction.LeftToRight)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        self.chat_center = QWidget()
+        self.chat_center.setMinimumWidth(0)
+        self.chat_center.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.chat_center.setStyleSheet("background: transparent; border: none;")
+        main_layout = QVBoxLayout(self.chat_center)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
         top_bar = QWidget()
         self.top_bar = top_bar
         top_bar.setObjectName("TopBar")
-        top_bar.setFixedHeight(88)
+        top_bar.setFixedHeight(58)
         top_bar.setStyleSheet(self._top_bar_stylesheet())
         top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(15, 7, 15, 14)
+        self.chat_top_layout = top_layout
+        top_layout.setDirection(QBoxLayout.Direction.LeftToRight)
+        top_layout.setContentsMargins(12, 5, 15, 5)
+        top_layout.setSpacing(4)
         top_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         
         self.menu_btn = QPushButton("⋮")
         self.menu_btn.setFont(QFont("Arial", 28, QFont.Weight.Bold))
-        self.menu_btn.setFixedSize(48, 48)
-        self.menu_btn.setToolTip("תפריט")
+        self.menu_btn.setFixedSize(42, 42)
+        self.menu_btn.setToolTip("פעולות שיחה")
         self.menu_btn.setStyleSheet(self._menu_button_stylesheet())
         self.menu_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         
@@ -5947,17 +6091,14 @@ class ChatWindow(QMainWindow):
         prepare_popup_menu(self.menu)
         self.menu.aboutToHide.connect(self._guard_menu_reopen_from_button)
         self._menu_actions = []
-        self._add_menu_action("שיחה חדשה", self.start_new_chat, "new_chat_icon", "plus_icon")
-        self._add_menu_action("היסטוריית שיחות", self.show_history_page, "chat_history_icon", "history_icon")
-        self._add_menu_action("Smarti Diagnostic", self.show_doctor_page, "doctor_icon")
-        self._add_menu_action("כלים", self.show_tools_page, "tools_icon", "toolbox_icon")
-        self._add_menu_action("הגדרות", self.show_settings_page, "settings_icon")
-        self._add_menu_action("ניהול הזיכרון", self.show_memory_page, "memory_management_icon")
-        self._add_menu_action("מרכז משימות", self.show_task_center_page, "task_center_icon", "tasks_icon")
-        self._add_menu_action("נתוני שימוש", self.show_usage_page, "usage_icon", "usage_stats_icon", "chart_icon")
-        self._add_menu_action("אודות", self.show_about_page, "about_icon", "info_icon")
         self.menu_btn.clicked.connect(self.show_menu)
         self._set_menu_button_icon()
+
+        self.workspace_toggle_btn = QPushButton()
+        self.workspace_toggle_btn.setFixedSize(42, 42)
+        self.workspace_toggle_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.workspace_toggle_btn.setToolTip("פתיחת אזור העבודה")
+        self.workspace_toggle_btn.clicked.connect(self.toggle_workbench)
 
         self.update_btn = QPushButton("!")
         self.update_btn.setObjectName("UpdateButton")
@@ -5973,44 +6114,19 @@ class ChatWindow(QMainWindow):
         titles_widget = QWidget()
         self.titles_widget = titles_widget
         titles_widget.setMinimumWidth(0)
+        titles_widget.setMaximumWidth(760)
         titles_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         titles_widget.setStyleSheet("background: transparent; border: none;")
-        titles_layout = QVBoxLayout(titles_widget)
-        titles_layout.setContentsMargins(8, 0, 8, 3)
-        titles_layout.setSpacing(2)
+        titles_layout = QHBoxLayout(titles_widget)
+        titles_layout.setContentsMargins(0, 0, 0, 0)
         self.title_label = EndElideLabel(self.active_chat_title())
         self.title_label.setStyleSheet(page_title_css(19))
-        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.favorite_model_btn = DropdownPillButton("מודל")
-        self.favorite_model_btn.setProperty("smartiModelPickerLocation", "header")
-        self.favorite_model_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.favorite_model_btn.setFixedWidth(172)
-        self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
-        self.favorite_model_btn.clicked.connect(self.show_favorite_model_menu)
-        self.subtitle = self.favorite_model_btn
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         titles_layout.addWidget(self.title_label)
-        titles_layout.addWidget(self.favorite_model_btn, 0, Qt.AlignmentFlag.AlignCenter)
-        
-        self.logo_lbl = QLabel()
-        self.logo_lbl.setFixedSize(50, 50)
-        self.logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo_path = os.path.join(ASSETS_DIR, "logo.png")
-        if os.path.exists(logo_path):
-            circular_pixmap = make_circular_pixmap(logo_path, 50, focus_content=True)
-            if circular_pixmap: self.logo_lbl.setPixmap(circular_pixmap)
-            self.logo_lbl.setStyleSheet("border: none; background-color: transparent;")
-        else:
-            self.logo_lbl.setText("S")
-            self.logo_lbl.setFont(app_font(20, QFont.Weight.Bold))
-            self.logo_lbl.setStyleSheet(f"border: none; border-radius: 25px; background-color: transparent; color: {ACCENT_COLOR};")
-            self.logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            
-        top_layout.addWidget(self.logo_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        top_layout.addWidget(titles_widget, 1)
-        top_layout.addWidget(self.update_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         top_layout.addWidget(self.menu_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        top_layout.addWidget(self.workspace_toggle_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        top_layout.addWidget(self.update_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        top_layout.addWidget(titles_widget, 1)
         main_layout.addWidget(top_bar)
         
         self.header_line = QFrame()
@@ -6029,11 +6145,13 @@ class ChatWindow(QMainWindow):
         
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.scroll.setMinimumWidth(0)
         self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS) 
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.chat_widget = QWidget()
+        self.chat_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.chat_widget.setMinimumWidth(0)
         self.chat_widget.setStyleSheet("background: transparent;")
         self.chat_layout = QVBoxLayout(self.chat_widget)
@@ -6063,7 +6181,9 @@ class ChatWindow(QMainWindow):
         self.input_overlay.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.input_overlay.setStyleSheet("background: transparent;")
         overlay_layout = QVBoxLayout(self.input_overlay)
-        overlay_layout.setContentsMargins(18, 0, 18, 18)
+        # Reserve a real transparent gutter for the graphics effect.  Layout
+        # padding outside the effect used to clip the composer's side shadow.
+        overlay_layout.setContentsMargins(28, 0, 28, 22)
         overlay_layout.setSpacing(4)
 
         self.status_lbl = QLabel("")
@@ -6122,18 +6242,18 @@ class ChatWindow(QMainWindow):
         self.action_btn_host = PinnedActionButtonHost(self.action_btn)
         control_row.addWidget(self.action_btn_host, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
-        # Restore the chat-box model picker here if you want it back inside the input controls:
-        # self.favorite_model_btn = DropdownPillButton("מודל")
-        # self.favorite_model_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        # self.favorite_model_btn.setFixedWidth(168)
-        # self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        # self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
-        # self.favorite_model_btn.clicked.connect(self.show_favorite_model_menu)
-        # control_row.addWidget(self.favorite_model_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.favorite_model_btn = DropdownPillButton("מודל")
+        self.favorite_model_btn.setProperty("smartiModelPickerLocation", "composer")
+        self.favorite_model_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.favorite_model_btn.setFixedWidth(168)
+        self.favorite_model_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.favorite_model_btn.setStyleSheet(self._quick_input_button_stylesheet())
+        self.favorite_model_btn.clicked.connect(self.show_favorite_model_menu)
+        control_row.addWidget(self.favorite_model_btn, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         self.autonomy_quick_btn = DropdownPillButton("מאוזן")
         self.autonomy_quick_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.autonomy_quick_btn.setFixedWidth(152)
+        self.autonomy_quick_btn.setFixedWidth(204)
         self.autonomy_quick_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.autonomy_quick_btn.setStyleSheet(self._quick_input_button_stylesheet())
         self.autonomy_quick_btn.clicked.connect(self.show_quick_autonomy_menu)
@@ -6175,25 +6295,371 @@ class ChatWindow(QMainWindow):
         self.refresh_local_fast_mode_control()
         QTimer.singleShot(0, self._resize_quick_input_controls)
         
-        bottom_layout.addWidget(self.input_frame, alignment=Qt.AlignmentFlag.AlignVCenter)
+        bottom_layout.addWidget(self.input_frame, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
         overlay_layout.addLayout(bottom_layout)
         body_layout.addWidget(self.input_overlay, 0, 0, Qt.AlignmentFlag.AlignBottom)
         self.input_overlay.raise_()
-        self.chat_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.chat_splitter.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.chat_splitter.setChildrenCollapsible(False)
-        self.chat_splitter.setHandleWidth(7)
-        self.canvas_panel = VisualCanvasPanel(self.chat_splitter)
+
+        self.chat_body_host = QWidget()
+        self.chat_body_host.setStyleSheet("background: transparent; border: none;")
+        chat_body_host_layout = QHBoxLayout(self.chat_body_host)
+        self.chat_body_host_layout = chat_body_host_layout
+        chat_body_host_layout.setDirection(QBoxLayout.Direction.LeftToRight)
+        chat_body_host_layout.setContentsMargins(0, 0, 0, 0)
+        chat_body_host_layout.setSpacing(0)
+        chat_body_host_layout.addStretch(5)
+        self.chat_body.setMaximumWidth(1040)
+        chat_body_host_layout.addWidget(self.chat_body, 14)
+        chat_body_host_layout.addStretch(5)
+        main_layout.addWidget(self.chat_body_host, 1)
+
+        # Construct the persistent browser profile before the isolated canvas
+        # profile so Playwright's first CDP context is the visible browser.
+        self.workspace_browser_panel = WorkspaceBrowserPanel(self.core)
+        self.canvas_panel = VisualCanvasPanel(self.core)
         self.canvas_panel.close_requested.connect(self.close_canvas)
         self.canvas_panel.canvas_action_requested.connect(self.handle_canvas_action)
         self.canvas_panel.canvas_layout_captured.connect(self.handle_canvas_layout)
-        self.chat_splitter.addWidget(self.canvas_panel)
-        self.chat_splitter.addWidget(self.chat_body)
-        self.chat_splitter.splitterMoved.connect(lambda _position, _index: self._schedule_chat_width_refresh())
-        self.canvas_panel.hide()
-        self.chat_splitter.setSizes([0, max(1, self.width())])
-        main_layout.addWidget(self.chat_splitter, 1)
+        self.workbench = WorkspaceWorkbench(
+            self.core,
+            self.canvas_panel,
+            browser_panel=self.workspace_browser_panel,
+        )
+        self.workbench.close_requested.connect(self.close_workbench)
+        self.workbench.visibility_changed.connect(self._on_workbench_visibility_changed)
+        self.workbench.panel_closed.connect(self._on_workbench_panel_closed)
+        self.workbench.browser_settings_requested.connect(lambda: self._show_management_section("workspace"))
+        self.workbench.hide()
+
+        self.sidebar_history_page = ChatHistoryPage(self.core, self)
+        self.workspace_sidebar = WorkspaceSidebar(self.sidebar_history_page)
+        self.workspace_sidebar.new_chat_requested.connect(self.start_new_chat)
+        self.workspace_sidebar.settings_requested.connect(self.show_settings_page)
+        self.workspace_sidebar.usage_requested.connect(self.show_usage_page)
+        self.workspace_sidebar.diagnostic_requested.connect(self.show_doctor_page)
+        self.workspace_sidebar.about_requested.connect(self.show_about_page)
+        self.workspace_sidebar.collapsed_changed.connect(self._on_sidebar_collapsed_changed)
+
+        self.workspace_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.workspace_splitter.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.workspace_splitter.setChildrenCollapsible(False)
+        self.workspace_splitter.setHandleWidth(1)
+        self.workspace_splitter.addWidget(self.workbench)
+        self.workspace_splitter.addWidget(self.chat_center)
+        self.workspace_splitter.addWidget(self.workspace_sidebar)
+        self.workspace_splitter.setStretchFactor(0, 2)
+        self.workspace_splitter.setStretchFactor(1, 1)
+        self.workspace_splitter.setStretchFactor(2, 0)
+        self.workspace_splitter.splitterMoved.connect(
+            lambda _position, _index: self._schedule_chat_width_refresh()
+        )
+        self.chat_splitter = self.workspace_splitter  # compatibility for theme refreshes
+        root_layout.addWidget(self.workspace_splitter, 1)
+
+        ui_preferences = self.core.settings.setdefault("ui_preferences", {})
+        self.workspace_sidebar.set_collapsed(
+            bool(ui_preferences.get("workspace_sidebar_collapsed", False))
+        )
+        self.workspace_splitter.setSizes([0, max(520, self.width() - 286), 286])
+        self.browser_preview_card = BrowserPreviewCard(self.workspace_browser_panel, self.chat_body)
+        self.browser_preview_card.expand_requested.connect(lambda: self.open_workbench("browser"))
+        self.workspace_browser_panel.activity_changed.connect(self._on_browser_activity)
+        self.browser_preview_card.hide()
+        self.embedded_browser_activate_signal.connect(self._activate_embedded_browser)
+        self.core.embedded_browser_activate_callback = (
+            lambda initial_url="about:blank": self.embedded_browser_activate_signal.emit(str(initial_url or "about:blank"))
+        )
+        QTimer.singleShot(0, self.sidebar_history_page.load_sessions)
+        QTimer.singleShot(0, self._apply_workspace_responsive)
         QTimer.singleShot(0, self._update_chat_bottom_padding)
+        QTimer.singleShot(0, self._refresh_workspace_toggle_icon)
+
+    def open_workbench(self, panel=None):
+        self.stacked_widget.setCurrentWidget(self.chat_page)
+        self._set_chat_content_density(True)
+        was_open = self.workbench.is_open()
+        self._workspace_transition_pending = True
+        try:
+            self.workbench.open_panel(str(panel or ""))
+        finally:
+            self._workspace_transition_pending = False
+        if panel == "browser":
+            self.workspace_browser_panel.ensure_background_ready()
+        if was_open:
+            self._apply_workspace_responsive()
+        else:
+            self._animate_workspace_layout(True)
+        self.browser_preview_card.hide()
+        self._refresh_workspace_toggle_icon()
+        self._schedule_chat_width_refresh()
+
+    def close_workbench(self):
+        if not self.workbench.is_open():
+            return
+        self._set_chat_content_density(False)
+        self._animate_workspace_layout(False)
+        self._refresh_workspace_toggle_icon(opening=False)
+        self._schedule_chat_width_refresh()
+
+    def toggle_workbench(self):
+        if self.workbench.is_open():
+            self.close_workbench()
+        else:
+            self.open_workbench()
+
+    def _on_workbench_panel_closed(self, kind):
+        if kind == "canvas":
+            self._canvas_expanded = False
+            self._set_active_canvas_card("")
+        self._refresh_workspace_toggle_icon()
+
+    def _animate_workspace_layout(self, opening):
+        if not hasattr(self, "workspace_splitter"):
+            return
+        if getattr(self, "_workspace_size_animation", None) is not None:
+            self._workspace_size_animation.stop()
+        width = max(1, self.workspace_splitter.width() or self.width())
+        sidebar_width = 58 if self.workspace_sidebar.is_collapsed() else 286
+        usable = max(320, width - sidebar_width)
+        start_sizes = self.workspace_splitter.sizes()
+        start_workbench = int(start_sizes[0] if start_sizes else 0)
+        narrow, target_workbench, _target_chat = self._workspace_open_sizes(width, sidebar_width)
+        end_workbench = target_workbench if opening else 0
+        if opening:
+            self.workbench.show()
+            self.chat_center.setVisible(not narrow)
+        animation = QVariantAnimation(self)
+        self._workspace_size_animation = animation
+        animation.setDuration(320)
+        animation.setStartValue(start_workbench)
+        animation.setEndValue(end_workbench)
+        animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+        def update(value):
+            workbench_width = max(0, int(value))
+            chat_width = 0 if narrow and opening else max(0, usable - workbench_width)
+            if not opening and narrow:
+                chat_width = max(0, usable - workbench_width)
+            self.workspace_splitter.setSizes([workbench_width, chat_width, sidebar_width])
+
+        def finished():
+            self._workspace_size_animation = None
+            if not opening:
+                self.workbench.close_panel()
+                self.chat_center.show()
+                self.workspace_splitter.setSizes([0, usable, sidebar_width])
+            self._apply_workspace_responsive()
+            self._refresh_workspace_toggle_icon()
+
+        animation.valueChanged.connect(update)
+        animation.finished.connect(finished)
+        animation.start()
+
+    def _on_workbench_visibility_changed(self, visible):
+        if not visible:
+            self.chat_center.show()
+        if getattr(self, "_workspace_transition_pending", False):
+            return
+        self._apply_workspace_responsive()
+
+    @staticmethod
+    def _workspace_open_sizes(total_width, sidebar_width):
+        usable = max(320, int(total_width) - int(sidebar_width))
+        narrow = usable < 920
+        if narrow:
+            return True, usable, 0
+        chat_minimum = 520
+        workbench = min(max(480, int(usable * 0.52)), usable - chat_minimum)
+        return False, workbench, usable - workbench
+
+    def _set_chat_content_density(self, work_area_open):
+        layout = getattr(self, "chat_body_host_layout", None)
+        if layout is None or layout.count() < 3:
+            return
+        if work_area_open:
+            layout.setContentsMargins(14, 0, 14, 0)
+            layout.setStretch(0, 0)
+            layout.setStretch(1, 1)
+            layout.setStretch(2, 0)
+        else:
+            layout.setContentsMargins(0, 0, 0, 0)
+            # Matches the approximately 58% conversation-column ratio used by
+            # wide desktop agent interfaces (14 / (5 + 14 + 5)).
+            layout.setStretch(0, 5)
+            layout.setStretch(1, 14)
+            layout.setStretch(2, 5)
+        QTimer.singleShot(0, self._align_chat_header_to_content)
+
+    def _align_chat_header_to_content(self):
+        """Keep the RTL conversation title on the composer's right edge."""
+        top_layout = getattr(self, "chat_top_layout", None)
+        body_host = getattr(self, "chat_body_host", None)
+        chat_body = getattr(self, "chat_body", None)
+        if top_layout is None or body_host is None or chat_body is None:
+            return
+        host_width = body_host.width()
+        if host_width <= 0 or chat_body.width() <= 0:
+            return
+        right_gap = max(0, host_width - (chat_body.x() + chat_body.width()))
+        top_layout.setContentsMargins(12, 5, right_gap, 5)
+
+    def _on_sidebar_collapsed_changed(self, collapsed):
+        adjusting = bool(getattr(self, "_workspace_responsive_adjusting", False))
+        if not adjusting:
+            preferences = self.core.settings.setdefault("ui_preferences", {})
+            preferences["workspace_sidebar_collapsed"] = bool(collapsed)
+            self.core._save_settings()
+        QTimer.singleShot(0 if adjusting else 320, self._apply_workspace_responsive)
+
+    def _apply_workspace_responsive(self):
+        if not hasattr(self, "workspace_splitter"):
+            return
+        animation = getattr(self, "_workspace_size_animation", None)
+        if animation is not None and animation.state() == QAbstractAnimation.State.Running:
+            return
+        width = max(1, self.workspace_splitter.width() or self.width())
+        preferences = self.core.settings.setdefault("ui_preferences", {})
+        narrow, _target_workbench, _target_chat = self._workspace_open_sizes(
+            width, 58 if self.workspace_sidebar.is_collapsed() else 286
+        )
+        desired_sidebar_collapsed = bool(preferences.get("workspace_sidebar_collapsed", False)) or narrow
+        self._workspace_responsive_adjusting = True
+        try:
+            self.workspace_sidebar.set_collapsed(desired_sidebar_collapsed)
+        finally:
+            self._workspace_responsive_adjusting = False
+        sidebar_width = 58 if self.workspace_sidebar.is_collapsed() else 286
+        usable = max(320, width - sidebar_width)
+        narrow, workbench_width, chat_width = self._workspace_open_sizes(width, sidebar_width)
+        if self.workbench.is_open():
+            if narrow:
+                self.chat_center.hide()
+                self.workspace_splitter.setSizes([usable, 0, sidebar_width])
+            else:
+                self.chat_center.show()
+                self.workspace_splitter.setSizes([workbench_width, chat_width, sidebar_width])
+        else:
+            self.chat_center.show()
+            self.workspace_splitter.setSizes([0, usable, sidebar_width])
+        self._reposition_browser_preview()
+
+    def _activate_embedded_browser(self, initial_url="about:blank"):
+        if not hasattr(self, "workspace_browser_panel"):
+            return
+        self.workspace_browser_panel.ensure_background_ready(initial_url)
+
+    def _on_browser_activity(self, title, url, progress):
+        if not hasattr(self, "browser_preview_card"):
+            return
+        url = str(url or "")
+        self.browser_preview_card.update_activity(title, url, progress)
+        should_show = (
+            url not in {"", "about:blank"}
+            and not self.workbench.is_open()
+            and self.stacked_widget.currentWidget() is self.chat_page
+        )
+        self.browser_preview_card.setVisible(should_show)
+        if should_show:
+            self.browser_preview_card.raise_()
+            self._reposition_browser_preview()
+
+    def _reposition_browser_preview(self):
+        if not hasattr(self, "browser_preview_card") or not hasattr(self, "chat_body"):
+            return
+        card = self.browser_preview_card
+        card.move(14, max(12, self.chat_body.height() - card.height() - 150))
+
+    def _ensure_management_center(self):
+        if self.management_center_page is not None:
+            return self.management_center_page
+        center = ManagementCenterPage(self, self.stacked_widget)
+
+        def settings_factory():
+            if self.settings_page is None:
+                self.settings_page = SettingsPage(self.core, self)
+                self.settings_page.set_management_embedded(True)
+            return self.settings_page
+
+        def workspace_factory():
+            return WorkspacePreferencesPage(self.core, self)
+
+        def usage_factory():
+            self.usage_page = UsageStatsPage(self.core, self)
+            return self.usage_page
+
+        def tools_factory():
+            self.tools_page = ToolsSettingsPage(self.core, self)
+            return self.tools_page
+
+        def memory_factory():
+            self.memory_page = MemoryManagementPage(self.core, self)
+            return self.memory_page
+
+        def tasks_factory():
+            self.task_center_page = TaskCenterPage(self.core, self)
+            return self.task_center_page
+
+        def doctor_factory():
+            self.doctor_page = SmartiDiagnosticPage(self.core, self)
+            return self.doctor_page
+
+        def trace_factory():
+            self.trace_page = DeveloperTracePage(self.core, self)
+            return self.trace_page
+
+        center.add_group("ניהול")
+        center.register_section(
+            "workspace", "סביבת עבודה ודפדפן", ("workspace_settings_icon",),
+            workspace_factory, lambda page: page.refresh(),
+        )
+        center.register_section(
+            "usage", "נתוני שימוש", ("usage_icon",), usage_factory,
+            lambda page: page.load_data("today"),
+        )
+        center.register_section("tools", "כלים וחיבורים", ("tools_icon",), tools_factory)
+        center.register_section(
+            "memory", "זיכרונות", ("memory_management_icon",), memory_factory,
+            lambda page: page.activate(force=False),
+        )
+        center.register_section(
+            "tasks", "מרכז משימות", ("task_center_icon",), tasks_factory,
+            lambda page: page.load_tasks(),
+        )
+        center.register_section("diagnostic", "Smarti Diagnostic", ("doctor_icon",), doctor_factory)
+        center.register_section(
+            "trace", "מעקב למפתחים", ("developer_icon", "code_icon"), trace_factory,
+            lambda page: page.load_trace(),
+        )
+        center.add_group("הגדרות")
+        for key, label, icons in (
+            ("ai", "מודלי AI וספקים", ("settings_ai_icon",)),
+            ("safety", "אבטחה ופרטיות", ("settings_security_icon", "policy_icon")),
+            ("tools", "כלים ותקשורת", ("settings_tools_icon", "tools_icon")),
+            ("appearance", "קול, מראה ומערכת", ("settings_appearance_icon",)),
+            ("advanced", "מתקדם ומפתחים", ("settings_advanced_icon",)),
+        ):
+            center.register_section(
+                f"settings_{key}",
+                label,
+                icons,
+                settings_factory,
+                lambda page, section=key: (
+                    page.show_management_section(section),
+                    page.ensure_models_loaded(),
+                ),
+            )
+        center.finish_sections()
+        self.management_center_page = center
+        self.stacked_widget.addWidget(center)
+        return center
+
+    def _show_management_section(self, section):
+        self._close_canvas_for_secondary_page()
+        center = self._ensure_management_center()
+        page = center.select_section(section)
+        self.stacked_widget.setCurrentWidget(center)
+        self._reset_page_scrolls(page)
+        return page
 
     def _reset_page_scrolls(self, page):
         if page is None:
@@ -6209,67 +6675,36 @@ class ChatWindow(QMainWindow):
         QTimer.singleShot(0, reset)
 
     def show_usage_page(self):
-        self._close_canvas_for_secondary_page()
-        if self.usage_page is None:
-            self.usage_page = UsageStatsPage(self.core, self)
-            self.stacked_widget.addWidget(self.usage_page)
-        self.usage_page.load_data('today')
-        self.stacked_widget.setCurrentWidget(self.usage_page)
-        self._reset_page_scrolls(self.usage_page)
+        self._show_management_section("usage")
 
     def show_memory_page(self):
-        self._close_canvas_for_secondary_page()
-        if self.memory_page is None:
-            self.memory_page = MemoryManagementPage(self.core, self)
-            self.stacked_widget.addWidget(self.memory_page)
-        self.stacked_widget.setCurrentWidget(self.memory_page)
-        self.memory_page.activate(force=False)
-        self._reset_page_scrolls(self.memory_page)
+        self._show_management_section("memory")
 
     def show_settings_page(self):
-        self._close_canvas_for_secondary_page()
-        if self.settings_page is None:
-            self.settings_page = SettingsPage(self.core, self)
-            self.stacked_widget.addWidget(self.settings_page)
-        self.settings_page.show_home()
-        self.settings_page.ensure_models_loaded()
-        self.stacked_widget.setCurrentWidget(self.settings_page)
-        self._reset_page_scrolls(self.settings_page)
+        self._show_management_section("settings_ai")
 
     def rebuild_settings_page(self):
-        if self.settings_page is not None:
-            self.stacked_widget.removeWidget(self.settings_page)
-            self.settings_page.deleteLater()
+        if self.management_center_page is not None:
+            self.stacked_widget.removeWidget(self.management_center_page)
+            self.management_center_page.deleteLater()
+            self.management_center_page = None
             self.settings_page = None
+            self.tools_page = None
+            self.usage_page = None
+            self.memory_page = None
+            self.task_center_page = None
+            self.trace_page = None
+            self.doctor_page = None
         self.show_settings_page()
 
     def show_tools_page(self):
-        self._close_canvas_for_secondary_page()
-        if self.tools_page is not None:
-            self.stacked_widget.removeWidget(self.tools_page)
-            self.tools_page.deleteLater()
-        self.tools_page = ToolsSettingsPage(self.core, self)
-        self.stacked_widget.addWidget(self.tools_page)
-        self.stacked_widget.setCurrentWidget(self.tools_page)
-        self._reset_page_scrolls(self.tools_page)
+        self._show_management_section("tools")
 
     def show_task_center_page(self):
-        self._close_canvas_for_secondary_page()
-        if self.task_center_page is None:
-            self.task_center_page = TaskCenterPage(self.core, self)
-            self.stacked_widget.addWidget(self.task_center_page)
-        self.task_center_page.load_tasks()
-        self.stacked_widget.setCurrentWidget(self.task_center_page)
-        self._reset_page_scrolls(self.task_center_page)
+        self._show_management_section("tasks")
 
     def show_trace_page(self):
-        self._close_canvas_for_secondary_page()
-        if self.trace_page is None:
-            self.trace_page = DeveloperTracePage(self.core, self)
-            self.stacked_widget.addWidget(self.trace_page)
-        self.trace_page.load_trace()
-        self.stacked_widget.setCurrentWidget(self.trace_page)
-        self._reset_page_scrolls(self.trace_page)
+        self._show_management_section("trace")
 
     def show_history_page(self):
         self._close_canvas_for_secondary_page()
@@ -6281,12 +6716,7 @@ class ChatWindow(QMainWindow):
         self._reset_page_scrolls(self.history_page)
 
     def show_doctor_page(self):
-        self._close_canvas_for_secondary_page()
-        if self.doctor_page is None:
-            self.doctor_page = SmartiDiagnosticPage(self.core, self)
-            self.stacked_widget.addWidget(self.doctor_page)
-        self.stacked_widget.setCurrentWidget(self.doctor_page)
-        self._reset_page_scrolls(self.doctor_page)
+        self._show_management_section("diagnostic")
 
     def show_about_page(self):
         self._close_canvas_for_secondary_page()
@@ -6366,27 +6796,14 @@ class ChatWindow(QMainWindow):
             QMessageBox.information(self, "קנבס מתקדם", "כדי לפתוח את הקנבס יש להתקין את PyQt6-WebEngine. השיחה נשארת זמינה.")
             return
         if not self._canvas_expanded:
-            self._compact_window_size = QSize(self.width(), self.height())
-            self.setUpdatesEnabled(False)
-            try:
-                self._canvas_expanded = True
-                self.canvas_panel.show()
-                available = self._canvas_screen_geometry()
-                if available:
-                    width = min(1220, max(820, available.width() - 32))
-                    height = min(760, max(620, available.height() - 32))
-                    self._pin_window_bottom_center(QSize(width, height))
-                self._set_expanded_canvas_sizes()
-            finally:
-                self.setUpdatesEnabled(True)
-                self.update()
+            self._canvas_expanded = True
         allow_remote_images = bool(
             self.core.settings.get("enable_visual_surfaces", False)
             and self.core.settings.get("enable_web_canvas", False)
             and self.core.settings.get("enable_canvas_remote_images", False)
         )
         self.canvas_panel.show_canvas(artifact, allow_remote_images=allow_remote_images)
-        self.canvas_panel.show()
+        self.open_workbench("canvas")
         self._set_active_canvas_card(artifact.get("id"))
         self._schedule_chat_width_refresh()
         self._schedule_scroll_last_user_to_view_top(delays=(0, 100))
@@ -6394,16 +6811,9 @@ class ChatWindow(QMainWindow):
     def close_canvas(self):
         if not getattr(self, "_canvas_expanded", False):
             return
-        self.setUpdatesEnabled(False)
-        try:
-            self.canvas_panel.hide()
-            self._canvas_expanded = False
-            compact = self._compact_window_size or QSize(450, 760)
-            self._pin_window_bottom_center(compact)
-            self._set_compact_chat_sizes()
-        finally:
-            self.setUpdatesEnabled(True)
-            self.update()
+        self._canvas_expanded = False
+        if hasattr(self, "workbench"):
+            self.workbench.close_kind("canvas")
         self._set_active_canvas_card("")
         self._schedule_chat_width_refresh()
 
@@ -6417,16 +6827,12 @@ class ChatWindow(QMainWindow):
             self.close_canvas()
 
     def _set_expanded_canvas_sizes(self):
-        if not hasattr(self, "chat_splitter"):
-            return
-        self.chat_splitter.setSizes([int(self.width() * 0.62), int(self.width() * 0.38)])
-        self._schedule_chat_width_refresh()
+        if hasattr(self, "workbench"):
+            self.open_workbench("canvas")
 
     def _set_compact_chat_sizes(self):
-        if not hasattr(self, "chat_splitter"):
-            return
-        self.chat_splitter.setSizes([0, max(1, self.width())])
-        self._schedule_chat_width_refresh()
+        if hasattr(self, "workbench"):
+            self.close_workbench()
 
     def handle_canvas_action(self, payload):
         if not isinstance(payload, dict):
@@ -6559,8 +6965,37 @@ class ChatWindow(QMainWindow):
             QTimer.singleShot(0, self.mark_active_session_read)
             self._refresh_codex_quota_if_active(min_age=15)
         if event.type() in (QEvent.Type.ActivationChange, QEvent.Type.WindowStateChange):
+            if hasattr(self, "window_title_bar"):
+                QTimer.singleShot(0, self.window_title_bar.sync_state)
             if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
                 QTimer.singleShot(0, self.voice_overlay.position_near_owner)
+
+    @staticmethod
+    def _resize_edges_for_point(point, width, height, margin=7):
+        """Return Qt resize edges without dereferencing a native MSG pointer."""
+        edge = max(1, int(margin))
+        edges = Qt.Edge(0)
+        if point.x() <= edge:
+            edges |= Qt.Edge.LeftEdge
+        elif point.x() >= int(width) - edge:
+            edges |= Qt.Edge.RightEdge
+        if point.y() <= edge:
+            edges |= Qt.Edge.TopEdge
+        elif point.y() >= int(height) - edge:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    def mousePressEvent(self, event):
+        """Start the platform resize through Qt for the custom frameless window."""
+        if event.button() == Qt.MouseButton.LeftButton and not self.isMaximized():
+            edges = self._resize_edges_for_point(
+                event.position().toPoint(), self.width(), self.height()
+            )
+            handle = self.windowHandle()
+            if edges and handle is not None and handle.startSystemResize(edges):
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
     def closeEvent(self, event):
         if getattr(self, "_quit_requested", False) or not self.core.settings.get("keep_running_in_tray", True):
@@ -6598,6 +7033,8 @@ class ChatWindow(QMainWindow):
                 self.refresh_chat_title()
             if self.history_page is not None:
                 self.history_page.load_sessions()
+            if hasattr(self, "sidebar_history_page"):
+                self.sidebar_history_page.load_sessions()
             return
         if not hasattr(self, "notifications"):
             return
@@ -6719,6 +7156,8 @@ class ChatWindow(QMainWindow):
             self._schedule_chat_width_refresh()
             self._resize_quick_input_controls()
             self._update_chat_bottom_padding()
+            self._apply_workspace_responsive()
+            self._reposition_browser_preview()
             if hasattr(self, "voice_overlay") and self.voice_overlay.isVisible():
                 self.voice_overlay.position_near_owner()
         except Exception:
@@ -6726,9 +7165,10 @@ class ChatWindow(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # The native frame margins only become final after the first show on
-        # Windows. Align once more then so no edge can slip under the taskbar.
-        self._schedule_canvas_taskbar_alignment()
+        if getattr(self, "_workspace_initial_maximize_pending", False):
+            self._workspace_initial_maximize_pending = False
+            QTimer.singleShot(0, self.showMaximized)
+        QTimer.singleShot(0, self._apply_workspace_responsive)
         # Project durable run/unread state only after Qt has created the native
         # top-level window. Scheduling these from __init__ can run re-entrantly
         # while complex child widgets are still being constructed.
@@ -6755,6 +7195,8 @@ class ChatWindow(QMainWindow):
         return super().eventFilter(watched, event)
 
     def _schedule_chat_width_refresh(self):
+        QTimer.singleShot(0, self._align_chat_header_to_content)
+        QTimer.singleShot(100, self._align_chat_header_to_content)
         QTimer.singleShot(0, self._refresh_chat_message_widths)
         QTimer.singleShot(100, self._refresh_chat_message_widths)
 
@@ -6917,7 +7359,45 @@ class ChatWindow(QMainWindow):
             self.menu.hide()
             QTimer.singleShot(220, self._clear_menu_reopen_guard)
             return
+        self._rebuild_active_conversation_menu()
         self.menu.exec(self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height())))
+
+    def _rebuild_active_conversation_menu(self):
+        self.menu.clear()
+        self._menu_actions = []
+        try:
+            record = dict(self.core.active_chat_session_metadata() or {})
+        except Exception:
+            record = {}
+        session_id = str(record.get("id") or "")
+        history = getattr(self, "sidebar_history_page", None)
+        if not session_id or history is None:
+            action = self.menu.addAction("אין פעולות זמינות")
+            action.setEnabled(False)
+            return
+        pinned = bool(record.get("pinned"))
+        self._add_menu_action(
+            "בטל הצמדה" if pinned else "הצמד שיחה",
+            lambda checked=False, sid=session_id, value=not pinned: history.set_pinned(sid, value),
+            "unpin_icon" if pinned else "pin_icon",
+        )
+        self._add_menu_action(
+            "שנה שם",
+            lambda checked=False, sid=session_id, title=record.get("title", ""): history.rename_session(sid, title),
+            "rename_icon",
+        )
+        self._add_menu_action(
+            "יצוא JSON",
+            lambda checked=False, sid=session_id, title=record.get("title", ""): history.export_session(sid, title),
+            "export_json_icon",
+            "export_icon",
+        )
+        self.menu.addSeparator()
+        self._add_menu_action(
+            "מחק שיחה",
+            lambda checked=False, sid=session_id: history.delete_session(sid),
+            "delete_icon",
+        )
 
     def show_attachment_menu(self):
         # Kept as a compatibility shim for older signal wiring; no menu is shown.
@@ -7322,6 +7802,10 @@ class ChatWindow(QMainWindow):
             "run_available", "run_started", "run_finished", "approval_requested"
         }:
             self.history_page.load_sessions()
+        if hasattr(self, "sidebar_history_page") and event_type in {
+            "run_available", "run_started", "run_finished", "approval_requested"
+        }:
+            self.sidebar_history_page.load_sessions()
 
     def _finish_managed_run(self, run_id, session_id, payload, view):
         response = str(payload.get("response") or payload.get("error") or "")
@@ -7754,6 +8238,10 @@ class ChatWindow(QMainWindow):
 
     def load_active_chat_session(self):
         self._chat_load_generation = int(getattr(self, "_chat_load_generation", 0) or 0) + 1
+        if hasattr(self, "sidebar_history_page"):
+            QTimer.singleShot(0, self.sidebar_history_page.load_sessions)
+        if hasattr(self, "workbench"):
+            self.workbench.refresh_context()
         generation = self._chat_load_generation
         self._clear_chat_widgets()
         page_loader = getattr(self.core, "active_chat_messages_page", None)
@@ -7911,6 +8399,8 @@ class ChatWindow(QMainWindow):
         self.refresh_chat_title()
         if self.history_page is not None:
             self.history_page.load_sessions()
+        if hasattr(self, "sidebar_history_page"):
+            self.sidebar_history_page.load_sessions()
 
     def clear_chat(self):
         self.start_new_chat()
@@ -8041,7 +8531,7 @@ class AnimatedSplash(QWidget):
         self.card.setStyleSheet(
             "QFrame#SplashCard {"
             f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {BG_ELEVATED_COLOR}, stop:0.55 {card_mid}, stop:1 {card_end});"
-            "border: none; border-radius: 0px;"
+            f"border: 1px solid {SOFT_LINE_COLOR}; border-radius: {self._window_radius}px;"
             "}"
         )
         self.title_lbl.setStyleSheet(
@@ -8098,7 +8588,7 @@ class AnimatedSplash(QWidget):
             )
 
     def _apply_window_mask(self):
-        self.clearMask()
+        apply_rounded_popup_mask(self, self._window_radius)
 
     def showEvent(self, event):
         self._apply_window_mask()

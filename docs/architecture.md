@@ -5,6 +5,25 @@ in `smarti/app.py`, `smarti/chat.py`, and the UI helper modules. The agent
 runtime is exposed as `smarti.core.SmartiCore` for compatibility, while the
 implementation is split into focused domain mixins under `smarti/agent/`.
 
+## Desktop Workspace
+
+- `smarti/chat.py` owns the central conversation surface and composes the
+  top-level Workspace shell.
+- `smarti/workspace_ui.py` provides the collapsible conversation sidebar, the
+  dynamic left work area, file/document/media previews, embedded browser, terminal,
+  conversation-artifact list, and the lazy settings-and-management hub.
+- `smarti/native_browser.py` embeds an app-mode Chromium native window as a Qt
+  child on Windows while preserving a loopback-only CDP endpoint for Playwright.
+- `smarti/browser_profile.py` implements explicit, copy-based one-time import
+  of compatible cookies, history, and bookmarks into Smarti Browser. It never
+  imports passwords or modifies the source profile.
+- `smarti/webengine_probe.py` retains a crash-isolated compatibility check for
+  non-Windows WebEngine paths. Windows avoids native WebEngine startup crashes
+  by using the native Chromium child host directly.
+- The canvas uses a temporary native Chromium host and tokenized loopback HTTP
+  bridge with a restrictive CSP. Smarti Browser uses a persistent native
+  profile and exposes its visible target on port 49223 for Playwright/CDP.
+
 ## Agent Runtime Modules
 
 - `smarti/core.py`: compatibility facade that composes `SmartiCore`.
@@ -58,5 +77,7 @@ to `smarti_startup_error.log` instead of disappearing silently under `pythonw`.
 ## Dependency Layout
 
 Runtime dependencies are consolidated in `requirements.txt`, including
-`PyQt6-WebEngine` for the optional Live Visual Canvas. Build-only dependencies
-stay in `requirements-build.txt`.
+compatible PyQt 6.11 bindings, the WebEngine compatibility path, and Playwright
+for structured browser automation. Windows browser/canvas rendering uses the
+installed Chromium engine through `smarti/native_browser.py`.
+Build-only dependencies stay in `requirements-build.txt`.

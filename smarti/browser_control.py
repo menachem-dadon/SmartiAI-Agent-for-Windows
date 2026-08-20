@@ -20,7 +20,7 @@ HELPER_RESULT_PREFIX = "SMARTI_BROWSER_RESULT="
 
 
 class SmartiBrowserController:
-    """Runs high-level browser actions against Chrome through Playwright/CDP."""
+    """Runs high-level browser actions against Smarti Browser through Playwright/CDP."""
 
     def __init__(self, core):
         self.core = core
@@ -122,17 +122,18 @@ class SmartiBrowserController:
     def _doctor_payload(self):
         profiles = self._profiles_payload()
         playwright = self._playwright_dependency()
-        chrome_path = ""
+        browser_path = ""
         try:
-            chrome_path = getattr(self.core, "_chrome_executable", lambda: "")() or ""
+            browser_path = getattr(self.core, "_chrome_executable", lambda: "")() or ""
         except Exception:
-            chrome_path = ""
+            browser_path = ""
         ready = bool(self.core._automation_browser_is_ready())
+        embedded = callable(getattr(self.core, "embedded_browser_activate_callback", None))
         checks = [
             {"id": "settings.enabled", "ok": bool(self.core.settings.get("enable_browser_automation", False))},
             {"id": "python.playwright", "ok": bool(playwright.get("installed")), "version": playwright.get("version", ""), "error": playwright.get("error", "")},
-            {"id": "chrome.executable", "ok": bool(chrome_path), "path": chrome_path},
-            {"id": "chrome.cdp_ready", "ok": ready, "endpoint": self.core._automation_browser_endpoint("").rstrip("/")},
+            {"id": "browser.runtime", "ok": bool(embedded or browser_path), "embedded": embedded, "fallbackPath": browser_path},
+            {"id": "browser.cdp_ready", "ok": ready, "endpoint": self.core._automation_browser_endpoint("").rstrip("/")},
             {"id": "profile.smarti", "ok": True, "path": self.core._automation_browser_profile_dir()},
         ]
         return {
@@ -142,7 +143,7 @@ class SmartiBrowserController:
             "dependencies": {
                 "python": sys.executable,
                 "playwright": playwright,
-                "chrome": {"found": bool(chrome_path), "path": chrome_path},
+                "browser": {"embedded": embedded, "fallbackFound": bool(browser_path), "fallbackPath": browser_path},
             },
             "checks": checks,
             "profiles": profiles["profiles"],
@@ -151,7 +152,7 @@ class SmartiBrowserController:
                 "python -m pip check",
                 "python -c \"from playwright.sync_api import sync_playwright; print('playwright ok')\"",
             ],
-            "message": "Use action='start' to launch Smarti Chrome if dependencies are OK but cdp_ready is false.",
+            "message": "Use action='start' to initialize Smarti Browser if dependencies are OK but cdp_ready is false.",
         }
 
     def _snapshot_defaults(self):
@@ -192,13 +193,16 @@ class SmartiBrowserController:
             "profiles": [
                 {
                     "id": "smarti",
-                    "label": "Smarti isolated Chrome",
+                    "label": "Smarti Browser",
                     "kind": "local-managed",
                     "default": True,
                     "ready": bool(self.core._automation_browser_is_ready()),
                     "cdpEndpoint": self.core._automation_browser_endpoint("").rstrip("/"),
                     "profileDir": self.core._automation_browser_profile_dir(),
-                    "canLaunch": bool(getattr(self.core, "_chrome_executable", lambda: None)()),
+                    "canLaunch": bool(
+                        callable(getattr(self.core, "embedded_browser_activate_callback", None))
+                        or getattr(self.core, "_chrome_executable", lambda: None)()
+                    ),
                     "canStop": True,
                 },
             ],

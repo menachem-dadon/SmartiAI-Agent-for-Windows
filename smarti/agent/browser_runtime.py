@@ -22,8 +22,8 @@ class BrowserRuntimeMixin:
             ps = (
                 f"$profile = '{profile_dir}'; "
                 f"$port = '{SMARTI_BROWSER_DEBUG_PORT}'; "
-                "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-                "Where-Object { ($_.CommandLine -like \"*--remote-debugging-port=$port*\") -or ($_.CommandLine -like \"*--user-data-dir=$profile*\") } | "
+                "Get-CimInstance Win32_Process | "
+                "Where-Object { ($_.Name -in @('chrome.exe','msedge.exe')) -and (($_.CommandLine -like \"*--remote-debugging-port=$port*\") -or ($_.CommandLine -like \"*--user-data-dir=$profile*\")) } | "
                 "Select-Object -First 1 -ExpandProperty CommandLine"
             )
             completed = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=5, env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
@@ -39,9 +39,13 @@ class BrowserRuntimeMixin:
         candidates = [
             shutil.which("chrome"),
             shutil.which("chrome.exe"),
+            shutil.which("msedge"),
+            shutil.which("msedge.exe"),
             os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
             os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
             os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Microsoft", "Edge", "Application", "msedge.exe"),
+            os.path.join(os.environ.get("PROGRAMFILES", ""), "Microsoft", "Edge", "Application", "msedge.exe"),
         ]
         for candidate in candidates:
             if candidate and os.path.exists(candidate):
@@ -75,9 +79,24 @@ class BrowserRuntimeMixin:
             if self._automation_browser_ssl_mode_matches():
                 return True, None
             self._close_automation_browser()
+        # The desktop owns a persistent Chromium profile embedded as a native
+        # Qt child. Asking the GUI to initialize it first keeps automation and
+        # the visible browser tab on the same target instead of opening an
+        # unrelated top-level window.
+        embedded_callback = getattr(self, "embedded_browser_activate_callback", None)
+        if callable(embedded_callback):
+            try:
+                embedded_callback(initial_url or "about:blank")
+                deadline = time.time() + 16
+                while time.time() < deadline:
+                    if self._automation_browser_is_ready():
+                        return True, None
+                    time.sleep(0.2)
+            except Exception as exc:
+                logging.debug("Embedded Smarti browser activation failed: %s", exc)
         chrome = self._chrome_executable()
         if not chrome:
-            return False, "ERROR: Chrome was not found. Install Google Chrome to use browser automation."
+            return False, "ERROR: The embedded Smarti browser is unavailable and no compatible Chromium browser was found."
         profile_dir = self._automation_browser_profile_dir()
         try:
             os.makedirs(profile_dir, exist_ok=True)
@@ -88,7 +107,7 @@ class BrowserRuntimeMixin:
                 if self._automation_browser_is_ready():
                     return True, None
                 time.sleep(0.25)
-            return False, f"ERROR: Smarti browser did not become ready on port {SMARTI_BROWSER_DEBUG_PORT}. If a Chrome profile warning is open, close it and retry."
+            return False, f"ERROR: Smarti browser did not become ready on port {SMARTI_BROWSER_DEBUG_PORT}."
         except Exception as e:
             return False, f"ERROR: Failed to start Smarti browser: {e}"
 
@@ -107,8 +126,8 @@ class BrowserRuntimeMixin:
         ps = (
             f"$profile = '{profile_dir}'; "
             f"$port = '{SMARTI_BROWSER_DEBUG_PORT}'; "
-            "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-            "Where-Object { ($_.CommandLine -like \"*--remote-debugging-port=$port*\") -or ($_.CommandLine -like \"*--user-data-dir=$profile*\") } | "
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { ($_.Name -in @('chrome.exe','msedge.exe')) -and (($_.CommandLine -like \"*--remote-debugging-port=$port*\") -or ($_.CommandLine -like \"*--user-data-dir=$profile*\")) } | "
             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
         )
         try:

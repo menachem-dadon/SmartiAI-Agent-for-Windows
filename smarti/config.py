@@ -366,7 +366,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "browser_automation_manager": {
-        "description": "Structured control manager for Smarti dedicated persistent Chrome through Playwright/CDP.",
+        "description": "Structured control manager for Smarti Browser through Playwright/CDP.",
         "inputSchema": {
             "type": "object",
             "properties": {"action": {"type": "string", "description": "Browser action."}},
@@ -549,7 +549,7 @@ BUILTIN_DYNAMIC_TOOLS = {
     "save_screenshot_to_disk": "שמירת צילום מסך כקובץ.",
     "set_volume": "השתקת השמע.",
     "email_manager": "Full email access through IMAP/SMTP. Use it for every email task: search/read by UID, send/draft/reply/forward, styled RTL/HTML messages, flags, archive/trash/delete/move/copy, folders, attachments. For Hebrew display-name searches use `from`, `subject_filter`, or `query`; auto mode falls back to local header scan. Use `count: 0` for all matches and preserve each result's `mailbox` when reading.",
-    "browser_automation_manager": "Structured Chrome control manager through Smarti's persistent Playwright/CDP Chrome profile: stable tabs, accessibility snapshots/ref maps, act by ref, screenshots/PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
+    "browser_automation_manager": "Structured control of Smarti's embedded persistent browser through Playwright/CDP: stable tabs, accessibility snapshots/ref maps, act by ref, screenshots/PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
     "computer_automation_manager": "מנהל שליטה במחשב דרך Windows UI Automation (`auto`) ובמידת הצורך מקלדת/עכבר (`pa`).",
     "read_local_document": "קריאת טקסט מקבצי מסמכים.",
     "run_mcp": "הפעלת פונקציות מכלים חיצוניים שהותקנו.",
@@ -1261,7 +1261,7 @@ BROWSER_AUTOMATION_ACTIONS = [
 BROWSER_AUTOMATION_PROPERTIES = {
     "url": {"type": "string", "description": "URL for open/navigate/start."},
     "targetUrl": {"type": "string", "description": "Alias for url."},
-    "profile": {"type": "string", "enum": ["smarti"], "description": "Browser profile. Only Smarti's persistent Playwright/CDP Chrome profile is supported."},
+    "profile": {"type": "string", "enum": ["smarti"], "description": "Browser profile. Automation uses Smarti's persistent embedded profile."},
     "targetId": {"type": "string", "description": "Tab/window target id from tabs/snapshot results."},
     "tabId": {"type": "string", "description": "Alias for targetId."},
     "ref": {"type": "string", "description": "Stable element ref from snapshot, for example e12."},
@@ -1345,7 +1345,7 @@ BROWSER_AUTOMATION_PROPERTIES = {
 
 BUILTIN_TOOL_SCHEMAS["browser_automation_manager"] = {
     "description": (
-        "Structured browser automation manager for Smarti's persistent Chrome profile. Prefer snapshot -> act by ref. "
+        "Structured browser automation manager for Smarti's persistent embedded browser profile. Prefer snapshot -> act by ref. "
         "Supports profiles, stable tabs, accessibility snapshots/ref maps, navigation, screenshots, PDF, console/errors/requests/trace, CDP, storage/cookies, dialogs, upload, "
         "downloads, wait, and JavaScript evaluate. profile='smarti' uses Smarti's persistent Playwright/CDP browser. Raw Python browser code is not used."
     ),
@@ -1841,7 +1841,7 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "extension_manager": "Unified MCP and Skills operations.",
     "search_tools": "Search Smarti's effective catalog before selecting, installing, or creating a tool.",
     "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
-    "browser_automation_manager": "Browser automation manager via Smarti's persistent Playwright/CDP Chrome profile: profiles, tabs, accessibility refs, act by ref, screenshots, PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
+    "browser_automation_manager": "Browser automation manager via Smarti's persistent embedded Playwright/CDP profile: profiles, tabs, accessibility refs, act by ref, screenshots, PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
     "computer_automation_manager": "Computer automation manager via Windows UI Automation: inspect/list/find UIA elements, then invoke/set/focus them without guessed coordinates.",
     "document_manager": "Structured Word/DOCX authoring, editing, COM automation, export/conversion, inspection, comparison, and page-PNG visual QA; Hebrew/RTL by default.",
 })
@@ -2058,6 +2058,8 @@ DEFAULT_SETTINGS = {
     "browser_allowed_hosts": [],
     "browser_capture_dir": "",
     "browser_download_dir": "",
+    "browser_embedded_primary": True,
+    "browser_profile_import": {},
     "email_default_read_body_chars": 6000,
     "email_multi_read_body_chars": 3000,
     "privacy_redact_logs": True,
@@ -2076,7 +2078,11 @@ DEFAULT_SETTINGS = {
         "sanitize_html": True,
         "lazy_settings_pages": True,
         "theme_mode": "dark",
-        "settings_show_advanced": False
+        "settings_show_advanced": False,
+        "workspace_start_maximized": True,
+        "workspace_sidebar_collapsed": False,
+        "workspace_workbench_collapsed": True,
+        "workspace_default_panel": "files"
     },
     "privacy": {
         "redact_logs": True,

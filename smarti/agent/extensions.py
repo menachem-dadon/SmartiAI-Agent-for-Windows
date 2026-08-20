@@ -121,7 +121,7 @@ class ExtensionsMixin:
                     "4. Act narrowly by ref. If a ref is missing/stale or not in the expected snapshotEpoch, snapshot the same targetId again and retry once with the new ref.\n"
                     "5. After navigation, modal changes, form submission, or dynamic loading, verify with the returned page state or a fresh snapshot. Use noSnapshot=true only for cheap intermediate actions where the next check is already planned.\n\n"
                     "Profiles:\n"
-                    "- Only profile='smarti' is supported. It is Smarti's persistent managed Chrome profile and can remember cookies/logins after the user signs in there manually.\n"
+                    "- Only profile='smarti' is supported. It is Smarti Browser's persistent embedded profile and can remember cookies/logins after manual sign-in or an explicit one-time import.\n"
                     "- If a login, password manager, 2FA, CAPTCHA, payment, or account-security step appears, pause and ask the user to complete it manually in the browser.\n\n"
                     "DevTools and visibility:\n"
                     "- Use console/errors/requests/trace to diagnose broken flows, failed API calls, client errors, redirects, and async state.\n"

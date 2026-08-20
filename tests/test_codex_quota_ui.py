@@ -87,6 +87,35 @@ class CodexQuotaMenuUiTests(unittest.TestCase):
             1,
         )
 
+    def test_composer_model_menu_flips_above_and_stays_attached_to_button(self):
+        button = QPushButton("gpt 5.6 luna", self.host)
+        button.setGeometry(250, 635, 190, 44)
+        self.host.show()
+        self.app.processEvents()
+        menu = QMenu(self.host)
+        provider = menu.addMenu("OpenAI")
+        for label in ("gpt 5.6 luna", "gpt 5.6 sol", "gpt 5.5"):
+            provider.addAction(label)
+        for label in ("עוצמת חשיבה", "מאוזנת", "גבוהה"):
+            menu.addAction(label)
+
+        opened = self.host._popup_menu_near_button(
+            menu, button, center_horizontally=False, anchor_below=False
+        )
+        self.app.processEvents()
+
+        self.assertTrue(opened)
+        self.assertLessEqual(menu.frameGeometry().bottom(), button.mapToGlobal(QPoint(0, 0)).y())
+
+    def test_autonomy_label_is_not_elided_when_the_control_has_room(self):
+        button = chat_module.DropdownPillButton("אוטונומי")
+        ChatWindow._fit_quick_input_button(
+            self.host, button, "אוטונומי", base_width=152, max_width=204, min_width=118
+        )
+        self.assertEqual(button.text(), "אוטונומי")
+        self.assertGreaterEqual(button.width(), 152)
+        button.deleteLater()
+
     def test_popup_menu_is_opaque_for_windows_text_antialiasing(self):
         menu = QMenu(self.host)
 
@@ -759,6 +788,46 @@ class ContextCompactionUiTests(unittest.TestCase):
         self.assertEqual(bubble.agent_process_groups[0].tool_widgets, [])
         self.assertEqual(len(bubble.agent_process_groups[1].tool_widgets), 1)
         bubble.deleteLater()
+
+
+class ChatRtlLayoutTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+        cls.app.setQuitOnLastWindowClosed(False)
+
+    def _laid_out_message(self, is_user):
+        container = chat_module.ChatMessageContainer(
+            "זוהי הודעת בדיקה קצרה",
+            is_user=is_user,
+            parent_width=900,
+        )
+        container.resize(900, container.sizeHint().height())
+        container.show()
+        self.app.processEvents()
+        return container
+
+    def test_user_bubble_and_actions_are_anchored_to_the_right(self):
+        container = self._laid_out_message(is_user=True)
+        try:
+            self.assertGreater(container.bubble.geometry().center().x(), container.width() // 2)
+            self.assertGreater(container.copy_btn.geometry().center().x(), container.width() // 2)
+            self.assertLessEqual(
+                container.actions_container.width() - container.copy_btn.geometry().right(),
+                20,
+            )
+        finally:
+            container.close()
+
+    def test_agent_content_and_actions_are_anchored_to_the_right(self):
+        container = self._laid_out_message(is_user=False)
+        try:
+            self.assertGreater(container.bubble.geometry().center().x(), container.width() // 2)
+            self.assertGreater(container.copy_btn.geometry().center().x(), container.width() // 2)
+            self.assertGreater(container.tts_btn.geometry().center().x(), container.width() // 2)
+            self.assertGreater(container.copy_btn.x(), container.tts_btn.x())
+        finally:
+            container.close()
 
 
 class FavoriteModelRegressionTests(unittest.TestCase):

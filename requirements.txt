@@ -1,5 +1,5 @@
-PyQt6>=6.7
-PyQt6-WebEngine>=6.7
+PyQt6>=6.11,<6.12
+PyQt6-WebEngine>=6.11,<6.12
 requests>=2.31
 urllib3>=2.2
 certifi>=2024.8.30
@@ -8,7 +8,7 @@ aiohttp>=3.9
 truststore>=0.10.4,<1
 cryptography>=43,<47
 openai>=1.40
-playwright>=1.45
+playwright>=1.58,<2
 PyAutoGUI>=0.9.54
 uiautomation>=2.0.20
 pyperclip>=1.8

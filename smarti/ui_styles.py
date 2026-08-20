@@ -878,6 +878,22 @@ def apply_windows_rounded_corners(widget, hwnd=None):
         return False
 
 
+def apply_rounded_popup_mask(widget, radius=12):
+    """Clip transient Qt windows so their stylesheet radius is real, not decorative."""
+    if widget is None or _qt_object_is_deleted(widget):
+        return False
+    try:
+        width, height = int(widget.width()), int(widget.height())
+        if width <= 1 or height <= 1:
+            return False
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, width, height), float(radius), float(radius))
+        widget.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        return True
+    except Exception:
+        return False
+
+
 class WindowsRoundedCornerController(QObject):
     def __init__(self, app):
         super().__init__(app)
@@ -902,7 +918,7 @@ class WindowsRoundedCornerController(QObject):
             self.apply_to(target)
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Show:
+        if event.type() in {QEvent.Type.Show, QEvent.Type.Resize}:
             try:
                 if (
                     isinstance(obj, QWidget)
@@ -912,6 +928,21 @@ class WindowsRoundedCornerController(QObject):
                 ):
                     target_ref = weakref.ref(obj)
                     QTimer.singleShot(0, lambda ref=target_ref: self._apply_weak_target(ref))
+                elif (
+                    isinstance(obj, QWidget)
+                    and not _qt_object_is_deleted(obj)
+                    and obj.isWindow()
+                    and obj.windowType() in {
+                        Qt.WindowType.Popup,
+                        Qt.WindowType.ToolTip,
+                        Qt.WindowType.SplashScreen,
+                    }
+                ):
+                    target_ref = weakref.ref(obj)
+                    QTimer.singleShot(
+                        0,
+                        lambda ref=target_ref: apply_rounded_popup_mask(ref(), 12) if ref() is not None else None,
+                    )
             except (RuntimeError, TypeError):
                 pass
         return False
@@ -987,7 +1018,7 @@ def application_stylesheet():
             background-color: palette(base);
             color: palette(text);
             border: 1px solid palette(mid);
-            border-radius: 0px;
+            border-radius: 12px;
             font-family: {ui_popup_font_family_css()};
             font-size: 14px;
             font-weight: 400;
@@ -995,7 +1026,7 @@ def application_stylesheet():
         }}
         QMenu::item {{
             padding: 9px 30px 9px 10px;
-            border-radius: 0px;
+            border-radius: 8px;
             min-width: 118px;
         }}
         QMenu::icon {{
@@ -1091,13 +1122,13 @@ def menu_stylesheet():
             background-color: {MENU_BG_COLOR};
             color: {TEXT_COLOR};
             border: 1px solid {SOFT_LINE_COLOR};
-            border-radius: 0px;
+            border-radius: 12px;
             font-family: {ui_popup_font_family_css()};
             font-size: 14px;
             font-weight: 400;
             padding: 7px;
         }}
-        QMenu::item {{ padding: 9px 30px 9px 10px; border-radius: 0px; min-width: 118px; }}
+        QMenu::item {{ padding: 9px 30px 9px 10px; border-radius: 8px; min-width: 118px; }}
         QMenu::icon {{ padding-right: 4px; }}
         QMenu::indicator {{ width: 18px; height: 18px; padding-right: 4px; }}
         QMenu::indicator:checked {{ image: url("{CHECKMARK_SVG_PATH}"); }}
@@ -1127,6 +1158,7 @@ def prepare_popup_menu(menu):
                 action.setFont(current_font)
         menu._smarti_action_font_handler = apply_action_fonts
         menu.aboutToShow.connect(apply_action_fonts)
+        menu.aboutToShow.connect(lambda target=menu: QTimer.singleShot(0, lambda: apply_rounded_popup_mask(target, 12)))
     menu.setStyleSheet(menu_stylesheet())
     return menu
 

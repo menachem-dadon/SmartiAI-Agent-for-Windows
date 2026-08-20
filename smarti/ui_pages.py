@@ -1059,7 +1059,7 @@ class SmartiDiagnosticPage(QWidget):
         self.completion_label = QLabel("● מוכן לבדיקה")
         self.completion_label.setObjectName("DiagnosticCompletion")
         hero_text.addWidget(self.completion_label)
-        self.progress_label = QLabel("בדיקה מהירה נשארת מקומית; בדיקה מלאה מאמתת חיבורי ספק ודוא\"ל. אם היא פותחת את Chrome הייעודי לצורך בדיקה, הוא נסגר מיד בסיום.")
+        self.progress_label = QLabel("בדיקה מהירה נשארת מקומית; בדיקה מלאה מאמתת חיבורי ספק ודוא\"ל. אם היא מפעילה דפדפן חלופי לצורך בדיקה, הוא נסגר מיד בסיום.")
         self.progress_label.setWordWrap(True)
         hero_text.addWidget(self.progress_label)
         self.progress_bar = QProgressBar()
@@ -1082,7 +1082,7 @@ class SmartiDiagnosticPage(QWidget):
         self.full_scan_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.full_scan_btn.setFixedHeight(48)
         self.full_scan_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.full_scan_btn.setToolTip("מאמתת חיבור לספק ולדוא\"ל; עשויה לפתוח זמנית את Chrome הייעודי של Smarti בלי לפתוח אתר, ואז לסגור אותו")
+        self.full_scan_btn.setToolTip("מאמתת חיבור לספק ולדוא\"ל; עשויה להפעיל זמנית דפדפן חלופי של Smarti בלי לפתוח אתר, ואז לסגור אותו")
         self.full_scan_btn.clicked.connect(lambda: self.start_scan(True))
         self.scan_action_row.add_button(self.full_scan_btn)
         self.stop_scan_btn = QPushButton("הפסק")
@@ -3434,6 +3434,7 @@ class SettingsPage(QWidget):
         self.back_btn = create_back_button(self.handle_back)
         top_bar.addWidget(self.back_btn)
         title = QLabel("הגדרות")
+        self.settings_title = title
         title.setStyleSheet(page_title_css(20))
         top_bar.addWidget(title)
         top_bar.addStretch()
@@ -3490,6 +3491,20 @@ class SettingsPage(QWidget):
                 self._clear_search_results()
             self.settings_stack.setCurrentWidget(self.settings_home_page)
             self._reset_scrolls_in_widget(self.settings_home_page)
+
+    def set_management_embedded(self, embedded=True):
+        """Remove the nested-page chrome when hosted by ManagementCenterPage."""
+        embedded = bool(embedded)
+        self.back_btn.setVisible(not embedded)
+        self.settings_title.setVisible(not embedded)
+        margins = 0 if embedded else 20
+        self.layout().setContentsMargins(margins, 8 if embedded else margins, margins, margins)
+
+    def show_management_section(self, key):
+        target = getattr(self, "_management_section_pages", {}).get(str(key or ""))
+        if target is None:
+            target = getattr(self, "settings_home_page", None)
+        self._set_settings_section(target)
 
     def _set_settings_section(self, target_page):
         if not hasattr(self, "settings_stack") or target_page is None:
@@ -5306,6 +5321,13 @@ class SettingsPage(QWidget):
         app_page, app_settings = self._make_scroll_page()
         advanced_page, advanced = self._make_scroll_page()
         self.developer_page = advanced_page
+        self._management_section_pages = {
+            "ai": ai_page,
+            "safety": safety_page,
+            "tools": tools_page,
+            "appearance": app_page,
+            "advanced": advanced_page,
+        }
 
         self.search_results_hint = QLabel("")
         self.search_results_hint.setWordWrap(True)
@@ -5428,8 +5450,8 @@ class SettingsPage(QWidget):
         self._add_checkbox(
             self.browser_auto_cb,
             tools,
-            "פותח ושולט בפרופיל Chrome הקבוע של סמארטי דרך Playwright/CDP. הפרופיל מבודד מה-Chrome האישי, אבל שומר התחברויות שבוצעו בו ידנית.",
-            keywords="browser web automation chrome smarti profile page click"
+            "שולט ב-Smarti Browser המובנה דרך Playwright/CDP. הפרופיל נפרד מדפדפנים אחרים במחשב ושומר התחברויות שבוצעו בו או יובאו אליו.",
+            keywords="browser web automation embedded smarti profile page click"
         )
         self._add_checkbox(self.computer_control_cb, tools, "קריאת עץ הנגישות של Windows ופעולה על רכיבים מזוהים.", keywords="computer control windows accessibility ui automation mouse keyboard")
         self._add_checkbox(self.tool_search_catalog_cb, tools, "מאפשר לסוכן לחפש בקטלוג הכלים הפנימי לפני בחירה, התקנה או יצירת כלי חדש.", keywords="tool search catalog tools python mcp skills selection", info=True)
@@ -6633,12 +6655,21 @@ class AboutPage(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }" + SCROLLBAR_CSS)
+        scroll_canvas = QWidget()
+        scroll_canvas.setStyleSheet("background: transparent;")
+        scroll_canvas_layout = QHBoxLayout(scroll_canvas)
+        scroll_canvas_layout.setDirection(QBoxLayout.Direction.LeftToRight)
+        scroll_canvas_layout.setContentsMargins(24, 0, 24, 0)
+        scroll_canvas_layout.addStretch(1)
         content = QWidget()
+        content.setMaximumWidth(960)
         content.setStyleSheet("background: transparent;")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 8, 0, 8)
         content_layout.setSpacing(16)
-        self.scroll.setWidget(content)
+        scroll_canvas_layout.addWidget(content, 10)
+        scroll_canvas_layout.addStretch(1)
+        self.scroll.setWidget(scroll_canvas)
         layout.addWidget(self.scroll)
 
         hero = QFrame()

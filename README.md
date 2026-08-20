@@ -15,7 +15,8 @@ Current release target: `V0.87.0`.
 - Web tools: internet search, webpage reading, browser opening, weather lookup, and website scraping with polite crawl controls.
 - Screen context: screenshot capture, screenshot saving, and local image analysis.
 - Windows control: discover installed applications, open software, inspect UI elements, invoke buttons, set text fields, send keys/hotkeys, use the clipboard, and manage audio mute state.
-- Browser automation through Playwright/CDP against Smarti's persistent Chrome profile, with page-state extraction and form/navigation helpers.
+- Integrated Smarti Workspace with a centered chat, collapsible conversation sidebar, and a dynamic left work area that starts empty and opens repeated file, browser, or terminal tabs plus context-created canvas/artifact tabs.
+- Browser automation through Playwright/CDP against Smarti Browser's persistent embedded profile, with page-state extraction and form/navigation helpers. A user-initiated one-time import can copy compatible cookies, history, and bookmarks from a local Chromium-based profile; passwords are not imported.
 - Email over IMAP/SMTP: search, read, draft, send, reply, forward, archive, trash/delete, move/copy, manage folders, flags, styled RTL/HTML messages, and attachments.
 - Background work: one-time and recurring tasks, reminders, retry/cancel/edit flows, Windows toast notifications, and calendar event file creation.
 - Local memory with user, short-term, long-term, and tool memory buckets, including expiry and Markdown export.
@@ -99,12 +100,12 @@ pythonw smarti_core.pyw
 
 ## Optional Capabilities
 
-- Browser automation requires Google Chrome.
+- On Windows, Smarti Browser embeds an installed Edge, Chrome, or compatible Chromium engine directly inside the app and shares its persistent profile with Playwright/CDP. `PyQt6-WebEngine` remains a compatibility renderer rather than the primary Windows browser.
 - MCP support requires Node.js and `npx` when running from source. Packaged releases include a private Node.js runtime.
 - Voice input requires a working microphone, `SpeechRecognition`, `keyboard`, and `PyAudio`.
 - OCR requires `pytesseract`, `Pillow`, and a system Tesseract OCR installation available in `PATH`.
 - Usage-cost estimates are richer when `litellm` is installed.
-- Live Visual Canvas is experimental and off by default. The WebEngine dependency is included in `requirements.txt`; enable **קנבס חזותי מתקדם** under Settings → Tools & Communication → Advanced. It uses an isolated local WebEngine profile; network, external files, downloads, popups, and media permissions are blocked by default. The separate **אפשר תמונות HTTPS מהרשת בתוך קנבס** setting permits HTTPS image resources only; navigation and every other external request remain blocked.
+- Live Visual Canvas is experimental and off by default; enable **קנבס חזותי מתקדם** under Settings → Tools & Communication → Advanced. On Windows it uses a temporary embedded Chromium host and tokenized loopback bridge. Network, external files, downloads, popups, and media permissions are blocked by default. The separate **אפשר תמונות HTTPS מהרשת בתוך קנבס** setting permits HTTPS image resources only; navigation and every other external request remain blocked.
 - Packaged releases include a private Python runtime used for custom Python tools, MCP support, and Skill dependency installs.
 
 ## Building a Windows Release
@@ -161,7 +162,10 @@ smarti/                  Modular application code
   agent/                 SmartiCore domain modules: lifecycle, policy, tool calls, automation, email, web, memory, TTS
   runtime.py             Source vs packaged runtime and private toolchain resolution
   config.py              Tool schemas, categories, and default settings
-  chat.py                Chat UI, tray behavior, voice input, updates, notifications, and background-task UI
+  chat.py                Workspace/chat shell, tray behavior, voice input, updates, notifications, and background-task UI
+  workspace_ui.py        Sidebar, dynamic work area, browser, file/document/media previews, terminal, artifacts, and management hub
+  native_browser.py      Windows native Chromium child host shared by visible browsing and Playwright/CDP
+  browser_profile.py     Explicit one-time local browser profile import helpers
   ui_pages.py            Settings, tools, task center, usage, developer logs, and about pages
   managers.py            Settings migration, memory, policy, audit, MCP, Skills, and tool registries
   workers.py             QThreads for agent work, voice, TTS, model loading, and validation
@@ -217,7 +221,8 @@ SmartiAI Agent for Windows הוא סוכן AI שולחני לעבודה מעשי
 - כלי רשת: חיפוש באינטרנט, קריאת דפי אתר, פתיחה בדפדפן, מזג אוויר ו-scraping עם בקרות זחילה מנומסות.
 - הקשר מסך: צילום מסך, שמירת צילום מסך וניתוח תמונות מקומיות.
 - שליטה ב-Windows: גילוי תוכנות מותקנות, פתיחת אפליקציות, בדיקת רכיבי ממשק, לחיצה על כפתורים, מילוי שדות, שליחת מקשים וקיצורים, שימוש בלוח ההעתקה וניהול מצב השתקת שמע.
-- אוטומציית דפדפן דרך Playwright/CDP מול פרופיל Chrome הקבוע של סמארטי, עם חילוץ מצב דף, ניווט ועבודה עם טפסים.
+- סביבת Smarti Workspace משולבת עם צ'אט ממורכז, תפריט שיחות מתקפל ואזור עבודה שמאלי ודינמי שמתחיל ריק ופותח לשוניות קבצים, דפדפן ומסוף לפי הצורך, לצד קנבס ותוצרים הקשורים לשיחה.
+- אוטומציית דפדפן דרך Playwright/CDP מול הפרופיל המוטמע והמתמשך של Smarti Browser, עם חילוץ מצב דף, ניווט ועבודה עם טפסים. ניתן לבצע ייבוא חד-פעמי ומפורש של עוגיות תואמות, היסטוריה וסימניות מפרופיל מקומי; סיסמאות אינן מיובאות.
 - ניהול אימייל דרך IMAP/SMTP: חיפוש, קריאה, טיוטות, שליחה, תשובה, העברה, ארכוב, מחיקה, העברה/העתקה בין תיקיות, דגלים, הודעות HTML/RTL וקבצים מצורפים.
 - עבודה ברקע: משימות חד-פעמיות וחוזרות, תזכורות, עריכה/ביטול/הרצה מחדש, התראות Windows ויצירת קבצי אירוע ליומן.
 - זיכרון מקומי עם סוגי זיכרון למשתמש, טווח קצר, טווח ארוך וכלים, כולל תפוגה וייצוא Markdown.
@@ -301,7 +306,8 @@ pythonw smarti_core.pyw
 
 ## יכולות אופציונליות
 
-- אוטומציית דפדפן דורשת Google Chrome.
+- ב-Windows, Smarti Browser מטמיע בתוך התוכנה מנוע Edge, Chrome או Chromium תואם המותקן במחשב, ומשתף את הפרופיל המתמשך שלו עם Playwright/CDP. ‏`PyQt6-WebEngine` נשמר כנתיב תאימות ואינו מנוע התצוגה הראשי ב-Windows.
+- הקנבס החזותי משתמש ב-Windows במארח Chromium זמני ובגשר loopback פרטי ומוגבל. ניווט, קבצים חיצוניים, הורדות, חלונות קופצים ומדיה חסומים כברירת מחדל; ניתן לאפשר בנפרד תמונות HTTPS בלבד.
 - MCP דורש Node.js ו-`npx` בהרצה מהמקור. חבילות הפצה כוללות runtime פרטי של Node.js.
 - קלט קולי דורש מיקרופון פעיל, `SpeechRecognition`, `keyboard` ו-`PyAudio`.
 - OCR דורש `pytesseract`, `Pillow` והתקנת Tesseract OCR במערכת וזמינות דרך `PATH`.
@@ -362,7 +368,10 @@ smarti/                  קוד האפליקציה המודולרי
   agent/                 מודולי SmartiCore: אתחול, מדיניות, קריאות כלים, אוטומציה, אימייל, web, זיכרון ו-TTS
   runtime.py             זיהוי מקור/הפצה ופתרון runtimes פרטיים
   config.py              סכמות כלים, קטגוריות והגדרות ברירת מחדל
-  chat.py                צ'אט, מגש מערכת, קול, עדכונים, התראות וממשק משימות רקע
+  chat.py                מעטפת Workspace וצ'אט, מגש מערכת, קול, עדכונים, התראות וממשק משימות רקע
+  workspace_ui.py        תפריט שיחות, אזור עבודה דינמי, דפדפן, תצוגות קבצים ומדיה, מסוף, תוצרים ומרכז ניהול
+  native_browser.py      מארח Chromium מוטמע ב-Windows המשותף לגלישה גלויה ול-Playwright/CDP
+  browser_profile.py     ייבוא חד-פעמי ומפורש של נתוני פרופיל דפדפן מקומי
   ui_pages.py            הגדרות, כלים, מרכז משימות, שימוש, לוגים ואודות
   managers.py            מיגרציית הגדרות, זיכרון, מדיניות, audit, MCP, Skills ורישומי כלים
   workers.py             QThreads לעבודת סוכן, קול, TTS, טעינת מודלים ואימות
