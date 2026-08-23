@@ -1,36 +1,33 @@
 # SmartiAI Windows Packaging
 
-This folder contains the release recipe for SmartiAI Agent for Windows.
+Point 16 makes Tauri the production package while keeping the legacy PyQt
+launcher available for comparison until Point 17.
 
-## What gets built
+## Production outputs
 
-- `SmartiAI.exe` from the Python/PyQt application using PyInstaller.
-- `runtime/python`, a private Python embeddable runtime with `pip`, Smarti requirements, and `uv`.
-- `runtime/node`, a private Node.js runtime with `npm` and `npx` for MCP packages.
-- A portable ZIP under `release/`.
-- A setup EXE under `release/` when Inno Setup 6 is installed.
+- Tauri 2 `smarti-desktop.exe` and a per-user NSIS setup executable.
+- Qt-free PyInstaller `onedir` headless Core sidecar.
+- private pinned Python and Node runtimes for Skills and MCP dependencies.
+- portable ZIP, SHA-256 manifest and, for production builds, signed Tauri
+  updater artifacts.
 
-The application EXE, setup EXE, and installer shortcuts use `assets/smarti.ico`.
-
-## Build locally
-
-From the repository root:
+The canonical command from the repository root is:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.87.0
+.\scripts\build_tauri_release.ps1 -Version 0.87.0
 ```
 
-For a clean rebuild:
+It validates the four version declarations, builds/stages every layer, rejects
+Qt in the production Core/runtime, creates the NSIS/portable outputs and records
+hashes and Authenticode status. `SMARTI_BUILD_WORK_DIR` can select a short work
+path; final artifacts are copied to `release/`.
 
-```powershell
-.\scripts\build_release.ps1 -Version 0.87.0 -Clean -ForceRuntime
-```
-
-The generated `build/`, `dist/`, `.build-cache/`, `.venv-build/`, and `release/` folders are intentionally ignored by Git.
-
-The build script uses a short working directory, `C:\SmartiAI-build` when writable, to avoid Windows Long Path failures in large dependencies. Override it with `SMARTI_BUILD_WORK_DIR` when needed. Final artifacts are still copied to `release/` in the repository.
-
-The release script verifies that `APP_VERSION` matches the requested release version. The runtime preparation step verifies developer/build dependencies with `pip check`, verifies the private runtime dependencies with `pip check`, prunes packaging-only `litellm` benchmark/static output files that can exceed classic Windows path limits, and then the release script force-resynchronizes `assets\` into `_internal\assets`, verifies the copied assets by SHA-256, and checks that the installer file layout stays within the path budget before creating the ZIP or setup EXE.
+Production updater builds require `TAURI_SIGNING_PRIVATE_KEY`,
+`SMARTI_UPDATER_PUBLIC_KEY` and `SMARTI_UPDATER_ENDPOINT`. Update signatures
+and Windows Authenticode are independent. `-AllowUnsignedLocal` exists only for
+local packaging evidence: it disables updater artifact creation and must never
+be published or described as signed. `-OfflineInstaller` selects Tauri's full
+offline WebView2 installer instead of the embedded bootstrapper.
 
 ## Runtime versions
 
@@ -46,13 +43,21 @@ $env:SMARTI_NODE_SHA256 = "<verified 64-character SHA-256>"
 # Optional only when overriding the pip bootstrap file:
 $env:SMARTI_GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 $env:SMARTI_GET_PIP_SHA256 = "<verified 64-character SHA-256>"
-.\scripts\build_release.ps1 -Version 0.87.0
+.\scripts\build_tauri_release.ps1 -Version 0.87.0
 ```
 
 ## Installer behavior
 
-The Inno Setup installer defaults to `%LOCALAPPDATA%\SmartiAI` and does not require admin rights. This keeps the private Python runtime writable so Smarti can install dynamic Skill dependencies and continue downloading/running MCP packages through its private Node.js runtime. Existing installs may continue using their previous app directory during silent upgrades.
+The NSIS package installs per-user. Its hooks detect the old Inno Setup entry,
+back up install-local legacy data under `%APPDATA%\SmartiAI\migration`, invoke
+the old uninstaller silently and retain normal Smarti user-data paths. The Core
+also prepares a one-time backup/import of compatible history, bookmarks and
+cookies from the old native-Chromium profile. WebView2 is never pointed at that
+profile in place and the source is never deleted.
 
-## GitHub release updates
+## Release boundary
 
-Smarti checks `https://api.github.com/repos/menachem-dadon/SmartiAI-Agent-for-Windows/releases/latest`, compares the release tag to `APP_VERSION`, and downloads the attached Windows asset that matches the current install type. Installed copies prefer an asset whose name contains `setup` and ends with `.exe`; portable ZIP copies prefer an asset whose name contains `portable` and ends with `.zip`. Publish the release with tag `V0.87.0` or `0.87.0`, attach `SmartiAI-Agent-for-Windows-0.87.0-Setup.exe`, and also attach `SmartiAI-Agent-for-Windows-0.87.0-win-x64-portable.zip`. GitHub's release asset digest is used for SHA-256 verification when available.
+The About page uses Tauri's updater plugin and restarts only after a verified
+download/install. Publishing, code-signing, updater hosting and clean Windows
+10/11 VM matrices are separate release operations; this command does not imply
+that they were performed.

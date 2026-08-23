@@ -302,19 +302,33 @@ impl CoreSupervisor {
             command.arg(script);
             return Ok(command);
         }
-        let binary = env::current_exe()
-            .map_err(|e| e.to_string())?
+        let executable = env::current_exe().map_err(|e| e.to_string())?;
+        let install_dir = executable
             .parent()
-            .ok_or("Desktop executable has no parent directory")?
-            .join("smarti-core")
-            .join("smarti-core.exe");
-        if !binary.is_file() {
+            .ok_or("Desktop executable has no parent directory")?;
+        let resource_roots = [
+            install_dir.to_path_buf(),
+            install_dir.join("resources"),
+            install_dir.join("package-resources"),
+            install_dir.join("resources").join("package-resources"),
+        ];
+        let located = resource_roots.iter().find_map(|root| {
+            let candidate = root.join("smarti-core").join("smarti-core.exe");
+            candidate.is_file().then(|| (candidate, root.clone()))
+        });
+        let Some((binary, resource_root)) = located else {
             return Err(format!(
-                "Packaged Core sidecar not found: {}",
-                binary.display()
+                "Packaged Core sidecar not found below {}",
+                install_dir.display()
             ));
+        };
+        let mut command = Command::new(binary);
+        let runtime_dir = resource_root.join("runtime");
+        if runtime_dir.is_dir() {
+            command.env("SMARTI_RUNTIME_DIR", runtime_dir);
+            command.env("SMARTI_FORCE_BUNDLED_RUNTIME", "1");
         }
-        Ok(Command::new(binary))
+        Ok(command)
     }
 
     fn capture_stderr<R: Read + Send + 'static>(&self, stderr: R, generation: u64, app: AppHandle) {
@@ -921,6 +935,11 @@ fn run_supervisor_smoke(app: AppHandle, supervisor: CoreSupervisor, result_path:
     );
 }
 
+#[tauri::command]
+fn restart_after_update(app: AppHandle) {
+    app.restart();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let supervisor = CoreSupervisor::new();
@@ -937,6 +956,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .manage(windows_integration::DesktopState::default())
         .manage(managed)
@@ -953,6 +973,7 @@ pub fn run() {
             windows_integration::desktop_notify,
             windows_integration::desktop_set_unread,
             windows_integration::desktop_quit,
+            restart_after_update,
             browser::browser_status,
             browser::browser_open,
             browser::browser_close,

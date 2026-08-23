@@ -1268,6 +1268,7 @@ export default function App() {
           initial={managementSection}
           onClose={() => setManagementSection(null)}
           setTheme={setPreference}
+          theme={resolved}
         />
       )}
     </main>

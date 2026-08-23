@@ -548,6 +548,21 @@
         "source_id"
       ],
       "additionalProperties": false
+    },
+    "legacyBrowserMigration": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "applied"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
     }
   },
   "operations": [
@@ -970,6 +985,20 @@
       "operation_id": "browserImport",
       "summary_he": "ייבוא מבוסס עותק ללא סיסמאות",
       "request_schema": "browserImport"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/browser/legacy-migration",
+      "operation_id": "legacyBrowserMigrationStatus",
+      "summary_he": "מיגרציית דפדפן ישן מגובה",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/browser/legacy-migration",
+      "operation_id": "completeLegacyBrowserMigration",
+      "summary_he": "אישור החלת מיגרציית הדפדפן",
+      "request_schema": "legacyBrowserMigration"
     },
     {
       "method": "POST",

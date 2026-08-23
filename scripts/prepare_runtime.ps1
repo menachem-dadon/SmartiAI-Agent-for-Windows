@@ -3,6 +3,7 @@ param(
     [string]$RuntimeDir,
     [string]$ConfigPath,
     [string]$CacheDir,
+    [string]$RequirementsPath,
     [switch]$Force,
     [switch]$SkipRequirements
 )
@@ -15,10 +16,12 @@ $RepoRoot = Resolve-Path (Join-Path $ScriptDir "..")
 if (-not $RuntimeDir) { $RuntimeDir = Join-Path $RepoRoot "build\runtime" }
 if (-not $ConfigPath) { $ConfigPath = Join-Path $RepoRoot "packaging\runtime-versions.json" }
 if (-not $CacheDir) { $CacheDir = Join-Path $RepoRoot ".build-cache" }
+if (-not $RequirementsPath) { $RequirementsPath = Join-Path $RepoRoot "requirements-core.txt" }
 
 $RuntimeDir = [System.IO.Path]::GetFullPath($RuntimeDir)
 $ConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
 $CacheDir = [System.IO.Path]::GetFullPath($CacheDir)
+$RequirementsPath = [System.IO.Path]::GetFullPath($RequirementsPath)
 
 function Get-ConfigValue {
     param($Object, [string]$Name, [string]$Fallback = "")
@@ -149,7 +152,17 @@ function Install-PythonPackages {
         [Parameter(Mandatory = $true)][string]$PythonExe,
         [Parameter(Mandatory = $true)]$Config
     )
-    $requirements = Join-Path $RepoRoot "requirements.txt"
+    $requirements = $RequirementsPath
+    if ([System.IO.Path]::GetFileName($requirements) -ieq "requirements-core.txt") {
+        # pip does not remove packages that disappeared from a requirements
+        # file. Scrub the temporary legacy UI explicitly so a reused runtime
+        # cannot accidentally ship Qt in the Tauri package.
+        $qtPackages = @("PyQt6", "PyQt6-WebEngine", "PyQt6-Qt6", "PyQt6-WebEngine-Qt6", "PyQt6-sip")
+        # pip treats absent packages as a successful no-op, which is both more
+        # reliable and clearer here than trying to normalize pip's JSON shape
+        # across Windows PowerShell and PowerShell 7.
+        Invoke-Checked -FilePath $PythonExe -Arguments (@("-m", "pip", "uninstall", "-y") + $qtPackages)
+    }
     Invoke-Checked -FilePath $PythonExe -Arguments @("-m", "pip", "install", "--upgrade", "--no-cache-dir", "pip", "setuptools", "wheel")
     Invoke-Checked -FilePath $PythonExe -Arguments @("-m", "pip", "install", "--no-cache-dir", "-r", $requirements)
     $extra = @()

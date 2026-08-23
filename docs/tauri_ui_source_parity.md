@@ -144,6 +144,34 @@ remains outside this source-parity gate.
 | Browser chrome | `WorkspaceBrowserPanel` RTL surface and Point 6 stable target | `BrowserPanel`, ordered Rust broker, keyboard/menu/library/privacy/import surfaces; browser state and Rust tests | MATCHED + EXTENDED |
 | Windows shell | legacy tray, hotkey, notifications, taskbar attention and custom titlebar | `windows_integration.rs`, Tauri plugins and existing React titlebar; Rust activation tests plus minimal single-instance/close-to-tray live smoke | MATCHED |
 
+## Points 10-15 source-parity remediation (2026-08-23)
+
+The first implementation of Points 10-15 reused generic dashboard cards and
+placeholder glyphs. That shell was not an exact rendering of the legacy PyQt
+composition and has been replaced. The remediation is derived from the source
+classes listed above, not from screenshots:
+
+- `ManagementCenter` now follows the PyQt management window: a 64 px header,
+  42 px themed back control, 250 px navigation rail, 42 px navigation rows,
+  original Hebrew grouping/order and the tracked legacy assets. About uses the
+  original 184 px Smarti mark rather than a generated letter mark.
+- settings, task, memory, tools, diagnostics, usage, trace and About pages reuse
+  the PyQt section widths, 12 px card radius, form hierarchy, compact action
+  geometry, RTL alignment and established light/dark palette. The updater is a
+  new Point 16 state inside About and deliberately inherits those controls.
+- `WorkspaceWorkbench` follows the PyQt 8 px outer margin, 18 px container
+  radius, 46 px header, 38 px tabs, 12 px tab radius and 38% RTL file-tree/
+  preview split. Terminal, Artifacts and Canvas reuse the same source surfaces;
+  the full Browser retains its approved Point 14 architecture inside that exact
+  Workbench frame.
+- the React implementation is in `ManagementCenter.tsx`,
+  `WorkbenchPanels.tsx`, `legacyAssets.tsx` and the final source-parity override
+  block in `App.css`. No PyQt source or fallback launcher was removed.
+
+The deterministic frontend suite guards labels, hierarchy and behavior. The
+source map above is the visual evidence for this remediation; no broad live
+computer-control walkthrough is claimed or required by the user.
+
 ## Verification evidence (2026-08-23)
 
 - Frontend: TypeScript check, 33 Vitest checks and production Vite build passed.

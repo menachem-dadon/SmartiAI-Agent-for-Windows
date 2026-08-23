@@ -112,3 +112,6 @@ export interface BrowserImportRequest {
   bookmarks?: boolean;
   cookies?: boolean;
 }
+export interface LegacyBrowserMigrationRequest {
+  action: "applied";
+}

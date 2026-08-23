@@ -23,6 +23,11 @@ from smarti.browser_profile import (
 from smarti.config import DEFAULT_SETTINGS
 from smarti.chat import ChatWindow
 from smarti.workspace_ui import WorkspaceSidebar, WorkspaceWorkbench, classify_workspace_file
+from smarti.tauri_migration import (
+    legacy_browser_migration_payload,
+    mark_legacy_browser_migration_applied,
+    prepare_legacy_tauri_migration,
+)
 
 
 class WorkspaceClassificationTests(unittest.TestCase):
@@ -250,6 +255,34 @@ class BrowserProfileImportTests(unittest.TestCase):
         self.assertEqual(len(payload["cookies"]), 2)
         self.assertEqual(payload["cookie_stats"]["recovered_via_source_browser"], 1)
         self.assertEqual(payload["cookie_stats"]["unrecovered_encrypted"], 1)
+
+    def test_point16_legacy_browser_migration_is_backed_up_and_idempotent(self):
+        legacy = self.local / "SmartiChromeProfile"
+        profile = legacy / "Default"
+        (profile / "Network").mkdir(parents=True)
+        (legacy / "Local State").write_text("legacy-state", encoding="utf-8")
+        (profile / "History").write_text("legacy-history", encoding="utf-8")
+        (profile / "Bookmarks").write_text("legacy-bookmarks", encoding="utf-8")
+        data_root = self.local / "new-data"
+        imported = {
+            "history": [{"url": "https://example.test", "title": "Example"}],
+            "bookmarks": [{"url": "https://example.test", "title": "Example"}],
+            "cookies": [], "cookie_stats": {"read": 0, "skipped_encrypted": 0},
+        }
+        with patch("smarti.tauri_migration.import_profile_data", return_value=imported) as reader:
+            first = prepare_legacy_tauri_migration(str(data_root), str(self.local))
+            second = prepare_legacy_tauri_migration(str(data_root), str(self.local))
+        self.assertEqual(first["status"], "prepared")
+        self.assertEqual(first, second)
+        reader.assert_called_once()
+        backup = Path(first["backup"])
+        self.assertEqual((backup / "Default" / "History").read_text(encoding="utf-8"), "legacy-history")
+        self.assertEqual((profile / "History").read_text(encoding="utf-8"), "legacy-history")
+        payload = legacy_browser_migration_payload(str(data_root))
+        self.assertEqual(payload["history"][0]["title"], "Example")
+        applied = mark_legacy_browser_migration_applied(str(data_root))
+        self.assertEqual(applied["status"], "applied")
+        self.assertNotIn("history", legacy_browser_migration_payload(str(data_root)))
 
 
 class EmbeddedBrowserRuntimeTests(unittest.TestCase):

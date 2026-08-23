@@ -52,6 +52,26 @@ import voiceListening from "../../assets/voice_listening.gif";
 import voiceOverlayOpenDark from "../../assets/voice_overlay_open_dark.png";
 import voiceOverlayOpenLight from "../../assets/voice_overlay_open_light.png";
 import closeIcon from "../../assets/close_icon.png";
+import aboutDark from "../../assets/about_icon_dark.png";
+import aboutLight from "../../assets/about_icon_light.png";
+import backDark from "../../assets/back_icon_dark.png";
+import backLight from "../../assets/back_icon_light.png";
+import doctorDark from "../../assets/doctor_icon_dark.png";
+import doctorLight from "../../assets/doctor_icon_light.png";
+import memoryDark from "../../assets/memory_management_icon_dark.png";
+import memoryLight from "../../assets/memory_management_icon_light.png";
+import settingsDark from "../../assets/settings_icon_dark.png";
+import settingsLight from "../../assets/settings_icon_light.png";
+import tasksDark from "../../assets/task_center_icon_dark.png";
+import tasksLight from "../../assets/task_center_icon_light.png";
+import toolsDark from "../../assets/tools_icon_dark.png";
+import toolsLight from "../../assets/tools_icon_light.png";
+import usageDark from "../../assets/usage_icon_dark.png";
+import usageLight from "../../assets/usage_icon_light.png";
+import folderDark from "../../assets/folder_icon_dark.png";
+import folderLight from "../../assets/folder_icon_light.png";
+import canvasDark from "../../assets/canvas_card_icon_dark.png";
+import canvasLight from "../../assets/canvas_card_icon_light.png";
 
 const themed = <T,>(theme: ResolvedTheme, light: T, dark: T): T => theme === "dark" ? dark : light;
 
@@ -85,6 +105,16 @@ export const legacyAssets = (theme: ResolvedTheme) => ({
   close: closeIcon,
   send: sendIcon,
   stop: stopIcon,
+  about: themed(theme, aboutLight, aboutDark),
+  back: themed(theme, backLight, backDark),
+  doctor: themed(theme, doctorLight, doctorDark),
+  memory: themed(theme, memoryLight, memoryDark),
+  settings: themed(theme, settingsLight, settingsDark),
+  tasks: themed(theme, tasksLight, tasksDark),
+  tools: themed(theme, toolsLight, toolsDark),
+  usage: themed(theme, usageLight, usageDark),
+  folder: themed(theme, folderLight, folderDark),
+  canvas: themed(theme, canvasLight, canvasDark),
 });
 
 export function LegacyIcon({ src, alt = "", size = 18 }: { src: string; alt?: string; size?: number }) {

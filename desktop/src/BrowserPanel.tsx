@@ -113,6 +113,7 @@ export function BrowserPanel({ visible }: { visible: boolean }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const addressRef = useRef<HTMLInputElement>(null);
   const initialTabRequested = useRef(false);
+  const legacyMigrationAttempted = useRef(false);
   const browserRef = useRef(browser);
   browserRef.current = browser;
   useEffect(() => {
@@ -161,6 +162,44 @@ export function BrowserPanel({ visible }: { visible: boolean }) {
       }),
     [],
   );
+  useEffect(() => {
+    if (!visible || !hydrated || legacyMigrationAttempted.current) return;
+    const tab = activeTab(browserRef.current);
+    if (!tab || tab.profile !== "persistent") return;
+    legacyMigrationAttempted.current = true;
+    void coreApi<{
+      status?: string;
+      history?: Array<{ url: string; title?: string; last_visit_at?: string; visit_count?: number }>;
+      bookmarks?: Array<{ url: string; title?: string }>;
+      cookies?: Array<Record<string, unknown>>;
+      counts?: Record<string, number>;
+    }>("GET", "/v2/browser/legacy-migration").then(async (data) => {
+      if (data.status !== "prepared") return;
+      persistLibrary((current) => ({
+        ...current,
+        history: [
+          ...(data.history || []).map((item) => ({
+            id: crypto.randomUUID(), url: item.url, title: item.title || item.url,
+            visitedAt: item.last_visit_at || new Date().toISOString(), visits: item.visit_count || 1,
+          })),
+          ...current.history,
+        ].slice(0, 5000),
+        bookmarks: [
+          ...(data.bookmarks || []).map((item) => ({
+            id: crypto.randomUUID(), url: item.url, title: item.title || item.url,
+            createdAt: new Date().toISOString(),
+          })),
+          ...current.bookmarks,
+        ],
+      }));
+      if (data.cookies?.length) await runCdp(tab, "Network.setCookies", { cookies: data.cookies });
+      await coreApi("POST", "/v2/browser/legacy-migration", { action: "applied" }, true);
+      setNotice(`נתוני Smarti Browser הישן שוחזרו מגיבוי: ${data.history?.length || 0} רשומות היסטוריה, ${data.bookmarks?.length || 0} סימניות.`);
+    }).catch((reason) => {
+      legacyMigrationAttempted.current = false;
+      setNotice(`מיגרציית הדפדפן הישן לא הושלמה: ${String(reason)}`);
+    });
+  }, [visible, hydrated, browser.tabs.length, runCdp]);
   const recordNavigation = useCallback((snapshot: BrowserSnapshot) => {
     const tab = activeTab(snapshot);
     if (

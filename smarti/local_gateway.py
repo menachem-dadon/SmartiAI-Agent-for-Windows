@@ -31,6 +31,7 @@ from .canvas_model import (
     normalize_canvas_artifact,
 )
 from .browser_profile import discover_browser_profiles, import_profile_data
+from .tauri_migration import legacy_browser_migration_payload, mark_legacy_browser_migration_applied
 from .desktop_services import (
     TerminalRegistry, WorkspaceScope, log_snapshot, memory_action, memory_rows,
     safe_task_rows, settings_schema_document, task_action, tools_snapshot,
@@ -699,6 +700,14 @@ class SmartiLocalGateway:
             "imported_at": result.get("imported_at", ""),
         })
 
+    async def _legacy_browser_migration(self, request):
+        if request.method == "GET":
+            return self._ok(request, legacy_browser_migration_payload(USER_DATA_DIR))
+        payload = await self._body(request, "legacyBrowserMigration")
+        if str(payload.get("action") or "").strip().lower() != "applied":
+            raise RequestValidationError("invalid_migration_action", ["action"])
+        return self._ok(request, mark_legacy_browser_migration_applied(USER_DATA_DIR))
+
     async def _workspace_tree(self, request):
         try:
             value = self._workspace.tree(request.query.get("path", ""), request.query.get("depth", 2))
@@ -977,6 +986,8 @@ class SmartiLocalGateway:
         app.router.add_patch("/v2/conversations/{session_id}/canvases/{canvas_id}", self._canvas_item)
         app.router.add_get("/v2/browser/import/sources", self._browser_import_sources)
         app.router.add_post("/v2/browser/import", self._browser_import)
+        app.router.add_get("/v2/browser/legacy-migration", self._legacy_browser_migration)
+        app.router.add_post("/v2/browser/legacy-migration", self._legacy_browser_migration)
         app.router.add_post("/v2/workbench/open", self._workspace_open)
         app.router.add_post("/v2/workbench/terminals", self._terminals)
         app.router.add_get("/v2/workbench/terminals/{terminal_id}", self._terminal_item)

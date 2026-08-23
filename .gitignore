@@ -41,6 +41,9 @@ release/
 .build-cache/
 .venv-build/
 runtime/
+desktop/src-tauri/package-resources/smarti-core/
+desktop/src-tauri/package-resources/runtime/
+desktop/src-tauri/tauri.release.conf.json
 *.egg-info/
 pip-wheel-metadata/
 *.7z

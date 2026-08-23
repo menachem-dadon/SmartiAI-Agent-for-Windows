@@ -127,6 +127,9 @@ REQUEST_SCHEMAS = {
         "source_id": {"type": "string", "minLength": 3, "maxLength": 200},
         "history": {"type": "boolean"}, "bookmarks": {"type": "boolean"}, "cookies": {"type": "boolean"},
     }, ("source_id",)),
+    "legacyBrowserMigration": _object({
+        "action": {"type": "string", "enum": ["applied"]},
+    }, ("action",)),
 }
 
 
@@ -191,6 +194,8 @@ OPERATIONS = [
     ("PATCH", "/v2/conversations/{session_id}/canvases/{canvas_id}", "canvasAction", "עדכון פריסת או מצב Canvas", "canvasAction"),
     ("GET", "/v2/browser/import/sources", "browserImportSources", "פרופילי Chromium זמינים לייבוא יזום", None),
     ("POST", "/v2/browser/import", "browserImport", "ייבוא מבוסס עותק ללא סיסמאות", "browserImport"),
+    ("GET", "/v2/browser/legacy-migration", "legacyBrowserMigrationStatus", "מיגרציית דפדפן ישן מגובה", None),
+    ("POST", "/v2/browser/legacy-migration", "completeLegacyBrowserMigration", "אישור החלת מיגרציית הדפדפן", "legacyBrowserMigration"),
     ("POST", "/v2/workbench/open", "openWorkspaceFile", "פתיחה חיצונית של קובץ תחום", "openWorkspaceFile"),
     ("POST", "/v2/workbench/terminals", "createTerminal", "יצירת מסוף PowerShell בבעלות Core", None),
     ("GET", "/v2/workbench/terminals/{terminal_id}", "readTerminal", "קריאת פלט מסוף", None),

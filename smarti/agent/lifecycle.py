@@ -43,6 +43,11 @@ class LifecycleMixin:
 
     def _migrate_legacy_runtime_state(self):
         migrate_legacy_runtime_state()
+        try:
+            from smarti.tauri_migration import prepare_legacy_tauri_migration
+            prepare_legacy_tauri_migration(USER_DATA_DIR)
+        except Exception as exc:
+            logging.warning("Legacy Tauri migration preparation skipped: %s", exc)
 
     def __init__(
         self, *, local_gateway_token=None, local_gateway_port=None,
