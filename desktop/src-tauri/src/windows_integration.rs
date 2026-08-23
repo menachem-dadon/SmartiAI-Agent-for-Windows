@@ -1,0 +1,459 @@
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{
+    image::Image,
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
+};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+#[cfg(not(windows))]
+use tauri_plugin_notification::NotificationExt;
+
+pub struct DesktopState {
+    quitting: AtomicBool,
+    close_to_tray: AtomicBool,
+}
+
+impl Default for DesktopState {
+    fn default() -> Self {
+        Self {
+            quitting: AtomicBool::new(false),
+            close_to_tray: AtomicBool::new(true),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopActivation {
+    pub command: String,
+    pub session_id: String,
+    pub arguments: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct WindowPlacement {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    maximized: bool,
+}
+
+pub fn show_main(app: &AppHandle, activation: DesktopActivation) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = window.request_user_attention(None);
+    }
+    let _ = app.emit("desktop://activation", activation);
+}
+
+pub fn activation_from_args(arguments: Vec<String>) -> DesktopActivation {
+    let mut command = "show".to_string();
+    let mut session_id = String::new();
+    for item in &arguments {
+        let normalized = item.trim_start_matches(['-', '/']).to_lowercase();
+        if matches!(
+            normalized.as_str(),
+            "new-chat" | "voice" | "update-shutdown" | "show"
+        ) {
+            command = normalized;
+        }
+        if let Some(value) = item.strip_prefix("--session=") {
+            session_id = value.chars().take(200).collect();
+        }
+    }
+    DesktopActivation {
+        command,
+        session_id,
+        arguments: arguments
+            .into_iter()
+            .take(32)
+            .map(|item| item.chars().take(500).collect())
+            .collect(),
+    }
+}
+
+fn placement_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|path| path.join("window-placement.json"))
+}
+
+fn save_placement(app: &AppHandle, window: &WebviewWindow) {
+    let (Ok(position), Ok(size), Ok(maximized)) = (
+        window.outer_position(),
+        window.outer_size(),
+        window.is_maximized(),
+    ) else {
+        return;
+    };
+    let placement = WindowPlacement {
+        x: position.x,
+        y: position.y,
+        width: size.width.max(720),
+        height: size.height.max(560),
+        maximized,
+    };
+    let Some(path) = placement_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(encoded) = serde_json::to_vec(&placement) {
+        let _ = fs::write(path, encoded);
+    }
+}
+
+fn restore_placement(app: &AppHandle, window: &WebviewWindow) {
+    let Some(path) = placement_path(app) else {
+        return;
+    };
+    let Ok(data) = fs::read(path) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_slice::<WindowPlacement>(&data) else {
+        return;
+    };
+    if !(720..=8192).contains(&value.width) || !(560..=8192).contains(&value.height) {
+        return;
+    }
+    let visible = window.available_monitors().ok().is_some_and(|monitors| {
+        monitors.iter().any(|monitor| {
+            let p = monitor.position();
+            let s = monitor.size();
+            value.x < p.x + s.width as i32
+                && value.y < p.y + s.height as i32
+                && value.x + 120 > p.x
+                && value.y + 80 > p.y
+        })
+    });
+    if visible {
+        let _ = window.set_position(PhysicalPosition::new(value.x, value.y));
+        let _ = window.set_size(PhysicalSize::new(value.width, value.height));
+        if value.maximized {
+            let _ = window.maximize();
+        }
+    } else {
+        let _ = window.center();
+    }
+}
+
+#[cfg(windows)]
+fn apply_windows_identity(window: &WebviewWindow) {
+    use windows::core::HSTRING;
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE};
+    use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+    let _ = unsafe { SetCurrentProcessExplicitAppUserModelID(&HSTRING::from("SmartiAI.Desktop")) };
+    if let Ok(hwnd) = window.hwnd() {
+        let preference: u32 = 2;
+        let _ = unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                (&preference as *const u32).cast(),
+                std::mem::size_of::<u32>() as u32,
+            )
+        };
+    }
+}
+
+#[cfg(not(windows))]
+fn apply_windows_identity(_window: &WebviewWindow) {}
+
+pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window missing")?;
+    restore_placement(app, &window);
+    apply_windows_identity(&window);
+    let app_for_window = app.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+            if let Some(window) = app_for_window.get_webview_window("main") {
+                save_placement(&app_for_window, &window);
+            }
+        }
+        WindowEvent::CloseRequested { api, .. }
+            if !app_for_window
+                .state::<DesktopState>()
+                .quitting
+                .load(Ordering::Acquire)
+                && app_for_window
+                    .state::<DesktopState>()
+                    .close_to_tray
+                    .load(Ordering::Acquire) =>
+        {
+            api.prevent_close();
+            if let Some(window) = app_for_window.get_webview_window("main") {
+                let _ = window.hide();
+            }
+            let _ = app_for_window.emit("desktop://hidden-to-tray", ());
+        }
+        _ => {}
+    });
+
+    let show = MenuItem::with_id(app, "show", "פתיחת SmartiAI", true, None::<&str>)?;
+    let new_chat = MenuItem::with_id(app, "new-chat", "שיחה חדשה", true, None::<&str>)?;
+    let voice = MenuItem::with_id(app, "voice", "קלט קולי", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "יציאה מלאה", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &new_chat, &voice, &quit])?;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or("application icon missing")?;
+    TrayIconBuilder::new()
+        .icon(icon)
+        .tooltip("SmartiAI")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "quit" => {
+                app.state::<DesktopState>()
+                    .quitting
+                    .store(true, Ordering::Release);
+                app.exit(0);
+            }
+            "new-chat" | "voice" | "show" => show_main(
+                app,
+                DesktopActivation {
+                    command: event.id().as_ref().to_string(),
+                    session_id: String::new(),
+                    arguments: vec![],
+                },
+            ),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) {
+                show_main(
+                    tray.app_handle(),
+                    DesktopActivation {
+                        command: "show".into(),
+                        session_id: String::new(),
+                        arguments: vec![],
+                    },
+                );
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_set_voice_hotkey(app: AppHandle, shortcut: String) -> Result<(), String> {
+    app.global_shortcut()
+        .unregister_all()
+        .map_err(|error| error.to_string())?;
+    let value = shortcut.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    app.global_shortcut()
+        .on_shortcut(value, |app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                show_main(
+                    app,
+                    DesktopActivation {
+                        command: "voice".into(),
+                        session_id: String::new(),
+                        arguments: vec![],
+                    },
+                );
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn desktop_set_close_to_tray(app: AppHandle, enabled: bool) {
+    app.state::<DesktopState>()
+        .close_to_tray
+        .store(enabled, Ordering::Release);
+}
+
+#[tauri::command]
+pub fn desktop_notify(
+    app: AppHandle,
+    title: String,
+    body: String,
+    session_id: String,
+) -> Result<(), String> {
+    let title: String = title.chars().take(160).collect();
+    let body: String = body.chars().take(1000).collect();
+    #[cfg(windows)]
+    {
+        let activation_app = app.clone();
+        let activation_session = session_id.clone();
+        tauri_winrt_notification::Toast::new("SmartiAI.Desktop")
+            .title(&title)
+            .text1(&body)
+            .add_button("פתח את השיחה", "open")
+            .on_activated(move |_action| {
+                show_main(
+                    &activation_app,
+                    DesktopActivation {
+                        command: "notification".into(),
+                        session_id: activation_session.clone(),
+                        arguments: vec![],
+                    },
+                );
+                Ok(())
+            })
+            .show()
+            .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(windows))]
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|error| error.to_string())?;
+    // The session remains pending until an explicit activation/read command;
+    // displaying a toast never acknowledges unrelated attention items.
+    let _ = app.emit(
+        "desktop://notification-created",
+        DesktopActivation {
+            command: "notification".into(),
+            session_id,
+            arguments: vec![],
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window missing")?;
+    let taskbar_title = if count == 0 {
+        "SmartiAI".to_string()
+    } else {
+        format!("SmartiAI ({count})")
+    };
+    window
+        .set_title(&taskbar_title)
+        .map_err(|error| error.to_string())?;
+    let badge = (count > 0).then(|| unread_badge(count));
+    window
+        .set_overlay_icon(badge)
+        .map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    if count > 0 && !window.is_focused().unwrap_or(false) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FlashWindowEx, FLASHWINFO, FLASHW_ALL, FLASHW_TIMERNOFG,
+        };
+        if let Ok(hwnd) = window.hwnd() {
+            let info = FLASHWINFO {
+                cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
+                hwnd,
+                dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+                uCount: 3,
+                dwTimeout: 0,
+            };
+            let _ = unsafe { FlashWindowEx(&info) };
+        }
+    }
+    let _ = app.emit("desktop://unread", count);
+    Ok(())
+}
+
+fn unread_badge(count: u32) -> Image<'static> {
+    const DIGITS: [[u8; 5]; 10] = [
+        [0b111, 0b101, 0b101, 0b101, 0b111],
+        [0b010, 0b110, 0b010, 0b010, 0b111],
+        [0b111, 0b001, 0b111, 0b100, 0b111],
+        [0b111, 0b001, 0b111, 0b001, 0b111],
+        [0b101, 0b101, 0b111, 0b001, 0b001],
+        [0b111, 0b100, 0b111, 0b001, 0b111],
+        [0b111, 0b100, 0b111, 0b101, 0b111],
+        [0b111, 0b001, 0b010, 0b010, 0b010],
+        [0b111, 0b101, 0b111, 0b101, 0b111],
+        [0b111, 0b101, 0b111, 0b001, 0b111],
+    ];
+    let mut rgba = vec![0u8; 16 * 16 * 4];
+    for y in 0..16i32 {
+        for x in 0..16i32 {
+            if (x - 8).pow(2) + (y - 8).pow(2) <= 58 {
+                let offset = ((y * 16 + x) * 4) as usize;
+                rgba[offset..offset + 4].copy_from_slice(&[220, 36, 52, 255]);
+            }
+        }
+    }
+    let text = if count > 99 {
+        "99".to_string()
+    } else {
+        count.to_string()
+    };
+    let start_x = if text.len() == 1 { 6 } else { 3 };
+    for (digit_index, character) in text.chars().enumerate() {
+        let digit = character.to_digit(10).unwrap_or(0) as usize;
+        for (row, bits) in DIGITS[digit].iter().enumerate() {
+            for column in 0..3 {
+                if bits & (1 << (2 - column)) != 0 {
+                    for dy in 0..2 {
+                        for dx in 0..2 {
+                            let x = start_x + digit_index * 7 + column * 2 + dx;
+                            let y = 3 + row * 2 + dy;
+                            if x < 16 && y < 16 {
+                                let offset = (y * 16 + x) * 4;
+                                rgba[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Image::new_owned(rgba, 16, 16)
+}
+
+#[tauri::command]
+pub fn desktop_quit(app: AppHandle) {
+    app.state::<DesktopState>()
+        .quitting
+        .store(true, Ordering::Release);
+    app.exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn second_launch_arguments_route_one_scoped_command() {
+        let activation = activation_from_args(vec![
+            "smarti.exe".into(),
+            "--voice".into(),
+            "--session=chat-42".into(),
+        ]);
+        assert_eq!(activation.command, "voice");
+        assert_eq!(activation.session_id, "chat-42");
+    }
+
+    #[test]
+    fn unknown_second_launch_defaults_to_show() {
+        assert_eq!(
+            activation_from_args(vec!["smarti.exe".into()]).command,
+            "show"
+        );
+    }
+}

@@ -5,7 +5,7 @@ from ..managers import *
 from ..history import ChatSessionStore, DEFAULT_CHAT_TITLE, DEFAULT_WELCOME_MESSAGE
 from ..attachments import *
 from ..browser_control import SmartiBrowserController
-from ..visual_canvas import (
+from ..canvas_model import (
     canvas_artifacts_from_messages,
     canvas_context_for_model,
     new_canvas_artifact,

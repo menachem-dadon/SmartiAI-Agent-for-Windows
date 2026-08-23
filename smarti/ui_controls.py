@@ -1,5 +1,5 @@
 """Reusable PyQt controls used across Smarti screens."""
-from .common import *
+from .ui_common import *
 from .ui_styles import *
 from PyQt6.QtCore import QRect
 

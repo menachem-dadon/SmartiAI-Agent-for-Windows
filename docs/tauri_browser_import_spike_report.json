@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-08-21T13:50:12.356920+00:00",
+  "safe_copy_read": true,
+  "source_profiles_modified": false,
+  "passwords_read": false,
+  "sensitive_urls_or_cookie_values_reported": false,
+  "profiles": [
+    {
+      "browser": "Google Chrome",
+      "profile": "profile-1",
+      "history_readable": 4067,
+      "bookmarks_readable": 55,
+      "cookies_compatible_current_user": 0,
+      "cookies_examined": 0,
+      "cookies_skipped_encrypted": 0,
+      "errors": [
+        "cookies:OperationalError"
+      ]
+    },
+    {
+      "browser": "Google Chrome",
+      "profile": "profile-2",
+      "history_readable": 4999,
+      "bookmarks_readable": 148,
+      "cookies_compatible_current_user": 0,
+      "cookies_examined": 0,
+      "cookies_skipped_encrypted": 0,
+      "errors": [
+        "cookies:PermissionError"
+      ]
+    },
+    {
+      "browser": "Google Chrome",
+      "profile": "profile-3",
+      "history_readable": 921,
+      "bookmarks_readable": 1,
+      "cookies_compatible_current_user": 0,
+      "cookies_examined": 0,
+      "cookies_skipped_encrypted": 0,
+      "errors": [
+        "cookies:PermissionError"
+      ]
+    },
+    {
+      "browser": "Google Chrome",
+      "profile": "profile-4",
+      "history_readable": 323,
+      "bookmarks_readable": 0,
+      "cookies_compatible_current_user": 0,
+      "cookies_examined": 91,
+      "cookies_skipped_encrypted": 91,
+      "errors": []
+    },
+    {
+      "browser": "Microsoft Edge",
+      "profile": "profile-1",
+      "history_readable": 1647,
+      "bookmarks_readable": 7,
+      "cookies_compatible_current_user": 0,
+      "cookies_examined": 0,
+      "cookies_skipped_encrypted": 0,
+      "errors": [
+        "cookies:PermissionError"
+      ]
+    },
+    {
+      "browser": "Microsoft Edge",
+      "profile": "profile-2",
+      "history_readable": 5,
+      "bookmarks_readable": 0,
+      "cookies_compatible_current_user": 0,
+      "cookies_examined": 19,
+      "cookies_skipped_encrypted": 19,
+      "errors": []
+    }
+  ],
+  "not_detected": [
+    "Brave",
+    "Chromium",
+    "Vivaldi"
+  ],
+  "cookie_note": "v20/App-Bound or otherwise unavailable cookies are skipped; Smarti does not bypass browser encryption."
+}

@@ -51,6 +51,7 @@ class SpeechMixin:
         self.stop_speaking()
         with self.tts_lock:
             self._stop_speech_flag = False
+            self._tts_is_playing = True
             if self.tts_status_callback: self.tts_status_callback(True)
             try:
                 voice_id = str(self.settings.get("tts_voice_id", "co.il") or "co.il").strip()
@@ -60,6 +61,7 @@ class SpeechMixin:
                     self._speak_text_with_gtts(clean)
             except Exception as e: logging.error(f"TTS Error: {e}")
             finally:
+                self._tts_is_playing = False
                 if self.tts_status_callback: self.tts_status_callback(False)
 
     def _tts_volume_fraction(self):

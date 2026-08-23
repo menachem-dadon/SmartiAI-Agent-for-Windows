@@ -44,7 +44,10 @@ class LifecycleMixin:
     def _migrate_legacy_runtime_state(self):
         migrate_legacy_runtime_state()
 
-    def __init__(self):
+    def __init__(
+        self, *, local_gateway_token=None, local_gateway_port=None,
+        local_gateway_required=False,
+    ):
         self._migrate_legacy_runtime_state()
         self.settings_manager = SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
         self.settings = self._load_settings()
@@ -122,11 +125,14 @@ class LifecycleMixin:
         self.step_callback = None
         self.notification_callback = None
         self.tts_status_callback = None
+        self.service_health_callback = None
+        self.embedded_browser_activate_callback = None
         self.background_task_start_callback = None
         self.background_task_step_callback = None
         self.background_task_finish_callback = None
         self.tts_lock = threading.Lock()
         self._stop_speech_flag = False
+        self._tts_is_playing = False
         self._background_cancel_events = {}
         self._extension_catalog_signature = None
         self._update_tools_config_from_files()
@@ -142,9 +148,11 @@ class LifecycleMixin:
         from ..run_manager import ConversationRunManager
         self.run_manager = ConversationRunManager(self)
         self.local_gateway = None
-        if self.settings.get("local_gateway_enabled", True):
+        if local_gateway_required or self.settings.get("local_gateway_enabled", True):
             try:
-                token = self._ensure_secret_loaded("local_gateway_token")
+                token = str(local_gateway_token or "")
+                if not token:
+                    token = self._ensure_secret_loaded("local_gateway_token")
                 if not token:
                     token = secrets.token_urlsafe(32)
                     self.settings["local_gateway_token"] = token
@@ -153,11 +161,18 @@ class LifecycleMixin:
                 self.local_gateway = SmartiLocalGateway(
                     self,
                     token,
-                    port=self.settings.get("local_gateway_port", 8765),
+                    port=(
+                        local_gateway_port
+                        if local_gateway_port is not None
+                        else self.settings.get("local_gateway_port", 8765)
+                    ),
                 )
-                self.local_gateway.start()
+                if not self.local_gateway.start() and local_gateway_required:
+                    raise RuntimeError("The required loopback control plane did not start")
             except Exception:
                 logging.exception("Local gateway initialization failed")
+                if local_gateway_required:
+                    raise
 
     def local_gateway_credentials(self):
         gateway = getattr(self, "local_gateway", None)
@@ -168,13 +183,13 @@ class LifecycleMixin:
             "token": str(gateway.token or ""),
         }
 
-    def shutdown_runtime(self):
+    def shutdown_runtime(self, wait=False):
         gateway = getattr(self, "local_gateway", None)
         if gateway:
             gateway.stop()
         manager = getattr(self, "run_manager", None)
         if manager:
-            manager.shutdown(wait=False)
+            manager.shutdown(wait=bool(wait))
         self.shutdown_title_generation()
 
     def _conversation_lock(self, session_id):

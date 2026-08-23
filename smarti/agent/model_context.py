@@ -387,7 +387,6 @@ class ModelContextMixin:
         return bool(
             self.settings.get("enable_visual_surfaces", False)
             and self.settings.get("enable_web_canvas", False)
-            and web_canvas_available()
         )
 
     def canvas_remote_images_enabled(self):
@@ -406,9 +405,6 @@ class ModelContextMixin:
         """Create/update an in-memory canvas artifact for this chat turn only."""
         if not self.settings.get("enable_visual_surfaces", False) or not self.settings.get("enable_web_canvas", False):
             return "ERROR: הקנבס המתקדם כבוי בהגדרות. המשתמש צריך להפעיל אותו מתפריט סמארטי."
-        if not web_canvas_available():
-            return "ERROR: רכיב PyQt6-WebEngine אינו מותקן. הצ׳אט נשאר זמין; התקן את requirements.txt כדי להשתמש בקנבס."
-
         args = args_dict if isinstance(args_dict, dict) else {}
         operation = str(args.get("action") or "").strip().lower()
         if operation not in {"create", "update", "close"}:

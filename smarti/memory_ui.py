@@ -1,6 +1,6 @@
 """Simple, privacy-aware RTL controls for Smarti's local memory."""
 
-from .common import *
+from .ui_common import *
 from .ui_styles import *
 from .ui_controls import *
 

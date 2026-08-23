@@ -1,3 +1,6 @@
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +9,68 @@ from smarti.history import ChatSessionStore
 from smarti.config import CANVAS_MANAGER_MODEL_GUIDANCE
 from smarti.core import SmartiCore
 from smarti.visual_canvas import canvas_artifacts_from_messages, canvas_context_for_model, materialize_canvas_html, new_canvas_artifact
+
+
+class PureCoreImportBoundaryTests(unittest.TestCase):
+    def test_canvas_capability_probe_does_not_import_qt_parent_package(self):
+        code = """
+import json, sys
+from smarti.canvas_model import web_canvas_available
+available = web_canvas_available()
+print(json.dumps({"available": available, "qt_loaded": "PyQt6" in sys.modules}))
+raise SystemExit("PyQt6" in sys.modules)
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertFalse(json.loads(completed.stdout.strip())["qt_loaded"])
+
+    def test_core_runtime_imports_do_not_load_qt_or_canvas_renderer(self):
+        modules = [
+            "smarti.core",
+            "smarti.history",
+            "smarti.run_manager",
+            "smarti.local_gateway",
+            "smarti.attachments",
+            "smarti.managers",
+        ]
+        code = """
+import importlib, json, sys
+for name in %r:
+    importlib.import_module(name)
+blocked = sorted(
+    name for name in sys.modules
+    if name == "PyQt6"
+    or name.startswith("PyQt6.")
+    or name in {
+        "smarti.visual_canvas",
+        "smarti.native_browser",
+        "smarti.ui_common",
+    }
+)
+print(json.dumps(blocked))
+raise SystemExit(bool(blocked))
+""" % modules
+
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertEqual(json.loads(completed.stdout.strip()), [])
+
+    def test_legacy_renderer_reexports_the_pure_canvas_model(self):
+        self.assertEqual(new_canvas_artifact.__module__, "smarti.canvas_model")
+        self.assertEqual(materialize_canvas_html.__module__, "smarti.canvas_model")
 
 
 class VisualCanvasPersistenceTests(unittest.TestCase):
@@ -90,6 +155,20 @@ class VisualCanvasPersistenceTests(unittest.TestCase):
         self.assertTrue(first.startswith("SUCCESS:"))
         self.assertTrue(second.startswith("SUCCESS:"))
         self.assertEqual(len(core._pending_canvas_artifacts), 2)
+
+    def test_tauri_canvas_enablement_has_no_qt_runtime_gate(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.settings = {"enable_visual_surfaces": True, "enable_web_canvas": True}
+        core._pending_canvas_artifacts = []
+
+        self.assertTrue(core.web_canvas_enabled())
+        result = core.canvas_manager_tool({
+            "action": "create",
+            "title": "headless",
+            "html": "<main>tauri</main>",
+        })
+
+        self.assertTrue(result.startswith("SUCCESS:"), result)
 
     def test_history_keeps_and_updates_button_positions(self):
         artifact = new_canvas_artifact({

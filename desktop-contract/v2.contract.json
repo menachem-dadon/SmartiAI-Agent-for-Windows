@@ -1,0 +1,1031 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contract": "Smarti Desktop Control Plane",
+  "version": "2.0.0",
+  "base_path": "/v2",
+  "security": {
+    "transport": "loopback-only",
+    "authentication": "Authorization: Bearer <per-launch-token>",
+    "allowed_origins": [
+      "tauri://localhost",
+      "http://tauri.localhost",
+      "https://tauri.localhost"
+    ],
+    "secrets": "masked metadata only; plaintext is accepted only by explicit set/validate commands"
+  },
+  "requests": {
+    "createWorkspace": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "root_path": {
+          "type": "string",
+          "maxLength": 32767
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "patchWorkspace": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "root_path": {
+          "type": "string",
+          "maxLength": 32767
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "createConversation": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "workspace_id": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "patchConversation": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "workspace_id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "pinned": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "submitRun": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "maxLength": 1000000
+        },
+        "attachment_handles": {
+          "type": "array",
+          "maxItems": 80,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "workspace_id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "source": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "provider_mode": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "model_name": {
+          "type": "string",
+          "maxLength": 300
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "markRead": {
+      "type": "object",
+      "properties": {
+        "actor_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "resolveApproval": {
+      "type": "object",
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "approved"
+      ],
+      "additionalProperties": false
+    },
+    "patchSettings": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "object",
+          "minProperties": 1
+        }
+      },
+      "required": [
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "setSecret": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      },
+      "required": [
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "validateProvider": {
+      "type": "object",
+      "properties": {
+        "secret": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "local_url": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "setModelReasoning": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "effort": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "model",
+        "effort"
+      ],
+      "additionalProperties": false
+    },
+    "registerAttachment": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32767
+        },
+        "session_id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 86400
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "startTts": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100000
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "taskAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "create",
+            "edit",
+            "cancel",
+            "retry",
+            "resume",
+            "delete"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 100000
+        },
+        "delay_minutes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "repeat": {
+          "type": "string",
+          "enum": [
+            "once",
+            "interval",
+            "weekly"
+          ]
+        },
+        "interval_minutes": {
+          "type": "number",
+          "minimum": 1
+        },
+        "days_of_week": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          }
+        },
+        "conversation_mode": {
+          "type": "string",
+          "enum": [
+            "current",
+            "new",
+            "dedicated"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "memoryAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "details",
+            "reveal",
+            "edit",
+            "archive",
+            "restore",
+            "delete"
+          ]
+        },
+        "subject": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 6000
+        },
+        "category": {
+          "type": "string"
+        },
+        "sensitivity": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "importance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "pinned": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "toolAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "set_trust",
+            "set_enabled",
+            "refresh",
+            "install_skill",
+            "install_custom",
+            "install_mcp"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "builtin",
+            "custom",
+            "mcp",
+            "skill"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "trusted": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 32767
+        },
+        "package": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "diagnosticAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "scan",
+            "repair"
+          ]
+        },
+        "include_network": {
+          "type": "boolean"
+        },
+        "repair_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "setWorkspaceRoot": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32767
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "openWorkspaceFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32767
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "terminalAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "write",
+            "restart"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 100000
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "canvasAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "layout",
+            "close",
+            "reopen"
+          ]
+        },
+        "button_positions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 96
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "x": {
+                "type": "number",
+                "minimum": -100000,
+                "maximum": 100000
+              },
+              "y": {
+                "type": "number",
+                "minimum": -100000,
+                "maximum": 100000
+              },
+              "width": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100000
+              },
+              "height": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100000
+              }
+            },
+            "required": [
+              "id",
+              "x",
+              "y"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "browserImport": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "history": {
+          "type": "boolean"
+        },
+        "bookmarks": {
+          "type": "boolean"
+        },
+        "cookies": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "operations": [
+    {
+      "method": "GET",
+      "path": "/v2/health",
+      "operation_id": "health",
+      "summary_he": "בדיקת חיות מינימלית",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/version",
+      "operation_id": "version",
+      "summary_he": "גרסת חוזה וגרסת מוצר",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/capabilities",
+      "operation_id": "capabilities",
+      "summary_he": "יכולות זמינות ב-Core",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/bootstrap",
+      "operation_id": "bootstrap",
+      "summary_he": "תמונת אתחול בטוחה לשולחן העבודה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/workspaces",
+      "operation_id": "listWorkspaces",
+      "summary_he": "רשימת סביבות עבודה",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/workspaces",
+      "operation_id": "createWorkspace",
+      "summary_he": "יצירת סביבת עבודה",
+      "request_schema": "createWorkspace"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/workspaces/{workspace_id}",
+      "operation_id": "patchWorkspace",
+      "summary_he": "עדכון סביבת עבודה",
+      "request_schema": "patchWorkspace"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/workspaces/{workspace_id}",
+      "operation_id": "deleteWorkspace",
+      "summary_he": "מחיקת סביבת עבודה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/conversations",
+      "operation_id": "listConversations",
+      "summary_he": "רשימה וחיפוש שיחות",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/conversations",
+      "operation_id": "createConversation",
+      "summary_he": "יצירת שיחה",
+      "request_schema": "createConversation"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/conversations/{session_id}",
+      "operation_id": "getConversation",
+      "summary_he": "פרטי שיחה",
+      "request_schema": null
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/conversations/{session_id}",
+      "operation_id": "patchConversation",
+      "summary_he": "שינוי שם, שיוך או נעיצה",
+      "request_schema": "patchConversation"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/conversations/{session_id}",
+      "operation_id": "deleteConversation",
+      "summary_he": "מחיקת שיחה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/conversations/{session_id}/messages",
+      "operation_id": "listMessages",
+      "summary_he": "הודעות בעימוד",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/conversations/{session_id}/runs",
+      "operation_id": "submitRun",
+      "summary_he": "שליחת בקשה לסוכן",
+      "request_schema": "submitRun"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/conversations/{session_id}/read",
+      "operation_id": "markRead",
+      "summary_he": "סימון תשומת לב כנקראה",
+      "request_schema": "markRead"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/runs",
+      "operation_id": "listRuns",
+      "summary_he": "רשימת ריצות",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/runs/{run_id}",
+      "operation_id": "getRun",
+      "summary_he": "מצב ריצה",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/runs/{run_id}/cancel",
+      "operation_id": "cancelRun",
+      "summary_he": "בקשת ביטול",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/runs/{run_id}/events",
+      "operation_id": "replayRunEvents",
+      "summary_he": "שחזור אירועי ריצה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/events/replay",
+      "operation_id": "replayEventsHttp",
+      "summary_he": "שחזור אירועים עמיד דרך מארח Tauri",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/approvals",
+      "operation_id": "listApprovals",
+      "summary_he": "אישורים ממתינים",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/approvals/{approval_id}/resolve",
+      "operation_id": "resolveApproval",
+      "summary_he": "אישור או דחייה",
+      "request_schema": "resolveApproval"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/settings/schema",
+      "operation_id": "settingsSchema",
+      "summary_he": "סכמת הגדרות בטוחה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/settings",
+      "operation_id": "getSettings",
+      "summary_he": "ערכים לא סודיים ומצב סודות ממוסך",
+      "request_schema": null
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/settings",
+      "operation_id": "patchSettings",
+      "summary_he": "עדכון הגדרות לא סודיות",
+      "request_schema": "patchSettings"
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/settings/secrets/{secret_key}",
+      "operation_id": "setSecret",
+      "summary_he": "שמירת סוד",
+      "request_schema": "setSecret"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/settings/secrets/{secret_key}",
+      "operation_id": "deleteSecret",
+      "summary_he": "מחיקת סוד",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/providers/{provider}/validate",
+      "operation_id": "validateProvider",
+      "summary_he": "בדיקת ספק וגילוי מודלים",
+      "request_schema": "validateProvider"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/providers/{provider}/models",
+      "operation_id": "discoverModels",
+      "summary_he": "גילוי מודלים",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/providers/{provider}/reasoning",
+      "operation_id": "getModelReasoning",
+      "summary_he": "קריאת רמות חשיבה למודל",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/providers/{provider}/reasoning",
+      "operation_id": "setModelReasoning",
+      "summary_he": "עדכון רמת חשיבה למודל הפעיל",
+      "request_schema": "setModelReasoning"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/providers/openai_codex_signin/quota",
+      "operation_id": "readCodexQuota",
+      "summary_he": "קריאת מכסת Codex שנותרה",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/attachments",
+      "operation_id": "registerAttachment",
+      "summary_he": "רישום קובץ לידית זמנית",
+      "request_schema": "registerAttachment"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/attachments/{handle}",
+      "operation_id": "readAttachment",
+      "summary_he": "קריאת קובץ דרך ידית תחומה",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/audio/tts",
+      "operation_id": "startTts",
+      "summary_he": "התחלת הקראה דרך Core",
+      "request_schema": "startTts"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/audio/tts/stop",
+      "operation_id": "stopTts",
+      "summary_he": "עצירת הקראה דרך Core",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/audio/tts/status",
+      "operation_id": "ttsStatus",
+      "summary_he": "מצב הקראה של Core",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/management/tasks",
+      "operation_id": "listTasks",
+      "summary_he": "רשימת משימות רקע",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/management/tasks",
+      "operation_id": "manageTask",
+      "summary_he": "יצירה ופעולות במשימת רקע",
+      "request_schema": "taskAction"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/management/memories",
+      "operation_id": "listMemories",
+      "summary_he": "ניהול זיכרון ממוסך",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/management/memories/{memory_id}",
+      "operation_id": "getMemory",
+      "summary_he": "פרטי זיכרון ממוסכים",
+      "request_schema": null
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/management/memories/{memory_id}",
+      "operation_id": "manageMemory",
+      "summary_he": "עריכה, חשיפה, ארכוב ושחזור זיכרון",
+      "request_schema": "memoryAction"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/management/memories/{memory_id}",
+      "operation_id": "deleteMemory",
+      "summary_he": "מחיקת זיכרון",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/management/tools",
+      "operation_id": "listTools",
+      "summary_he": "כלים, MCP ו-Skills",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/management/tools",
+      "operation_id": "manageTools",
+      "summary_he": "רענון, התקנה ואמון הרחבות",
+      "request_schema": "toolAction"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/management/usage",
+      "operation_id": "usage",
+      "summary_he": "נתוני שימוש מקומיים",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/management/logs",
+      "operation_id": "logs",
+      "summary_he": "לוג מאוחד עם סינון פרטיות",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/management/about",
+      "operation_id": "about",
+      "summary_he": "גרסה ומידע על היישום",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/management/diagnostics",
+      "operation_id": "diagnostics",
+      "summary_he": "בדיקה או תיקון מאושר",
+      "request_schema": "diagnosticAction"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/workbench/root",
+      "operation_id": "workspaceRoot",
+      "summary_he": "שורש Workbench התחום",
+      "request_schema": null
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/workbench/root",
+      "operation_id": "setWorkspaceRoot",
+      "summary_he": "בחירת שורש Workbench",
+      "request_schema": "setWorkspaceRoot"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/workbench/tree",
+      "operation_id": "workspaceTree",
+      "summary_he": "עץ קבצים תחום",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/workbench/file",
+      "operation_id": "workspaceFile",
+      "summary_he": "תצוגה מקדימה תחומה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/workbench/artifacts",
+      "operation_id": "artifacts",
+      "summary_he": "תוצרים בתיקיית העבודה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/conversations/{session_id}/canvases",
+      "operation_id": "canvases",
+      "summary_he": "רשימת Canvas לשיחה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/conversations/{session_id}/canvases/{canvas_id}",
+      "operation_id": "canvas",
+      "summary_he": "מסמך Canvas מבודד",
+      "request_schema": null
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/conversations/{session_id}/canvases/{canvas_id}",
+      "operation_id": "canvasAction",
+      "summary_he": "עדכון פריסת או מצב Canvas",
+      "request_schema": "canvasAction"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/browser/import/sources",
+      "operation_id": "browserImportSources",
+      "summary_he": "פרופילי Chromium זמינים לייבוא יזום",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/browser/import",
+      "operation_id": "browserImport",
+      "summary_he": "ייבוא מבוסס עותק ללא סיסמאות",
+      "request_schema": "browserImport"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/workbench/open",
+      "operation_id": "openWorkspaceFile",
+      "summary_he": "פתיחה חיצונית של קובץ תחום",
+      "request_schema": "openWorkspaceFile"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/workbench/terminals",
+      "operation_id": "createTerminal",
+      "summary_he": "יצירת מסוף PowerShell בבעלות Core",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/workbench/terminals/{terminal_id}",
+      "operation_id": "readTerminal",
+      "summary_he": "קריאת פלט מסוף",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/workbench/terminals/{terminal_id}",
+      "operation_id": "writeTerminal",
+      "summary_he": "קלט או אתחול מסוף",
+      "request_schema": "terminalAction"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/workbench/terminals/{terminal_id}",
+      "operation_id": "closeTerminal",
+      "summary_he": "סגירת מסוף",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/events",
+      "operation_id": "subscribeEvents",
+      "summary_he": "WebSocket מאומת עם replay",
+      "request_schema": null
+    }
+  ],
+  "event": {
+    "cursor": "event_id",
+    "ordering": "strictly increasing durable event_id",
+    "fields": [
+      "event_id",
+      "sequence",
+      "event_type",
+      "request_id",
+      "session_id",
+      "run_id",
+      "payload",
+      "created_at"
+    ]
+  }
+}

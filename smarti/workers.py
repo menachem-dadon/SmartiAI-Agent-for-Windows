@@ -1,5 +1,5 @@
 """Qt worker threads for agent, speech, TTS, and model loading."""
-from .common import *
+from .ui_common import *
 
 # ==========================================
 # תהליכי רקע (QThreads) ל-GUI למניעת קפיאות

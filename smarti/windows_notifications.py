@@ -1,5 +1,5 @@
 """Windows toast notifications and polished in-app fallback popups."""
-from .common import *
+from .ui_common import *
 from .ui_styles import *
 from .ui_controls import apply_soft_shadow
 

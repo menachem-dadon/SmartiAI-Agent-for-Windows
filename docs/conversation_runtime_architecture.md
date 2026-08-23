@@ -103,6 +103,41 @@ Mutation endpoints accept `Idempotency-Key`. Supported routes:
 
 The channel route is an authenticated ingress adapter for a future WhatsApp or other transport connector. A connector must validate its own webhook signature and map the remote identity before forwarding to loopback. Smarti's normal policy and durable approval flow still applies; channel code must never call tools directly.
 
+## Headless Core service
+
+`smarti_core_service.py` is the source entrypoint for the UI-independent Core
+process. `SmartiCoreService` owns the lifecycle states `starting`, `ready`,
+`stopping`, `stopped`, and `fatal`; starts `SmartiCore`, the run manager, the
+background scheduler, and the existing authenticated loopback gateway; and
+shuts them down without constructing `QApplication` or any window, tray, or
+dialog.
+
+The readiness line written to stdout is JSON and includes the PID, selected
+loopback port, API version, lifecycle state, and component health. The parent
+may request graceful shutdown by writing `{"command":"shutdown"}` to stdin;
+closing the supervisor pipe also stops the orphaned sidecar. A launch
+token may be supplied through `SMARTI_CORE_LAUNCH_TOKEN` (preferred for a child
+process) or `--token`; it is never included in the readiness payload. The
+versioned desktop HTTP/WebSocket API is the `/v2` contract described in
+`docs/desktop_control_plane_v2.md`; `/v1` remains compatible for local/channel
+integrations.
+
+Core-owned presentation requests are projected as service events:
+notifications, API-key requests, durable approvals/run events, TTS state,
+background-task progress, and browser-activation requests. Consumers cannot
+take the Core down by raising from an event callback.
+
+Run the deterministic development smoke with:
+
+```powershell
+.\scripts\smoke_headless_core.ps1
+```
+
+It uses an isolated temporary data directory, checks loopback health, creates a
+session, registers an attachment handle, submits a fake-provider run through
+the `/v2` API, verifies HTTP and WebSocket event replay, resolves an approval,
+checks the persisted response, and performs a graceful shutdown.
+
 ## Compatibility
 
 The legacy synchronous `SmartiCore.send_message()` API remains available. It now locks only the target conversation. Existing chat history, title generation, memory capture, canvases, notifications, speech, and background-task APIs remain readable. The built-in background scheduler submits work through the same run manager instead of switching the globally active desktop conversation.

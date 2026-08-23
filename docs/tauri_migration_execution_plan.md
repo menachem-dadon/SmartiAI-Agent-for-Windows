@@ -1,10 +1,10 @@
 # SmartiAI Tauri Migration Master Execution Plan
 
-Status: approved execution plan; implementation has not started  
-Plan version: 1.0  
-Plan date: 2026-08-20  
-Repository: `C:\Users\יהודית סיידון\Downloads\GitHub\SmartiAI-Agent-for-Windows`  
-Current product target at plan creation: `V0.87.0`  
+- Status: execution complete through Point 15; Point 16 is next
+- Plan version: 1.2
+- Plan date: 2026-08-20; browser architecture amended 2026-08-21; exact UI parity amended 2026-08-23
+- Repository: `C:\Users\יהודית סיידון\Downloads\GitHub\SmartiAI-Agent-for-Windows`
+- Current product target at plan creation: `V0.87.0`
 
 This is the authoritative, standalone handoff for migrating SmartiAI's desktop
 interface from PyQt6 to Tauri 2 + React + TypeScript while preserving the Python
@@ -12,6 +12,33 @@ agent runtime and the one-click Windows application experience.
 
 Point numbers in this document are stable. Do not renumber existing points. If
 the plan later needs an inserted task, add a suffix such as `Point 6A`.
+
+**Binding browser amendment (2026-08-21):** the user explicitly rejected the
+legacy technique of launching an installed Chrome/Edge window and reparenting
+its HWND into Smarti. The target is now a first-class Smarti Browser: Smarti's
+own polished React browser chrome surrounding Tauri-owned child WebViews backed
+by WebView2 on Windows. Remote sites must look and behave like content inside a
+real browser, not like an external browser window pasted over the application.
+Sections 7.3, Point 6, and Point 14 below supersede any older native-Chromium
+hosting language in historical handoffs. The supplied visual reference was the
+clean Codex-style browser layout: compact tabs, omnibox/navigation, overflow
+menu, downloads/history/settings, and a quiet content-first surface.
+
+**Binding exact-UI amendment (2026-08-23):** the user requires the migrated
+interface to reproduce the original PyQt interface one-to-one. The authoritative
+specification is the legacy source code, not screenshots, subjective visual
+similarity, a new component library, or a redesign proposal. For every existing
+surface, read and map the actual widget/layout/style/state code and reproduce
+its structure, geometry, spacing, typography, colors, assets, text, menus,
+shortcuts, visibility rules, states, RTL/LTR behavior, persistence, and
+interaction semantics. Screenshots are regression evidence only. This amendment
+supersedes every older instruction to "refine", "modernize", "improve the
+presentation", or reinterpret an existing UI. Internal React/Rust/Python
+implementation may differ, but there may be no undocumented user-visible or
+behavioral difference. Truly new surfaces with no PyQt equivalent, including
+the explicitly approved built-in Smarti Browser architecture, must reuse the
+exact established Smarti visual language unless the user separately approves a
+different design.
 
 ## 1. Execution trigger for future Codex tasks
 
@@ -31,15 +58,19 @@ the executing Codex task must:
 3. Run `git status --short` and preserve all pre-existing user work.
 4. Inspect the current checkout before trusting file names or historical line
    numbers in this plan.
-5. Execute only the requested point and its explicitly listed prerequisites or
+5. For every UI-bearing point, read the complete relevant legacy PyQt classes,
+   their parent composition, shared style/theme helpers, assets, signal/action
+   wiring, responsive code, and persisted settings before changing React. Do
+   not implement from screenshots or class names alone.
+6. Execute only the requested point and its explicitly listed prerequisites or
    repairs. Do not begin the next point.
-6. Do not execute two migration points in parallel.
-7. Make reasonable implementation decisions within the point's architecture.
+7. Do not execute two migration points in parallel.
+8. Make reasonable implementation decisions within the point's architecture.
    Ask the user only if a missing choice would materially change product scope.
-8. Run all acceptance checks required by the point.
-9. Update the Execution Ledger in this file only after the point is genuinely
+9. Run all acceptance checks required by the point.
+10. Update the Execution Ledger in this file only after the point is genuinely
    complete. Record exact evidence, not a generic "tests passed" statement.
-10. End with a self-contained handoff stating: outcome, files changed, tests,
+11. End with a self-contained handoff stating: outcome, files changed, tests,
     live/visual/package evidence, known limitations, Git status, and the next
     point number. Do not commit, push, publish, or create a release unless the
     user explicitly authorizes that separate action.
@@ -60,6 +91,9 @@ work remains. Evidence types must remain separate:
 - **Live evidence:** the behavior was exercised against a running application.
 - **Visual evidence:** screenshots or direct layout inspection in required RTL,
   light/dark, sizing, and DPI states.
+- **Source-parity evidence:** a code-derived map from each legacy PyQt class,
+  layout, style rule, asset, signal, and conditional state to its Tauri
+  implementation, with every intentional deviation listed and user-approved.
 - **Package evidence:** the installed or portable artifact was actually built
   and smoke-tested on a clean machine or VM.
 - **Release evidence:** signed artifacts, updater metadata, and upgrade paths
@@ -75,21 +109,22 @@ Allowed states are `PENDING`, `IN_PROGRESS`, `BLOCKED`, and `COMPLETE`.
 
 | Point | Short name | Status | Evidence / completion note |
 |---:|---|---|---|
-| 1 | Baseline and parity inventory | PENDING | |
-| 2 | Pure-Python import boundary | PENDING | |
-| 3 | Headless Core service entrypoint | PENDING | |
-| 4 | Versioned HTTP/WebSocket control plane | PENDING | |
-| 5 | Tauri shell and Core supervisor | PENDING | |
-| 6 | Embedded-browser feasibility gate | PENDING | |
-| 7 | Design system and Workspace shell | PENDING | |
-| 8 | Chat vertical slice | PENDING | |
-| 9 | Rich messages, composer, attachments, voice | PENDING | |
-| 10 | Settings and provider management | PENDING | |
-| 11 | Tasks, memory, tools, diagnostics, usage | PENDING | |
-| 12 | Files, artifacts, and terminal Workbench | PENDING | |
-| 13 | Sandboxed Canvas | PENDING | |
-| 14 | Full Smarti Browser surface | PENDING | |
-| 15 | Windows desktop integration | PENDING | |
+| 1 | Baseline and parity inventory | COMPLETE | `docs/tauri_migration_baseline.md`: 97 unique feature IDs; import probe loaded PyQt6 and `smarti.visual_canvas`; focused runtime/history 18/18 and full Python 357/357 passed; isolated live source capture recorded 4.963685 s ready, 203,157,504-byte working set, 5 s idle CPU sample, and visually inspected RTL light/dark 720x560 + 1440x900 screenshots at 125% DPI. A new package build/smoke was explicitly waived by the user on 2026-08-21; only clearly labeled historical V0.87.0 artifact sizes/hashes were recorded. |
+| 2 | Pure-Python import boundary | COMPLETE | `smarti.common` is Qt-free; legacy Qt wildcard compatibility moved to `smarti.ui_common`; the persisted Canvas model moved to `smarti.canvas_model` and is shared by Core and the legacy renderer. Fresh-process `import smarti.core` loaded no `PyQt6`, `smarti.visual_canvas`, `smarti.native_browser`, or UI adapter modules. Focused import/runtime/history tests passed 28/28, full Python passed 359/359, `compileall`, `pip check`, and `git diff --check` passed. An isolated live legacy `SmartiCore` + `ChatWindow` opened and rendered RTL light/dark narrow/wide captures at 125% DPI; package validation was not required for this point. |
+| 3 | Headless Core service entrypoint | COMPLETE | `smarti_core_service.py` + `SmartiCoreService` provide Qt-free `starting/ready/stopping/stopped/fatal` lifecycle, Core/run-manager/background-scheduler startup, Core event adapters, loopback health, parent-pipe/signal shutdown, and JSON readiness. Deterministic fresh-process smoke created a session, persisted `deterministic:hello`, and stopped cleanly with `qt_loaded=false`; focused runtime/background/recovery tests passed 73/73, full Python passed 363/363, `compileall`, `pip check`, and `git diff --check` passed. Isolated offscreen legacy `ChatWindow` startup remained visible and RTL. No package or visual migration evidence was required. |
+| 4 | Versioned HTTP/WebSocket control plane | COMPLETE | Authenticated loopback `aiohttp` `/v2` now covers bootstrap/capabilities/version/health, workspace and conversation CRUD/search, paginated messages, submit/cancel/status/replay/read, approvals, masked settings and explicit secrets/provider models, scoped attachment handles, and cursor-based WebSocket replay while `/v1` remains compatible. `smarti/control_plane_contract.py` generates JSON + TypeScript definitions and `docs/desktop_control_plane_v2.md` summarizes operations. Point-specific gateway tests passed 5/5; focused runtime/history passed 26/26; full Python passed 367/367 on the confirming run, with `compileall`, Qt-free Core import, `pip check`, and `git diff --check` passing. A live isolated headless smoke used a random port/token to create a conversation, hide an attachment path behind a handle, complete `deterministic:hello`, replay 3 missed WebSocket events exactly, resolve an approval, and stop with `qt_loaded=false`. No Tauri UI, visual, package, LAN, cloud, WhatsApp, or shell-API evidence was required or claimed. |
+| 5 | Tauri shell and Core supervisor | COMPLETE | `desktop/` contains locked Tauri 2.11.5 + React 19 + TypeScript/Vite sources, an RTL light/dark startup/recovery shell, restrictive CSP, and one minimal capability with no shell/filesystem plugin. The Rust supervisor keeps the random per-launch bearer token outside React, launches source Python or a packaged sidecar without a console, validates readiness identity/health, proxies narrow status/health/restart operations, retains one Core across WebView reload, captures redacted diagnostics, detects crashes, restarts one new generation, and shuts down over the inherited pipe. `scripts/run_tauri_dev.ps1` is the one-command developer entrypoint. Frontend tests passed 8/8, Rust tests 11/11, focused import-boundary tests 3/3, full Python 368/368, `typecheck`, Vite production build, `cargo check`, `compileall`, `pip check`, and `git diff --check` passed. A hidden real-process supervisor smoke proved initial Ready, duplicate prevention, same PID across an actual WebView reload, intentional crash detection, restart to generation 2, Rust-proxied health, and graceful stop. Live Windows Tauri validation showed no Core console; the user supplied a visually inspected light-theme Ready screenshot after using the recovery button, and the earlier live recovery state was also visually inspected. No installer/package evidence is claimed or required at this point. |
+| 6 | Built-in Smarti Browser foundation gate | COMPLETE | `desktop/` now hosts a polished RTL React browser chrome around Rust-owned Tauri child WebViews/WebView2; no installed browser HWND or remote-debugging port is used. Stable tab/target/request IDs and the authenticated lifecycle-scoped Core bridge route both user controls and Python `browser_automation_manager` actions to the same visible target. The live gate proved `tab-00000001` = `wv2-target-00000001`, hostile-page Tauri denial, Hebrew input, popup-to-governed-tab routing, persistent reload state, fresh Guest cleanup, focus/resize/hide/show, WebAuthn API availability, and a 13,224-byte screenshot; first-tab latency was 3.702 s in the confirming development run. Light/dark, maximize and real Google rendering were visually inspected, including a live same-target proof. Safe installed-profile probing read copied Chrome/Edge history and bookmarks, skipped protected/locked cookies honestly, exposed no URL/cookie value/password, and recorded absent Brave/Chromium/Vivaldi. Frontend tests, Rust tests, production build, focused Python bridge/import tests, full Python, `compileall`, `pip check`, and `git diff --check` passed on the confirming run. Account-dependent OAuth/passkey registration, every physical DPI/multi-monitor configuration, complete download UX and packaged browser rerun remain explicitly documented for the user matrix/Point 14/16; no unsupported parity claim is made. |
+| 7 | Design system and Workspace shell | COMPLETE | The Workspace architecture and browser visibility behavior are implemented. The PyQt `WorkspaceWindowTitleBar`, `WorkspaceSidebar`, `ChatHistoryPage`, top-bar layout, theme constants and responsive behavior are the authoritative specification. The prior source-parity correction restored original assets, dimensions, conversation metadata/cards, 24 px activity indicators, active/approval/unread states, collapsed-logo hover expansion, and conversation/profile menus, and automated checks passed. The new stricter 2026-08-23 one-to-one whole-surface audit is intentionally owned by Point 9A and is not claimed by this original completion row. |
+| 8 | Chat vertical slice | COMPLETE | The React client now uses a Rust-owned authenticated `/v2` proxy that keeps the launch token out of WebView JavaScript and rejects non-`/v2`, traversal, remote-URL, and non-HTTP-method requests. The real Workspace covers bootstrap, empty-conversation persistence, search/create/rename/delete, active selection, paginated messages, per-conversation runs/cancellation, provider/model snapshots, durable HTTP event replay after reload/reconnect, semantic run/tool groups, approvals, and relevant-only read receipts. A deterministic fake-Core control-plane workflow covered create/list, scoped attachment, submit-to-completion, model snapshot, replay, approval and TTS without a paid call. Full Python passed 369/369; React state/component tests and Rust proxy tests passed in the combined Point 8/9 confirmation below. A minimal live Tauri run showed the real Core connected with persisted conversations and working chat controls; no paid live-provider request was sent. |
+| 9 | Rich messages, composer, attachments, voice | COMPLETE | The user reported Point 9 complete on 2026-08-23. Rich-message, attachment, voice, TTS and cancellation behavior is implemented. The composer was rebuilt from the PyQt `PillInputFrame`, `PinnedActionButtonHost`, `DropdownPillButton`, `_quick_input_button_stylesheet`, and `update_action_btn_visuals` source: 40.5 px pill radius, exact internal margins, 17 px input, 52 px bottom-pinned action control, 42 px attachment control, 10 px control spacing, original gradients, favorite-model visibility rules, and autonomy icon/arrow menus. React tests, production build, focused Core settings behavior and Rust check passed. The new stricter 2026-08-23 one-to-one whole-surface audit is intentionally owned by Point 9A and is not claimed by this original completion row. |
+| 9A | Exact legacy-code UI parity gate | COMPLETE | Completed 2026-08-23. `docs/tauri_ui_source_parity.md` is the binding source-derived traceability matrix. The Points 7-9 React/CSS surfaces were corrected against the enclosing PyQt composition and shared helpers, including responsive Workspace ownership, the user-directed approximately 35% wide-screen chat density, race-safe native browser bounds, themed Smarti scrollbars, right-aligned composer/process content, safe internet/local-file links, exact history/activity/message geometry, background-task prompts, message actions outside bubbles, durable/live agent reports and tool loops above the answer with elapsed work time, source assets and dialogs, gapless nested provider/model favorite picker, model reasoning choices, live Codex quota card, voice overlay and approval states. TypeScript, 33 frontend tests, production build, 21 focused Core/control-plane tests, generated-contract equality, 18 Rust tests/check and deliberately minimal focused live Tauri validation passed. Point 10 is next; no packaging or release proof is claimed. |
+| 10 | Settings, providers, secrets and connection management | COMPLETE | Completed 2026-08-23. The Tauri management center reads a Core-owned schema generated from `DEFAULT_SETTINGS`, exposes Hebrew groups/search/advanced and restart metadata, provider/model discovery and validation, persisted system/light/dark preference, SSL trust-mode selection and warnings, and explicit secret set/delete controls. `/v2/settings` never returns plaintext secrets; only configured/masked metadata crosses the bridge. Settings updates remain Core-persisted and synchronize model, prompt, extension and SSL runtime state where applicable. The generated `/v2` contract, focused gateway integration and source-parity checks passed. |
+| 11 | Tasks, Memory, Tools, Diagnostics, Usage, Logs and About | COMPLETE | Completed 2026-08-23. The profile management center now contains Core-backed task create/edit/cancel/retry/resume/delete flows with once/interval/weekly recurrence and conversation routing; masked memory search/details/explicit reveal/edit/archive/restore/delete; built-in enablement plus Python/MCP/Skill trust/install/refresh; quick/full diagnostics and explicitly confirmed repairs; cached-first usage; privacy-redacted logs by default with opt-in content and export; and version/runtime/About data. Internal RTL dialogs replace generic browser prompts. No paid provider call or per-feature computer-control QA was performed. |
+| 12 | Files, Artifacts and Terminal Workbench | COMPLETE | Completed 2026-08-23. The on-demand multi-tab Workbench now supports Files, Artifacts, multiple Terminal sessions and the existing Browser, with duplicate-capable file/browser/terminal tabs. Python Core owns the selected/persisted workspace root, realpath containment, traversal/symlink rejection, depth/size limits, safe text/Markdown preview, image/audio/video/PDF data previews, cached Office-to-PDF conversion, artifact discovery and narrow external-open action. Core-owned hidden PowerShell sessions stream output, accept input, restart/close independently, clean up on gateway shutdown and preserve Hebrew paths through UTF-8. A real loopback integration exercised a Hebrew workspace, Markdown preview, traversal rejection and an actual PowerShell session. Point 13 was not started. |
+| 13 | Sandboxed Canvas | COMPLETE | Completed 2026-08-23. The pure Qt-free Canvas model remains authoritative while authenticated conversation-scoped `/v2` routes list, materialize, update, close and reopen persisted artifacts. `CanvasPanel` renders each artifact in a stable Workbench tab through an opaque-origin `sandbox="allow-scripts"` iframe, restrictive per-document CSP, local image materialization, explicit HTTPS remote-image opt-in, bounded/source-validated messaging and a trusted parent confirmation before a Canvas action can enter chat. Active/closed history and layout survive reload; a Canvas error remains isolated. Malicious/CSP frontend fixtures and Core persistence/routes passed, and Canvas enablement no longer probes PyQt/WebEngine. |
+| 14 | Full Smarti Browser surface | COMPLETE | Completed 2026-08-23. The Point 6 same-visible-target broker now provides ordered/pinned/duplicate/restored tabs, favicon/loading/audio/crash metadata, full navigation and RTL browser chrome, shortcuts, page commands, per-origin permissions, Smarti-owned persistent history/bookmarks/download history/session restore, strict Guest exclusion/cleanup, privacy controls, safe collision-aware download destinations with dangerous-extension blocking, and a selective detected-profile import wizard for copied history/bookmarks/compatible cookies without password extraction. Inactive WebViews are hidden/frozen, target IDs remain stable, and the support matrix documents WebView2/Tauri/vendor boundaries. A debug NSIS candidate was built; both development and bundled-candidate binary smoke proved the same visible `tab-00000001`/`wv2-target-00000001`, Tauri denial, profile isolation, governed popup, Hebrew input, persistence and screenshot. Clean installation and production sidecar packaging remain Point 16. |
+| 15 | Windows desktop integration | COMPLETE | Completed 2026-08-23. Rust/Tauri now owns single-instance activation (`show`, `new-chat`, `voice`, scoped conversation and update shutdown), native tray/close-to-tray/explicit Quit, global voice shortcut lifecycle, WinRT conversation-scoped notification activation without implicit acknowledgement, durable unread taskbar overlay/flash, AUMID, rounded corners and guarded multi-monitor placement restore. Unit tests cover activation routing. A minimal live packaged-candidate check proved a second launch routes and exits, `WM_CLOSE` leaves the primary process alive in tray, `show` routes to it, and `update-shutdown` closes it cleanly with no remaining instance. No exhaustive computer-control, notification click-through or physical DPI/monitor matrix was run per the user's explicit quota-saving direction. |
 | 16 | Packaging, updater, and old-install upgrade | PENDING | |
 | 17 | Final cutover and PyQt removal | PENDING | |
 
@@ -109,12 +144,30 @@ The product must still feel like one installed application:
 - Closing the main window may keep Smarti in the tray according to the existing
   setting; it must not accidentally stop durable background work.
 - Existing settings, secrets, history, memory, tasks, workspaces, attachments,
-  browser profile, and audit data remain available.
+  Smarti-owned browser data, and audit data remain available or are migrated
+  through an explicit, verified conversion.
+- Smarti Browser is part of the application. It does not launch or visually
+  embed the user's installed Chrome, Edge, Brave, or another top-level browser.
 
-The migration is also a product redesign. Preserve the information architecture
-and Smarti visual identity, but do not reproduce every PyQt widget pixel for
-pixel. Use the move to improve hierarchy, motion, typography, spacing,
-responsiveness, polish, and consistency.
+The Tauri migration is a framework/architecture migration, not a UI redesign.
+The existing PyQt code is the authoritative visual, structural, behavioral, and
+interaction specification. The final user must encounter the same interface:
+component hierarchy, placement, dimensions, minimum/maximum sizes, stretch and
+alignment behavior, margins, spacing, typography, palette, borders, radii,
+gradients, shadows, icons, labels, tooltips, menus, indicators, animations,
+focus/hover/pressed/disabled states, responsive transitions, shortcuts,
+selection rules, and persisted UI choices. React may implement these details
+differently internally, but must not reinterpret them. A screenshot can show
+one state at one size; it cannot replace reading the code that produces all
+states and sizes.
+
+Where Qt and Web rendering differ, match the declared source values and the
+resulting layout as closely as the platform permits, measure the remaining
+difference, and record it. Any user-visible exception—however reasonable it may
+seem—requires explicit user approval. Do not quietly substitute a “more modern”
+control, icon family, spacing system, animation, card layout, or responsive
+behavior. Security and accessibility fixes remain required, but should preserve
+the original presentation unless a visible change is unavoidable and approved.
 
 ## 5. Non-negotiable product invariants
 
@@ -136,7 +189,10 @@ responsiveness, polish, and consistency.
 
 - Python remains authoritative for the agent loop, model providers, tools,
   policy, approvals, MCP, Skills, background tasks, memory, history, settings,
-  secrets, browser automation, and Windows computer automation.
+  secrets, browser-automation policy/action contracts, and Windows computer
+  automation. Rust may execute narrow browser-host operations for Python
+  through the authenticated browser broker; that does not transfer policy or
+  tool authority to React.
 - New foreground and background runs enter through
   `ConversationRunManager`; do not reintroduce GUI-owned agent execution.
 - One conversation is serialized; independent conversations may run
@@ -165,6 +221,15 @@ responsiveness, polish, and consistency.
 - Local files displayed in the WebView use scoped handles or narrowly scoped
   asset routes, not an unrestricted local file server.
 - Existing browser persistent and guest profiles remain explicitly separate.
+- Arbitrary remote pages run in dedicated child WebViews with no Tauri command
+  capability, desktop credential, host object, general filesystem access, or
+  direct Core access. Browser chrome and remote content are separate trust
+  domains even though they appear as one product.
+- Production browser automation must not leave a stable, unauthenticated CDP
+  endpoint exposed. Prefer in-process WebView2 CDP calls through the Rust
+  broker. If a loopback debugging endpoint is required for Playwright, Point 6
+  must make it random, lifecycle-scoped, inaccessible to remote hosts, and
+  explicitly document the residual same-user risk.
 
 ### 5.4 Windows and installation invariants
 
@@ -175,7 +240,10 @@ responsiveness, polish, and consistency.
 - Packaged Smarti retains private Python and Node runtimes for custom Python
   tools, Skill dependencies, and MCP packages.
 - The UI development Node toolchain is not a runtime prerequisite for users.
-- Existing application data paths and browser profiles are preserved.
+- Existing application data paths are preserved. Smarti-owned legacy browser
+  data is migrated safely into the new WebView2/Smarti data model; third-party
+  source profiles are copied/read only after explicit consent and are never
+  opened for in-place control or modified.
 - Update signing and Windows Authenticode signing are separate requirements.
 
 ## 6. Current repository context at plan creation
@@ -226,13 +294,19 @@ the current checkout.
 
 - On Windows, `smarti/native_browser.py` launches an installed Chromium/Edge
   app-mode window, reparents its native HWND into Qt, and preserves a loopback
-  CDP endpoint.
+  CDP endpoint. This accurately describes the legacy compatibility client, but
+  it is explicitly rejected as the Tauri target by the 2026-08-21 amendment.
 - `smarti/browser_control.py` uses Playwright/CDP structured actions against
-  that same persistent profile and visible target.
+  that same persistent profile and visible target. Preserve its user-visible
+  action capabilities and Python policy contract, not its current host process.
 - `smarti/browser_profile.py` provides copy-based, user-initiated import of
   compatible cookies, history, and bookmarks; passwords are never imported.
 - Persistent Smarti and temporary guest profiles have different lifecycle and
   privacy requirements.
+- The new browser must not require an installed Chrome/Edge executable. It uses
+  the supported WebView2 Runtime and Smarti-owned profiles. History/bookmarks
+  may be imported into Smarti's own browser library; compatible decryptable
+  cookies may be added to the Smarti profile through WebView2's cookie API.
 - Canvas artifacts persist validated HTML, images, buttons, positions, and
   context metadata. Their data model is reusable; their Qt renderer is not.
 
@@ -258,13 +332,15 @@ SmartiAI.exe (Tauri 2 desktop process)
 |   +-- right conversation drawer
 |   +-- left on-demand Workbench
 |   +-- management center
+|   +-- Smarti Browser chrome, tabs, libraries, and settings
 |   +-- design system, motion, RTL, light/dark
 |
 +-- Rust trusted desktop host
 |   +-- window, tray, single instance, taskbar, notifications
 |   +-- Core process supervisor and authenticated proxy
 |   +-- updater, file dialogs, safe native opening
-|   +-- native Chromium child-host integration
+|   +-- WebView2 browser broker, profiles, downloads, and CDP bridge
+|   +-- isolated Tauri child WebViews for remote browser content
 |
 +-- smarti-core.exe (headless Python sidecar)
     +-- SmartiCore and ConversationRunManager
@@ -297,11 +373,48 @@ semantics, never because the WebView merely reloads.
 
 ### 7.3 Browser decision
 
-Do not base the required integrated browser on Tauri's unstable multiwebview
-API. Preserve the dedicated installed Chromium/Edge process and CDP design.
-Port the native child-window hosting layer from PyQt/ctypes to Rust/Win32 and
-position it over a React-declared browser viewport. This design must be proven
-by Point 6 before the main UI migration proceeds.
+Build a first-class Smarti Browser; do not port the legacy installed-browser
+HWND reparenting layer. The browser has two deliberately separated layers:
+
+1. The main trusted React WebView renders Smarti-owned browser chrome: tabs,
+   navigation, omnibox, menus, history, bookmarks, downloads, permissions, and
+   settings.
+2. Each remote page is rendered in a Tauri-owned child `Webview` positioned in
+   the browser content viewport. On Windows this is an embedded WebView2
+   control, not the user's Chrome/Edge window and not an iframe inside the
+   trusted Smarti document.
+
+Tauri 2 exposes child WebViews as a stable public API, including creation,
+bounds, focus, visibility, zoom, cookies, and browsing-data clearing. The
+current scaffold resolves Tauri 2.11.x, whose Rust `with_webview` hook also
+provides the platform WebView2 handle. Pin at least the Tauri minor version when
+using that platform hook, because its underlying WebView2 bindings may change
+in Tauri minor releases.
+
+Rust owns child-WebView lifecycle, popup/tab routing, profile selection,
+downloads, permissions, and the narrow automation bridge. Python continues to
+own the public browser tool, policy, leases, approvals, and structured action
+contract. Point 6 must prove one production transport to the *same visible
+WebView2 target*: preferably WebView2's in-process DevTools Protocol methods and
+events through Rust; a random lifecycle-scoped loopback CDP connection for
+Playwright is acceptable only if its security and packaging behavior are
+measured and documented. Functional compatibility matters more than retaining
+Playwright as an internal implementation detail.
+
+Use a durable Smarti WebView2 profile for normal browsing and a separate
+InPrivate/ephemeral profile or user-data directory for Guest. Never attach the
+new browser to a third-party profile in place. Profile import is an explicit
+copy/read/convert operation with a category-by-category result report.
+
+Point 6 remains a mandatory gate because WebView2 intentionally differs from a
+full Microsoft Edge product: vendor account sync, extensions, favorites UI,
+some built-in browser features, and some embedded OAuth flows are unavailable.
+The required result is a complete everyday Smarti browser like the supplied
+Codex-style reference, not a false claim of bit-for-bit Edge/Chrome parity. If
+a user-critical login or capability cannot work in WebView2, compare a truly
+embedded CEF-class engine against size, security, maintenance, automation, and
+simple-install requirements. Reparenting an external Chrome window is not an
+allowed fallback.
 
 ### 7.4 Canvas decision
 
@@ -325,33 +438,75 @@ network access. Remote images remain opt-in.
 
 ## 8. Design direction
 
-The new interface should be recognizably Smarti, but substantially more refined.
+The target is an exact migration of the original interface, not a visual
+reinterpretation. “Design system” in this plan means a faithful encoding of the
+existing PyQt design constants and rules in web technology.
 
-- Use CSS custom properties as semantic design tokens for color, typography,
-  spacing, radii, shadows, blur, motion, and density.
-- Maintain separate light and dark themes from the first component, not at the
-  end of the migration.
-- Prefer structured CSS or CSS modules over an uncontrolled accumulation of
-  inline styles or utility classes. A small utility layer is acceptable.
-- Use accessible headless primitives where useful, with an RTL audit rather
-  than assuming a component library is RTL-correct.
-- Use a consistent icon family and SVG assets; do not use text glyphs as final
-  icons when a real icon is available.
-- Use motion to explain state and hierarchy. Respect `prefers-reduced-motion`.
-- Blur, glow, Mica/Acrylic, gradients, and transparency must have performant,
-  readable fallbacks. Visual novelty must not reduce contrast or clarity.
-- Avoid deep card nesting. Prefer a small number of clear surfaces with strong
-  spacing and typography.
+- Derive CSS custom properties from the actual values and conditional branches
+  in `smarti/ui_styles.py`, `smarti/ui_controls.py`, `smarti/chat.py`,
+  `smarti/workspace_ui.py`, `smarti/ui_pages.py`, `smarti/memory_ui.py`, and the
+  relevant feature modules. Do not invent a replacement scale for color,
+  typography, spacing, radii, shadows, blur, motion, or density.
+- Reuse the original tracked icons and visual assets when technically suitable.
+  If an asset must be converted to a web-compatible representation, preserve
+  its shape, stroke, fill, viewbox, visual size, theme variant, and state logic.
+- Reproduce the original widget/layout tree semantically: parent-child
+  ownership, insertion order, direction, alignment, stretch factors, fixed and
+  minimum dimensions, margins, spacing, clipping, scrolling, stacking, and
+  show/hide rules. A flattened React DOM is acceptable only if it behaves and
+  renders identically.
+- Reproduce the complete state machine from code: empty/loading/error/running,
+  hover/focus/pressed/disabled, active/inactive/unread/approval, expanded/
+  collapsed, send/cancel, menu-open, attachment, voice/TTS, and persistence.
+- Maintain the source light and dark themes exactly. A system-theme option may
+  select between them but must not create a third unapproved theme.
+- Component libraries may provide invisible accessibility/focus mechanics, but
+  their default visuals, spacing, animation, portals, direction assumptions,
+  and typography must not leak into the final interface.
+- Do not add Mica, Acrylic, glass, glow, new gradients, new cards, new motion,
+  changed corner radii, or different iconography unless that exact treatment is
+  present in the PyQt source or explicitly approved later.
+- Respect `prefers-reduced-motion` and accessibility requirements by suppressing
+  or adapting motion without altering the normal-motion source-parity target.
 - Chat Markdown must not enable arbitrary raw HTML. Code blocks need copy,
   wrapping/scroll behavior, direction handling, and lazy syntax highlighting.
 - Hebrew user-facing text remains natural and polished. Paths, code, terminal,
   URLs, model IDs, and technical values remain LTR inside the RTL shell.
+- Smarti Browser follows the supplied Codex-style visual intent: compact tabs,
+  one calm toolbar/omnibox row, restrained borders and elevation, a spacious
+  content surface, and a polished overflow menu. It must feel authored as part
+  of Smarti in both themes, not like browser chrome from another application.
+  This is an explicit new-surface exception because the rejected legacy HWND
+  browser is not the design target; all surrounding Workspace integration must
+  still match the original PyQt source exactly.
 
 ## 9. Cross-cutting acceptance matrix
 
 Every relevant point must validate the subset it changes.
 
-### 9.1 Layout and visual states
+### 9.1 Source-code UI parity
+
+- Before implementation, create or update a code-derived mapping that names the
+  legacy PyQt classes/functions/constants/assets/settings and the corresponding
+  React/CSS/Rust implementation. The mapping must cover conditional and dynamic
+  paths, not only the default constructor state.
+- Inspect the relevant source directly. Screenshots, memories, prior summaries,
+  and the Point 1 baseline are supporting evidence and regression fixtures, not
+  substitutes for the code.
+- Preserve exact user-visible values and behaviors. At each required window
+  size/theme/DPI, compare hierarchy, geometry, alignment, wrapping, clipping,
+  scroll behavior, visibility, state transitions, menus, tooltips, keyboard and
+  pointer behavior, and persisted state.
+- Automated source-parity tests should assert stable design values, conditional
+  state behavior, DOM/component roles, and representative geometry. Visual
+  comparisons must exercise equivalent source and Tauri states.
+- Toolkit font rasterization or native-control differences do not excuse layout
+  drift. Match source-declared values first; measure any unavoidable rendered
+  difference and list it for explicit user acceptance.
+- Completion means zero undocumented differences. “Similar”, “recognizable”,
+  “cleaner”, “more polished”, or “better for web” is not acceptance evidence.
+
+### 9.2 Layout and visual states
 
 - Light and dark themes.
 - RTL shell and mixed RTL/LTR content.
@@ -362,7 +517,7 @@ Every relevant point must validate the subset it changes.
   states.
 - Reduced motion and keyboard-only navigation.
 
-### 9.2 Runtime states
+### 9.3 Runtime states
 
 - No conversation, new conversation, long history, and paginated history.
 - One run, queued runs, independent conversations, cancellation, restart
@@ -370,8 +525,12 @@ Every relevant point must validate the subset it changes.
 - Core starts slowly, Core fails startup, Core crashes, WebView reloads, and
   desktop exits while work is active.
 - Browser/computer singleton leases under concurrent conversations.
+- Multiple browser tabs, popup-to-tab routing, persistent restart, Guest
+  cleanup, a crashed content process, failed navigation, certificate/auth
+  prompts, permission requests, uploads/downloads, and agent/user contention
+  over the active tab.
 
-### 9.3 Security states
+### 9.4 Security states
 
 - Unauthorized local request, wrong origin/token, replayed idempotency key,
   oversized body, malformed schema, path traversal, symlink/reparse escape,
@@ -379,11 +538,12 @@ Every relevant point must validate the subset it changes.
 - Frontend code must not be able to invoke arbitrary shell or read arbitrary
   user files through Tauri.
 
-### 9.4 Performance
+### 9.5 Performance
 
 Point 1 establishes measured baselines. Later points must report total memory
-across Tauri, Core, and managed Chromium, startup-to-ready time, idle CPU, chat
-render time for a long conversation, and first-action latency where relevant.
+across Tauri, Core, and active WebView2 browser processes, startup-to-ready
+time, idle CPU, chat render time for a long conversation, and first-action
+latency where relevant.
 A regression above 20% against the accepted baseline requires an explanation
 and explicit acceptance; do not hide it by measuring only one process.
 
@@ -417,6 +577,15 @@ repository-owned PowerShell command for producing the complete Windows release.
 Do not make the user manually coordinate multiple terminals.
 
 ## 11. Execution points
+
+The binding exact-UI amendment and Section 9.1 are inherited acceptance
+criteria for every point that creates, migrates, or changes user-visible UI,
+even when the individual point does not repeat them. Points 10-13 and 15 must
+extend `docs/tauri_ui_source_parity.md` before implementation. Point 14 follows
+the separately approved Smarti Browser visual exception while matching its
+legacy Workspace placement, visibility, sizing, theme integration and commands.
+Point 17 cannot delete the PyQt reference until every later UI surface has been
+audited against the source.
 
 ### Point 1 - Establish the migration baseline and parity inventory
 
@@ -659,59 +828,117 @@ no console or localhost address should be part of the product interaction.
 
 No complete chat, Workbench, embedded browser, tray, or installer yet.
 
-### Point 6 - Prove the embedded Smarti Browser architecture
+### Point 6 - Prove the built-in Smarti Browser foundation
 
 **Depends on:** Point 5 complete.  
 **This is a mandatory go/no-go gate. Do not start Point 7 if Point 6 is blocked.**
 
 **Objective**
 
-Prove that Tauri can preserve Smarti's integrated visible Chromium surface and
-Playwright/CDP capabilities without relying on unstable multiwebview APIs or an
-external user-managed browser window.
+Prove a real, polished, built-in Smarti Browser foundation using Tauri child
+WebViews/WebView2. The prototype must look like one browser product, accept
+normal user browsing, and expose the same visible page to Smarti automation.
+It must not launch, strip, reparent, overlay, or visually embed an installed
+Chrome/Edge/Brave window.
 
 **Required work**
 
-1. Implement a minimal Rust/Win32 native-browser host based on the behavior of
-   `smarti/native_browser.py`:
-   - find a compatible installed Edge/Chrome/Chromium;
-   - launch with loopback CDP and Smarti-managed profile;
-   - identify the correct browser HWND and CDP target;
-   - make it a child/sibling native surface inside the Tauri window;
-   - position, resize, focus, show, hide, and close it safely.
-2. Add a React browser viewport placeholder that reports physical/logical bounds
-   to Rust and reserves toolbar space outside the native browser airspace.
-3. Prove the persistent profile and a disposable guest profile, with guest data
-   removed on close.
-4. Connect the existing Python Playwright/CDP controller to the same target the
-   user sees.
-5. Exercise navigation, keyboard, Hebrew input/IME, mouse, focus transfer,
-   clipboard, downloads, uploads, screenshots, cookies, clear-data, minimize,
-   restore, maximize, workbench-tab hiding, multi-monitor movement, and display
-   scale 100%, 125%, 150%, and 200%.
-6. Add focused Rust/Python contract tests and a repeatable manual QA script.
+1. Create a focused React prototype based on the supplied visual intent:
+   compact tab strip and new-tab control, back/forward/reload, LTR omnibox,
+   security/loading state, overflow menu, and an intentionally quiet content
+   surface. Validate both Smarti themes and Hebrew RTL surrounding layout.
+2. Create remote content as one or more Tauri child `Webview` instances backed
+   by WebView2. Rust must own create/close, bounds, focus, visibility, z-order,
+   navigation, popup-to-tab routing, and process-failure recovery. Do not use a
+   remote iframe in the trusted Smarti WebView.
+3. Give remote-content WebViews zero general Tauri capabilities. Prove that a
+   hostile test page cannot invoke Smarti commands, read the desktop token,
+   access arbitrary local files, or impersonate the trusted browser chrome.
+4. Implement a narrow Rust browser broker shared by the React chrome and the
+   Python Core. Define stable tab/profile/target IDs and request IDs so user and
+   agent actions address exactly the same visible page without relying on page
+   index races.
+5. Select and prove the automation transport:
+   - prefer WebView2 `CallDevToolsProtocolMethod` and protocol events through
+     Rust with Python retaining the structured browser action contract; or
+   - if Playwright over remote CDP is materially more capable, use a random,
+     loopback-only, lifecycle-scoped endpoint and document same-user exposure,
+     discovery, authentication limitations, cleanup, and packaged behavior.
+   Preserve at least snapshot/semantic refs, navigate, click, type/fill/press,
+   scroll, select, hover, upload, download, screenshot/PDF, console, network,
+   storage/cookies, evaluate, and raw-CDP capability or a documented equivalent.
+6. Prove a durable Smarti profile and an isolated Guest/InPrivate profile.
+   Normal cookies, permissions, local storage, cache, autofill preferences, and
+   session state persist only in the normal profile; Guest data is removed on
+   close and is never merged into normal browsing.
+7. Build an import feasibility spike against copied test profiles from Chrome,
+   Edge, Brave, Chromium, and Vivaldi where installed:
+   - import history and bookmarks into Smarti's own searchable browser library;
+   - import cookies into the Smarti WebView2 profile only when they can be
+     decrypted by supported current-user mechanisms and accepted by the
+     WebView2 cookie manager;
+   - never write to, lock, launch automation against, or browse in the source
+     profile;
+   - do not bypass Chrome App-Bound Encryption and do not silently extract or
+     import saved passwords;
+   - produce a safe report with selected source/category, imported/skipped/
+     failed counts and reasons, without logging cookie values or sensitive URLs.
+8. Exercise navigation, tabs, popups, keyboard shortcuts, Hebrew input/IME,
+   mouse, clipboard, find, zoom, print, permissions, downloads/uploads,
+   screenshots, clear-data, minimize/restore/maximize, Workbench hide/show,
+   multi-monitor movement, and display scale 100%, 125%, 150%, and 200%.
+9. Test representative real sites and login classes, including a site using
+   passkeys/WebAuthn where available and an OAuth flow. Record WebView2/vendor
+   limitations explicitly. If a user-critical flow is blocked, evaluate a
+   truly embedded engine before accepting the architecture; never fall back to
+   an externally reparented browser window.
+10. Record startup/first-tab latency, total WebView2 process memory, inactive
+    tab behavior, crash recovery, and installer impact. Add focused Rust,
+    TypeScript, Python contract/security tests and a repeatable manual QA script.
 
 **Acceptance**
 
-- The browser is visibly integrated into the Tauri window.
-- Playwright navigates and inspects exactly that visible target.
+- The result looks and behaves like a coherent built-in browser, not a patched
+  external window. It works on a machine with WebView2 Runtime but no installed
+  Chrome/Edge browser executable selected as a host.
+- User controls and Smarti automation navigate and inspect exactly the same
+  visible target, with stable tab/target ownership and the required structured
+  action coverage.
 - Persistent and guest profiles are demonstrably separate.
-- Focus, resize, DPI, minimize/restore, and hide/show are reliable.
-- No unmanaged external top-level browser window is the normal UX.
+- Focus, Hebrew IME, resize, DPI, minimize/restore, hide/show, downloads,
+  popups, and process recovery are reliable.
+- The import spike demonstrates history/bookmark import and reports cookie
+  compatibility honestly. Encryption-protected cookies being skipped is an
+  expected documented limitation, not permission to weaken or bypass security.
+- Remote pages have no Smarti/Tauri authority, and no production-stable CDP
+  port or secret browser data is exposed.
+- A browser feature/compatibility matrix identifies required, implemented,
+  deferred-to-Point-14, unsupported-by-WebView2, and blocked items. No critical
+  daily-browsing or Smarti-automation requirement is silently omitted.
 
 If this cannot be made reliable, mark Point 6 `BLOCKED`, present measured
 alternatives and tradeoffs, and stop. Do not silently downgrade the requirement
-or continue building the remaining interface.
+or continue building the remaining interface. A truly embedded alternative may
+be proposed; the legacy external-Chrome HWND technique may not be proposed as
+the final design.
 
 **User check**
 
-Open the prototype, type Hebrew into a real website, resize/maximize the Smarti
-window, switch away from and back to the Browser panel, and ask the test action
-to navigate the visible page. Confirm there is no separate browser window.
+Open the prototype and browse it as you would the reference: create/switch/close
+tabs, enter a URL, type Hebrew into a real site, use back/reload/find/zoom/menu,
+download a harmless file, resize/maximize Smarti, and collapse/reopen the
+Workbench. Then ask Smarti to act on that same visible page. Restart normal mode
+and confirm its state persists; repeat in Guest and confirm it does not. Run the
+test-profile import and inspect the category counts. At no point should an
+installed Chrome/Edge window appear, flash, overlap Smarti, or show foreign
+browser chrome.
 
 **Out of scope**
 
-No complete browser toolbar, library, import UI, or final styling.
+The prototype need not yet contain the final history/bookmark/download manager,
+complete import wizard, final settings pages, or production-perfect styling;
+those belong to Point 14. No vendor account sync, extension ecosystem, automatic
+password extraction/import, or claim of exact Edge/Chrome feature parity.
 
 ### Point 7 - Build the design system and final Workspace shell
 
@@ -719,17 +946,22 @@ No complete browser toolbar, library, import UI, or final styling.
 
 **Objective**
 
-Establish the visual language and responsive Workspace composition before
-moving feature-heavy screens.
+Encode and reproduce the exact existing PyQt visual language and responsive
+Workspace composition before moving feature-heavy screens. This point does not
+authorize a new Tauri-specific look.
 
 **Required work**
 
-1. Create semantic tokens for both themes: background, surface hierarchy,
-   glass, border, text, muted text, accent, success, warning, danger, focus,
-   code, radii, spacing, shadow, blur, motion, density, and typography.
-2. Build accessible base components: buttons, icon buttons, fields, textarea,
-   menus, tooltips, dialogs, sheets/drawers, tabs, scroll areas, badges,
-   skeletons, alerts, cards, resizers, empty states, and focus management.
+1. Extract semantic tokens for both themes from the actual PyQt constants,
+   palettes, stylesheets, widget initialization and conditional styling:
+   background, surface hierarchy, glass, border, text, muted text, accent,
+   success, warning, danger, focus, code, radii, spacing, shadow, blur, motion,
+   density, and typography. Record the source symbol for every value.
+2. Build accessible base components that reproduce the corresponding PyQt
+   controls exactly: buttons, icon buttons, fields, textarea, menus, tooltips,
+   dialogs, sheets/drawers, tabs, scroll areas, badges, skeletons, alerts,
+   cards, resizers, empty states, and focus management. Do not accept library
+   defaults as the Smarti design.
 3. Implement the permanent composition:
    - central chat column;
    - collapsible right conversation drawer;
@@ -740,20 +972,24 @@ moving feature-heavy screens.
    model IDs, and terminal text.
 5. Add theme persistence, system-theme option, reduced motion, keyboard
    navigation, and contrast tests.
-6. Produce light/dark screenshots at the required sizes and compare them with
-   architectural, not pixel, parity from Point 1.
+6. Read the corresponding PyQt widget/layout/style implementations, produce
+   light/dark screenshots at the required sizes, and compare both structure and
+   visual details with the Point 1 baseline. Screenshots alone are not an
+   adequate design specification.
 
 **Acceptance**
 
-Component tests, type checks, Rust checks, and visual QA pass. The shell looks
-like a modern Smarti redesign, not an unfinished web admin dashboard and not a
-pixel copy of Qt. The left area is truly empty until requested.
+Component tests, type checks, Rust checks, and visual QA pass. The Tauri shell
+matches the original PyQt Workspace, including its collapsed/expanded sidebar,
+top controls, menus, activity indicators, composer geometry and responsive
+states. The left area is truly empty until requested.
 
 **User check**
 
-Review the supplied light/dark narrow/wide screenshots. Confirm the chat is
-central, conversations are on the right, the Workbench is on the left and empty
-by default, and the overall visual identity feels like an upgraded Smarti.
+Review the supplied light/dark narrow/wide screenshots alongside the matching
+PyQt source components. Confirm the chat is central, conversations are on the
+right, the Workbench is on the left and empty by default, and controls retain
+the original Smarti geometry and behavior.
 
 **Out of scope**
 
@@ -812,13 +1048,15 @@ No attachment composer, voice, full management center, or Workbench content.
 
 **Objective**
 
-Reach full daily chat-composer parity and improve its presentation.
+Reach exact source-code-derived daily chat/composer parity without redesigning
+or “improving” its presentation.
 
 **Required work**
 
-1. Build the final responsive composer: multiline input, send/cancel state,
-   keyboard behavior, action menu, model indicator, drag/drop, paste, and file
-   picker.
+1. Reconstruct the final responsive composer from its PyQt classes, layout
+   constants, stylesheets and update functions: multiline input, exact geometry
+   and nesting, send/cancel state, keyboard behavior, action menu, model
+   indicator, drag/drop, paste, and file picker.
 2. Preserve pending attachment previews, per-item removal, sent attachment
    metadata, image/media thumbnails, provider capability validation, and local
    paths/handles without exposing unrestricted filesystem access.
@@ -835,7 +1073,9 @@ Reach full daily chat-composer parity and improve its presentation.
 **Acceptance**
 
 The full chat/composer workflow works with keyboard, mouse, drag/drop, paste,
-attachments, voice, TTS, tool cards, and mixed RTL/LTR content. Secret and file
+attachments, voice, TTS, tool cards, and mixed RTL/LTR content. Its appearance,
+geometry, responsive behavior, menus, icons and state transitions match the
+authoritative PyQt source with zero undocumented differences. Secret and file
 boundaries remain enforced.
 
 **User check**
@@ -848,9 +1088,87 @@ clear in both themes and no permission prompt is hidden behind the window.
 
 No Settings or Workbench file browser implementation.
 
+### Point 9A - Audit and correct exact legacy-code UI parity
+
+**Depends on:** The functional implementation of Points 7, 8, and 9.
+**This is a mandatory parity gate. Do not start Point 10 until Point 9A is complete.**
+
+**Objective**
+
+Apply the binding 2026-08-23 requirement retroactively to every user-visible
+surface already migrated in Points 7-9. Prove that the Workspace shell,
+conversation drawer, chat, rich messages, composer, attachments, approvals,
+activity/tool states, voice and TTS reproduce the original PyQt interface from
+code one-to-one, rather than merely resembling selected screenshots.
+
+**Required work**
+
+1. Create `docs/tauri_ui_source_parity.md` as the durable source-derived UI
+   specification and traceability matrix. For every migrated component, record:
+   - legacy module, class/function, relevant constants and shared style helpers;
+   - parent/child hierarchy and ordering;
+   - layout direction, alignment, stretch, margins, spacing, fixed/min/max size;
+   - font, palette, border, radius, gradient, shadow, icon/asset and text;
+   - visibility/enabled rules and every interactive state;
+   - signal/action/menu/shortcut behavior and persisted settings;
+   - matching React component, CSS/token/test and current parity status.
+2. Read the complete relevant legacy paths, including the enclosing composition
+   and shared helpers—not only isolated class definitions. At minimum cover
+   `smarti/app.py`, `smarti/chat.py`, `smarti/workspace_ui.py`,
+   `smarti/ui_controls.py`, `smarti/ui_styles.py`, and the legacy modules used
+   by messages, approvals, attachments, voice/TTS and history.
+3. Audit the current Tauri implementation against the matrix. Remove redesign
+   residue, generic web-library defaults, guessed values, screenshot-only
+   approximations, substituted assets, altered text, extra cards/motion/effects,
+   and simplified or missing states.
+4. Correct the Tauri Workspace, drawer, message timeline, composer and shared
+   primitives until source values and behaviors match. Preserve the approved
+   Tauri process/security architecture; parity concerns presentation and user
+   interaction, not reintroducing Qt ownership into Core.
+5. Exercise every code-controlled state: empty/populated/long history, collapsed
+   and expanded drawer, active/inactive/unread/running/approval conversations,
+   user/assistant/system/tool/error messages, code/Markdown/mixed direction,
+   idle/sending/cancelling composer, attachments, model/autonomy menus,
+   responsive narrow/wide transitions, voice/listening/TTS and disabled/error
+   states.
+6. Add deterministic parity tests for extracted design values, visibility/state
+   rules, menus/shortcuts, direction, responsive thresholds and representative
+   rendered geometry. Use legacy offscreen/runtime captures and Tauri captures
+   of equivalent states in light/dark at minimum, typical and wide sizes.
+7. Produce a deviation ledger. The point cannot complete while it contains an
+   unapproved user-visible difference. A toolkit-imposed difference must include
+   measurements, technical cause, attempted remedies and explicit user approval.
+
+**Acceptance**
+
+- `docs/tauri_ui_source_parity.md` covers every Points 7-9 surface and links
+  both sides of the implementation.
+- Every row is `MATCHED` or carries explicit user-approved deviation evidence;
+  no row is merely “visually similar”.
+- Source-value/state tests, frontend tests, type checks, Rust checks, relevant
+  Python tests and equivalent-state visual QA pass.
+- The original PyQt app remains runnable for comparison through Point 16.
+- No screenshot was treated as the sole specification for a dynamic component.
+
+**User check**
+
+Open the legacy PyQt and Tauri applications side by side in the same theme and
+window size. Compare the title/top controls, drawer expanded and collapsed,
+conversation cards/states, chat messages/tool groups, composer states and
+menus. Repeat in the other theme and a narrow/wide size. Navigation, hover,
+clicks, keyboard shortcuts, send/cancel, attachments and voice/TTS should feel
+and appear the same. Review every entry in the deviation ledger; Point 9A is not
+complete until you approve any listed visible exception.
+
+**Out of scope**
+
+No Settings, management-center, Workbench file/terminal, Canvas, final Browser,
+Windows integration or packaging implementation. Point 9A may establish shared
+parity primitives required by those later points.
+
 ### Point 10 - Migrate Settings, providers, secrets, and connection management
 
-**Depends on:** Point 9 complete.
+**Depends on:** Point 9A complete.
 
 **Objective**
 
@@ -1028,44 +1346,87 @@ No final Smarti Browser toolbar/library.
 
 **Objective**
 
-Turn the proven native host into the full polished, secure Smarti Browser panel.
+Turn the proven Tauri/WebView2 foundation into a polished, secure, browser-class
+Smarti Browser that is comfortable for normal user browsing and for agent
+automation. Its existing PyQt Smarti Browser surface is the visual baseline;
+new browser capabilities must extend that RTL design without replacing the
+application with an unrelated visual language.
 
 **Required work**
 
-1. Implement final toolbar and state: back, forward, reload/stop, home, address
-   and search, loading/security state, error state, find, zoom, and menu.
-2. Preserve persistent/guest switching with explicit privacy explanation and
-   complete guest cleanup.
-3. Migrate user-initiated profile discovery/import for compatible cookies,
-   history, and bookmarks. Never import passwords or modify source profiles.
-4. Implement searchable history/bookmark library, downloads, capture path,
-   device mode, screenshots, user agent, clear data, external open, and browser
-   preferences.
-5. Support repeated Browser tabs/panels as current Workbench behavior requires,
-   with correct CDP target ownership and cleanup.
-6. Ensure Python browser automation activates the visible browser, uses the same
-   persistent target, obeys network/private-host policy, and serializes singleton
-   leases across conversations.
-7. Run the complete Point 6 DPI/focus/keyboard/automation matrix again on the
-   final UI and in a packaged candidate, not only the prototype.
+1. Complete the tab model and chrome: new/close/duplicate/reorder/pin/restore,
+   tab titles/favicons/loading/audio/crash state, back/forward/reload/stop/home,
+   LTR address/search omnibox, security/error state, keyboard shortcuts, focus
+   order, and responsive behavior in the RTL Workspace.
+2. Complete everyday browser commands and menus: find in page, zoom, print,
+   screenshot, save/capture where supported, copy/share address, view source or
+   DevTools behind an explicit developer setting, open externally, user agent,
+   device mode, and per-site permissions.
+3. Build Smarti-owned searchable history and bookmark libraries plus session/
+   recently-closed restoration. Record navigation from all Smarti Browser tabs
+   without leaking private Guest entries into the persistent library.
+4. Build the download manager: safe destination selection, progress, pause/
+   resume/cancel where WebView2 supports it, collision handling, open/show in
+   folder, dangerous-file policy, completed/failed history, and cleanup.
+5. Complete persistent/Guest profile controls, privacy explanation, permission
+   review, cookie/site-data controls, cache/history/autofill/password-autosave
+   clearing, and complete Guest cleanup. Password autosave inside the new Smarti
+   profile may be offered as an explicit setting; Smarti must never read or
+   display stored password values.
+6. Implement the user-initiated import wizard for detected Chrome, Edge, Brave,
+   Chromium, and Vivaldi profiles. Let the user choose source profile and
+   history/bookmarks/cookies separately, copy source databases before reading,
+   never modify the source, show imported/skipped/failed counts and reasons,
+   and support retry. Add history/bookmarks to Smarti's library and compatible
+   decryptable cookies through WebView2's cookie manager. Do not bypass
+   application-bound encryption; blocked sessions require normal sign-in inside
+   Smarti. Do not claim password import.
+7. Handle window.open/popups as governed tabs, JavaScript dialogs, basic auth,
+   certificates, client certificates where required, camera/microphone/
+   clipboard/location/notification permissions, downloads/uploads, fullscreen,
+   PDF viewing/printing, media, renderer crashes, offline and network errors.
+8. Support multiple concurrent Browser tabs with resource-aware suspension or
+   unloading of inactive tabs, predictable restore, stable target ownership,
+   profile isolation, and correct cleanup. Do not create an unbounded WebView2
+   process/memory leak.
+9. Preserve the complete public `browser_automation_manager` contract. Python
+   continues to authorize, lease, and audit actions; the Rust broker executes
+   them against the selected visible WebView2 tab. User activity, agent activity,
+   takeover/focus, cancellation, and sensitive upload/permission approvals must
+   be understandable and race-safe.
+10. Publish a browser support matrix in repository documentation. Clearly label
+    WebView2/vendor limitations such as browser extensions, vendor profile sync,
+    Edge/Chrome internal settings pages, built-in collections/translation/
+    immersive-reader features, and embedded OAuth restrictions. Implement a
+    Smarti-owned equivalent only when it is a required accepted feature; never
+    present an absent vendor feature as working.
+11. Run the complete Point 6 security, profile/import, site compatibility,
+    DPI/focus/keyboard/automation/performance matrix again on the final UI and
+    in a packaged candidate, not only the prototype.
 
 **Acceptance**
 
-Every Browser item in the parity matrix is resolved, the visible and automated
-target is the same, profile privacy boundaries are intact, and package-level
-browser smoke passes.
+Every required Browser item in the parity/support matrices is resolved, the
+visible user-controlled and automated target is the same, normal daily browsing
+is credible, profile privacy boundaries are intact, and package-level browser
+smoke passes. The product has no dependency on reparenting an installed browser
+window and makes no unsupported claim of full Edge/Chrome vendor parity.
 
 **User check**
 
-Browse normally in persistent mode, restart and verify the session persists;
-repeat in Guest and verify it does not. Import from a test browser profile,
-search history/bookmarks, download a file, take a screenshot, and ask Smarti to
-navigate the same visible page.
+Use Smarti Browser for a representative normal session: several tabs, search and
+direct URLs, a login, back/forward, find, zoom, print/PDF, media, permissions,
+upload and download. Restart persistent mode and verify tabs/session/history;
+repeat in Guest and verify no private state persists. Import a test profile and
+confirm the report and searchable history/bookmarks, while accepting that some
+encrypted cookies may require signing in again. Finally ask Smarti to inspect
+and act on the exact visible page and confirm that no external browser appears.
 
 **Out of scope**
 
-No general-purpose password manager and no control of the user's ordinary
-Chrome profile in place.
+No control of a third-party browser profile in place, no automatic password
+extraction/import, no Chrome/Edge extension store, and no vendor-account profile
+sync unless separately designed and explicitly approved.
 
 ### Point 15 - Complete Windows desktop integration
 
@@ -1073,8 +1434,10 @@ Chrome profile in place.
 
 **Objective**
 
-Restore and improve the native Windows behaviors that make Smarti one desktop
-application rather than a localhost client.
+Restore the native Windows behaviors that make Smarti one desktop application
+rather than a localhost client, matching the legacy user-visible controls,
+settings and interaction rules exactly. Architecture-only changes may improve
+reliability, but must not silently redesign the interface.
 
 **Required work**
 
@@ -1125,16 +1488,20 @@ Tauri, the headless Core, and Smarti's private runtimes.
    PyQt-WebEngine unless the temporary legacy fallback package explicitly needs
    them.
 2. Build the Core as PyInstaller `onedir` sidecar and include all dynamic imports,
-   assets, certificates, Playwright helpers, and runtime path behavior required
-   by packaged operation.
+   assets, certificates, browser-broker/automation helpers, and runtime path
+   behavior required by packaged operation. Bundle Playwright browser machinery
+   only if Point 6 selected it as part of the production WebView2 transport.
 3. Bundle private Python and Node runtimes with pinned versions and checksums,
    retaining writable user caches and Skill/MCP dependency behavior.
 4. Produce a Tauri NSIS per-user installer and portable ZIP. Configure WebView2
    embedded bootstrapper for the primary installer and an optional separate
    offline installer if required.
-5. Preserve data paths, browser profile, AUMID/identity, shortcuts, protocol
-   behavior, and settings. Implement and test detection/removal/upgrade from the
-   old Inno Setup installation without deleting user data.
+5. Preserve data paths, AUMID/identity, shortcuts, protocol behavior, settings,
+   and Smarti-owned browser data. Implement a one-time, backed-up migration from
+   the legacy native-Chromium Smarti profile into the new Smarti library/
+   WebView2 profile where compatible; never point WebView2 at the old profile
+   in place. Implement and test detection/removal/upgrade from the old Inno
+   Setup installation without deleting user data.
 6. Integrate the Tauri updater with mandatory update signatures, GitHub/static
    metadata, safe restart, and rollback/error UX. Treat update signing separately
    from Windows Authenticode signing.
@@ -1145,8 +1512,8 @@ Tauri, the headless Core, and Smarti's private runtimes.
    update, cancelled update, corrupted/signature-invalid update, portable mode,
    uninstall, and reinstall.
 9. Smoke on clean x64 Windows 10 and Windows 11 VMs without developer Python,
-   Node, Rust, npm, or repository files; exercise both WebView2-present and
-   WebView2-missing installation paths.
+   Node, Rust, npm, repository files, or an installed Chrome/Edge browser host;
+   exercise both WebView2-present and WebView2-missing installation paths.
 
 **Acceptance**
 
@@ -1180,24 +1547,31 @@ release without losing Smarti capabilities.
 1. Audit every stable feature ID from Point 1. Resolve each as implemented,
    intentionally changed with user acceptance, or explicitly unsupported with a
    blocker. No silent omissions.
-2. Make Tauri the default source and packaged launcher.
-3. Remove legacy PyQt UI modules, Qt adapters, WebEngine compatibility paths,
+2. Re-audit every row in `docs/tauri_ui_source_parity.md` against the final
+   legacy source before deleting it. Resolve later-point Settings, management,
+   Workbench, Canvas and Windows surfaces with the same code-derived standard;
+   zero undocumented user-visible differences may remain.
+3. Make Tauri the default source and packaged launcher.
+4. Remove legacy PyQt UI modules, Qt adapters, WebEngine compatibility paths,
    PyQt requirements, PyInstaller UI entrypoint, Inno-only packaging, dead
    assets, and transition feature flags that are no longer needed.
-4. Preserve pure Python behavior extracted from former UI modules and ensure no
+5. Preserve pure Python behavior extracted from former UI modules and ensure no
    Core import/runtime path loads Qt.
-5. Update README, architecture, contributor setup, tests, packaging docs,
+6. Update README, architecture, contributor setup, tests, packaging docs,
    screenshots, troubleshooting, and release notes to the final product.
-6. Run full Python, frontend, Rust, integration, security, visual, browser,
+7. Run full Python, frontend, Rust, integration, security, source-parity,
+   visual, browser,
    package, clean-install, and upgrade suites again after deletion.
-7. Compare final performance and artifact metrics to Point 1 and document every
+8. Compare final performance and artifact metrics to Point 1 and document every
    meaningful improvement or regression.
-8. Produce the final release candidate and a complete evidence-backed handoff.
+9. Produce the final release candidate and a complete evidence-backed handoff.
    Do not publish without explicit user authorization.
 
 **Acceptance**
 
 - The parity matrix has no unresolved required feature.
+- The source-parity matrix has no unmatched or unapproved visible/behavioral
+  difference from the final legacy PyQt source.
 - No production dependency or import of PyQt remains.
 - Source, installed, portable, browser, update, and old-install upgrade tests
   pass with exact evidence.
@@ -1211,8 +1585,9 @@ Use the final installer as an ordinary user. Verify the complete daily flow:
 launch, chat, parallel conversation, approval, attachment, settings, task,
 memory, files, terminal, Canvas, Browser automation, notification/tray, restart,
 and update check. Compare the final screenshots and experience with Point 1 and
-confirm that the architecture is familiar while the presentation is materially
-more polished.
+the matching legacy source application. Confirm that the migrated interface is
+one-to-one in structure, geometry, styling, states and interaction—not merely
+familiar or subjectively more polished.
 
 **Out of scope**
 
@@ -1231,15 +1606,23 @@ post-migration product features without a separate explicit request.
 4. Do not replace durable approvals with modal-only React dialogs.
 5. Do not expose Python tools as direct Tauri commands. All agent and remote
    actions pass through Core policy.
-6. Do not replace the integrated browser with a normal external browser window
-   without explicit user approval. Point 6 exists to prevent that downgrade.
+6. Do not port, preserve, or revive the legacy technique of reparenting an
+   installed Chrome/Edge/Brave window into Smarti. Point 6 requires a true
+   Tauri-owned WebView2 browser surface. An external browser may be offered only
+   as an explicit one-off "Open externally" command, never as Smarti Browser.
 7. If a point reveals that a later point's assumptions are invalid, update this
    plan with an added stable subpoint and explanation; do not renumber or
    silently broaden the active point.
 8. If tests fail for apparently unrelated reasons, reproduce them in isolation
    and against the pre-point state before attributing or ignoring them.
-9. Never use source/offscreen tests to claim installer, WebView2, native HWND,
-   DPI, notification, updater, or packaged browser success.
+9. Never use source/offscreen tests to claim installer, WebView2 child-WebView,
+   profile import, cookie compatibility, DPI, notification, updater, or
+   packaged browser success.
+10. Never treat screenshots as the authoritative UI specification. Do not
+    replace reading the relevant PyQt code with image matching, a remembered
+    description, or subjective design judgment. Do not accept an unapproved
+    visible deviation because it looks newer, cleaner, or easier to implement
+    in React.
 
 ## 13. Required handoff format after every point
 
@@ -1259,6 +1642,7 @@ Verification:
 - Static checks.
 - Focused tests with counts.
 - Full tests with counts.
+- Source-parity map/tests and deviation status for UI-bearing points.
 - Live validation.
 - Visual validation.
 - Package validation.
@@ -1289,6 +1673,8 @@ Next:
 4. כתוב רק: `עכשיו תבצע את נקודה N`.
 5. אל תפתח את נקודה N+1 לפני שהמשימה הקודמת דיווחה `COMPLETE` ועדכנה את טבלת
    ה־Execution Ledger במסמך.
+6. לאחר נקודה 9 יש לבצע את נקודה 9A, ורק אחריה את נקודה 10. בנקודות ממשק ודא
+   שהדיווח כולל השוואה לקוד PyQt המקורי ולא רק לצילומי מסך.
 
 ### מה לבדוק בסיום
 
@@ -1329,6 +1715,10 @@ Repository references:
 - `smarti/local_gateway.py`
 - `smarti/chat.py`
 - `smarti/workspace_ui.py`
+- `smarti/ui_controls.py`
+- `smarti/ui_styles.py`
+- `smarti/ui_pages.py`
+- `smarti/memory_ui.py`
 - `smarti/native_browser.py`
 - `smarti/browser_control.py`
 - `smarti/browser_profile.py`
@@ -1344,5 +1734,18 @@ External technical references to revalidate at implementation time:
 - Tauri updater: <https://v2.tauri.app/plugin/updater/>
 - Tauri permissions/capabilities:
   <https://v2.tauri.app/learn/security/using-plugin-permissions/>
-- Current Tauri `WebviewBuilder` status:
-  <https://docs.rs/tauri/latest/tauri/webview/struct.WebviewBuilder.html>
+- Tauri child WebView JavaScript API:
+  <https://v2.tauri.app/reference/javascript/api/namespacewebview/>
+- Tauri Rust `Webview` and platform `with_webview` access:
+  <https://docs.rs/tauri/latest/tauri/webview/struct.Webview.html>
+- WebView2 API overview and browser-feature differences:
+  <https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/overview-features-apis>
+  <https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/browser-features>
+- WebView2 user-data folders, profiles, cookies, and data clearing:
+  <https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/user-data-folder>
+  <https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/multi-profile-support>
+  <https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/clear-browsing-data>
+- WebView2 Chrome DevTools Protocol support:
+  <https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/chromium-devtools-protocol>
+- Chrome App-Bound cookie encryption on Windows:
+  <https://security.googleblog.com/2024/07/improving-security-of-chrome-cookies-on.html>

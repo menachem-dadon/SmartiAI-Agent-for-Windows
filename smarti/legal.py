@@ -1,5 +1,5 @@
 """First-run legal agreement gate for Smarti."""
-from .common import *
+from .ui_common import *
 from .ui_styles import *
 from .ui_controls import make_circular_pixmap
 from PyQt6.QtWidgets import QTextBrowser

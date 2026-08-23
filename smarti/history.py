@@ -416,13 +416,16 @@ class ChatSessionStore:
 
     def _row_message(self, row):
         extra = _json_loads(row["extra_json"], {})
+        metadata = _json_loads(row["metadata_json"], {})
         result = copy.deepcopy(extra)
         result.update({
             "role": str(row["role"]),
             "content": str(row["content"] or ""),
             "created_at": str(row["created_at"] or ""),
-            "metadata": _json_loads(row["metadata_json"], {}),
+            "metadata": metadata,
         })
+        if isinstance(metadata.get("attachments"), list):
+            result["attachments"] = copy.deepcopy(metadata["attachments"])
         return result
 
     def _session(self, db, session_id, include_messages=True):
@@ -712,18 +715,32 @@ class ChatSessionStore:
             record["is_busy"] = status in active_states
         return records
 
-    def list_sessions(self, query="", include_preview=True):
+    def list_sessions(self, query="", include_preview=True, include_empty=False):
         query = str(query or "").strip()
         with self._lock, self._connect() as db:
-            rows = db.execute(
+            visible_activity = """
+                EXISTS(
+                    SELECT 1 FROM messages m WHERE m.session_id=s.id
+                ) OR EXISTS(
+                    SELECT 1 FROM runs r
+                    WHERE r.session_id=s.id
+                      AND r.status IN ('queued', 'running', 'waiting_for_approval', 'cancelling')
+                ) OR EXISTS(
+                    SELECT 1 FROM attention_items a
+                    WHERE a.session_id=s.id AND a.read_at IS NULL
+                )
+            """
+            if include_empty is True:
+                visibility = ""
+            elif include_empty == "latest":
+                visibility = f"""
+                    WHERE ({visible_activity}) OR s.title_user_edited=1 OR s.id=(
+                        SELECT newest.id FROM sessions newest
+                        ORDER BY newest.updated_at DESC, newest.rowid DESC LIMIT 1
+                    )
                 """
-                SELECT s.id, s.title, s.created_at, s.updated_at, s.pinned,
-                       (
-                           SELECT COUNT(*)
-                           FROM messages counted
-                           WHERE counted.session_id=s.id
-                       ) AS message_count
-                FROM sessions s
+            else:
+                visibility = f"""
                 WHERE EXISTS(
                     SELECT 1 FROM messages m WHERE m.session_id=s.id
                 ) OR EXISTS(
@@ -734,6 +751,17 @@ class ChatSessionStore:
                     SELECT 1 FROM attention_items a
                     WHERE a.session_id=s.id AND a.read_at IS NULL
                 )
+                """
+            rows = db.execute(
+                f"""
+                SELECT s.id, s.title, s.created_at, s.updated_at, s.pinned,
+                       (
+                           SELECT COUNT(*)
+                           FROM messages counted
+                           WHERE counted.session_id=s.id
+                       ) AS message_count
+                FROM sessions s
+                {visibility}
                 ORDER BY s.pinned DESC, s.updated_at DESC
                 """
             ).fetchall()
@@ -981,6 +1009,33 @@ class ChatSessionStore:
                         return True
         return False
 
+    def update_canvas_state(self, canvas_id, *, closed, session_id=None):
+        """Persist open/closed Canvas state without depending on a UI renderer."""
+        canvas_id = str(canvas_id or "").strip()
+        if not canvas_id:
+            return False
+        with self._lock, self._connect() as db:
+            target = str(session_id or self._active_id(db))
+            rows = db.execute(
+                "SELECT * FROM messages WHERE session_id=? ORDER BY ordinal DESC", (target,),
+            ).fetchall()
+            for row in rows:
+                metadata = _json_loads(row["metadata_json"], {})
+                canvases = metadata.get("canvases") if isinstance(metadata, dict) else None
+                if not isinstance(canvases, list):
+                    continue
+                for canvas in canvases:
+                    if isinstance(canvas, dict) and str(canvas.get("id") or "") == canvas_id:
+                        canvas["closed"] = bool(closed)
+                        canvas["state_updated_at"] = _now_iso()
+                        db.execute(
+                            "UPDATE messages SET metadata_json=? WHERE id=?",
+                            (_json_dumps(metadata), row["id"]),
+                        )
+                        db.execute("UPDATE sessions SET updated_at=? WHERE id=?", (_now_iso(), target))
+                        return True
+        return False
+
     def apply_generated_title(self, session_id, title):
         cleaned = _clean_title(title)
         if not cleaned or cleaned == DEFAULT_CHAT_TITLE:
@@ -1141,6 +1196,50 @@ class ChatSessionStore:
                 }
                 for row in rows
             ]
+
+    def workspace(self, workspace_id):
+        target = str(workspace_id or "")
+        return next(
+            (item for item in self.list_workspaces() if item["id"] == target),
+            None,
+        )
+
+    def update_workspace(self, workspace_id, *, title=None, root_path=None, metadata=None):
+        target = str(workspace_id or "")
+        updates = []
+        values = []
+        if title is not None:
+            updates.append("title=?")
+            values.append(str(title or DEFAULT_CHAT_TITLE))
+        if root_path is not None:
+            updates.append("root_path=?")
+            values.append(str(root_path or ""))
+        if metadata is not None:
+            updates.append("metadata_json=?")
+            values.append(_json_dumps(_json_object(metadata)))
+        if not updates:
+            return self.workspace(target)
+        updates.append("updated_at=?")
+        values.append(_now_iso())
+        values.append(target)
+        with self._lock, self._connect() as db:
+            result = db.execute(
+                f"UPDATE workspaces SET {', '.join(updates)} WHERE id=?",
+                tuple(values),
+            )
+            if not result.rowcount:
+                return None
+        return self.workspace(target)
+
+    def delete_workspace(self, workspace_id):
+        target = str(workspace_id or "")
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE sessions SET workspace_id=NULL, updated_at=? WHERE workspace_id=?",
+                (_now_iso(), target),
+            )
+            result = db.execute("DELETE FROM workspaces WHERE id=?", (target,))
+            return bool(result.rowcount)
 
     def assign_session_workspace(self, session_id, workspace_id=None):
         with self._lock, self._connect() as db:
@@ -1339,6 +1438,42 @@ class ChatSessionStore:
                     "run_id": str(row["run_id"]),
                     "sequence": int(row["sequence"]),
                     "event_type": str(row["event_type"]),
+                    "payload": _json_loads(row["payload_json"], {}),
+                    "created_at": str(row["created_at"] or ""),
+                }
+                for row in rows
+            ]
+
+    def events_after(self, after_event_id=0, session_id=None, limit=500):
+        """Return the durable cross-run stream used by reconnecting desktop clients."""
+        clauses = ["e.id>?"]
+        values = [max(0, int(after_event_id or 0))]
+        if session_id:
+            clauses.append("r.session_id=?")
+            values.append(str(session_id))
+        values.append(max(1, min(2000, int(limit or 500))))
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT e.*, r.session_id, r.metadata_json AS run_metadata_json
+                FROM run_events e
+                JOIN runs r ON r.id=e.run_id
+                WHERE {' AND '.join(clauses)}
+                ORDER BY e.id
+                LIMIT ?
+                """,
+                tuple(values),
+            ).fetchall()
+            return [
+                {
+                    "event_id": int(row["id"]),
+                    "run_id": str(row["run_id"]),
+                    "session_id": str(row["session_id"]),
+                    "sequence": int(row["sequence"]),
+                    "event_type": str(row["event_type"]),
+                    "request_id": str(
+                        _json_loads(row["run_metadata_json"], {}).get("request_id") or ""
+                    ),
                     "payload": _json_loads(row["payload_json"], {}),
                     "created_at": str(row["created_at"] or ""),
                 }

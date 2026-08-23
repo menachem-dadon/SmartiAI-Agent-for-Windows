@@ -1,6 +1,7 @@
 """Structured Playwright/CDP control plane for Smarti's persistent browser."""
 import ipaddress
 import importlib.metadata
+import base64
 import json
 import os
 import re
@@ -10,6 +11,8 @@ import subprocess
 import tempfile
 import textwrap
 import time
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 
 from .common import SMARTI_BROWSER_DEBUG_PORT, WIN_CREATE_NO_WINDOW
@@ -46,6 +49,16 @@ class SmartiBrowserController:
         if profile_error:
             return profile_error
         args["profile"] = profile
+
+        if self._tauri_bridge_available():
+            effective_action, effective_args = self._effective_action(args)
+            ok, err = self._preflight_policy(effective_action, effective_args)
+            if not ok:
+                return err
+            prepared, err = self._prepare_paths(args, effective_action, effective_args)
+            if err:
+                return err
+            return self._run_tauri_bridge(prepared)
 
         if action in {"close_browser", "stop", "close_all"}:
             return self.core._close_automation_browser()
@@ -107,6 +120,56 @@ class SmartiBrowserController:
         return self.core._truncate_tool_output(
             UNTRUSTED_BROWSER_PREFIX + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
         )
+
+    def _tauri_bridge_available(self):
+        port = str(os.environ.get("SMARTI_TAURI_BROWSER_BROKER_PORT") or "").strip()
+        token = str(os.environ.get("SMARTI_TAURI_BROWSER_BROKER_TOKEN") or "").strip()
+        return port.isdigit() and 0 < int(port) < 65536 and len(token) >= 32
+
+    def _run_tauri_bridge(self, payload):
+        """Route the existing policy-approved action to the visible Tauri WebView2 tab."""
+        port = int(os.environ["SMARTI_TAURI_BROWSER_BROKER_PORT"])
+        token = os.environ["SMARTI_TAURI_BROWSER_BROKER_TOKEN"]
+        body = json.dumps(dict(payload or {}), ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/action",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Content-Length": str(len(body)),
+            },
+        )
+        try:
+            timeout = max(5, int(self.core._timeout("tool_timeout_seconds", 120)))
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                parsed = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = json.loads(exc.read().decode("utf-8")).get("error")
+            except Exception:
+                detail = str(exc)
+            return f"ERROR: Tauri browser action failed: {detail}"
+        except Exception as exc:
+            return f"ERROR: Tauri browser bridge unavailable: {exc}"
+
+        action = self._normalize_action(payload.get("action"))
+        if action in {"screenshot", "pdf"} and payload.get("path"):
+            encoded = (((parsed.get("result") or {}).get("data")) if isinstance(parsed, dict) else None)
+            if encoded:
+                try:
+                    Path(payload["path"]).write_bytes(base64.b64decode(encoded, validate=True))
+                    parsed["path"] = payload["path"]
+                    parsed["result"] = {"saved": True, "bytes": os.path.getsize(payload["path"])}
+                except Exception as exc:
+                    return f"ERROR: Tauri browser capture could not be saved: {exc}"
+        post_ok, parsed, post_err = self._postflight_policy(action, parsed)
+        if not post_ok:
+            return post_err
+        if isinstance(parsed, dict) and parsed.get("ok") is False:
+            return "ERROR: Tauri browser action failed.\n" + self._json(parsed)
+        return self._json(parsed)
 
     def _playwright_dependency(self):
         try:

@@ -1,5 +1,5 @@
 """Theme tokens, stylesheet snippets, and generated UI assets."""
-from .common import *
+from .ui_common import *
 import weakref
 
 try:

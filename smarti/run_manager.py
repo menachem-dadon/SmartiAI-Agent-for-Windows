@@ -94,12 +94,15 @@ class ConversationRunManager:
         if not target or not self.core.chat_store.has_session(target):
             target = str(self.core.chat_store.create_session(set_active=not bool(session_id))["id"])
         should_title = self.core.chat_store.should_generate_title_for_next_turn(target)
+        run_metadata = copy.deepcopy(metadata if isinstance(metadata, dict) else {})
         provider_mode = normalize_provider_name(
-            self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini"))
+            run_metadata.get("provider_mode")
+            or self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini"))
             or "gemini"
         )
         model_name = str(
-            self.core.settings.get(f"selected_{provider_mode}_model")
+            run_metadata.get("model_name")
+            or self.core.settings.get(f"selected_{provider_mode}_model")
             or provider_default_model(provider_mode)
             or "Local"
         )
@@ -109,7 +112,6 @@ class ConversationRunManager:
             if callable(capture_snapshot)
             else {"mode": provider_mode, "model_name": model_name}
         )
-        run_metadata = copy.deepcopy(metadata if isinstance(metadata, dict) else {})
         run_metadata.update({
             "is_background_task": bool(is_background_task),
             "should_generate_title": bool(should_title),

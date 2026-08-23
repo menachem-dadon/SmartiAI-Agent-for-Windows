@@ -476,6 +476,37 @@ class _BrowserAutomationCore:
 
 
 class BrowserAutomationManagerTests(unittest.TestCase):
+    def test_tauri_bridge_routes_to_visible_webview_without_legacy_launch(self):
+        core = _BrowserAutomationCore()
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        response.read.return_value = json.dumps({
+            "ok": True,
+            "action": "snapshot",
+            "tabId": "tab-00000001",
+            "targetId": "wv2-target-00000001",
+            "result": {"result": {"value": {"title": "Visible", "url": "https://example.test/"}}},
+        }).encode("utf-8")
+        try:
+            with (
+                mock.patch.dict(os.environ, {
+                    "SMARTI_TAURI_BROWSER_BROKER_PORT": "54321",
+                    "SMARTI_TAURI_BROWSER_BROKER_TOKEN": "a" * 64,
+                }),
+                mock.patch("smarti.browser_control.urllib.request.urlopen", return_value=response) as opened,
+            ):
+                result = SmartiBrowserController(core).run({"action": "snapshot"})
+            self.assertTrue(result.startswith(UNTRUSTED_BROWSER_PREFIX))
+            payload = json.loads(result[len(UNTRUSTED_BROWSER_PREFIX):])
+            self.assertEqual(payload["targetId"], "wv2-target-00000001")
+            self.assertFalse(core.ensure_called)
+            sent = json.loads(opened.call_args.args[0].data.decode("utf-8"))
+            self.assertEqual(sent["action"], "snapshot")
+            self.assertNotIn("SMARTI_TAURI_BROWSER_BROKER_TOKEN", sent)
+        finally:
+            core.cleanup()
+
     def test_schema_contains_world_class_actions(self):
         expected = {
             "doctor", "status", "start", "stop", "profiles", "tabs",

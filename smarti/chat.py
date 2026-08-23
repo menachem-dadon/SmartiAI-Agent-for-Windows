@@ -2,7 +2,7 @@
 import math
 import random
 
-from .common import *
+from .ui_common import *
 from .attachments import *
 from .ui_styles import *
 from .ui_controls import *

@@ -1,5 +1,5 @@
 """Application entry point for Smarti."""
-from .common import *
+from .ui_common import *
 from .ui_styles import *
 from .core import SmartiCore
 from .chat import ChatWindow, AnimatedSplash

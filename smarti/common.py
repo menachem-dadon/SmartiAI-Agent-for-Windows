@@ -1,4 +1,4 @@
-"""Shared imports, constants, and small helpers for Smarti."""
+"""Pure Python imports, constants, paths, and runtime helpers for Smarti Core."""
 import os
 import json
 import subprocess
@@ -563,13 +563,6 @@ SMARTI_APP_AUMID = "SmartiAI"
 
 class SmartiCancelled(Exception):
     pass
-
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QGridLayout, QBoxLayout,
-                             QHBoxLayout, QTextEdit, QPlainTextEdit, QPushButton, QLabel,
-                             QScrollArea, QFrame, QMenu, QLineEdit, QTextBrowser, QProgressBar,
-                             QCheckBox, QFormLayout, QSizePolicy, QMessageBox, QComboBox, QSystemTrayIcon, QSlider, QStackedWidget, QStyleOptionButton, QStyle, QGraphicsOpacityEffect, QGraphicsEffect, QGraphicsDropShadowEffect, QFileDialog, QDialog, QDialogButtonBox, QInputDialog, QListWidget, QListWidgetItem, QAbstractItemView, QToolTip)
-from PyQt6.QtCore import Qt, QEvent, QObject, QThread, pyqtSignal, QSize, QTimer, QPoint, QPropertyAnimation, QEasingCurve, QElapsedTimer, QRectF, QUrl
-from PyQt6.QtGui import QIcon, QFont, QFontDatabase, QFontMetrics, QPixmap, QCursor, QColor, QPainter, QPainterPath, QPen, QMovie, QTextOption, QPalette, QTextCursor, QLinearGradient, QBrush, QImage, QDesktopServices, QRegion
 
 DOCX_INSTALLED = importlib.util.find_spec("docx") is not None
 PDF_INSTALLED = importlib.util.find_spec("PyPDF2") is not None
