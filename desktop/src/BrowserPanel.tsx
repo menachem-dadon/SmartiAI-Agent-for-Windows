@@ -72,14 +72,9 @@ const readJson = <T,>(key: string, fallback: T): T => {
     return fallback;
   }
 };
-const saveFile = (base64: string, mime: string, name: string) => {
+const saveFile = async (base64: string, _mime: string, name: string) => {
   const bytes = Uint8Array.from(atob(base64), (value) => value.charCodeAt(0));
-  const href = URL.createObjectURL(new Blob([bytes], { type: mime }));
-  const link = document.createElement("a");
-  link.href = href;
-  link.download = name;
-  link.click();
-  URL.revokeObjectURL(href);
+  await invoke("save_binary_file", { suggestedName: name, bytes: Array.from(bytes) });
 };
 export const browserProductCapabilities = {
   sameVisibleTarget: true,
@@ -89,7 +84,8 @@ export const browserProductCapabilities = {
   maxRestoredTabs: 12,
 } as const;
 
-export function BrowserPanel({ visible }: { visible: boolean }) {
+export type BrowserActivity = { title: string; url: string; loading: boolean; previewDataUrl?: string };
+export function BrowserPanel({ visible, onActivity }: { visible: boolean; onActivity?: (activity: BrowserActivity) => void }) {
   const [browser, setBrowser] = useState<BrowserSnapshot>(initialBrowser);
   const [hydrated, setHydrated] = useState(false);
   const [address, setAddress] = useState("");
@@ -375,6 +371,26 @@ export function BrowserPanel({ visible }: { visible: boolean }) {
   }, [visible]);
   const current = useMemo(() => activeTab(browser), [browser]);
   useEffect(() => {
+    if (!current) return;
+    onActivity?.({ title: pageTitle(current), url: current.url, loading: current.loading });
+  }, [current?.tabId, current?.title, current?.url, current?.loading, onActivity]);
+  useEffect(() => {
+    if (visible || !current || !/^https?:/i.test(current.url) || !onActivity) return;
+    let stopped = false;
+    const preview = async () => {
+      try {
+        const result = await runCdp(current, "Page.captureScreenshot", { format: "jpeg", quality: 55, captureBeyondViewport: false });
+        const data = String(result.result.data || "");
+        if (!stopped && data) onActivity({ title: pageTitle(current), url: current.url, loading: current.loading, previewDataUrl: `data:image/jpeg;base64,${data}` });
+      } catch {
+        // A hidden/crashed page keeps its last activity text without affecting chat.
+      }
+    };
+    void preview();
+    const timer = window.setInterval(() => void preview(), 1800);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [visible, current?.tabId, current?.url, current?.loading, onActivity, runCdp]);
+  useEffect(() => {
     if (current) setAddress(current.url);
   }, [current?.tabId, current?.url]);
   const newTab = useCallback(
@@ -456,7 +472,7 @@ export function BrowserPanel({ visible }: { visible: boolean }) {
     );
     const data = String(result.result.data || "");
     if (!data) throw new Error("capture returned no data");
-    saveFile(
+    await saveFile(
       data,
       pdf ? "application/pdf" : "image/png",
       `smarti-${Date.now()}.${pdf ? "pdf" : "png"}`,
@@ -484,14 +500,7 @@ export function BrowserPanel({ visible }: { visible: boolean }) {
     const html = String(
       (result.result as { result?: { value?: unknown } }).result?.value || "",
     );
-    const href = URL.createObjectURL(
-      new Blob([html], { type: "text/html;charset=utf-8" }),
-    );
-    const link = document.createElement("a");
-    link.href = href;
-    link.download = `source-${Date.now()}.html`;
-    link.click();
-    URL.revokeObjectURL(href);
+    await invoke("save_text_file", { suggestedName: `source-${Date.now()}.html`, contents: html });
   };
   const toggleUserAgent = async () => {
     if (!current) return;

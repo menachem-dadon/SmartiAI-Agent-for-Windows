@@ -1,8 +1,8 @@
 # SmartiAI Desktop
 
-The Point 5 Tauri 2 + React + TypeScript shell. The Rust host owns the Python
-Core lifecycle and its per-launch credential; frontend code receives only
-narrow status, health, and restart commands.
+The recovered Tauri 2 + React + TypeScript Smarti client. The Rust host owns the
+Python Core lifecycle and its per-launch credential; frontend code receives
+only narrow authenticated operations and never the bearer token.
 
 ## Development
 
@@ -27,6 +27,11 @@ Development overrides:
 The default capability grants no shell plugin and no filesystem plugin. The
 Core bearer token remains private Rust state and is never serialized to React.
 
+Keep the legacy PyQt launcher available for source comparison until Point 17.
+Do not run source Tauri and another `npm run tauri dev` instance concurrently:
+Vite deliberately uses fixed port `1420`. If startup reports that the port is
+busy, close the existing Smarti development instance normally and retry.
+
 ## Checks
 
 ```powershell
@@ -36,9 +41,30 @@ npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
 ..\scripts\smoke_tauri_supervisor.ps1
+..\scripts\smoke_tauri_browser.ps1
+python ..\scripts\verify_tauri_point16c.py
 ```
 
 The supervisor smoke opens the Tauri WebView hidden, verifies the real Python
-Core readiness handshake and Rust health proxy, reloads the WebView without
-replacing the Core, detects an intentional Core crash, restarts one new Core,
-and shuts it down through the inherited control pipe.
+Core readiness handshake and Rust health proxy, creates a deterministic
+conversation/run without a paid provider request, reloads the WebView without
+replacing the Core, proves that chat survives reload and Core restart, detects
+an intentional crash, restarts one new Core, and shuts it down through the
+inherited control pipe. The Browser smoke separately proves the same visible
+and automated WebView2 target, hostile-page Tauri denial, persistent/Guest
+isolation, governed popup routing, Hebrew input, resize/focus and screenshot.
+
+## Internal visual fixtures
+
+Development-only fixture routes render real React components without touching
+the user's desktop or data:
+
+- `?visual-fixture=point16a&theme=dark&workbench=1`
+- `?visual-fixture=point16a&theme=light&workbench=0`
+- `?visual-fixture=point16b-management&theme=dark`
+- `?visual-fixture=point16b-management&theme=light`
+- `?visual-fixture=point16b-legal&theme=dark`
+
+Use headless Edge/Chromium or the existing offscreen QA workflow at narrow and
+wide viewport sizes. The PyQt code and `docs/tauri_ui_source_parity.md` remain
+the specification; fixture screenshots are regression evidence only.

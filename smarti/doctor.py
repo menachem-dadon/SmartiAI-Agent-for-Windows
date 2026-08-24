@@ -65,8 +65,8 @@ from .common import (
 from .codex_signin import CODEX_SIGNIN_PROVIDER, CodexSignInProvider
 from .config import BUILTIN_TOOL_SCHEMAS, DEFAULT_POLICY_MATRIX, SETTINGS_SCHEMA_VERSION
 from .runtime import SMARTI_RUNTIME
-from .visual_canvas import new_canvas_artifact, web_canvas_available
-from .workers import test_email_connection
+from .canvas_model import new_canvas_artifact, web_canvas_available
+from .email_service import test_email_connection
 
 
 STATUS_PASS = "pass"
@@ -1275,7 +1275,16 @@ class SmartiDiagnostic:
             name for name in ("search_tools", "load_skill", "get_tool_info", "run_skill")
             if name not in BUILTIN_TOOL_SCHEMAS
         ]
-        tool_count = len(getattr(self.core, "tool_registry", {}) or {})
+        custom_tools = getattr(self.core, "custom_tools", None)
+        registry_service = getattr(self.core, "tool_registry", None)
+        if custom_tools is not None and hasattr(custom_tools, "__len__"):
+            tool_count = len(custom_tools)
+        elif hasattr(registry_service, "__len__"):
+            # Compatibility with small test/legacy registry collections. The
+            # production ToolRegistry service deliberately has no collection length.
+            tool_count = len(registry_service)
+        else:
+            tool_count = 0
         mcp_count = len(getattr(self.core, "mcp_registry", {}) or {})
         skill_count = len(getattr(self.core, "skill_registry", {}) or {})
         catalog_stale = False

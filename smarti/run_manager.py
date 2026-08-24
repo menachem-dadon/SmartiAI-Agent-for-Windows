@@ -6,7 +6,7 @@ from collections import deque
 
 
 TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
-ACTIVE_RUN_STATUSES = frozenset({"queued", "running", "waiting_for_approval", "cancelling"})
+ACTIVE_RUN_STATUSES = frozenset({"queued", "running", "waiting_for_approval", "waiting_for_input", "cancelling"})
 
 
 class RunHandle:
@@ -41,6 +41,7 @@ class ConversationRunManager:
         self._handles = {}
         self._subscribers = {}
         self._approval_waiters = {}
+        self._api_key_waiters = {}
         self._closed = False
         for run in self.core.chat_store.recover_incomplete_runs():
             self._enqueue_existing(run)
@@ -325,7 +326,13 @@ class ConversationRunManager:
             "status_callback": combine("status_callback", "run_status"),
             "print_callback": combine("print_callback", "run_output"),
             "step_callback": combine("step_callback", "run_step"),
-            "api_key_callback": external.get("api_key_callback"),
+            "api_key_callback": external.get("api_key_callback") or (
+                lambda secret_key, provider_label, title, message, help_url:
+                self.request_api_key(
+                    run_id, session_id, secret_key, provider_label,
+                    title, message, help_url,
+                )
+            ),
             "ask_user_callback": external.get("ask_user_callback"),
         }
 
@@ -577,6 +584,85 @@ class ConversationRunManager:
                 waiter["approved"] = bool(approved) and decision == "approved"
                 waiter["event"].set()
         return bool(changed)
+
+    def request_api_key(
+        self, run_id, session_id, secret_key, provider_label, title, message,
+        help_url="",
+    ):
+        """Expose a missing-key interruption as a durable, cancellable run event."""
+        waiter = {
+            "event": threading.Event(),
+            "secret_key": str(secret_key or ""),
+            "value": "",
+        }
+        with self._lock:
+            self._api_key_waiters[str(run_id)] = waiter
+        self.core.chat_store.transition_run(
+            run_id,
+            "waiting_for_input",
+            expected_statuses={"running"},
+        )
+        self.core.chat_store.create_attention(
+            session_id,
+            run_id,
+            "api_key",
+            {"secret_key": waiter["secret_key"]},
+        )
+        provider = next(
+            (
+                name for name in MODEL_PROVIDER_ORDER
+                if provider_secret_key(name) == waiter["secret_key"]
+            ),
+            "",
+        )
+        self._emit(
+            "api_key_required",
+            run_id,
+            session_id,
+            {
+                "secret_key": waiter["secret_key"],
+                "provider_label": str(provider_label or ""),
+                "title": str(title or ""),
+                "message": str(message or ""),
+                "help_url": str(help_url or ""),
+                "provider": provider,
+                "key_instructions": provider_key_instructions(secret_key=waiter["secret_key"]),
+            },
+            persist=True,
+        )
+        handle = self.handle(run_id)
+        while not waiter["event"].wait(0.25):
+            if handle and handle.cancel_event.is_set():
+                break
+        with self._lock:
+            self._api_key_waiters.pop(str(run_id), None)
+        return "" if handle and handle.cancel_event.is_set() else str(waiter["value"] or "")
+
+    def resolve_api_key_request(self, run_id, secret_key, value):
+        session_id = ""
+        with self._lock:
+            waiter = self._api_key_waiters.get(str(run_id or ""))
+            if not waiter or waiter["secret_key"] != str(secret_key or ""):
+                return False
+            waiter["value"] = sanitize_secret_value(value)
+            if not waiter["value"]:
+                return False
+            handle = self._handles.get(str(run_id or ""))
+            session_id = handle.session_id if handle else ""
+            waiter["event"].set()
+        self._emit(
+            "api_key_submitted",
+            run_id,
+            session_id,
+            {"secret_key": str(secret_key or "")},
+            persist=True,
+        )
+        self.core.chat_store.transition_run(
+            run_id,
+            "running",
+            expected_statuses={"waiting_for_input"},
+        )
+        return True
 
     def shutdown(self, wait=False):
         with self._lock:

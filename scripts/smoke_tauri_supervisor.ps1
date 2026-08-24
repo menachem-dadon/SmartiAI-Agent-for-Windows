@@ -20,10 +20,12 @@ $previousProjectRoot = $env:SMARTI_PROJECT_ROOT
 $previousPython = $env:SMARTI_PYTHON
 $previousData = $env:SMARTI_DATA_DIR
 $previousSmoke = $env:SMARTI_SUPERVISOR_SMOKE_FILE
+$previousDeterministic = $env:SMARTI_DETERMINISTIC_PRODUCT_SMOKE
 $env:SMARTI_PROJECT_ROOT = $repoRoot
 $env:SMARTI_PYTHON = $pythonCommand.Source
 $env:SMARTI_DATA_DIR = $dataPath
 $env:SMARTI_SUPERVISOR_SMOKE_FILE = $resultPath
+$env:SMARTI_DETERMINISTIC_PRODUCT_SMOKE = '1'
 
 Push-Location $desktopRoot
 try {
@@ -38,5 +40,6 @@ try {
     $env:SMARTI_PYTHON = $previousPython
     $env:SMARTI_DATA_DIR = $previousData
     $env:SMARTI_SUPERVISOR_SMOKE_FILE = $previousSmoke
+    $env:SMARTI_DETERMINISTIC_PRODUCT_SMOKE = $previousDeterministic
     if (Test-Path -LiteralPath $smokeRoot) { Remove-Item -LiteralPath $smokeRoot -Recurse -Force }
 }

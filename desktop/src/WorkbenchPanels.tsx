@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { BrowserPanel } from "./BrowserPanel";
+import { BrowserPanel, type BrowserActivity } from "./BrowserPanel";
 import { CanvasPanel } from "./CanvasPanel";
 import { coreApi, encodePath } from "./coreApi";
-import type { WorkbenchTab } from "./workspaceState";
+import {
+  closeWorkbenchTab,
+  openWorkbenchTab,
+  reorderWorkbenchTabs,
+  type WorkbenchSnapshot,
+  type WorkbenchTab,
+  type WorkbenchTabRecord,
+} from "./workspaceState";
 
 type TreeItem = {
   name: string;
@@ -22,7 +29,7 @@ type FilePreview = {
   text?: string;
   data_url?: string;
 };
-type Tab = { id: string; kind: WorkbenchTab; title: string };
+type Tab = WorkbenchTabRecord;
 const labels: Record<WorkbenchTab, string> = {
   browser: "דפדפן",
   files: "קבצים",
@@ -313,46 +320,70 @@ function TerminalPanel({ onSession }: { onSession?: (id: string) => void }) {
 
 export function WorkbenchSurface({
   initial,
+  visible,
+  restored,
+  onStateChange,
+  onBrowserActivity,
   onClose,
   sessionId,
   onCanvasAction,
 }: {
-  initial: WorkbenchTab;
+  initial: WorkbenchTab | null;
+  visible: boolean;
+  restored?: WorkbenchSnapshot | null;
+  onStateChange?: (state: WorkbenchSnapshot) => void;
+  onBrowserActivity?: (activity: BrowserActivity) => void;
   onClose: () => void;
   sessionId: string;
   onCanvasAction: (text: string) => void;
 }) {
-  const counter = useRef(1);
-  const [tabs, setTabs] = useState<Tab[]>(() => [
-    { id: `${initial}-1`, kind: initial, title: labels[initial] },
-  ]);
-  const [active, setActive] = useState(`${initial}-1`);
+  const counter = useRef(0);
+  const restoredApplied = useRef(Boolean(restored));
+  const [tabs, setTabs] = useState<Tab[]>(() => restored?.tabs || []);
+  const [active, setActive] = useState(() => restored?.active || "");
   const [menu, setMenu] = useState(false);
+  const draggedTab = useRef("");
   useEffect(() => {
-    if (!tabs.some((tab) => tab.kind === initial)) add(initial);
-    else setActive(tabs.find((tab) => tab.kind === initial)!.id);
+    if (restoredApplied.current || !restored) return;
+    restoredApplied.current = true;
+    setTabs(restored.tabs);
+    setActive(restored.active);
+    counter.current = Math.max(counter.current, restored.tabs.length);
+  }, [restored]);
+  useEffect(() => {
+    if (!initial) return;
+    const existing = tabs.find((tab) => tab.kind === initial);
+    if (existing) setActive(existing.id);
+    else add(initial);
   }, [initial]);
-  const add = (kind: WorkbenchTab) => {
+  useEffect(() => {
+    onStateChange?.({ tabs, active });
+  }, [tabs, active, onStateChange]);
+  const add = (kind: WorkbenchTab, forceNew = false) => {
     const number = ++counter.current;
     const id = `${kind}-${number}`;
-    setTabs((current) => [
-      ...current,
+    const next = openWorkbenchTab(
+      { tabs, active },
       {
         id,
         kind,
-        title: `${labels[kind]}${["files", "browser", "terminal"].includes(kind) && current.some((tab) => tab.kind === kind) ? ` ${number}` : ""}`,
+        title: `${labels[kind]}${["files", "browser", "terminal"].includes(kind) && tabs.some((tab) => tab.kind === kind) ? ` ${number}` : ""}`,
       },
-    ]);
-    setActive(id);
+      forceNew,
+    );
+    setTabs(next.tabs);
+    setActive(next.active);
     setMenu(false);
   };
   const close = (id: string) => {
-    setTabs((current) => {
-      const next = current.filter((tab) => tab.id !== id);
-      if (!next.length) setTimeout(onClose, 0);
-      if (active === id && next.length) setActive(next[next.length - 1].id);
-      return next;
-    });
+    const next = closeWorkbenchTab({ tabs, active }, id);
+    setTabs(next.tabs);
+    setActive(next.active);
+    if (!next.tabs.length) setTimeout(onClose, 0);
+  };
+  const reorder = (sourceId: string, targetId: string) => {
+    const next = reorderWorkbenchTabs({ tabs, active }, sourceId, targetId);
+    setTabs(next.tabs);
   };
   const current = tabs.find((tab) => tab.id === active);
   return (
@@ -366,6 +397,14 @@ export function WorkbenchSurface({
               role="tab"
               aria-selected={tab.id === active}
               onClick={() => setActive(tab.id)}
+              draggable
+              onDragStart={() => { draggedTab.current = tab.id; }}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                reorder(draggedTab.current, tab.id);
+                draggedTab.current = "";
+              }}
             >
               <span>{icons[tab.kind]}</span>
               {tab.title}
@@ -401,7 +440,7 @@ export function WorkbenchSurface({
                   "artifacts",
                 ] as WorkbenchTab[]
               ).map((kind) => (
-                <button type="button" key={kind} onClick={() => add(kind)}>
+                  <button type="button" key={kind} onClick={() => add(kind, true)}>
                   <span>{icons[kind]}</span>
                   {labels[kind]}
                 </button>
@@ -411,13 +450,14 @@ export function WorkbenchSurface({
         </div>
       </header>
       <div className="workbench-body">
-        {current?.kind === "browser" && <BrowserPanel visible />}
-        {current?.kind === "files" && <FilesPanel />}
-        {current?.kind === "terminal" && <TerminalPanel />}
-        {current?.kind === "artifacts" && <ArtifactsPanel />}
-        {current?.kind === "canvas" && (
-          <CanvasPanel sessionId={sessionId} onAction={onCanvasAction} />
-        )}
+        {!current && <div className="workbench-empty"><h2>מה תרצה לפתוח?</h2><button type="button" onClick={() => add("files", true)}>▣ קבצים</button><button type="button" onClick={() => add("browser", true)}>◎ דפדפן</button><button type="button" onClick={() => add("terminal", true)}>&gt;_ מסוף</button></div>}
+        {tabs.map((tab) => <section className="workbench-panel" hidden={tab.id !== active} key={tab.id} aria-label={tab.title}>
+          {tab.kind === "browser" && <BrowserPanel visible={visible && tab.id === active} onActivity={onBrowserActivity} />}
+          {tab.kind === "files" && <FilesPanel />}
+          {tab.kind === "terminal" && <TerminalPanel />}
+          {tab.kind === "artifacts" && <ArtifactsPanel />}
+          {tab.kind === "canvas" && <CanvasPanel sessionId={sessionId} onAction={onCanvasAction} />}
+        </section>)}
       </div>
     </>
   );

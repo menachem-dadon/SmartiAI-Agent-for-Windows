@@ -22,6 +22,16 @@ Qt in the production Core/runtime, creates the NSIS/portable outputs and records
 hashes and Authenticode status. `SMARTI_BUILD_WORK_DIR` can select a short work
 path; final artifacts are copied to `release/`.
 
+For an explicitly unsigned current-machine acceptance build, use:
+
+```powershell
+.\scripts\build_tauri_release.ps1 -Version 0.87.0 -AllowUnsignedLocal
+```
+
+This still runs the full packaged supervisor/chat smoke and the packaged
+WebView2 Browser smoke. The resulting manifest contains both payloads under
+`packageSmoke`; it is not merely a successful linker/build flag.
+
 Production updater builds require `TAURI_SIGNING_PRIVATE_KEY`,
 `SMARTI_UPDATER_PUBLIC_KEY` and `SMARTI_UPDATER_ENDPOINT`. Update signatures
 and Windows Authenticode are independent. `-AllowUnsignedLocal` exists only for
@@ -61,3 +71,23 @@ The About page uses Tauri's updater plugin and restarts only after a verified
 download/install. Publishing, code-signing, updater hosting and clean Windows
 10/11 VM matrices are separate release operations; this command does not imply
 that they were performed.
+
+Point 16C acceptance is intentionally current-machine and does not install over
+the user's existing Smarti. The NSIS artifact is built and hashed, while the
+portable tree is exercised from an isolated `SMARTI_DATA_DIR`. Clean install,
+upgrade over the current PyQt/Inno copy, uninstall/reinstall and preservation of
+live user data require separate explicit approval and a backup first.
+
+## Build troubleshooting
+
+- Run from the repository root; npm commands are executed in `desktop/` by the
+  script.
+- If Cargo is not on `PATH`, the script uses the current user's `.cargo\bin`.
+- `CARGO_HTTP_CHECK_REVOKE=false` may be required on this machine when the
+  Windows certificate-revocation check blocks Cargo downloads.
+- Use a short ASCII `SMARTI_BUILD_WORK_DIR` only when path/tool limitations
+  require it. The script confines its clean/reset operations to that work root.
+- `-SkipRuntime` and `-SkipCoreBuild` are reuse switches, not proof shortcuts;
+  the referenced prepared trees must exist and still pass the Qt-free checks.
+- `-SkipPackageSmoke` intentionally removes package acceptance evidence and
+  must not be used for a Point 16C completion build.

@@ -170,6 +170,68 @@
       ],
       "additionalProperties": false
     },
+    "legalAcceptance": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean",
+          "const": true
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "accepted",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "settingsAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "reset",
+            "codex_status",
+            "codex_check",
+            "codex_login",
+            "codex_logout",
+            "email_test",
+            "ssl_test",
+            "ssl_import_ca",
+            "log_clear"
+          ]
+        },
+        "ssl_trust_mode": {
+          "type": "string",
+          "enum": [
+            "system",
+            "custom_ca",
+            "legacy_insecure"
+          ]
+        },
+        "ssl_custom_ca_path": {
+          "type": "string",
+          "maxLength": 32767
+        },
+        "source_path": {
+          "type": "string",
+          "maxLength": 32767
+        },
+        "confirmation": {
+          "type": "string",
+          "maxLength": 100
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
     "validateProvider": {
       "type": "object",
       "properties": {
@@ -242,6 +304,26 @@
       ],
       "additionalProperties": false
     },
+    "provideRunApiKey": {
+      "type": "object",
+      "properties": {
+        "secret_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      },
+      "required": [
+        "secret_key",
+        "value"
+      ],
+      "additionalProperties": false
+    },
     "taskAction": {
       "type": "object",
       "properties": {
@@ -311,6 +393,7 @@
             "details",
             "reveal",
             "edit",
+            "pin",
             "archive",
             "restore",
             "delete"
@@ -342,6 +425,82 @@
         },
         "pinned": {
           "type": "boolean"
+        },
+        "memory_type": {
+          "type": "string"
+        },
+        "ttl_hours": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "memoryCollectionAction": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "create",
+            "bulk_archive",
+            "bulk_restore",
+            "bulk_delete",
+            "import",
+            "export",
+            "clear"
+          ]
+        },
+        "ids": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 6000
+        },
+        "category": {
+          "type": "string"
+        },
+        "memory_type": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "importance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "ttl_hours": {
+          "type": "number",
+          "minimum": 0
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 32767
+        },
+        "confirmation": {
+          "type": "string",
+          "maxLength": 100
         }
       },
       "required": [
@@ -360,7 +519,8 @@
             "refresh",
             "install_skill",
             "install_custom",
-            "install_mcp"
+            "install_mcp",
+            "delete"
           ]
         },
         "kind": {
@@ -402,7 +562,8 @@
           "type": "string",
           "enum": [
             "scan",
-            "repair"
+            "repair",
+            "cancel"
           ]
         },
         "include_network": {
@@ -665,6 +826,13 @@
       "request_schema": null
     },
     {
+      "method": "GET",
+      "path": "/v2/conversations/{session_id}/export",
+      "operation_id": "exportConversation",
+      "summary_he": "ייצוא JSON בסמכות היסטוריית Smarti",
+      "request_schema": null
+    },
+    {
       "method": "POST",
       "path": "/v2/conversations/{session_id}/runs",
       "operation_id": "submitRun",
@@ -705,6 +873,13 @@
       "operation_id": "replayRunEvents",
       "summary_he": "שחזור אירועי ריצה",
       "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/runs/{run_id}/api-key",
+      "operation_id": "provideRunApiKey",
+      "summary_he": "מענה להפרעת מפתח API של ריצה",
+      "request_schema": "provideRunApiKey"
     },
     {
       "method": "GET",
@@ -763,6 +938,27 @@
       "request_schema": null
     },
     {
+      "method": "GET",
+      "path": "/v2/management/legal",
+      "operation_id": "legalStatus",
+      "summary_he": "מצב שער ההסכמה המשפטית",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/management/legal",
+      "operation_id": "acceptLegal",
+      "summary_he": "הסכמה מפורשת למסמך המשפטי הנוכחי",
+      "request_schema": "legalAcceptance"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/management/settings/actions",
+      "operation_id": "settingsAction",
+      "summary_he": "זרימות הגדרות ייעודיות ובדיקות חיבור",
+      "request_schema": "settingsAction"
+    },
+    {
       "method": "POST",
       "path": "/v2/providers/{provider}/validate",
       "operation_id": "validateProvider",
@@ -795,6 +991,13 @@
       "path": "/v2/providers/openai_codex_signin/quota",
       "operation_id": "readCodexQuota",
       "summary_he": "קריאת מכסת Codex שנותרה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/audio/tts/voices",
+      "operation_id": "listTtsVoices",
+      "summary_he": "רשימת קולות ההקראה הזמינים ב-Core",
       "request_schema": null
     },
     {
@@ -833,6 +1036,27 @@
       "request_schema": null
     },
     {
+      "method": "POST",
+      "path": "/v2/audio/voice",
+      "operation_id": "startVoice",
+      "summary_he": "התחלת האזנה דרך שירות הקול של Core",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/audio/voice/stop",
+      "operation_id": "stopVoice",
+      "summary_he": "ביטול האזנה של Core",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/audio/voice/status",
+      "operation_id": "voiceStatus",
+      "summary_he": "מצב ותמלול האזנה של Core",
+      "request_schema": null
+    },
+    {
       "method": "GET",
       "path": "/v2/management/tasks",
       "operation_id": "listTasks",
@@ -852,6 +1076,13 @@
       "operation_id": "listMemories",
       "summary_he": "ניהול זיכרון ממוסך",
       "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/management/memories",
+      "operation_id": "manageMemories",
+      "summary_he": "יצירה, פעולות מרובות, ייבוא, ייצוא וניקוי זיכרון",
+      "request_schema": "memoryCollectionAction"
     },
     {
       "method": "GET",
@@ -896,6 +1127,13 @@
       "request_schema": null
     },
     {
+      "method": "DELETE",
+      "path": "/v2/management/usage",
+      "operation_id": "clearUsage",
+      "summary_he": "ניקוי נתוני שימוש מקומיים עם גיבוי",
+      "request_schema": null
+    },
+    {
       "method": "GET",
       "path": "/v2/management/logs",
       "operation_id": "logs",
@@ -907,6 +1145,13 @@
       "path": "/v2/management/about",
       "operation_id": "about",
       "summary_he": "גרסה ומידע על היישום",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/management/diagnostics",
+      "operation_id": "diagnosticProgress",
+      "summary_he": "התקדמות בדיקה פעילה",
       "request_schema": null
     },
     {

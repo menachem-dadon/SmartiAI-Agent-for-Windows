@@ -1,10 +1,21 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { check } from "@tauri-apps/plugin-updater";
 import { ManagementCenter } from "./ManagementCenter";
+import { validateProviderKey } from "./SettingsManagement";
+import type { ManagementSection } from "./managementCatalog";
+import { LegalAgreement, type LegalStatus } from "./LegalAgreement";
 import { WorkbenchSurface } from "./WorkbenchPanels";
-import { ACTIVE_RUN_STATES, mergeMessages } from "./chatState";
+import type { BrowserActivity } from "./BrowserPanel";
+import {
+  ACTIVE_RUN_STATES,
+  mergeMessages,
+  pendingApiKeyRequest,
+  type ApiKeyRequest,
+} from "./chatState";
 import type {
   Approval,
   Bootstrap,
@@ -29,9 +40,12 @@ import { RichMessage } from "./RichMessage";
 import { Alert, Button, IconButton } from "./ui";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
 import {
+  clampWorkbenchResize,
   initialWorkspaceState,
+  parseWorkbenchSnapshot,
   workspaceColumns,
   workspaceReducer,
+  type WorkbenchSnapshot,
   type WorkbenchTab,
 } from "./workspaceState";
 import { activityState, legacyUi, workspaceIsNarrow } from "./legacyUiParity";
@@ -48,6 +62,103 @@ const initialCore: CoreSnapshot = {
 };
 const cursorKey = "smarti.desktop.event-cursor";
 type FavoriteModel = { provider: string; model: string };
+
+export function ApiKeyRequiredDialog({
+  request,
+  onCancel,
+}: {
+  request: ApiKeyRequest;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [status, setStatus] = useState("");
+  const provide = async () => {
+    const value = draft.trim();
+    if (!value) return;
+    setStatus("בודק את המפתח לפני שמירה…");
+    try {
+      await validateProviderKey({ provider: request.provider, secret: value });
+      const result = await coreApi<{ accepted: boolean }>(
+        "POST",
+        `/v2/runs/${encodePath(request.runId)}/api-key`,
+        { secret_key: request.secretKey, value },
+        true,
+      );
+      if (!result.accepted) throw new Error("הבקשה אינה ממתינה עוד למפתח");
+      setDraft("");
+      setStatus("");
+    } catch (reason) {
+      setDraft(value);
+      setStatus(
+        `המפתח לא נשמר: ${reason instanceof Error ? reason.message : String(reason)}`,
+      );
+    }
+  };
+  return (
+    <div className="action-confirm-backdrop">
+      <form
+        className="api-key-required-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="api-key-required-title"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void provide();
+        }}
+      >
+        <h2 id="api-key-required-title">{request.title}</h2>
+        <p>{request.message}</p>
+        <b className="api-key-provider">ספק פעיל: {request.providerLabel}</b>
+        <label>
+          <input
+            autoFocus
+            type="password"
+            autoComplete="off"
+            value={draft}
+            placeholder="הדבק כאן את מפתח ה-API"
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setStatus("");
+            }}
+          />
+        </label>
+        {request.helpUrl && (
+          <button
+            className="api-key-help"
+            type="button"
+            onClick={() =>
+              void invoke("open_chat_link", {
+                target: request.helpUrl,
+                local: false,
+              })
+            }
+          >
+            פתח דף הנפקת מפתחות API
+          </button>
+        )}
+        {request.keyInstructions && (
+          <p className="api-key-instructions">{request.keyInstructions}</p>
+        )}
+        <p className="api-key-note">
+          המפתח יישמר כמו שאר המפתחות של סמארטי, ולא יוצג בלוגים.
+        </p>
+        {status && (
+          <p className="api-key-validation-status" role="status">
+            {status}
+          </p>
+        )}
+        <footer>
+          <button type="button" className="reject" onClick={onCancel}>
+            ביטול
+          </button>
+          <button type="submit" className="accept" disabled={!draft.trim()}>
+            שמירה והמשך
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}
 
 function conversationMeta(item: Conversation): string {
   let date = "";
@@ -67,6 +178,20 @@ function conversationMeta(item: Conversation): string {
 
 function WindowTitleBar() {
   const appWindow = getCurrentWindow();
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const sync = () =>
+      void appWindow.isMaximized().then((value) => {
+        if (alive) setMaximized(value);
+      });
+    sync();
+    const listener = appWindow.onResized(sync);
+    return () => {
+      alive = false;
+      void listener.then((dispose) => dispose());
+    };
+  }, [appWindow]);
   return (
     <header
       className="window-titlebar"
@@ -79,14 +204,15 @@ function WindowTitleBar() {
         aria-label="מזער"
         onClick={() => void appWindow.minimize()}
       >
-        ─
+        —
       </button>
       <button
         type="button"
-        aria-label="הגדלה"
+        aria-label={maximized ? "שחזר" : "הגדל"}
+        title={maximized ? "שחזר" : "הגדל"}
         onClick={() => void appWindow.toggleMaximize()}
       >
-        □
+        {maximized ? "❐" : "□"}
       </button>
       <button
         type="button"
@@ -113,10 +239,10 @@ function useTheme() {
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
-  const setPreference = (next: ThemePreference) => {
+  const setPreference = useCallback((next: ThemePreference) => {
     localStorage.setItem(THEME_STORAGE_KEY, next);
     setPreferenceState(next);
-  };
+  }, []);
   return {
     preference,
     resolved: resolveTheme(preference, systemDark),
@@ -133,17 +259,8 @@ export default function App() {
     initialWorkspaceState,
   );
   const [managementOpen, setManagementOpen] = useState(false);
-  const [managementSection, setManagementSection] = useState<
-    | "settings"
-    | "tasks"
-    | "memory"
-    | "tools"
-    | "diagnostics"
-    | "usage"
-    | "logs"
-    | "about"
-    | null
-  >(null);
+  const [managementSection, setManagementSection] =
+    useState<ManagementSection | null>(null);
   const { resolved, setPreference } = useTheme();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -154,12 +271,18 @@ export default function App() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [query, setQuery] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const [error, setError] = useState("");
+  const [availableUpdateVersion, setAvailableUpdateVersion] = useState("");
   const [reconnecting, setReconnecting] = useState(false);
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [favoriteModels, setFavoriteModels] = useState<FavoriteModel[]>([]);
+  const [modelSelectionSource, setModelSelectionSource] = useState<
+    Record<string, unknown>
+  >({});
   const [reasoningEffort, setReasoningEffort] = useState("auto");
   const [reasoningOptions, setReasoningOptions] = useState<ReasoningOption[]>(
     [],
@@ -169,9 +292,20 @@ export default function App() {
   const [narrowWorkspace, setNarrowWorkspace] = useState(() =>
     workspaceIsNarrow(innerWidth),
   );
+  const [viewportWidth, setViewportWidth] = useState(() => innerWidth);
+  const [workbenchWidth, setWorkbenchWidth] = useState<number | null>(null);
   const [uiPreferences, setUiPreferences] = useState<Record<string, unknown>>(
     {},
   );
+  const uiPreferencesRef = useRef<Record<string, unknown>>({});
+  const [workbenchRestore, setWorkbenchRestore] =
+    useState<WorkbenchSnapshot | null>(null);
+  const [browserActivity, setBrowserActivity] =
+    useState<BrowserActivity | null>(null);
+  const [bootstrapReady, setBootstrapReady] = useState(false);
+  const [workspaceWindowReady, setWorkspaceWindowReady] = useState(false);
+  const [legalStatus, setLegalStatus] = useState<LegalStatus | null>(null);
+  const [legalChecked, setLegalChecked] = useState(false);
   const [voiceHotkey, setVoiceHotkey] = useState("Ctrl+Shift+Space");
   const [keepRunningInTray, setKeepRunningInTray] = useState(true);
   const notifiedUnread = useRef<Record<string, number>>({});
@@ -187,6 +321,21 @@ export default function App() {
     )?.id || "";
   const refreshCore = useCallback(
     async () => setCore(await invoke<CoreSnapshot>("core_status")),
+    [],
+  );
+  const saveUiPreferencePatch = useCallback(
+    async (patch: Record<string, unknown>) => {
+      const next = { ...uiPreferencesRef.current, ...patch };
+      uiPreferencesRef.current = next;
+      setUiPreferences(next);
+      await coreApi(
+        "PATCH",
+        "/v2/settings",
+        { values: { ui_preferences: next } },
+        true,
+      );
+      return next;
+    },
     [],
   );
 
@@ -231,9 +380,9 @@ export default function App() {
       ? values.favorite_models.filter((item): item is FavoriteModel =>
           Boolean(
             item &&
-              typeof item === "object" &&
-              typeof (item as FavoriteModel).provider === "string" &&
-              typeof (item as FavoriteModel).model === "string",
+            typeof item === "object" &&
+            typeof (item as FavoriteModel).provider === "string" &&
+            typeof (item as FavoriteModel).model === "string",
           ),
         )
       : [];
@@ -245,6 +394,12 @@ export default function App() {
     setReasoningOptions(data.chat_models.reasoning_options || []);
     setDisplayName(data.display_name || "");
     setFavoriteModels(favorites);
+    setModelSelectionSource(
+      values.selected_model_source &&
+        typeof values.selected_model_source === "object"
+        ? (values.selected_model_source as Record<string, unknown>)
+        : {},
+    );
     setAutonomyMode(
       typeof values.autonomy_mode === "string"
         ? values.autonomy_mode
@@ -257,18 +412,34 @@ export default function App() {
         : "Ctrl+Shift+Space",
     );
     setKeepRunningInTray(values.keep_running_in_tray !== false);
+    uiPreferencesRef.current = preferences;
     setUiPreferences(preferences);
+    const themeMode = String(preferences.theme_mode || "system");
+    setPreference(
+      themeMode === "light" || themeMode === "dark" ? themeMode : "system",
+    );
+    const restoredWorkbench = parseWorkbenchSnapshot(
+      preferences.workspace_workbench,
+    );
+    setWorkbenchRestore(restoredWorkbench);
+    const restoredTab =
+      restoredWorkbench?.tabs.find(
+        (item) => item.id === restoredWorkbench.active,
+      )?.kind || null;
     dispatch({
-      type: "set-conversations",
-      open:
+      type: "restore-layout",
+      conversations:
         !workspaceIsNarrow(innerWidth) &&
         !Boolean(preferences.workspace_sidebar_collapsed),
+      workbench: Boolean(preferences.workspace_workbench_open && restoredTab),
+      tab: restoredTab,
     });
     const first = activeId || data.conversations[0]?.id || "";
     setActiveId(first);
     if (first) await loadMessages(first);
     await refreshLists();
-  }, [activeId, loadMessages, refreshLists]);
+    setBootstrapReady(true);
+  }, [activeId, loadMessages, refreshLists, setPreference]);
 
   useEffect(() => {
     let alive = true;
@@ -285,20 +456,33 @@ export default function App() {
     let alive = true;
     if (core.state !== "ready") {
       setHealthOkay(false);
+      setWorkspaceWindowReady(false);
+      setLegalChecked(false);
+      setLegalStatus(null);
       return () => {
         alive = false;
       };
     }
-    void invoke<{ ready: boolean }>("core_health")
-      .then((health) => {
+    void (async () => {
+      try {
+        await invoke("desktop_finish_startup");
+        const health = await invoke<{ ready: boolean }>("core_health");
+        if (!alive) return;
+        setHealthOkay(Boolean(health.ready));
+        const legal = await coreApi<LegalStatus>("GET", "/v2/management/legal");
+        if (!alive) return;
+        setLegalStatus(legal);
+        setLegalChecked(true);
+        if (legal.accepted) await bootstrap();
+      } catch (reason) {
         if (alive) {
-          setHealthOkay(Boolean(health.ready));
-          void bootstrap().catch((reason) => setError(String(reason)));
+          setHealthOkay(false);
+          setError(String(reason));
         }
-      })
-      .catch(() => {
-        if (alive) setHealthOkay(false);
-      });
+      } finally {
+        if (alive) setWorkspaceWindowReady(true);
+      }
+    })();
     return () => {
       alive = false;
     };
@@ -306,6 +490,8 @@ export default function App() {
   useEffect(() => {
     const responsive = () => {
       const narrow = workspaceIsNarrow(innerWidth);
+      setViewportWidth(innerWidth);
+      setWorkbenchWidth(null);
       setNarrowWorkspace(narrow);
       if (narrow) dispatch({ type: "responsive-narrow" });
       else if (!Boolean(uiPreferences.workspace_sidebar_collapsed))
@@ -317,11 +503,72 @@ export default function App() {
   }, [uiPreferences.workspace_sidebar_collapsed]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      if (core.state === "ready")
-        void refreshLists(query).catch(() => setReconnecting(true));
+      if (core.state === "ready") {
+        setHistoryLoading(true);
+        setHistoryError("");
+        void refreshLists(query)
+          .catch((reason) => {
+            setHistoryError(`לא ניתן לטעון את השיחות: ${String(reason)}`);
+            setReconnecting(true);
+          })
+          .finally(() => setHistoryLoading(false));
+      }
     }, legacyUi.historySearchDebounceMs);
     return () => clearTimeout(timer);
   }, [query, core.state]);
+  useEffect(() => {
+    if (core.state !== "ready" || !bootstrapReady) return;
+    let stopped = false;
+    const runAutomaticCheck = async () => {
+      try {
+        const safe = await coreApi<{ values: Record<string, unknown> }>(
+          "GET",
+          "/v2/settings",
+        );
+        if (safe.values.updates_auto_check === false) return;
+        const lastChecked = Date.parse(
+          String(safe.values.updates_last_checked_at || ""),
+        );
+        if (
+          Number.isFinite(lastChecked) &&
+          Date.now() - lastChecked < 55 * 60 * 1000
+        ) {
+          const known = String(
+            safe.values.updates_last_available_version || "",
+          );
+          if (!stopped) setAvailableUpdateVersion(known);
+          return;
+        }
+        const found = await check();
+        if (stopped) return;
+        const version = found?.version || "";
+        setAvailableUpdateVersion(version);
+        await coreApi(
+          "PATCH",
+          "/v2/settings",
+          {
+            values: {
+              updates_last_checked_at: new Date().toISOString(),
+              updates_last_available_version: version,
+            },
+          },
+          true,
+        );
+      } catch {
+        // A failed background check must not interrupt chat startup. Manual check shows the error.
+      }
+    };
+    const first = window.setTimeout(() => void runAutomaticCheck(), 2600);
+    const hourly = window.setInterval(
+      () => void runAutomaticCheck(),
+      60 * 60 * 1000,
+    );
+    return () => {
+      stopped = true;
+      window.clearTimeout(first);
+      window.clearInterval(hourly);
+    };
+  }, [bootstrapReady, core.state]);
   useEffect(() => {
     if (!activeId || core.state !== "ready") return;
     void loadMessages(activeId)
@@ -397,7 +644,10 @@ export default function App() {
         if (managementSection) setManagementSection(null);
         else {
           setManagementOpen(false);
-          if (workspace.workbenchOpen) dispatch({ type: "close-workbench" });
+          if (workspace.workbenchOpen) {
+            dispatch({ type: "close-workbench" });
+            void saveUiPreferencePatch({ workspace_workbench_open: false });
+          }
         }
       }
       if (event.ctrlKey && event.key.toLowerCase() === "b") {
@@ -407,6 +657,9 @@ export default function App() {
             ? { type: "close-workbench" }
             : { type: "open-workbench", tab: "browser" },
         );
+        void saveUiPreferencePatch({
+          workspace_workbench_open: !workspace.workbenchOpen,
+        });
       }
       if (event.ctrlKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
@@ -415,7 +668,7 @@ export default function App() {
     };
     window.addEventListener("keydown", keyboard);
     return () => window.removeEventListener("keydown", keyboard);
-  }, [workspace.workbenchOpen, managementSection]);
+  }, [workspace.workbenchOpen, managementSection, saveUiPreferencePatch]);
 
   const activeConversation = conversations.find((item) => item.id === activeId);
   const activeRun = runs.find(
@@ -426,15 +679,16 @@ export default function App() {
   const activeApprovals = approvals.filter(
     (item) => item.session_id === activeId,
   );
+  const activeApiKeyRequest = pendingApiKeyRequest(activeEvents);
   const eventsForRun = (runId: string) =>
     activeEvents.filter((item) => item.run_id === runId);
   const activeAssistantRecorded = Boolean(
     activeRun &&
-      messages.some(
-        (message) =>
-          message.role === "assistant" &&
-          String(message.metadata?.run_id || "") === activeRun.id,
-      ),
+    messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        String(message.metadata?.run_id || "") === activeRun.id,
+    ),
   );
   const createConversation = async () => {
     try {
@@ -471,26 +725,15 @@ export default function App() {
     await refreshLists();
   };
   const exportConversation = async (item: Conversation) => {
-    let before: number | null = null;
-    let collected: ChatMessage[] = [];
-    do {
-      const suffix: string = before ? `&before=${before}` : "";
-      const chunk: MessagePage = await coreApi<MessagePage>(
-        "GET",
-        `/v2/conversations/${encodePath(item.id)}/messages?limit=500${suffix}`,
-      );
-      collected = mergeMessages(chunk.messages, collected);
-      before = chunk.has_older ? chunk.next_before_ordinal : null;
-    } while (before);
-    const blob = new Blob(
-      [JSON.stringify({ conversation: item, messages: collected }, null, 2)],
-      { type: "application/json" },
+    const payload = await coreApi<Record<string, unknown>>(
+      "GET",
+      `/v2/conversations/${encodePath(item.id)}/export`,
     );
-    const anchor = document.createElement("a");
-    anchor.href = URL.createObjectURL(blob);
-    anchor.download = `${item.title.replace(/[\\/:*?"<>|]/g, "_") || "smarti-chat"}.json`;
-    anchor.click();
-    URL.revokeObjectURL(anchor.href);
+    await invoke("save_text_file", {
+      suggestedName: `${item.title || "smarti-chat"}.json`,
+      contents: JSON.stringify(payload, null, 2),
+    });
+    setError("");
   };
   const deleteConversation = async (item: Conversation) => {
     if (item.is_busy) {
@@ -579,18 +822,10 @@ export default function App() {
   const toggleConversationDrawer = async () => {
     const open = !workspace.conversationDrawerOpen;
     dispatch({ type: "set-conversations", open });
-    const next = { ...uiPreferences, workspace_sidebar_collapsed: !open };
-    setUiPreferences(next);
     try {
-      await coreApi(
-        "PATCH",
-        "/v2/settings",
-        { values: { ui_preferences: next } },
-        true,
-      );
+      await saveUiPreferencePatch({ workspace_sidebar_collapsed: !open });
     } catch (reason) {
       dispatch({ type: "set-conversations", open: !open });
-      setUiPreferences(uiPreferences);
       setError(`לא ניתן לשמור את מצב תפריט הצד: ${String(reason)}`);
     }
   };
@@ -621,23 +856,6 @@ export default function App() {
     );
     await refreshLists();
   };
-  const changeProvider = async (next: string) => {
-    setProvider(next);
-    setModel("");
-    try {
-      const data = await coreApi<{
-        models: Array<string | { id?: string; name?: string }>;
-      }>("GET", `/v2/providers/${encodePath(next)}/models`);
-      const values = data.models
-        .map((item) =>
-          typeof item === "string" ? item : item.id || item.name || "",
-        )
-        .filter(Boolean);
-      setModel(values[0] || "");
-    } catch (reason) {
-      setError(`לא ניתן לטעון מודלים: ${String(reason)}`);
-    }
-  };
   const loadReasoning = async (nextProvider: string, nextModel: string) => {
     const data = await coreApi<{
       reasoning_effort: string;
@@ -650,13 +868,36 @@ export default function App() {
     setReasoningOptions(data.reasoning_options || []);
   };
   const selectFavoriteModel = async (item: FavoriteModel) => {
-    if (item.provider !== provider) await changeProvider(item.provider);
+    const previousProvider = provider;
+    const previousModel = model;
+    setProvider(item.provider);
     setModel(item.model);
     try {
+      await coreApi(
+        "PATCH",
+        "/v2/settings",
+        {
+          values: {
+            api_mode: item.provider,
+            [`selected_${item.provider}_model`]: item.model,
+            selected_model_source: {
+              ...modelSelectionSource,
+              [item.provider]: "user",
+            },
+            model_selection_provenance_version: 1,
+          },
+        },
+        true,
+      );
+      setModelSelectionSource((current) => ({
+        ...current,
+        [item.provider]: "user",
+      }));
       await loadReasoning(item.provider, item.model);
-    } catch {
-      setReasoningEffort("auto");
-      setReasoningOptions([]);
+    } catch (reason) {
+      setProvider(previousProvider);
+      setModel(previousModel);
+      setError(`לא ניתן להחליף מודל: ${String(reason)}`);
     }
   };
   const changeReasoning = async (effort: string) => {
@@ -713,13 +954,70 @@ export default function App() {
       setBusy(false);
     }
   };
+  const setWorkbenchOpen = useCallback(
+    (open: boolean, tab: WorkbenchTab = "browser") => {
+      if (open) setWorkbenchWidth(null);
+      dispatch(
+        open ? { type: "open-workbench", tab } : { type: "close-workbench" },
+      );
+      void saveUiPreferencePatch({ workspace_workbench_open: open }).catch(
+        (reason) =>
+          setError(`לא ניתן לשמור את מצב אזור העבודה: ${String(reason)}`),
+      );
+    },
+    [saveUiPreferencePatch],
+  );
+  const beginWorkbenchResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (narrowWorkspace || !workspace.workbenchOpen) return;
+      event.preventDefault();
+      const sidebarWidth = workspace.conversationDrawerOpen ? 286 : 58;
+      const startX = event.clientX;
+      const match = workspaceColumns(
+        workspace,
+        viewportWidth,
+        workbenchWidth,
+      ).match(/ (\d+)px$/);
+      const startWidth = Number(match?.[1] || 480);
+      const move = (next: PointerEvent) => {
+        setWorkbenchWidth(
+          clampWorkbenchResize(
+            viewportWidth,
+            sidebarWidth,
+            startWidth + next.clientX - startX,
+          ),
+        );
+      };
+      const stop = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop, { once: true });
+      window.addEventListener("pointercancel", stop, { once: true });
+    },
+    [narrowWorkspace, viewportWidth, workbenchWidth, workspace],
+  );
+  const persistWorkbench = useCallback(
+    (snapshot: WorkbenchSnapshot) => {
+      if (!bootstrapReady) return;
+      setWorkbenchRestore(snapshot);
+      void saveUiPreferencePatch({ workspace_workbench: snapshot }).catch(
+        (reason) => setError(`לא ניתן לשמור את הלשוניות: ${String(reason)}`),
+      );
+    },
+    [bootstrapReady, saveUiPreferencePatch],
+  );
   useEffect(() => {
     if (core.state === "ready")
       void invoke("desktop_set_voice_hotkey", { shortcut: voiceHotkey }).catch(
         (reason) => setError(`קיצור הקול אינו זמין: ${String(reason)}`),
       );
   }, [core.state, voiceHotkey]);
-  useEffect(() => { void invoke("desktop_set_close_to_tray", { enabled: keepRunningInTray }); }, [keepRunningInTray]);
+  useEffect(() => {
+    void invoke("desktop_set_close_to_tray", { enabled: keepRunningInTray });
+  }, [keepRunningInTray]);
   useEffect(() => {
     const unread = conversations.reduce(
       (sum, item) => sum + Number(item.unread_count || 0),
@@ -757,7 +1055,7 @@ export default function App() {
     };
   }, []);
 
-  if (core.state !== "ready") {
+  if (core.state !== "ready" || !workspaceWindowReady || !legalChecked) {
     const copy = copyForState(core.state, core.lastError);
     const failed = ["crashed", "fatal", "repair"].includes(core.state);
     return (
@@ -797,8 +1095,26 @@ export default function App() {
     );
   }
 
-  const openWorkbench = (tab: WorkbenchTab) =>
-    dispatch({ type: "open-workbench", tab });
+  if (legalStatus && !legalStatus.accepted) {
+    return (
+      <LegalAgreement
+        status={legalStatus}
+        theme={resolved}
+        onAccepted={async () => {
+          await coreApi(
+            "POST",
+            "/v2/management/legal",
+            { accepted: true, version: legalStatus.version },
+            true,
+          );
+          setLegalStatus({ ...legalStatus, accepted: true });
+          await bootstrap();
+        }}
+      />
+    );
+  }
+
+  const openWorkbench = (tab: WorkbenchTab) => setWorkbenchOpen(true, tab);
   const icons = legacyAssets(resolved);
   return (
     <main
@@ -809,7 +1125,13 @@ export default function App() {
       <WindowTitleBar />
       <section
         className={`workspace ${workspace.workbenchOpen ? "has-workbench" : ""} ${narrowWorkspace && workspace.workbenchOpen ? "is-workbench-narrow" : ""}`}
-        style={{ gridTemplateColumns: workspaceColumns(workspace) }}
+        style={{
+          gridTemplateColumns: workspaceColumns(
+            workspace,
+            viewportWidth,
+            workbenchWidth,
+          ),
+        }}
       >
         <aside
           className={`conversation-drawer ${workspace.conversationDrawerOpen ? "is-open" : "is-rail"}`}
@@ -870,6 +1192,16 @@ export default function App() {
                 )}
               </label>
               <div className="conversation-list">
+                {historyLoading && (
+                  <p className="drawer-state" role="status">
+                    טוען שיחות…
+                  </p>
+                )}
+                {historyError && (
+                  <p className="drawer-state is-error" role="alert">
+                    {historyError}
+                  </p>
+                )}
                 {conversations.map((item) => {
                   const state = activityState(item);
                   return (
@@ -894,7 +1226,9 @@ export default function App() {
                             state === "running"
                               ? "סמארטי עובד בשיחה הזאת"
                               : state === "waiting_for_approval"
-                                ? "סמארטי ממתין לאישור"
+                                ? item.runtime_status === "waiting_for_input"
+                                  ? "סמארטי ממתין למפתח API"
+                                  : "סמארטי ממתין לאישור"
                                 : "התקבלה תשובה חדשה"
                           }
                           className={`conversation-activity ${state === "running" ? "is-busy" : state === "waiting_for_approval" ? "needs-input" : "has-unread"}`}
@@ -943,7 +1277,9 @@ export default function App() {
                   );
                 })}
                 {!conversations.length && (
-                  <p className="drawer-empty">לא נמצאו שיחות</p>
+                  <p className="drawer-empty">
+                    {query ? "לא נמצאו שיחות" : "עדיין אין שיחות"}
+                  </p>
                 )}
               </div>
             </>
@@ -962,7 +1298,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setManagementSection("settings")}
+                onClick={() => setManagementSection("settings_ai")}
               >
                 הגדרות וניהול
               </button>
@@ -1000,7 +1336,7 @@ export default function App() {
                 }
                 onClick={() =>
                   workspace.workbenchOpen
-                    ? dispatch({ type: "close-workbench" })
+                    ? setWorkbenchOpen(false)
                     : openWorkbench("browser")
                 }
               >
@@ -1013,6 +1349,16 @@ export default function App() {
                 />
               </IconButton>
             </div>
+            {availableUpdateVersion && (
+              <button
+                type="button"
+                className="chat-update-available"
+                onClick={() => setManagementSection("settings_appearance")}
+              >
+                <LegacyIcon src={icons.checkUpdates} size={18} />
+                עדכון {availableUpdateVersion}
+              </button>
+            )}
             <h1>{activeConversation?.title || "שיחה חדשה"}</h1>
             {managementOpen && (
               <div className="legacy-management-menu">
@@ -1094,15 +1440,22 @@ export default function App() {
                 {messages.map((message, index) => {
                   const runId = String(message.metadata?.run_id || "");
                   const messageActive = Boolean(
-                    activeRun && runId === activeRun.id,
+                    message.role === "assistant" &&
+                    activeRun &&
+                    runId === activeRun.id,
                   );
                   return (
                     <RichMessage
                       key={`${message.created_at}-${index}`}
                       message={message}
-                      events={runId ? eventsForRun(runId) : []}
+                      events={
+                        message.role === "assistant" && runId
+                          ? eventsForRun(runId)
+                          : []
+                      }
                       active={messageActive}
                       theme={resolved}
+                      onOpenCanvas={() => openWorkbench("canvas")}
                     />
                   );
                 })}
@@ -1117,6 +1470,7 @@ export default function App() {
                     events={eventsForRun(activeRun.id)}
                     active
                     theme={resolved}
+                    onOpenCanvas={() => openWorkbench("canvas")}
                   />
                 )}
               </div>
@@ -1175,6 +1529,13 @@ export default function App() {
                 </div>
               );
             })()}
+          {activeApiKeyRequest && (
+            <ApiKeyRequiredDialog
+              key={`${activeApiKeyRequest.runId}:${activeApiKeyRequest.secretKey}`}
+              request={activeApiKeyRequest}
+              onCancel={() => void cancel()}
+            />
+          )}
           {conversationDialog && (
             <div
               className="legacy-dialog-backdrop"
@@ -1247,18 +1608,59 @@ export default function App() {
             onSend={send}
             onCancel={() => void cancel()}
           />
+          {!workspace.workbenchOpen &&
+            browserActivity &&
+            !["", "about:blank"].includes(browserActivity.url) && (
+              <aside
+                className="browser-preview-card"
+                aria-label="תצוגה מקדימה של הדפדפן"
+              >
+                <header>
+                  <strong>{browserActivity.title || "דפדפן"}</strong>
+                  <button
+                    type="button"
+                    title="הרחבת תצוגת הדפדפן"
+                    onClick={() => openWorkbench("browser")}
+                  >
+                    ↗
+                  </button>
+                </header>
+                {browserActivity.previewDataUrl ? (
+                  <img src={browserActivity.previewDataUrl} alt="" />
+                ) : (
+                  <div className="browser-preview-placeholder">
+                    {browserActivity.loading ? "טוען…" : "Smarti Browser"}
+                  </div>
+                )}
+                <small dir="ltr">{browserActivity.url}</small>
+              </aside>
+            )}
         </section>
         <aside
           className={`workbench ${workspace.workbenchOpen ? "is-open" : ""}`}
           aria-label="Workbench"
           aria-hidden={!workspace.workbenchOpen}
         >
-          {workspace.workbenchOpen && workspace.activeWorkbenchTab && (
+          {workspace.workbenchOpen && !narrowWorkspace && (
+            <div
+              className="workbench-resize-handle"
+              role="separator"
+              aria-label="שינוי רוחב אזור העבודה"
+              aria-orientation="vertical"
+              onPointerDown={beginWorkbenchResize}
+              onDoubleClick={() => setWorkbenchWidth(null)}
+            />
+          )}
+          {bootstrapReady && (
             <WorkbenchSurface
               initial={workspace.activeWorkbenchTab}
+              visible={workspace.workbenchOpen}
+              restored={workbenchRestore}
+              onStateChange={persistWorkbench}
+              onBrowserActivity={setBrowserActivity}
               sessionId={activeId}
               onCanvasAction={(text) => void send(text)}
-              onClose={() => dispatch({ type: "close-workbench" })}
+              onClose={() => setWorkbenchOpen(false)}
             />
           )}
         </aside>
@@ -1267,6 +1669,10 @@ export default function App() {
         <ManagementCenter
           initial={managementSection}
           onClose={() => setManagementSection(null)}
+          onOpenWorkbench={(tab) => {
+            setManagementSection(null);
+            openWorkbench(tab);
+          }}
           setTheme={setPreference}
           theme={resolved}
         />

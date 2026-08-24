@@ -13,10 +13,13 @@ import subprocess
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from .common import APP_VERSION, UNIFIED_LOG_FILE, USER_DATA_DIR, redact_sensitive_text
+from .common import (
+    APP_VERSION, MCP_TOOLS_DIR, TOOLS_DIR, UNIFIED_LOG_FILE, USER_DATA_DIR,
+    redact_sensitive_text, unified_log_paths,
+)
 from .config import (
     BUILTIN_DYNAMIC_TOOLS, BUILTIN_TOOL_SCHEMAS, DEFAULT_SETTINGS,
     PUBLIC_BUILTIN_TOOLS, TOOL_CATEGORIES,
@@ -49,6 +52,35 @@ SETTING_LABELS = {
     "max_concurrent_agents": "מספר סוכנים במקביל", "max_parallel_tool_calls": "מספר כלים במקביל",
     "enable_mcp_clawhub": "הפעלת MCP ו-ClawHub", "enable_skills_beta": "הפעלת Skills",
     "require_approval_for_cloud_upload": "דרוש אישור להעלאה לענן", "raw_shell_requires_approval": "דרוש אישור לפקודת Shell",
+}
+
+BUILTIN_TOOL_DISPLAY_LABELS = {
+    "get_tool_info": "מידע על כלי וסכמות",
+    "search_tools": "חיפוש כלים ויכולות",
+    "system_manager": "ניהול מערכת",
+    "software_manager": "ניהול תוכנות",
+    "file_manager": "ניהול קבצים",
+    "web_manager": "אינטרנט ואתרים",
+    "screen_manager": "צילום וניתוח מסך",
+    "background_task_manager": "משימות רקע",
+    "notification_manager": "התראות ותזכורות",
+    "memory_manager": "ניהול זיכרון",
+    "email_manager": "ניהול דוא\"ל",
+    "automation_manager": "אוטומציה בדפדפן ובמחשב",
+    "extension_manager": "ניהול הרחבות, MCP ומיומנויות",
+    "canvas_manager": "קנבס חזותי",
+    "browser_automation_manager": "אוטומציית דפדפן",
+    "computer_automation_manager": "אוטומציית מחשב",
+    "document_manager": "יצירה ועריכת מסמכים",
+    "create_python_tool": "יצירת כלי Python מותאם",
+}
+
+TOOL_CATEGORY_DISPLAY_LABELS = {
+    "schema": "מידע ועזרה", "system": "מערכת", "software": "תוכנות",
+    "files": "קבצים", "web": "אינטרנט", "screen": "מסך",
+    "tasks": "משימות רקע", "memory": "זיכרון", "visual": "קנבס חזותי",
+    "email": "דוא\"ל", "automation": "אוטומציה", "documents": "מסמכים",
+    "extensions": "הרחבות", "developer": "מפתחים",
 }
 
 TOKEN_LABELS = {
@@ -175,12 +207,25 @@ def task_action(core, action, payload):
     return {"message": str(result), "items": safe_task_rows(core)}
 
 
-def memory_rows(core, query="", status="active", memory_type="any"):
+def memory_rows(core, query="", status="active", memory_type="any", *, category="", sensitivity="any",
+                date_range="any", expiry="any", sort_by="updated_desc", page=1, page_size=8):
     manager = getattr(core, "memory_manager", None)
     if not manager:
         return {"items": [], "stats": {}, "available": False}
+    try:
+        page = max(1, int(page or 1))
+        page_size = max(1, min(50, int(page_size or 8)))
+    except (TypeError, ValueError):
+        page, page_size = 1, 8
+    rows = manager.list_entries(
+        query=query, status=status, memory_type=memory_type, category=category,
+        sensitivity=sensitivity, date_range=date_range, expiry=expiry,
+        sort_by=sort_by, max_results=1000,
+    )
+    start = (page - 1) * page_size
     return {
-        "items": manager.list_entries(query=query, status=status, memory_type=memory_type, max_results=200),
+        "items": rows[start:start + page_size], "total": len(rows), "page": page,
+        "page_size": page_size, "pages": max(1, (len(rows) + page_size - 1) // page_size),
         "stats": manager.memory_stats(), "available": True,
     }
 
@@ -194,8 +239,10 @@ def memory_action(core, action, memory_id, payload):
     if action == "reveal":
         return manager.get_entry(memory_id, reveal_sensitive=True, user_authorized=True)
     if action == "edit":
-        allowed = {key: payload[key] for key in ("subject", "content", "category", "sensitivity", "tags", "importance", "pinned") if key in payload}
+        allowed = {key: payload[key] for key in ("subject", "content", "category", "sensitivity", "tags", "importance", "pinned", "memory_type", "ttl_hours") if key in payload}
         return manager.edit_entry(memory_id, user_authorized=True, **allowed)
+    if action == "pin":
+        return manager.edit_entry(memory_id, user_authorized=True, pinned=bool(payload.get("pinned")))
     if action == "archive":
         return {"changed": manager.archive_entry(memory_id, reason="desktop_user")}
     if action == "restore":
@@ -213,51 +260,142 @@ def tools_snapshot(core):
             continue
         schema = BUILTIN_TOOL_SCHEMAS[name]
         category = TOOL_CATEGORIES.get(name, "developer")
-        builtins.append({"name": name, "description": str(schema.get("description") or BUILTIN_DYNAMIC_TOOLS.get(name) or ""), "category": category, "enabled": bool(config.get(name, True))})
+        builtins.append({
+            "name": name,
+            "label": BUILTIN_TOOL_DISPLAY_LABELS.get(name, name.replace("_", " ")),
+            "description": str(schema.get("description") or BUILTIN_DYNAMIC_TOOLS.get(name) or ""),
+            "category": category,
+            "category_label": TOOL_CATEGORY_DISPLAY_LABELS.get(category, category),
+            "enabled": bool(config.get(name, True)),
+        })
     external = []
-    for kind, loader in (("skill", getattr(core, "list_skills", None)),):
-        if callable(loader):
-            try:
-                for item in loader() or []:
-                    external.append({"kind": kind, **(item if isinstance(item, dict) else {"name": str(item)})})
-            except Exception:
-                pass
     registry = getattr(core, "tool_registry", None)
-    if registry:
-        for kind, attr in (("custom", "custom_tools"), ("mcp", "mcp_tools")):
-            for name in sorted(getattr(core, attr, {}) or {}):
-                external.append({"kind": kind, "name": name, "trust": registry.trust_status(kind, name)})
+    for kind, directory, suffix, setting_prefix in (
+        ("custom", TOOLS_DIR, ".pyw", ""),
+        ("mcp", MCP_TOOLS_DIR, ".txt", "mcp_"),
+    ):
+        names = []
+        try:
+            names = sorted(item[:-len(suffix)] for item in os.listdir(directory) if item.endswith(suffix))
+        except OSError:
+            pass
+        for name in names:
+            trust = registry.trust_status(kind, name) if registry else "trusted"
+            enabled = bool(config.get(f"{setting_prefix}{name}", True)) and trust == "trusted"
+            external.append({
+                "kind": kind, "name": name, "label": name, "enabled": enabled,
+                "trust": trust,
+                "removable": True,
+            })
+    skills = getattr(core, "skill_registry", None)
+    if not isinstance(skills, dict):
+        loader = getattr(core, "_load_skill_registry", None)
+        skills = loader() if callable(loader) else {}
+    skills_config = core.settings.get("skills_config", {}) or {}
+    skill_enabled = getattr(core, "_skill_enabled", None)
+    for name, raw_spec in sorted((skills or {}).items()):
+        spec = raw_spec if isinstance(raw_spec, dict) else {}
+        source = str(spec.get("source") or "local")
+        enabled = bool(skill_enabled(name)) if callable(skill_enabled) else bool(skills_config.get(name, True))
+        external.append({
+            "kind": "skill", "name": name, "label": name,
+            "description": str(spec.get("description") or ""), "source": source,
+            "source_label": {"builtin": "מובנה", "local": "הותקן ידנית", "clawhub": "ClawHub"}.get(source, "הותקן ידנית"),
+            "enabled": enabled,
+            "trust": registry.trust_status("skill", name) if registry else ("trusted" if enabled else "disabled"),
+            "removable": source != "builtin",
+        })
     return {"builtins": builtins, "extensions": external}
 
 
-def usage_snapshot(core):
+def usage_snapshot(core, timeframe="all"):
     from .common import USAGE_FILE
     try:
         with open(USAGE_FILE, "r", encoding="utf-8") as handle:
             raw = json.load(handle)
     except (OSError, ValueError):
         raw = {}
-    total = 0
+    normalized = str(timeframe or "all").lower()
+    cutoff = {
+        "today": datetime.now().date(), "week": (datetime.now() - timedelta(days=6)).date(),
+        "month": (datetime.now() - timedelta(days=29)).date(),
+    }.get(normalized)
+    totals = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0, "cache_write_tokens": 0, "cost_usd": 0.0}
     models = {}
     for date, rows in raw.items() if isinstance(raw, dict) else []:
         if not isinstance(rows, dict):
             continue
+        if cutoff:
+            try:
+                if datetime.fromisoformat(str(date)).date() < cutoff:
+                    continue
+            except ValueError:
+                continue
         for model, item in rows.items():
             if not isinstance(item, dict):
                 continue
-            tokens = sum(int(item.get(key, 0) or 0) for key in ("input_tokens", "output_tokens", "cached_input_tokens"))
-            total += tokens
-            models[model] = models.get(model, 0) + tokens
-    return {"total_tokens": total, "models": [{"model": key, "tokens": value} for key, value in sorted(models.items(), key=lambda row: row[1], reverse=True)], "memory": getattr(getattr(core, "memory_manager", None), "memory_stats", lambda: {})()}
+            target = models.setdefault(model, {"model": model, **{key: 0 for key in totals}})
+            for key in totals:
+                value = float(item.get(key, item.get("estimated_cost_usd", 0) if key == "cost_usd" else 0) or 0)
+                totals[key] += value
+                target[key] += value
+    total_tokens = sum(totals[key] for key in ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_tokens"))
+    for item in models.values():
+        item["tokens"] = sum(item[key] for key in ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_tokens"))
+    return {
+        "timeframe": normalized, "total_tokens": int(total_tokens), **totals,
+        "models": sorted(models.values(), key=lambda row: row["tokens"], reverse=True),
+        "memory": getattr(getattr(core, "memory_manager", None), "memory_stats", lambda: {})(),
+    }
+
+
+def clear_usage(core):
+    from .common import USAGE_FILE
+    backup = ""
+    if os.path.exists(USAGE_FILE):
+        backup = f"{USAGE_FILE}.backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        import shutil
+        shutil.copy2(USAGE_FILE, backup)
+    os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
+    with open(USAGE_FILE, "w", encoding="utf-8") as handle:
+        json.dump({}, handle)
+    return {"cleared": True, "backup_path": backup, **usage_snapshot(core, "all")}
+
+
+def test_email_settings(settings):
+    """Test IMAP and SMTP login without reading or sending a message."""
+    from .email_service import test_email_connection
+    cfg = {
+        "user": str(settings.get("email_address") or "").strip(),
+        "password": str(settings.get("email_password") or ""),
+        "imap_host": str(settings.get("email_imap_host") or "").strip(),
+        "imap_port": int(settings.get("email_imap_port") or 993),
+        "imap_ssl": bool(settings.get("email_imap_ssl", True)),
+        "smtp_host": str(settings.get("email_smtp_host") or "").strip(),
+        "smtp_port": int(settings.get("email_smtp_port") or 587),
+        "smtp_ssl": bool(settings.get("email_smtp_ssl", False)),
+        "smtp_starttls": bool(settings.get("email_smtp_starttls", True)),
+    }
+    if not cfg["user"] or not cfg["password"] or not cfg["imap_host"] or not cfg["smtp_host"]:
+        return False, "חסרים כתובת אימייל, סיסמת אפליקציה או פרטי השרתים."
+    return test_email_connection(cfg, settings)
 
 
 def log_snapshot(limit=500, redact_personal=True):
     try:
-        with open(UNIFIED_LOG_FILE, "r", encoding="utf-8", errors="replace") as handle:
-            lines = handle.readlines()[-max(1, min(5000, int(limit or 500))):]
+        requested = int(limit)
+    except (TypeError, ValueError):
+        requested = 500
+    bounded = min(20_000, max(1, requested)) if requested > 0 else 0
+    lines = []
+    try:
+        for path in unified_log_paths():
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                lines.extend(handle.read().splitlines())
     except OSError:
         lines = []
-    lines = [line.rstrip("\r\n") for line in lines]
+    if bounded:
+        lines = lines[-bounded:]
     if redact_personal:
         lines = sanitize_desktop_log_lines(lines)
     return {"lines": lines, "path": UNIFIED_LOG_FILE, "personal_content_hidden": bool(redact_personal)}

@@ -1,8 +1,8 @@
 # SmartiAI Tauri Migration Master Execution Plan
 
-- Status: execution complete through Point 15; Point 16 is BLOCKED on signed/VM release evidence
-- Plan version: 1.2
-- Plan date: 2026-08-20; browser architecture amended 2026-08-21; exact UI parity amended 2026-08-23
+- Status: Point 16C is BLOCKED by reopened whole-product source parity; Point 17 remains forbidden
+- Plan version: 1.3
+- Plan date: 2026-08-20; browser architecture amended 2026-08-21; exact UI parity amended 2026-08-23; recovery and local-validation policy amended 2026-08-24
 - Repository: `C:\Users\יהודית סיידון\Downloads\GitHub\SmartiAI-Agent-for-Windows`
 - Current product target at plan creation: `V0.87.0`
 
@@ -40,6 +40,35 @@ the explicitly approved built-in Smarti Browser architecture, must reuse the
 exact established Smarti visual language unless the user separately approves a
 different design.
 
+**Binding recovery amendment (2026-08-24):** after Points 1-16, direct user
+inspection and a fresh code audit found substantial gaps between the legacy
+PyQt product and the Tauri interface. These include missing daily controls such
+as the favorite-model selector in the composer, a generic settings renderer,
+collapsed management navigation, missing explanations/actions/states, and
+features that remain in Python but are not fully reachable from React. All
+earlier `MATCHED` UI statuses are therefore historical claims, not current
+acceptance evidence. Points 16A-16C reopen every visible surface and stable
+feature ID for code-derived verification and repair before any PyQt deletion.
+
+The recovery target is the complete original Smarti product with the same
+visual language, composition, labels, explanations, controls, usability,
+states, and deep runtime synchronization, implemented in Tauri. The approved
+exceptions are the first-class Tauri-owned Smarti Browser and additions that
+are genuinely required by the new architecture, such as Tauri/Core/WebView2
+health checks, connection settings, and the new build/package controls. These
+additions must look native to the original Smarti design and must not replace
+or simplify an existing feature.
+
+The user also changed the validation policy: clean Windows 10/11 machines and
+VM matrices are not migration gates. Final functional and package acceptance
+will be performed on the user's current Windows computer. Automated UI work
+must prefer deterministic component/integration tests, internal or offscreen
+visual rendering, screenshots, computed-layout assertions, and hidden process
+smokes. Do not control the user's mouse, keyboard, focused windows, or desktop
+unless the user separately requests it. A current-machine result must not be
+misreported as proof for every Windows machine; the untested portability scope
+is recorded honestly but does not block Point 17.
+
 ## 1. Execution trigger for future Codex tasks
 
 When this document is attached or present in the repository and the user says
@@ -62,6 +91,8 @@ the executing Codex task must:
    their parent composition, shared style/theme helpers, assets, signal/action
    wiring, responsive code, and persisted settings before changing React. Do
    not implement from screenshots or class names alone.
+   During Points 16A-16C, do not trust an earlier `MATCHED` row without
+   re-reading the source and proving the current implementation.
 6. Execute only the requested point and its explicitly listed prerequisites or
    repairs. Do not begin the next point.
 7. Do not execute two migration points in parallel.
@@ -95,7 +126,9 @@ work remains. Evidence types must remain separate:
   layout, style rule, asset, signal, and conditional state to its Tauri
   implementation, with every intentional deviation listed and user-approved.
 - **Package evidence:** the installed or portable artifact was actually built
-  and smoke-tested on a clean machine or VM.
+  and exercised on the explicitly named machine. A clean machine or VM is
+  required only when a point explicitly asks for cross-machine release proof;
+  it is not required by Points 16A-17 under the 2026-08-24 user amendment.
 - **Release evidence:** signed artifacts, updater metadata, and upgrade paths
   were tested. A source build is not release evidence.
 
@@ -125,7 +158,10 @@ Allowed states are `PENDING`, `IN_PROGRESS`, `BLOCKED`, and `COMPLETE`.
 | 13 | Sandboxed Canvas | COMPLETE | Completed 2026-08-23. The pure Qt-free Canvas model remains authoritative while authenticated conversation-scoped `/v2` routes list, materialize, update, close and reopen persisted artifacts. `CanvasPanel` renders each artifact in a stable Workbench tab through an opaque-origin `sandbox="allow-scripts"` iframe, restrictive per-document CSP, local image materialization, explicit HTTPS remote-image opt-in, bounded/source-validated messaging and a trusted parent confirmation before a Canvas action can enter chat. Active/closed history and layout survive reload; a Canvas error remains isolated. Malicious/CSP frontend fixtures and Core persistence/routes passed, and Canvas enablement no longer probes PyQt/WebEngine. |
 | 14 | Full Smarti Browser surface | COMPLETE | Completed 2026-08-23. The Point 6 same-visible-target broker now provides ordered/pinned/duplicate/restored tabs, favicon/loading/audio/crash metadata, full navigation and RTL browser chrome, shortcuts, page commands, per-origin permissions, Smarti-owned persistent history/bookmarks/download history/session restore, strict Guest exclusion/cleanup, privacy controls, safe collision-aware download destinations with dangerous-extension blocking, and a selective detected-profile import wizard for copied history/bookmarks/compatible cookies without password extraction. Inactive WebViews are hidden/frozen, target IDs remain stable, and the support matrix documents WebView2/Tauri/vendor boundaries. A debug NSIS candidate was built; both development and bundled-candidate binary smoke proved the same visible `tab-00000001`/`wv2-target-00000001`, Tauri denial, profile isolation, governed popup, Hebrew input, persistence and screenshot. Clean installation and production sidecar packaging remain Point 16. |
 | 15 | Windows desktop integration | COMPLETE | Completed 2026-08-23. Rust/Tauri now owns single-instance activation (`show`, `new-chat`, `voice`, scoped conversation and update shutdown), native tray/close-to-tray/explicit Quit, global voice shortcut lifecycle, WinRT conversation-scoped notification activation without implicit acknowledgement, durable unread taskbar overlay/flash, AUMID, rounded corners and guarded multi-monitor placement restore. Unit tests cover activation routing. A minimal live packaged-candidate check proved a second launch routes and exits, `WM_CLOSE` leaves the primary process alive in tray, `show` routes to it, and `update-shutdown` closes it cleanly with no remaining instance. No exhaustive computer-control, notification click-through or physical DPI/monitor matrix was run per the user's explicit quota-saving direction. |
-| 16 | Packaging, updater, and old-install upgrade | BLOCKED | Source implementation and local unsigned packaging completed 2026-08-24. Dependency sets now keep the production Core/private runtime Qt-free while preserving the legacy PyQt launcher; a PyInstaller `onedir` sidecar, pinned private Python/Node runtimes, per-user Tauri NSIS/portable pipeline, mandatory signed-updater production configuration, safe restart/error UX, old-Inno backed-up preinstall removal and one-time copied legacy-browser migration are implemented. `docs/tauri_point16_release_evidence.md` records the final local artifacts (Setup 246,657,470 bytes, SHA-256 `d0b51a35986be68e4267b6ea93fdbbd4f5a90f6e101a521d0088948c902e0b33`; portable 446,217,457 bytes, SHA-256 `e860a1c48f2d095c52420a34b5afb2351650fa8b22d7eab8ee89ed9913ac0703`) and successful hidden packaged supervisor smoke. The candidate is explicitly Authenticode `NotSigned`, updater signing inputs are absent, and no clean Windows 10/11 VM, old-install upgrade/update/corruption/uninstall matrix was available; acceptance and release evidence therefore remain blocked and Point 17 must not start. |
+| 16 | Packaging, updater, and old-install upgrade foundation | COMPLETE | Source implementation and local unsigned packaging completed 2026-08-24. Dependency sets keep the production Core/private runtime Qt-free while preserving the legacy PyQt reference; the PyInstaller sidecar, private runtimes, Tauri NSIS/portable pipeline, fail-closed signed-updater configuration, migration hooks, one-command build, exact local artifacts and hidden supervisor smoke are recorded in `docs/tauri_point16_release_evidence.md`. The earlier VM/signing block was superseded by the user's 2026-08-24 local-validation policy. The artifacts remain honestly `NotSigned`; no clean-machine or broad Windows compatibility claim is made. Final current-machine product/package acceptance belongs to Point 16C after UI recovery. |
+| 16A | Daily Workspace and interaction parity recovery | COMPLETE | Completed 2026-08-24. The reopened PyQt source audit restored the exact two-stage splash/Workspace window lifecycle, independent native voice Tool window and Core-owned recognition, durable API-key interruption, Core JSON export plus native Windows saves, persisted provider/model/reasoning and Workspace layout state, exact history/error/activity branches, memory/Canvas message cards, persistent duplicate-capable Workbench tabs and hidden browser lifecycle, browser preview, and the source 52%/520 px splitter rule with manual resize. The granular current mapping is in `docs/tauri_ui_source_parity.md`. Frontend typecheck/build and 44 tests, 123 focused Python/Core/PyQt-offscreen tests, and 22 offline Rust tests passed. A hidden real Tauri smoke measured the 500x310 splash, 1380x792 Workspace and non-visible 342x70 always-on-top voice window; five inspected Edge-headless fixtures cover startup/voice plus RTL light/dark and wide/narrow states under `.codex-local/point16a-evidence`. The legacy launcher remains intact; no Point 16B management reconstruction or package/release claim was made. |
+| 16B | Settings and management parity recovery | COMPLETE | Completed 2026-08-24. The source-derived management shell now restores the exact `ניהול` and `הגדרות` group order, five separate Settings entries, 69 labeled/helped controls without visible internal keys/JSON, cross-category search/recent searches/advanced state/autosave/reset-with-backup, provider/model/reasoning and validate-before-save masked-secret/Codex flows, policy/sandbox/SSL/email/MCP/Skills/TTS/theme/tray/update/budget workflows, and the full Workspace, Usage, Tools, Memory, Tasks, Diagnostic, Logs, About, update and first-run legal surfaces. Python remains the settings/business authority; authenticated `/v2` additions cover legal acceptance, settings actions, memory collection actions, usage clearing and live Diagnostic progress/cancellation, while Rust supplies native path selection, updater handling and Tauri/Core/WebView2/package-health checks. The granular current mapping is in `docs/tauri_ui_source_parity.md`. Contract generation, 47 frontend tests, 58 focused Core/gateway/doctor tests, 29 memory-management tests, production build, `cargo check`, and inspected management/legal RTL fixtures passed. Point 16C was not started; no installed-package or signed-release claim is made. |
+| 16C | Whole-product integration and local package acceptance | BLOCKED | Current-machine unsigned build/package/smoke passed as separate package evidence, but the user-visible parity gate was reopened after direct inspection. Settings source controls, provider help/secret validation, production Core-requested key dialog, segmented policy, SSL, dependent Canvas state, update status and the Advanced log panel were remediated and focused tests pass. The reverse audit in `tauri_point16c_source_audit.md` still has whole-product visual/state/action audits open for chat/composer, Workspace/Workbench, Browser/Canvas, tools/MCP/Skills, memory, tasks, usage, Diagnostic, About/legal/update and Windows states. Do not start Point 17 or remove PyQt. |
 | 17 | Final cutover and PyQt removal | PENDING | |
 
 ## 4. Product intent
@@ -1147,7 +1183,7 @@ code one-to-one, rather than merely resembling selected screenshots.
   no row is merely “visually similar”.
 - Source-value/state tests, frontend tests, type checks, Rust checks, relevant
   Python tests and equivalent-state visual QA pass.
-- The original PyQt app remains runnable for comparison through Point 16.
+- The original PyQt app remains runnable for comparison through Point 16C.
 - No screenshot was treated as the sole specification for a dynamic component.
 
 **User check**
@@ -1508,63 +1544,380 @@ Tauri, the headless Core, and Smarti's private runtimes.
 7. Provide one `scripts/` PowerShell release command that builds all required
    layers, validates version synchronization, checks layout/path budgets, and
    writes hashes/manifests.
-8. Test clean install, upgrade from current PyQt installer, in-place Tauri
-   update, cancelled update, corrupted/signature-invalid update, portable mode,
-   uninstall, and reinstall.
-9. Smoke on clean x64 Windows 10 and Windows 11 VMs without developer Python,
-   Node, Rust, npm, repository files, or an installed Chrome/Edge browser host;
-   exercise both WebView2-present and WebView2-missing installation paths.
+8. Provide deterministic update, cancellation, corruption/signature rejection,
+   migration, portable-layout and uninstall-data-policy checks that do not
+   mutate the user's current installation. Defer the final current-machine
+   source/portable/installer workflow until the recovered UI reaches Point 16C.
+9. Record the exact machine and evidence boundary. Clean Windows 10/11 machines,
+   VMs, every physical DPI/monitor combination and a WebView2-missing machine
+   are optional future release-hardening evidence, not migration gates.
 
 **Acceptance**
 
 Exact installer and portable artifact paths, sizes, SHA-256 hashes, signature
-status, VM matrix, startup/browser/chat/tool smoke, upgrade result, and remaining
-limitations are recorded. No artifact may be called signed if Authenticode was
-not actually applied and verified.
+status, startup/supervisor smoke and remaining limitations are recorded for the
+current machine. The build pipeline fails closed when a production signed
+updater is requested without its signing inputs. No artifact may be called
+signed if Authenticode or updater signing was not actually applied and verified.
+Cross-machine support is not claimed from this evidence.
 
 **User check**
 
-On a disposable Windows account or VM, install over the old Smarti version,
-launch from the Start menu, confirm history/settings remain, run a harmless chat
-and browser action, close/reopen, and uninstall. There must be no console or
-manual runtime setup.
+No additional user action is required at this foundation point. Point 16C owns
+the final current-computer check after interface recovery, so the user does not
+have to install and repeatedly retest an interface that is known to be wrong.
 
 **Out of scope**
 
-No publication to GitHub Releases unless explicitly authorized.
+No publication to GitHub Releases unless explicitly authorized. Clean-machine
+or VM certification and Windows Authenticode procurement are not required for
+the local migration; if omitted, their absence must remain visible in release
+documentation and the product must not imply that the artifact is signed.
 
-### Point 17 - Final cutover, parity audit, and PyQt removal
+### Point 16A - Daily Workspace and interaction parity recovery
 
-**Depends on:** Point 16 complete.
+**Depends on:** Point 16 foundation complete.
 
 **Objective**
 
-Make Tauri the only production UI, remove transition debt, and prove the final
-release without losing Smarti capabilities.
+Restore the complete daily Smarti experience from the authoritative PyQt code
+before touching the management surfaces or deleting any legacy UI. The result
+must look and behave like the original Smarti Workspace, with only the approved
+Tauri-owned Smarti Browser architecture added inside the same visual language.
 
 **Required work**
 
-1. Audit every stable feature ID from Point 1. Resolve each as implemented,
-   intentionally changed with user acceptance, or explicitly unsupported with a
-   blocker. No silent omissions.
-2. Re-audit every row in `docs/tauri_ui_source_parity.md` against the final
-   legacy source before deleting it. Resolve later-point Settings, management,
-   Workbench, Canvas and Windows surfaces with the same code-derived standard;
-   zero undocumented user-visible differences may remain.
-3. Make Tauri the default source and packaged launcher.
-4. Remove legacy PyQt UI modules, Qt adapters, WebEngine compatibility paths,
+1. Treat every earlier `MATCHED` row for Points 7-9 and 12-15 as reopened.
+   Read the complete enclosing source implementations in `smarti/app.py`,
+   `smarti/chat.py`, `smarti/workspace_ui.py`, `smarti/ui_controls.py`,
+   `smarti/ui_styles.py`, the corresponding workers/history code and all used
+   assets. Expand `docs/tauri_ui_source_parity.md` from broad surface claims to
+   control/state/action-level mappings.
+2. Restore the exact application shell: startup/splash and recovery states,
+   custom title bar, central chat, right conversation drawer, left on-demand
+   Workbench, original sizing/responsiveness, RTL/LTR islands, light/dark/system
+   themes, assets, menus, tooltips, focus/hover/pressed/disabled states and
+   persisted layout choices.
+3. Restore conversation history completely: create, select, paging, delayed
+   search, pin, rename, export, delete, activity priority, unread/attention,
+   pending approvals, active titles, empty/no-result/error states and every
+   source menu/shortcut. Every action must mutate the same Core/history state as
+   the original and survive reload.
+4. Restore chat and message behavior: welcome state, user/assistant/system/error
+   rendering, Markdown, safe links, code actions, attachments, long-message
+   collapse, background-task presentation, agent progress/tool details, elapsed
+   time, copy/TTS actions, approvals, API-key-required interruption and all
+   active/cancelling/reconnected/restored states.
+5. Reconstruct the complete composer from the PyQt classes and state handlers.
+   This explicitly includes the original favorite-model spinner/pill inside the
+   input area, its visibility rule, centered text/arrow, provider/model nested
+   menus, favorites, current-model reasoning choices and Codex quota; the
+   autonomy selector; local FastMode; plus/attachment actions; paste/drop;
+   voice/listening overlay; send/cancel state; exact geometry, labels, icons,
+   animation and keyboard behavior. No control may disappear merely because a
+   generic React substitute is easier.
+6. Restore the complete Workbench frame and lifecycle for Browser, Files,
+   Artifacts, Terminal and Canvas tabs: exact margins/tabs/splits/actions,
+   repeated-tab behavior, open/close/focus/resize/persistence and error/empty
+   states. Keep the Tauri-owned WebView2 browser and same-visible-target
+   automation; do not reintroduce an external Chrome/Edge HWND.
+7. Prove deep wiring rather than visual presence. For each interactive control,
+   record the React handler, Rust command or `/v2` operation, Python authority,
+   persisted field/event and reload effect. Add interaction tests that trigger
+   the control and assert the exact command/payload/state transition; string
+   searches in source files are not sufficient.
+8. Use deterministic React rendering, internal browser/component screenshots,
+   computed-style/layout assertions and hidden/offscreen Core/Tauri smokes for
+   QA. Do not take over the user's desktop. A short user-operated source check
+   is allowed only after automated evidence passes.
+
+**Acceptance**
+
+- Every daily surface has a granular source-code mapping with no unresolved or
+  undocumented visible/behavioral difference.
+- The favorite-model control and every other source composer control are
+  present in all applicable states and are connected to persisted Core state.
+- History, chat, approvals, attachments, voice/TTS, Workbench and browser actions
+  pass real interaction/contract tests, not only raw-source assertions.
+- RTL light/dark and representative narrow/wide states pass internal visual and
+  measured-layout QA without automated mouse/keyboard control of Windows.
+- The legacy PyQt launcher remains intact. Point 16B is not started.
+
+**User check**
+
+Run Tauri from source with an isolated `SMARTI_DATA_DIR`. Check the empty chat,
+conversation drawer/menu, send/cancel/attachment flow, favorite-model and
+autonomy controls, and open/close one Workbench tab. Compare only these daily
+surfaces with the original application; no installation is required.
+
+**Out of scope**
+
+Do not rebuild Settings/management pages, remove PyQt, publish, install over the
+existing application, or perform broad computer-control QA.
+
+**Completion record (2026-08-24)**
+
+- Source boundary re-read: complete daily compositions and shared authorities
+  in `smarti/app.py`, `smarti/chat.py`, `smarti/workspace_ui.py`,
+  `smarti/ui_controls.py`, `smarti/ui_styles.py`, `smarti/workers.py`,
+  `smarti/history.py`, attachment/Canvas code and the assets used by them.
+- Deep behavior: the Tauri composer now invokes the shared Python voice service;
+  missing provider keys produce a durable `waiting_for_input` run/event and are
+  resumed through a scoped `/v2` command without persisting the submitted
+  secret in the event log. Conversation export is Core-generated, while JSON,
+  source, screenshot and code saves use a native Windows save dialog.
+- Daily persistence and lifecycle: model/provider/reasoning provenance, theme,
+  drawer, Workbench open state and ordered tab snapshot round-trip through Core
+  settings. Browser and terminal panels stay mounted while inactive; repeated
+  Browser/Files/Terminal tabs, singleton Canvas/Artifacts, close/focus/reorder,
+  browser background preview and the source responsive splitter behavior are
+  represented by executable state helpers and integration tests.
+- Automated evidence: `npm run typecheck`, 44 Vitest checks, `npm run build`,
+  123 focused Python/Core/PyQt-offscreen tests, `cargo fmt --check` and 22
+  offline Rust unit tests passed. The production frontend build reports only
+  the existing Vite chunk-size advisory.
+- Visual evidence: Edge headless rendered and the agent visually inspected
+  `.codex-local/point16a-evidence/startup-dark-500x310.png`,
+  `voice-dark-298x70.png`, `wide-dark-workbench.png`,
+  `wide-light-chat.png` and `narrow-dark-workbench.png`. These cover the real
+  startup, voice, message, composer and Workbench components at their source
+  sizes and at 1380x900/820x900 without controlling the user's desktop. The
+  first render exposed an RTL user-message anchor defect; it was repaired and
+  the representative captures were regenerated.
+- Hidden native smoke: the existing isolated supervisor workflow also measured
+  the real Tauri startup shell at 500x310/non-resizable, current-screen
+  Workspace at 1380x792/resizable and a 342x70 undecorated always-on-top voice
+  window kept invisible during smoke, while retaining duplicate prevention,
+  WebView reload PID stability, crash/restart and graceful shutdown.
+- Boundary: this is source/unit/integration/offscreen visual evidence. It is not
+  installed-package, signed-release, paid-provider, microphone-hardware or
+  broad Windows compatibility evidence. Point 16B remains untouched and next.
+
+### Point 16B - Settings and management parity recovery
+
+**Depends on:** Point 16A complete.
+
+**Objective**
+
+Restore the complete original Settings and management experience, where the
+migration caused the most serious loss, while adding only the health and
+configuration surfaces genuinely required by Tauri, the supervised Core and
+the integrated WebView2 browser.
+
+**Required work**
+
+1. Rebuild the management shell from `ManagementCenterPage` and its registration
+   in `ChatWindow`. Preserve its header, width, spacing, lazy page ownership,
+   original assets, grouping and order. Under the side-menu heading `הגדרות`,
+   expose five separate entries exactly as in the source, not one generic page:
+   `מודלי AI וספקים`, `אבטחה ופרטיות`, `כלים ותקשורת`,
+   `קול, מראה ומערכת`, and `מתקדם ומפתחים`. Under `ניהול`, restore
+   `סביבת עבודה ודפדפן`, `נתוני שימוש`, `כלים וחיבורים`, `זיכרונות`,
+   `מרכז משימות`, `Smarti Diagnostic`, and `מעקב למפתחים` with their
+   source order, icons and activation behavior. About and other profile-menu
+   surfaces must retain their original location and navigation semantics.
+2. Replace the generic `DEFAULT_SETTINGS` field renderer as the user-facing UI.
+   The Core may remain the schema/persistence authority, but every visible
+   setting must use its source-derived label, explanation, keywords, control
+   type, range/options, unit, basic/advanced visibility, tooltip/info popup,
+   validation, disabled/loading/error/saved/restart state and layout. Never show
+   internal keys or raw dict/list JSON unless the original developer UI does.
+3. Restore all specialized Settings workflows, including provider/model loading
+   and favorites, API-key validation before save, masked secret set/paste/delete,
+   Codex sign-in and status, reasoning effort, SSL mode/custom CA/test/warnings,
+   autonomy and granular policy matrix, sandbox and allowed-directory pickers,
+   browser/computer permissions, email configuration/test, MCP/Skills options,
+   TTS voice/volume/preview, voice hotkey, theme application, notification/tray,
+   update preferences, context/tool budgets, developer trace/logs, search and
+   recent searches, autosave status, reset-with-backup and every source help or
+   external-link action.
+4. Prove deep settings synchronization. For every setting, test the full path
+   `control -> React -> authenticated contract -> Python validation/persistence
+   -> affected live subsystem -> reload`. Provider/model/prompt, extension
+   catalog, policy, SSL, browser, voice, Windows integration and appearance
+   changes must take effect at the same time and under the same conditions as
+   the original. A clickable control that does not govern the Core is a failure.
+5. Restore every management page from its complete source, including all empty,
+   loading, populated, filtered, selected, sensitive, error and confirmation
+   states: Workspace/browser preferences; usage timeframes, token/cost/cache and
+   memory summaries plus clearing; built-in/custom/MCP/Skill install, trust,
+   enablement and removal; memory create/details/reveal/edit/pin/filter/page,
+   archive/restore/bulk/import/export/clear; task display, recurrence, routing,
+   result, cancel/retry/resume/edit/delete; privacy-first logs/export; the full
+   About/legal/version/capability presentation; release notes/update dialogs;
+   and the first-run legal agreement gate.
+6. Restore `Smarti Diagnostic` one-to-one, including progress, filters, summary,
+   details, cancellation, log access, navigation actions, explicit repair
+   approval and repair result states. Add source-styled checks for the new
+   architecture: Rust supervisor/Core generation and handshake; `/v2` auth and
+   contract version; packaged sidecar/private runtime manifests and writable
+   data paths; WebView2 availability; Smarti Browser target/profile health and
+   migration state; Tauri assets/CSP/capabilities; tray/single-instance/hotkey/
+   notification readiness; updater/signature configuration; and stale/crashed
+   child cleanup. New checks must be useful and actionable, not decorative.
+7. Expand the generated contract and Python services only where the legacy
+   behavior has no safe UI-independent route. Keep secrets masked, repairs and
+   destructive actions explicitly approved, file paths scoped, and all business
+   logic in Python/Rust rather than duplicating it in React.
+8. Add component interaction, Python service, contract-generation and reload
+   tests for every restored action. Use internal/offscreen visual fixtures for
+   each page in light/dark and relevant state variants without controlling the
+   user's desktop.
+
+**Acceptance**
+
+- The five Settings categories are separate side-menu entries under `הגדרות`,
+  and all management entries, labels, icons and navigation match the source.
+- No generic internal-key/JSON settings UI remains user-visible.
+- Every original setting and management capability is present, usable, wired to
+  the correct Core behavior and durable across reload/restart where applicable.
+- Diagnostic matches the original and includes tested Tauri/Core/WebView2/
+  package health checks with safe repair boundaries.
+- First-run legal acceptance, API-key-required flow, About, update/release-note
+  and privacy-sensitive flows work without PyQt.
+- Point 16C is not started and the PyQt source remains available.
+
+**User check**
+
+Open the management center from a source Tauri run. Confirm the two group
+headings and five separate Settings entries, inspect one ordinary and one
+advanced setting in each category, run a quick Diagnostic, and visit Memory,
+Tools, Tasks, Usage and About. No installation or automated desktop control is
+required.
+
+**Out of scope**
+
+Do not remove PyQt, publish a release, silently redesign a source surface, or
+claim package readiness from component tests.
+
+**Completion evidence (2026-08-24)**
+
+- `ManagementCenter`, the five `SettingsManagement` pages, `MemoryManagement`,
+  `ManagementPages` and `LegalAgreement` were reconstructed from the PyQt
+  control/state/action sources. `managementCatalog` binds 69 visible fields to
+  Hebrew labels, help, control types, search terms and advanced visibility;
+  internal setting keys and raw JSON are not rendered.
+- The generated `/v2` contract now includes explicit legal, settings-action,
+  memory-collection, usage-clear and Diagnostic-progress operations. Live
+  Diagnostic progress reports the active check and exact current/total count;
+  a cancellation request stops the shared `SmartiDiagnostic` instance at its
+  safe boundary. Destructive and repair paths keep explicit confirmation.
+- Deterministic evidence passed: `npm test -- --run` (47/47), `npm run build`,
+  `python -m pytest tests/test_conversation_runs.py tests/test_doctor.py -q`
+  (58/58 unique tests after the final progress test),
+  `python -m pytest tests/test_memory_management.py -q` (29/29), generated
+  contract equality, Python compilation and Rust `cargo check`.
+- Minimal local browser QA inspected the dark RTL management fixture and the
+  first-run legal fixture. Navigation order, masked provider secret, all 18
+  legal clauses, RTL card direction, checkbox, decline action and disabled
+  pre-acceptance button were present with no horizontal overflow. No automated
+  Windows desktop control was used.
+- Evidence is source/unit/integration/build/offscreen-visual only. It is not an
+  installed-package, signed-release, paid-provider, clean-machine or broad
+  Windows compatibility claim. The legacy PyQt launcher remains intact and
+  Point 16C remains next.
+
+### Point 16C - Whole-product integration and local package acceptance
+
+**Depends on:** Points 16A and 16B complete.
+
+**Objective**
+
+Prove on the user's current Windows computer that recovered Tauri Smarti is one
+coherent, usable application with no lost source feature, no decorative control
+disconnected from Python, and a repeatable simple build/package workflow.
+
+**Required work**
+
+1. Resolve all 97 stable feature IDs from Point 1 as `IMPLEMENTED`, an explicit
+   user-approved architectural addition, or a real blocker. Re-audit every row
+   in `docs/tauri_ui_source_parity.md` against current PyQt source and current
+   React/CSS/Rust/Python code. Broad page-level `MATCHED` labels are forbidden;
+   no silent omission may remain.
+2. Run the full static/unit/integration boundary: Python suite and Qt-free Core
+   import; frontend typecheck/build and interaction tests; Rust tests/check;
+   generated contract equality; Core supervisor, lifecycle, settings, history,
+   memory, task, tools, Diagnostic, Workbench, Canvas, browser and Windows
+   integration checks. Separate a code result from a live/package result.
+3. Run visual QA internally without taking over the desktop: deterministic
+   light/dark, narrow/wide and important state renderings; screenshot or pixel/
+   geometry comparison where useful; computed layout/style assertions; and
+   hidden/offscreen process smokes. Use the PyQt code as authority and baseline
+   captures only as regression aids.
+4. Run source Tauri and the portable/package supervisor on the current machine
+   with isolated data. Exercise startup/recovery, chat, reload, browser target,
+   background Core survival/restart and clean shutdown without using automated
+   mouse/keyboard control. Any focused visible check is performed by the user.
+5. Build the final local NSIS installer and portable ZIP using the one-command
+   script. Record paths, sizes, hashes, version synchronization, Qt-free runtime,
+   package layout, WebView2 mode, signature status and hidden smoke result.
+   Signing credentials are not required for local migration completion, but an
+   unsigned artifact must remain labeled `NotSigned`; the production updater
+   must stay disabled/fail closed without valid signing inputs.
+6. Provide one short user-operated acceptance checklist on this computer. Do
+   not install over the existing Smarti, invoke an uninstaller or alter its live
+   data without explicit user approval. If the user chooses installation, back
+   up data first and verify preservation of settings/history/memory/browser data.
+7. Update the plan, feature/parity matrices, architecture, development/run,
+   troubleshooting, build/package and known-limitations documentation to match
+   what is actually proved. Record that clean-machine and broad Windows/DPI
+   compatibility remain unverified rather than blocking final cutover.
+
+**Acceptance**
+
+- All 97 feature IDs and every source-parity row are resolved with no unapproved
+  omission or difference.
+- Automated interaction tests prove that representative controls on every
+  surface call the correct contract and change the correct Python/Rust state.
+- Internal visual QA passes for the declared themes/sizes/states without desktop
+  control, followed by the user's bounded manual approval of the real window.
+- Source and portable/package operation pass on the current computer; the final
+  artifacts and their honest signature/evidence boundaries are recorded.
+- The build remains one command and ordinary use remains one application with
+  no console or manually opened localhost URL.
+- Point 17 may start only after the user-visible parity result is accepted.
+
+**User check**
+
+Run the final source or portable application on this computer and check: launch;
+history and chat; favorite model/autonomy/send/attachment; one setting in each
+of the five categories; quick Diagnostic; Memory/Tools/Tasks/Usage/About; one
+Workbench surface and Smarti Browser action; close-to-tray and reopen. Report
+any difference before authorizing Point 17.
+
+**Out of scope**
+
+No clean Windows/VM matrix, automated control of the user's desktop, public
+release, broad compatibility claim, or PyQt deletion.
+
+### Point 17 - Final cutover and PyQt removal
+
+**Depends on:** Points 16A, 16B and 16C complete and user parity acceptance.
+
+**Objective**
+
+Make the already accepted Tauri application the only production UI, remove
+transition debt, and prove that cleanup itself did not change the product.
+
+**Required work**
+
+1. Confirm the Point 16C matrices contain no unresolved row and record the exact
+   Git commit containing the final legacy PyQt reference before deleting files.
+   Do not reopen product design or begin cleanup if parity is not accepted.
+2. Make Tauri the default source and packaged launcher.
+3. Remove legacy PyQt UI modules, Qt adapters, WebEngine compatibility paths,
    PyQt requirements, PyInstaller UI entrypoint, Inno-only packaging, dead
    assets, and transition feature flags that are no longer needed.
-5. Preserve pure Python behavior extracted from former UI modules and ensure no
+4. Preserve pure Python behavior extracted from former UI modules and ensure no
    Core import/runtime path loads Qt.
-6. Update README, architecture, contributor setup, tests, packaging docs,
+5. Update README, architecture, contributor setup, tests, packaging docs,
    screenshots, troubleshooting, and release notes to the final product.
-7. Run full Python, frontend, Rust, integration, security, source-parity,
-   visual, browser,
-   package, clean-install, and upgrade suites again after deletion.
-8. Compare final performance and artifact metrics to Point 1 and document every
+6. Re-run the complete Point 16C static, unit, integration, internal visual,
+   current-machine source and local package checks after deletion. Do not use
+   automated desktop control or add a clean-machine/VM requirement.
+7. Compare final performance and artifact metrics to Point 1 and document every
    meaningful improvement or regression.
-9. Produce the final release candidate and a complete evidence-backed handoff.
+8. Produce the final local release candidate and a complete evidence-backed handoff.
    Do not publish without explicit user authorization.
 
 **Acceptance**
@@ -1573,18 +1926,20 @@ release without losing Smarti capabilities.
 - The source-parity matrix has no unmatched or unapproved visible/behavioral
   difference from the final legacy PyQt source.
 - No production dependency or import of PyQt remains.
-- Source, installed, portable, browser, update, and old-install upgrade tests
-  pass with exact evidence.
+- Source, portable/local package, browser and current-machine user checks pass
+  with exact evidence; any unperformed installer/signing/cross-machine evidence
+  remains clearly labeled and is not transformed into a compatibility claim.
 - Smarti still launches as one simple Windows application.
 - The repository contains no accidental generated build artifacts or stale
   transition code.
 
 **User check**
 
-Use the final installer as an ordinary user. Verify the complete daily flow:
+Use the final source or portable application as an ordinary user. Verify the complete daily flow:
 launch, chat, parallel conversation, approval, attachment, settings, task,
 memory, files, terminal, Canvas, Browser automation, notification/tray, restart,
-and update check. Compare the final screenshots and experience with Point 1 and
+and update check. Installation over the old copy is optional and requires
+separate approval. Compare the final screenshots and experience with Point 1 and
 the matching legacy source application. Confirm that the migrated interface is
 one-to-one in structure, geometry, styling, states and interaction—not merely
 familiar or subjectively more polished.
@@ -1596,7 +1951,7 @@ post-migration product features without a separate explicit request.
 
 ## 12. Failure and rollback rules
 
-1. Keep the legacy PyQt client working through Point 16. Do not delete it early
+1. Keep the legacy PyQt client working through Point 16C. Do not delete it early
    to make a test pass.
 2. Use additive database migrations with backups/transactions where applicable.
    Never make a schema change that prevents the currently released Smarti from
@@ -1623,6 +1978,11 @@ post-migration product features without a separate explicit request.
     description, or subjective design judgment. Do not accept an unapproved
     visible deviation because it looks newer, cleaner, or easier to implement
     in React.
+11. Under the 2026-08-24 validation amendment, use internal/offscreen visual
+    checks and hidden process smokes by default. Do not automate the user's
+    mouse, keyboard, foreground windows or desktop merely to satisfy a QA row.
+    A limitation that needs a real focused window is handed to the user as a
+    short manual check.
 
 ## 13. Required handoff format after every point
 
@@ -1673,8 +2033,9 @@ Next:
 4. כתוב רק: `עכשיו תבצע את נקודה N`.
 5. אל תפתח את נקודה N+1 לפני שהמשימה הקודמת דיווחה `COMPLETE` ועדכנה את טבלת
    ה־Execution Ledger במסמך.
-6. לאחר נקודה 9 יש לבצע את נקודה 9A, ורק אחריה את נקודה 10. בנקודות ממשק ודא
-   שהדיווח כולל השוואה לקוד PyQt המקורי ולא רק לצילומי מסך.
+6. לאחר נקודה 16 יש לבצע לפי הסדר רק את נקודות 16A, 16B, 16C, ורק לאחר אישור
+   התוצאה להתחיל את נקודה 17. בנקודות ממשק ודא שהדיווח כולל השוואה לקוד PyQt
+   המקורי ברמת כל בקרה, מצב ופעולה — לא רק לצילומי מסך או לכותרת כללית של מסך.
 
 ### מה לבדוק בסיום
 
@@ -1682,6 +2043,9 @@ Next:
 - ודא שמופיעים שמות הבדיקות ומספר הבדיקות, ולא רק המשפט "הכול עבר".
 - ודא שמופרד במפורש מה נבדק בקוד, מה נבדק חי, מה נבדק חזותית ומה נבדק
   במתקין.
+- בנקודות 16A-16C בדיקות חזותיות אוטומטיות צריכות להיות פנימיות או מחוץ למסך.
+  אינך צריך למסור לקודקס שליטה בעכבר או במקלדת; את הבדיקה הקצרה בחלון האמיתי
+  אתה מבצע בעצמך כאשר נוח לך.
 - בצע את סעיף `User check` של הנקודה. אם משהו אינו תואם, המשך באותה שיחה ובקש
   לתקן; אל תפתח עדיין את הנקודה הבאה.
 - אם הכול תקין, פתח משימה חדשה לנקודה הבאה.

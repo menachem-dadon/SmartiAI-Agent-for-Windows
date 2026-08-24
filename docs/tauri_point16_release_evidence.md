@@ -3,7 +3,9 @@
 - Evidence date: 2026-08-24 (Asia/Jerusalem)
 - Product version: `0.87.0`
 - Candidate type: local unsigned Tauri/NSIS and portable evidence only
-- Point state: `BLOCKED` pending signed update artifacts and clean-VM matrix
+- Point state: local packaging foundation `COMPLETE` under the user's
+  2026-08-24 current-computer validation policy; final recovered-product and
+  package acceptance moved to Point 16C
 
 ## Implemented release path
 
@@ -50,7 +52,7 @@ in this local evidence run.
   restarted as generation 2 and shut down gracefully.
 - no computer-control click-through or broad live UI QA was performed.
 
-## Required release matrix not yet available
+## Optional cross-machine/release evidence not performed
 
 | Scenario | Windows 10 clean VM | Windows 11 clean VM | Current machine |
 |---|---|---|---|
@@ -62,18 +64,22 @@ in this local evidence run.
 | uninstall, retained data, reinstall | NOT RUN | NOT RUN | NOT CLAIMED |
 
 This host exposes no Hyper-V cmdlets, and the required updater signing variables
-were absent. The candidate is also Authenticode `NotSigned`. Therefore this
-document deliberately does not call Point 16 complete or call the artifacts a
-signed release. Publishing to GitHub Releases was not requested and was not
-performed.
+were absent. The candidate is also Authenticode `NotSigned`. The user decided on
+2026-08-24 that clean Windows/VM matrices are not migration gates and that final
+functional/package acceptance will be performed on the current computer after
+UI recovery in Point 16C. This document therefore records Point 16's packaging
+foundation as complete without calling the artifacts signed or claiming broad
+Windows compatibility. Publishing to GitHub Releases was not requested and was
+not performed.
 
-## Remaining release actions
+## Deferred or optional release-hardening actions
 
-1. Supply protected Tauri update-signing and Windows Authenticode credentials
-   plus the production updater endpoint; build and verify the signed artifacts.
-2. Execute the matrix above on clean x64 Windows 10 and 11 VMs, including old
-   Inno upgrade, WebView2-present/missing, invalid update, uninstall and data
-   retention.
+1. When a signed public release is desired, supply protected Tauri
+   update-signing and Windows Authenticode credentials plus the production
+   updater endpoint, then build and verify signed artifacts.
+2. If broad Windows certification is desired later, execute the matrix above on
+   clean x64 Windows 10 and 11 machines. Its absence does not block Points
+   16A-17 and must remain documented as unverified portability evidence.
 3. Add a custom Hebrew Tauri NSIS message file if fully translated installer
    chrome is required; the current NSIS run warns that Tauri-specific Hebrew
    messages fall back rather than being custom-translated.

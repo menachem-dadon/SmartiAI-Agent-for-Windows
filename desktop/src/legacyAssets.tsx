@@ -62,6 +62,22 @@ import memoryDark from "../../assets/memory_management_icon_dark.png";
 import memoryLight from "../../assets/memory_management_icon_light.png";
 import settingsDark from "../../assets/settings_icon_dark.png";
 import settingsLight from "../../assets/settings_icon_light.png";
+import pasteDark from "../../assets/paste_icon_dark.png";
+import pasteLight from "../../assets/paste_icon_light.png";
+import policyDark from "../../assets/policy_icon_dark.png";
+import policyLight from "../../assets/policy_icon_light.png";
+import resetDark from "../../assets/reset_icon_dark.png";
+import resetLight from "../../assets/reset_icon_light.png";
+import saveDoneDark from "../../assets/save_done_dark.png";
+import saveDoneLight from "../../assets/save_done_light.png";
+import starFilledDark from "../../assets/star_filled_dark.png";
+import starFilledLight from "../../assets/star_filled_light.png";
+import starEmptyDark from "../../assets/star_empty_dark.png";
+import starEmptyLight from "../../assets/star_empty_light.png";
+import connectionTestDark from "../../assets/connection_test_icon_dark.png";
+import connectionTestLight from "../../assets/connection_test_icon_light.png";
+import checkUpdatesDark from "../../assets/check_updates_icon_dark.png";
+import checkUpdatesLight from "../../assets/check_updates_icon_light.png";
 import tasksDark from "../../assets/task_center_icon_dark.png";
 import tasksLight from "../../assets/task_center_icon_light.png";
 import toolsDark from "../../assets/tools_icon_dark.png";
@@ -72,6 +88,8 @@ import folderDark from "../../assets/folder_icon_dark.png";
 import folderLight from "../../assets/folder_icon_light.png";
 import canvasDark from "../../assets/canvas_card_icon_dark.png";
 import canvasLight from "../../assets/canvas_card_icon_light.png";
+import agentMemoryDark from "../../assets/agent_tool_memory_manager_dark.png";
+import agentMemoryLight from "../../assets/agent_tool_memory_manager_light.png";
 
 const themed = <T,>(theme: ResolvedTheme, light: T, dark: T): T => theme === "dark" ? dark : light;
 
@@ -110,11 +128,20 @@ export const legacyAssets = (theme: ResolvedTheme) => ({
   doctor: themed(theme, doctorLight, doctorDark),
   memory: themed(theme, memoryLight, memoryDark),
   settings: themed(theme, settingsLight, settingsDark),
+  paste: themed(theme, pasteLight, pasteDark),
+  policy: themed(theme, policyLight, policyDark),
+  reset: themed(theme, resetLight, resetDark),
+  saveDone: themed(theme, saveDoneLight, saveDoneDark),
+  starFilled: themed(theme, starFilledLight, starFilledDark),
+  starEmpty: themed(theme, starEmptyLight, starEmptyDark),
+  connectionTest: themed(theme, connectionTestLight, connectionTestDark),
+  checkUpdates: themed(theme, checkUpdatesLight, checkUpdatesDark),
   tasks: themed(theme, tasksLight, tasksDark),
   tools: themed(theme, toolsLight, toolsDark),
   usage: themed(theme, usageLight, usageDark),
   folder: themed(theme, folderLight, folderDark),
   canvas: themed(theme, canvasLight, canvasDark),
+  agentMemory: themed(theme, agentMemoryLight, agentMemoryDark),
 });
 
 export function LegacyIcon({ src, alt = "", size = 18 }: { src: string; alt?: string; size?: number }) {

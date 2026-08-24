@@ -1,28 +1,50 @@
 # SmartiAI Architecture
 
-SmartiAI is a Python/PyQt6 desktop agent. The UI and application lifecycle live
-in `smarti/app.py`, `smarti/chat.py`, and the UI helper modules. The agent
-runtime is exposed as `smarti.core.SmartiCore` for compatibility, while the
-implementation is split into focused domain mixins under `smarti/agent/`.
+SmartiAI is in the final transition from a Python/PyQt6 desktop client to a
+Tauri 2 + React Windows client around the same Python agent runtime. The Tauri
+client is the packaged migration target; the PyQt client remains runnable and
+is the authoritative one-to-one UI specification until Point 17 is explicitly
+approved. The agent/runtime API remains `smarti.core.SmartiCore`, implemented by
+focused domain mixins under `smarti/agent/`.
 
-## Desktop Workspace
+## Desktop product boundary
 
-- `smarti/chat.py` owns the central conversation surface and composes the
-  top-level Workspace shell.
-- `smarti/workspace_ui.py` provides the collapsible conversation sidebar, the
-  dynamic left work area, file/document/media previews, embedded browser, terminal,
-  conversation-artifact list, and the lazy settings-and-management hub.
-- `smarti/native_browser.py` embeds an app-mode Chromium native window as a Qt
-  child on Windows while preserving a loopback-only CDP endpoint for Playwright.
-- `smarti/browser_profile.py` implements explicit, copy-based one-time import
-  of compatible cookies, history, and bookmarks into Smarti Browser. It never
-  imports passwords or modifies the source profile.
-- `smarti/webengine_probe.py` retains a crash-isolated compatibility check for
-  non-Windows WebEngine paths. Windows avoids native WebEngine startup crashes
-  by using the native Chromium child host directly.
-- The canvas uses a temporary native Chromium host and tokenized loopback HTTP
-  bridge with a restrictive CSP. Smarti Browser uses a persistent native
-  profile and exposes its visible target on port 49223 for Playwright/CDP.
+- `desktop/src/` owns the React Workspace: RTL chat, right conversation drawer,
+  left on-demand Workbench, composer, management center and source-derived
+  light/dark presentation.
+- `desktop/src-tauri/` is the trusted Windows host. It owns the application
+  window, single instance, tray, notifications/taskbar attention, file dialogs,
+  updater, Core supervision and Tauri-owned child WebViews.
+- `smarti_core_service.py` starts one Qt-free Python Core sidecar. The Core owns
+  the agent loop, tools, policy, history, settings/secrets, memory, tasks,
+  diagnostics and every other business/runtime operation.
+- Rust holds the random per-launch bearer token and exposes only narrow Tauri
+  commands. React reaches Python through the authenticated loopback `/v2`
+  contract; the credential never enters frontend storage or serialized state.
+- `smarti/control_plane_contract.py` is the authoritative contract generator;
+  `desktop-contract/v2.contract.json` and `v2.generated.d.ts` must remain equal
+  to it.
+
+## Workspace, Browser and Canvas
+
+- `desktop/src/App.tsx`, `Composer.tsx`, `RichMessage.tsx` and
+  `WorkbenchPanels.tsx` reproduce the PyQt composition and state behavior. The
+  granular code-derived map is `docs/tauri_ui_source_parity.md`.
+- `desktop/src-tauri/src/browser.rs` owns Smarti Browser tabs and WebView2 child
+  WebViews. User controls and Python automation address the same stable visible
+  target through the in-process CDP broker; no installed Chrome/Edge HWND and
+  no stable remote-debugging port is embedded.
+- Persistent and Guest browser profiles are distinct. Profile import is
+  explicit and copy-based, never modifies a third-party source profile and
+  never extracts passwords.
+- `smarti/canvas_model.py` is the Qt-free persisted Canvas authority.
+  `desktop/src/CanvasPanel.tsx` renders it in an opaque-origin
+  `sandbox="allow-scripts"` iframe with restrictive CSP and validated messages.
+- The legacy modules `smarti/chat.py`, `smarti/workspace_ui.py`,
+  `smarti/native_browser.py`, `smarti/visual_canvas.py`, `smarti/ui_pages.py`
+  and related helpers remain available only as the comparison client through
+  Point 16C/user acceptance. Their internal browser host is not the Tauri
+  architecture.
 
 ## Agent Runtime Modules
 
@@ -70,14 +92,19 @@ Existing imports should continue to use:
 from smarti.core import SmartiCore
 ```
 
-The root `smarti_core.pyw` remains the source launcher. It intentionally imports
-only `smarti.app.main` at runtime so double-click startup failures can be logged
-to `smarti_startup_error.log` instead of disappearing silently under `pythonw`.
+The root `smarti_core.pyw` remains the legacy source launcher through Point 16C
+and imports only `smarti.app.main` at runtime. Tauri source development uses
+`scripts/run_tauri_dev.ps1`; the packaged application starts the headless Core
+itself and does not expose a console or localhost page.
 
-## Dependency Layout
+## Dependency and package layout
 
-Runtime dependencies are consolidated in `requirements.txt`, including
-compatible PyQt 6.11 bindings, the WebEngine compatibility path, and Playwright
-for structured browser automation. Windows browser/canvas rendering uses the
-installed Chromium engine through `smarti/native_browser.py`.
-Build-only dependencies stay in `requirements-build.txt`.
+- `requirements-core.txt` is the Qt-free production Core/private-runtime set.
+- `requirements.txt` retains PyQt only for the comparison client until Point 17.
+- `requirements-build.txt` contains build tooling for the PyInstaller `onedir`
+  Core sidecar.
+- `scripts/build_tauri_release.ps1` stages the sidecar and pinned private
+  Python/Node runtimes, builds the per-user Tauri NSIS package and portable ZIP,
+  runs hidden product/browser smokes and emits hashes/signature evidence.
+- The updater fails closed without its signing key, public key and endpoint.
+  Windows Authenticode and Tauri updater signing are separate release concerns.

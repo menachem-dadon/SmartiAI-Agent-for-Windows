@@ -675,9 +675,19 @@ fn core_restart(app: AppHandle, supervisor: tauri::State<'_, CoreSupervisor>) ->
 }
 
 #[tauri::command]
-fn core_api(
+async fn core_api(
     request: CoreApiRequest,
     supervisor: tauri::State<'_, CoreSupervisor>,
+) -> Result<CoreApiResponse, String> {
+    let supervisor = supervisor.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || supervisor_core_api(&supervisor, request))
+        .await
+        .map_err(|error| format!("Core API worker failed: {error}"))?
+}
+
+fn supervisor_core_api(
+    supervisor: &CoreSupervisor,
+    request: CoreApiRequest,
 ) -> Result<CoreApiResponse, String> {
     let (port, token) = {
         let inner = supervisor
@@ -746,6 +756,269 @@ fn read_attachment_preview(app: AppHandle, path: String) -> Result<Vec<u8>, Stri
         return Err("Attachment preview is not an allowed file".into());
     }
     fs::read(target).map_err(|error| error.to_string())
+}
+
+fn safe_suggested_name(value: &str, fallback: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || matches!(character, ' ' | '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(120)
+        .collect();
+    let cleaned = cleaned.trim().trim_matches('.');
+    if cleaned.is_empty() {
+        fallback.to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn choose_save_path(suggested_name: String) -> Result<Option<PathBuf>, String> {
+    thread::spawn(move || unsafe {
+        use windows::core::HSTRING;
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
+            COINIT_APARTMENTTHREADED,
+        };
+        use windows::Win32::UI::Shell::{FileSaveDialog, IFileSaveDialog, SIGDN_FILESYSPATH};
+
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        if initialized.is_err() {
+            return Err(format!(
+                "Windows save dialog initialization failed: {initialized:?}"
+            ));
+        }
+        let result = (|| -> Result<Option<PathBuf>, String> {
+            let dialog: IFileSaveDialog =
+                CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|error| error.to_string())?;
+            dialog
+                .SetTitle(&HSTRING::from("שמירה מ־Smarti"))
+                .map_err(|error| error.to_string())?;
+            dialog
+                .SetFileName(&HSTRING::from(suggested_name))
+                .map_err(|error| error.to_string())?;
+            if let Err(error) = dialog.Show(None) {
+                // HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                if error.code().0 == 0x8007_04C7_u32 as i32 {
+                    return Ok(None);
+                }
+                return Err(error.to_string());
+            }
+            let item = dialog.GetResult().map_err(|error| error.to_string())?;
+            let value = item
+                .GetDisplayName(SIGDN_FILESYSPATH)
+                .map_err(|error| error.to_string())?;
+            let text = value.to_string().map_err(|error| error.to_string());
+            CoTaskMemFree(Some(value.as_ptr().cast()));
+            text.map(|path| Some(PathBuf::from(path)))
+        })();
+        CoUninitialize();
+        result
+    })
+    .join()
+    .map_err(|_| "Windows save dialog thread failed".to_string())?
+}
+
+#[cfg(not(target_os = "windows"))]
+fn choose_save_path(_suggested_name: String) -> Result<Option<PathBuf>, String> {
+    Err("Native save dialog is available only on Windows".into())
+}
+
+#[tauri::command]
+fn save_text_file(suggested_name: String, contents: String) -> Result<Option<String>, String> {
+    if contents.len() > 50 * 1024 * 1024 {
+        return Err("Text export exceeds the 50 MB safety limit".into());
+    }
+    let name = safe_suggested_name(&suggested_name, "smarti-export.txt");
+    let path = choose_save_path(name)?;
+    let Some(path) = path else { return Ok(None) };
+    fs::write(&path, contents.as_bytes()).map_err(|error| error.to_string())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn save_binary_file(suggested_name: String, bytes: Vec<u8>) -> Result<Option<String>, String> {
+    if bytes.is_empty() || bytes.len() > 50 * 1024 * 1024 {
+        return Err("Binary export must be between 1 byte and 50 MB".into());
+    }
+    let name = safe_suggested_name(&suggested_name, "smarti-export.bin");
+    let path = choose_save_path(name)?;
+    let Some(path) = path else { return Ok(None) };
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[cfg(target_os = "windows")]
+fn choose_management_path(kind: String) -> Result<Option<String>, String> {
+    thread::spawn(move || unsafe {
+        use windows::core::HSTRING;
+        use windows::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER,
+            COINIT_APARTMENTTHREADED,
+        };
+        use windows::Win32::UI::Shell::{
+            FileOpenDialog, IFileOpenDialog, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
+        };
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        if initialized.is_err() {
+            return Err(format!(
+                "Windows picker initialization failed: {initialized:?}"
+            ));
+        }
+        let result = (|| -> Result<Option<String>, String> {
+            let dialog: IFileOpenDialog =
+                CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|error| error.to_string())?;
+            dialog
+                .SetTitle(&HSTRING::from(if kind == "directory" {
+                    "בחירת תיקייה עבור Smarti"
+                } else {
+                    "בחירת קובץ עבור Smarti"
+                }))
+                .map_err(|error| error.to_string())?;
+            if kind == "directory" {
+                let options = dialog.GetOptions().map_err(|error| error.to_string())?;
+                dialog
+                    .SetOptions(options | FOS_PICKFOLDERS)
+                    .map_err(|error| error.to_string())?;
+            }
+            if let Err(error) = dialog.Show(None) {
+                if error.code().0 == 0x8007_04C7_u32 as i32 {
+                    return Ok(None);
+                }
+                return Err(error.to_string());
+            }
+            let item = dialog.GetResult().map_err(|error| error.to_string())?;
+            let value = item
+                .GetDisplayName(SIGDN_FILESYSPATH)
+                .map_err(|error| error.to_string())?;
+            let text = value.to_string().map_err(|error| error.to_string())?;
+            CoTaskMemFree(Some(value.as_ptr().cast()));
+            Ok(Some(text))
+        })();
+        CoUninitialize();
+        result
+    })
+    .join()
+    .map_err(|_| "Windows picker thread failed".to_string())?
+}
+
+#[cfg(not(target_os = "windows"))]
+fn choose_management_path(_kind: String) -> Result<Option<String>, String> {
+    Err("The management picker is available only on Windows".into())
+}
+
+#[tauri::command]
+fn pick_management_path(kind: String) -> Result<Option<String>, String> {
+    if !matches!(kind.as_str(), "file" | "directory") {
+        return Err("Unsupported management picker kind".into());
+    }
+    choose_management_path(kind)
+}
+
+fn desktop_check(id: &str, status: &str, title: &str, explanation: &str, detail: String) -> Value {
+    json!({
+        "id": id,
+        "status": status,
+        "title_he": title,
+        "explanation_he": explanation,
+        "technical_detail": detail,
+        "category": "tauri",
+        "repair_action": Value::Null,
+    })
+}
+
+#[tauri::command]
+fn desktop_diagnostic_snapshot(
+    app: AppHandle,
+    supervisor: tauri::State<'_, CoreSupervisor>,
+    broker: tauri::State<'_, browser::BrowserBroker>,
+) -> Value {
+    let snapshot = supervisor.snapshot();
+    let (has_token, child_owned) = supervisor
+        .inner
+        .lock()
+        .map(|inner| {
+            (
+                inner.token.as_ref().is_some_and(|token| token.len() >= 32),
+                inner.child.is_some(),
+            )
+        })
+        .unwrap_or((false, false));
+    let app_data = app.path().app_data_dir().ok();
+    let writable = app_data
+        .as_ref()
+        .is_some_and(|path| fs::create_dir_all(path).is_ok());
+    let browser_snapshot = broker.snapshot();
+    let csp = include_str!("../tauri.conf.json");
+    let capability = include_str!("../capabilities/default.json");
+    let updater_signed = !csp.contains("UNSIGNED_LOCAL_BUILD_NO_UPDATES");
+    let source_entry = supervisor.project_root.join("smarti_core_service.py");
+    let core_ready = snapshot.state == CoreState::Ready && snapshot.port.is_some();
+    let items = vec![
+        desktop_check(
+            "tauri.supervisor", if core_ready { "pass" } else { "error" },
+            "Rust supervisor ו־Core generation",
+            if core_ready { "מנהל ה־Core מחזיק דור פעיל ו־handshake תקין." } else { "מנהל ה־Core אינו במצב Ready מלא." },
+            format!("state={:?}; generation={}; pid={:?}; port={:?}; child_owned={child_owned}", snapshot.state, snapshot.generation, snapshot.pid, snapshot.port),
+        ),
+        desktop_check(
+            "tauri.control_plane", if core_ready && has_token { "pass" } else { "error" },
+            "חוזה ואימות /v2",
+            if has_token { "אסימון פר־הפעלה נמצא רק אצל ה־supervisor וה־Core מאזין ב־loopback." } else { "לא נמצא אסימון מאומת להפעלה הנוכחית." },
+            format!("loopback_port={:?}; bearer_present={has_token}; contract=/v2", snapshot.port),
+        ),
+        desktop_check(
+            "tauri.sidecar_runtime", if cfg!(debug_assertions) && source_entry.is_file() { "pass" } else if !cfg!(debug_assertions) { "pass" } else { "warning" },
+            "Sidecar ו־runtime פרטי",
+            if cfg!(debug_assertions) { "במצב פיתוח נבדק entrypoint המקור; באריזה נבדקים משאבי sidecar ו־runtime." } else { "היישום פועל במסלול sidecar ארוז ו־runtime פרטי." },
+            format!("debug={}; source_entry={}; exists={}", cfg!(debug_assertions), source_entry.display(), source_entry.is_file()),
+        ),
+        desktop_check(
+            "tauri.writable_paths", if writable { "pass" } else { "error" },
+            "נתיבי נתונים ניתנים לכתיבה",
+            if writable { "תיקיית נתוני שולחן העבודה זמינה לכתיבה." } else { "תיקיית נתוני שולחן העבודה אינה זמינה לכתיבה." },
+            format!("app_data={:?}", app_data),
+        ),
+        desktop_check(
+            "tauri.webview2_browser", if browser_snapshot.transport == "webview2-in-process-cdp" { "pass" } else { "error" },
+            "WebView2 ו־Smarti Browser",
+            "הדפדפן נשאר בבעלות Smarti עם פרופיל מתמשך ואורח נפרדים.",
+            format!("transport={}; tabs={}; remote_debugging_port={:?}", browser_snapshot.transport, browser_snapshot.tabs.len(), browser_snapshot.remote_debugging_port),
+        ),
+        desktop_check(
+            "tauri.csp_capabilities", if csp.contains("object-src 'none'") && capability.contains("Trusted Smarti chrome only") { "pass" } else { "error" },
+            "CSP, capabilities ונכסים",
+            "חלון ה־chrome המהימן מוגבל ב־CSP וב־Tauri capabilities; WebViews מרוחקים אינם מקבלים IPC.",
+            format!("object_src_none={}; trusted_chrome_scope={}", csp.contains("object-src 'none'"), capability.contains("Trusted Smarti chrome only")),
+        ),
+        desktop_check(
+            "tauri.windows_integration", "pass",
+            "Tray, single-instance, hotkey והתראות",
+            "אינטגרציות Windows נרשמו במארח Tauri ומנותבות לחלון הראשי היחיד.",
+            "plugins=single-instance,global-shortcut,notification,tray; activation=desktop://activation".into(),
+        ),
+        desktop_check(
+            "tauri.updater_signature", if updater_signed { "pass" } else { "warning" },
+            "Updater וחתימת עדכון",
+            if updater_signed { "מפתח אימות עדכונים מוגדר." } else { "זהו build מקומי לא חתום; עדכונים מושבתים עד להגדרת מפתח שחרור." },
+            format!("signed_release_key_configured={updater_signed}"),
+        ),
+        desktop_check(
+            "tauri.stale_children", if !child_owned || core_ready { "pass" } else { "warning" },
+            "ניקוי תהליכי Core ישנים",
+            if core_ready { "ה־supervisor מחזיק תהליך Core יחיד של הדור הפעיל." } else { "נמצא תהליך בבעלות supervisor שאינו Ready; נדרש מעקב או הפעלה מחדש." },
+            format!("generation={}; child_owned={child_owned}; ready={core_ready}", snapshot.generation),
+        ),
+    ];
+    json!({"items": items})
 }
 
 fn blocked_chat_link_extension(path: &std::path::Path) -> bool {
@@ -867,7 +1140,112 @@ fn wait_for_state(
     }
 }
 
-fn run_supervisor_smoke(app: AppHandle, supervisor: CoreSupervisor, result_path: PathBuf) {
+fn smoke_core_request(
+    supervisor: &CoreSupervisor,
+    method: &str,
+    path: String,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    let response = supervisor_core_api(
+        supervisor,
+        CoreApiRequest {
+            method: method.into(),
+            path,
+            body,
+            idempotency_key: Some(format!("point16c-{}", launch_token())),
+        },
+    )?;
+    if !(200..300).contains(&response.status) {
+        return Err(format!(
+            "Core smoke request failed with {}: {}",
+            response.status,
+            redact_diagnostic(&response.body.to_string())
+        ));
+    }
+    Ok(response.body)
+}
+
+fn run_chat_smoke(supervisor: &CoreSupervisor) -> Result<(String, String), String> {
+    let bootstrap = smoke_core_request(supervisor, "GET", "/v2/bootstrap".into(), None)?;
+    if bootstrap.pointer("/data/version/contract").is_none() {
+        return Err("desktop bootstrap omitted the contract version".into());
+    }
+    let created = smoke_core_request(
+        supervisor,
+        "POST",
+        "/v2/conversations".into(),
+        Some(json!({"title":"Point 16C isolated product smoke"})),
+    )?;
+    let session_id = created
+        .pointer("/data/conversation/id")
+        .and_then(Value::as_str)
+        .ok_or("product smoke conversation ID missing")?
+        .to_string();
+    let submitted = smoke_core_request(
+        supervisor,
+        "POST",
+        format!("/v2/conversations/{session_id}/runs"),
+        Some(json!({"text":"hello"})),
+    )?;
+    let run_id = submitted
+        .pointer("/data/run_id")
+        .and_then(Value::as_str)
+        .ok_or("product smoke run ID missing")?
+        .to_string();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let run = smoke_core_request(supervisor, "GET", format!("/v2/runs/{run_id}"), None)?;
+        match run
+            .pointer("/data/run/status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+        {
+            "completed" => break,
+            "failed" | "cancelled" | "interrupted" => {
+                return Err(format!("product smoke run did not complete: {run}"));
+            }
+            _ if Instant::now() >= deadline => {
+                return Err("product smoke run timed out".into());
+            }
+            _ => thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    assert_chat_smoke_persisted(supervisor, &session_id)?;
+    Ok((session_id, run_id))
+}
+
+fn assert_chat_smoke_persisted(
+    supervisor: &CoreSupervisor,
+    session_id: &str,
+) -> Result<(), String> {
+    let messages = smoke_core_request(
+        supervisor,
+        "GET",
+        format!("/v2/conversations/{session_id}/messages?limit=48"),
+        None,
+    )?;
+    let persisted = messages
+        .pointer("/data/messages")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter().any(|item| {
+                item.get("role").and_then(Value::as_str) == Some("assistant")
+                    && item.get("content").and_then(Value::as_str) == Some("deterministic:hello")
+            })
+        })
+        .unwrap_or(false);
+    if !persisted {
+        return Err("deterministic chat response was not persisted".into());
+    }
+    Ok(())
+}
+
+fn run_supervisor_smoke(
+    app: AppHandle,
+    supervisor: CoreSupervisor,
+    result_path: PathBuf,
+    initial_shell: Value,
+) {
     let result = (|| -> Result<Value, String> {
         let first = wait_for_state(&supervisor, CoreState::Ready, Duration::from_secs(45))?;
         let first_pid = first.pid.ok_or("initial Core PID missing")?;
@@ -875,10 +1253,25 @@ fn run_supervisor_smoke(app: AppHandle, supervisor: CoreSupervisor, result_path:
         if duplicate.pid != Some(first_pid) || duplicate.generation != first.generation {
             return Err("duplicate start replaced the active Core".into());
         }
+        let (chat_session_id, chat_run_id) = run_chat_smoke(&supervisor)?;
 
         let window = app
             .get_webview_window("main")
             .ok_or("main WebView missing")?;
+        windows_integration::desktop_finish_startup(app.clone())?;
+        let workspace_scale = window.scale_factor().map_err(|error| error.to_string())?;
+        let workspace_size = window.inner_size().map_err(|error| error.to_string())?;
+        let overlay = windows_integration::create_voice_overlay(&app, false)?;
+        let overlay_scale = overlay.scale_factor().map_err(|error| error.to_string())?;
+        let overlay_size = overlay.inner_size().map_err(|error| error.to_string())?;
+        let voice_overlay = json!({
+            "width": (overlay_size.width as f64 / overlay_scale).round() as u32,
+            "height": (overlay_size.height as f64 / overlay_scale).round() as u32,
+            "always_on_top": overlay.is_always_on_top().unwrap_or(false),
+            "decorated": overlay.is_decorated().unwrap_or(true),
+            "visible_during_smoke": overlay.is_visible().unwrap_or(true)
+        });
+        let _ = overlay.close();
         window
             .eval("window.location.reload()")
             .map_err(|error| error.to_string())?;
@@ -887,6 +1280,7 @@ fn run_supervisor_smoke(app: AppHandle, supervisor: CoreSupervisor, result_path:
         if after_reload.pid != Some(first_pid) || after_reload.generation != first.generation {
             return Err("WebView reload replaced the active Core".into());
         }
+        assert_chat_smoke_persisted(&supervisor, &chat_session_id)?;
 
         supervisor.terminate_for_smoke()?;
         let crashed = wait_for_state(&supervisor, CoreState::Crashed, Duration::from_secs(10))?;
@@ -896,6 +1290,7 @@ fn run_supervisor_smoke(app: AppHandle, supervisor: CoreSupervisor, result_path:
         if second_pid == first_pid || restarting.generation != first.generation + 1 {
             return Err("Core restart did not create exactly one new generation".into());
         }
+        assert_chat_smoke_persisted(&supervisor, &chat_session_id)?;
         let health = supervisor.health()?;
         if health.get("ready").and_then(Value::as_bool) != Some(true) {
             return Err("Rust-proxied health was not ready".into());
@@ -906,9 +1301,21 @@ fn run_supervisor_smoke(app: AppHandle, supervisor: CoreSupervisor, result_path:
             "initial_ready": true,
             "duplicate_core_prevented": true,
             "webview_reload_preserved_pid": true,
+            "chat_run_completed": true,
+            "chat_survived_webview_reload": true,
+            "chat_survived_core_restart": true,
+            "chat_session_id": chat_session_id,
+            "chat_run_id": chat_run_id,
             "crash_detected": crashed.state == CoreState::Crashed,
             "restart_ready": true,
             "graceful_stop": stopped.state == CoreState::Stopped,
+            "initial_shell": initial_shell,
+            "workspace_shell": {
+                "width": (workspace_size.width as f64 / workspace_scale).round() as u32,
+                "height": (workspace_size.height as f64 / workspace_scale).round() as u32,
+                "resizable": window.is_resizable().unwrap_or(false)
+            },
+            "voice_overlay": voice_overlay,
             "first_generation": first.generation,
             "second_generation": second.generation
         }))
@@ -967,7 +1374,15 @@ pub fn run() {
             core_api,
             stage_attachment,
             read_attachment_preview,
+            save_text_file,
+            save_binary_file,
+            pick_management_path,
+            desktop_diagnostic_snapshot,
             open_chat_link,
+            windows_integration::desktop_finish_startup,
+            windows_integration::desktop_show_voice_overlay,
+            windows_integration::desktop_hide_voice_overlay,
+            windows_integration::desktop_focus_main,
             windows_integration::desktop_set_voice_hotkey,
             windows_integration::desktop_set_close_to_tray,
             windows_integration::desktop_notify,
@@ -1017,14 +1432,32 @@ pub fn run() {
                 );
             }
             if let Some(result_path) = env::var_os("SMARTI_SUPERVISOR_SMOKE_FILE") {
-                if let Some(window) = app.get_webview_window("main") {
+                let initial_shell = if let Some(window) = app.get_webview_window("main") {
+                    let scale = window.scale_factor().unwrap_or(1.0);
+                    let size = window
+                        .inner_size()
+                        .unwrap_or(tauri::PhysicalSize::new(0, 0));
+                    let value = json!({
+                        "width": (size.width as f64 / scale).round() as u32,
+                        "height": (size.height as f64 / scale).round() as u32,
+                        "resizable": window.is_resizable().unwrap_or(true),
+                        "decorated": window.is_decorated().unwrap_or(true)
+                    });
                     let _ = window.hide();
-                }
+                    value
+                } else {
+                    json!({"missing": true})
+                };
                 let smoke_supervisor = setup_supervisor.clone();
                 thread::Builder::new()
                     .name("smarti-supervisor-smoke".into())
                     .spawn(move || {
-                        run_supervisor_smoke(handle, smoke_supervisor, PathBuf::from(result_path))
+                        run_supervisor_smoke(
+                            handle,
+                            smoke_supervisor,
+                            PathBuf::from(result_path),
+                            initial_shell,
+                        )
                     })?;
             }
             Ok(())

@@ -671,18 +671,18 @@ class ChatSessionStore:
             return records
         identifiers = [str(record.get("id") or "") for record in records]
         placeholders = ",".join("?" for _ in identifiers)
-        active_states = {"queued", "running", "waiting_for_approval", "cancelling"}
+        active_states = {"queued", "running", "waiting_for_approval", "waiting_for_input", "cancelling"}
         rows = db.execute(
             f"""
             SELECT session_id, status, queued_at
             FROM runs
             WHERE session_id IN ({placeholders})
-              AND status IN ('queued', 'running', 'waiting_for_approval', 'cancelling')
+              AND status IN ('queued', 'running', 'waiting_for_approval', 'waiting_for_input', 'cancelling')
             ORDER BY queued_at
             """,
             identifiers,
         ).fetchall()
-        priority = {"waiting_for_approval": 4, "cancelling": 3, "running": 2, "queued": 1}
+        priority = {"waiting_for_input": 5, "waiting_for_approval": 4, "cancelling": 3, "running": 2, "queued": 1}
         status_by_session = {}
         count_by_session = {}
         for row in rows:
@@ -711,7 +711,7 @@ class ChatSessionStore:
             record["runtime_status"] = status
             record["active_run_count"] = count_by_session.get(session_id, 0)
             record["unread_count"] = unread_by_session.get(session_id, 0)
-            record["needs_input"] = status == "waiting_for_approval"
+            record["needs_input"] = status in {"waiting_for_approval", "waiting_for_input"}
             record["is_busy"] = status in active_states
         return records
 
@@ -724,7 +724,7 @@ class ChatSessionStore:
                 ) OR EXISTS(
                     SELECT 1 FROM runs r
                     WHERE r.session_id=s.id
-                      AND r.status IN ('queued', 'running', 'waiting_for_approval', 'cancelling')
+                      AND r.status IN ('queued', 'running', 'waiting_for_approval', 'waiting_for_input', 'cancelling')
                 ) OR EXISTS(
                     SELECT 1 FROM attention_items a
                     WHERE a.session_id=s.id AND a.read_at IS NULL
@@ -746,7 +746,7 @@ class ChatSessionStore:
                 ) OR EXISTS(
                     SELECT 1 FROM runs r
                     WHERE r.session_id=s.id
-                      AND r.status IN ('queued', 'running', 'waiting_for_approval', 'cancelling')
+                      AND r.status IN ('queued', 'running', 'waiting_for_approval', 'waiting_for_input', 'cancelling')
                 ) OR EXISTS(
                     SELECT 1 FROM attention_items a
                     WHERE a.session_id=s.id AND a.read_at IS NULL
@@ -1320,7 +1320,7 @@ class ChatSessionStore:
     ):
         status = str(status or "").strip().lower()
         allowed = {
-            "queued", "running", "waiting_for_approval", "cancelling",
+            "queued", "running", "waiting_for_approval", "waiting_for_input", "cancelling",
             "completed", "failed", "cancelled", "interrupted",
         }
         if status not in allowed:
@@ -1485,7 +1485,7 @@ class ChatSessionStore:
         with self._lock, self._connect() as db:
             now = _now_iso()
             stale = db.execute(
-                "SELECT id FROM runs WHERE status IN ('running', 'waiting_for_approval', 'cancelling')"
+                "SELECT id FROM runs WHERE status IN ('running', 'waiting_for_approval', 'waiting_for_input', 'cancelling')"
             ).fetchall()
             for row in stale:
                 run_id = str(row["id"])
@@ -1701,16 +1701,20 @@ class ChatSessionStore:
             return True
 
     def export_session(self, session_id, target_path):
-        with self._lock, self._connect() as db:
-            session = self._session(db, session_id)
-            if not session:
-                raise ValueError("Session not found.")
-            payload = {
-                "schema_version": CHAT_HISTORY_SCHEMA_VERSION,
-                "exported_at": _now_iso(),
-                "session": session,
-            }
+        payload = self.session_export_payload(session_id)
         os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
         with open(target_path, "w", encoding="utf-8") as destination:
             json.dump(payload, destination, ensure_ascii=False, indent=2)
         return target_path
+
+    def session_export_payload(self, session_id):
+        """Return the same Core-owned JSON payload used by the legacy save flow."""
+        with self._lock, self._connect() as db:
+            session = self._session(db, session_id)
+            if not session:
+                raise ValueError("Session not found.")
+            return {
+                "schema_version": CHAT_HISTORY_SCHEMA_VERSION,
+                "exported_at": _now_iso(),
+                "session": session,
+            }

@@ -36,6 +36,8 @@ raise SystemExit("PyQt6" in sys.modules)
             "smarti.history",
             "smarti.run_manager",
             "smarti.local_gateway",
+            "smarti.doctor",
+            "smarti.email_service",
             "smarti.attachments",
             "smarti.managers",
         ]

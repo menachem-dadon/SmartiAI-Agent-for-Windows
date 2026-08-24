@@ -1,111 +1,97 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { coreApi, encodePath } from "./coreApi";
+import { useState } from "react";
 import type { ResolvedTheme, ThemePreference } from "./designSystem";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { invoke } from "@tauri-apps/api/core";
+import {
+  managementNavigation,
+  settingDefinitions,
+  type ManagementSection,
+  type SettingsSection,
+} from "./managementCatalog";
+import { SettingsView } from "./SettingsManagement";
+import { MemoryView } from "./MemoryManagement";
+import {
+  AboutView,
+  DiagnosticsView,
+  LogsView,
+  TasksView,
+  ToolsView,
+  UpdateControls,
+  UsageView,
+  WorkspaceView,
+} from "./ManagementPages";
 
-type Section = "settings" | "tasks" | "memory" | "tools" | "diagnostics" | "usage" | "logs" | "about";
-type Json = Record<string, unknown>;
-type SettingsField = { key: string; label: string; group: string; group_label: string; type: string; default?: unknown; writable: boolean; restart_required?: boolean; advanced?: boolean; secret?: boolean; configured?: boolean; masked?: string; options?: string[] };
-type SettingsSchema = { groups: Array<{ id: string; label: string; order: number }>; fields: Record<string, SettingsField> };
-const relaunch = () => invoke("restart_after_update");
-
-const sections: Array<{ id: Section; label: string; icon: "settings" | "tasks" | "memory" | "tools" | "doctor" | "usage" | "about"; group?: string }> = [
-  { id: "usage", label: "נתוני שימוש", icon: "usage", group: "ניהול" },
-  { id: "tools", label: "כלים וחיבורים", icon: "tools" },
-  { id: "memory", label: "זיכרונות", icon: "memory" },
-  { id: "tasks", label: "מרכז משימות", icon: "tasks" },
-  { id: "diagnostics", label: "Smarti Diagnostic", icon: "doctor" },
-  { id: "logs", label: "מעקב למפתחים", icon: "settings" },
-  { id: "settings", label: "מודלי AI וספקים", icon: "settings", group: "הגדרות" },
-  { id: "about", label: "אודות", icon: "about" },
-];
-
-function Field({ field, value, onSave }: { field: SettingsField; value: unknown; onSave: (key: string, value: unknown) => Promise<void> }) {
-  const [draft, setDraft] = useState(() => typeof value === "string" ? value : JSON.stringify(value ?? field.default ?? ""));
-  const [status, setStatus] = useState("");
-  useEffect(() => setDraft(typeof value === "string" ? value : JSON.stringify(value ?? field.default ?? "")), [value]);
-  const save = async () => {
-    let next: unknown = draft;
-    if (field.type === "int") next = Number.parseInt(draft, 10);
-    else if (field.type === "float") next = Number.parseFloat(draft);
-    else if (["dict", "list"].includes(field.type)) next = JSON.parse(draft);
-    setStatus("שומר…"); try { await onSave(field.key, next); setStatus(field.restart_required ? "נשמר · נדרש אתחול" : "נשמר"); } catch (reason) { setStatus(String(reason)); }
-  };
-  if (field.type === "bool") return <label className="management-field toggle-field"><span><b>{field.label}</b><small>{field.key}</small></span><input type="checkbox" checked={Boolean(value)} onChange={(event) => void onSave(field.key, event.target.checked)} /></label>;
-  if (field.options?.length) return <label className="management-field"><span><b>{field.label}</b><small>{field.key}{status && ` · ${status}`}</small></span><select value={draft} disabled={!field.writable} onChange={(event) => { setDraft(event.target.value); void onSave(field.key, event.target.value); }}>{field.options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>;
-  return <label className="management-field"><span><b>{field.label}</b><small>{field.key}{status && ` · ${status}`}</small></span><div><input dir="auto" value={draft} disabled={!field.writable} onChange={(event) => setDraft(event.target.value)} onBlur={() => void save()} /></div></label>;
-}
-
-function InputDialog({ title, label, initial = "", confirmLabel = "שמירה", onCancel, onConfirm }: { title: string; label: string; initial?: string; confirmLabel?: string; onCancel: () => void; onConfirm: (value: string) => void }) {
-  const [value, setValue] = useState(initial);
-  return <div className="legacy-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}><form className="legacy-input-dialog" role="dialog" aria-modal="true" aria-label={title} onSubmit={(event) => { event.preventDefault(); if (value.trim()) onConfirm(value.trim()); }}><h2>{title}</h2><label>{label}<textarea autoFocus dir="auto" value={value} onChange={(event) => setValue(event.target.value)} /></label><footer><button type="button" onClick={onCancel}>ביטול</button><button type="submit">{confirmLabel}</button></footer></form></div>;
-}
-
-function ConfirmDialog({ title, description, onCancel, onConfirm }: { title: string; description: string; onCancel: () => void; onConfirm: () => void }) {
-  return <div className="legacy-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}><div className="legacy-input-dialog" role="alertdialog" aria-modal="true" aria-label={title}><h2>{title}</h2><p>{description}</p><footer><button onClick={onCancel}>ביטול</button><button onClick={onConfirm}>אישור מפורש</button></footer></div></div>;
-}
-
-function SecretField({ field, onChanged }: { field: SettingsField; onChanged: () => Promise<void> }) {
-  const [value, setValue] = useState(""); const [status, setStatus] = useState("");
-  const save = async () => { if (!value.trim()) return; setStatus("שומר…"); await coreApi("PUT", `/v2/settings/secrets/${encodePath(field.key)}`, { value }, true); setValue(""); setStatus("נשמר באופן מאובטח"); await onChanged(); };
-  const remove = async () => { await coreApi("DELETE", `/v2/settings/secrets/${encodePath(field.key)}`, {}, true); setStatus("נמחק"); await onChanged(); };
-  return <div className="management-field secret-field"><span><b>{field.label}</b><small>{field.configured ? `מוגדר · ${field.masked || "••••"}` : "לא מוגדר"}{status && ` · ${status}`}</small></span><div><input type="password" autoComplete="new-password" value={value} onChange={(event) => setValue(event.target.value)} placeholder="הדבקת מפתח חדש" /><button onClick={() => void save()}>שמירה</button>{field.configured && <button onClick={() => void remove()}>מחיקה</button>}</div></div>;
-}
-
-function SettingsView({ setTheme }: { setTheme: (theme: ThemePreference) => void }) {
-  const [schema, setSchema] = useState<SettingsSchema | null>(null); const [values, setValues] = useState<Json>({}); const [query, setQuery] = useState(""); const [advanced, setAdvanced] = useState(false); const [group, setGroup] = useState("providers"); const [error, setError] = useState(""); const [models, setModels] = useState<string[]>([]);
-  const load = useCallback(async () => { const [nextSchema, settings] = await Promise.all([coreApi<SettingsSchema>("GET", "/v2/settings/schema"), coreApi<{ values: Json }>("GET", "/v2/settings")]); setSchema(nextSchema); setValues(settings.values); }, []);
-  useEffect(() => { void load().catch((reason) => setError(String(reason))); }, [load]);
-  const save = async (key: string, value: unknown) => { await coreApi("PATCH", "/v2/settings", { values: { [key]: value } }, true); setValues((current) => ({ ...current, [key]: value })); };
-  const setAppearance = async (theme: ThemePreference) => { const preferences = { ...((values.ui_preferences as Json) || {}), theme_mode: theme }; await save("ui_preferences", preferences); setTheme(theme); };
-  const provider = String(values.api_mode || "gemini");
-  useEffect(() => { if (!provider) return; void coreApi<{ models: Array<string | { id?: string; name?: string }> }>("GET", `/v2/providers/${encodePath(provider)}/models`).then((data) => setModels(data.models.map((item) => typeof item === "string" ? item : item.id || item.name || "").filter(Boolean))).catch(() => setModels([])); }, [provider]);
-  const fields = useMemo(() => Object.values(schema?.fields || {}).filter((field) => (advanced || !field.advanced) && (!query.trim() ? field.group === group : `${field.label} ${field.key} ${field.group_label}`.toLowerCase().includes(query.trim().toLowerCase()))), [schema, query, advanced, group]);
-  const validateProvider = async () => { const result = await coreApi<{ ok: boolean; message: string }>("POST", `/v2/providers/${encodePath(provider)}/validate`, {}, true); setError(result.ok ? `החיבור אל ${provider} תקין. ${result.message}` : result.message); };
-  const selectedModelKey = `selected_${provider}_model`;
-  const providerOptions = schema?.fields.api_mode?.options || [];
-  return <div className="management-page"><div className="settings-tools"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="חפש הגדרה" /><label>הצג הגדרות מתקדמות <input type="checkbox" checked={advanced} onChange={(event) => setAdvanced(event.target.checked)} /></label></div>{error && <p className="management-notice">{error}</p>}<div className="settings-groups">{schema?.groups.map((item) => <button key={item.id} className={group === item.id ? "active" : ""} onClick={() => { setGroup(item.id); setQuery(""); }}>{item.label}</button>)}</div>{group === "providers" && !query && <><section className="management-hero"><div><h2>ספקים, מודלים וחיבור</h2><p>הסודות נשמרים ב־Core בלבד. בדיקת החיבור משתמשת במצב הממוסך הקיים ואינה מחזירה מפתח.</p></div><button onClick={() => void validateProvider()}>בדיקת החיבור</button></section><div className="provider-quick-fields"><label>ספק פעיל<select value={provider} onChange={(event) => void save("api_mode", event.target.value)}>{providerOptions.map((item) => <option key={item}>{item}</option>)}</select></label><label>מודל נבחר<select value={String(values[selectedModelKey] || "")} onChange={(event) => void save(selectedModelKey, event.target.value)}>{models.map((item) => <option key={item}>{item}</option>)}</select></label></div></>}{group === "appearance" && !query && <section className="theme-selector"><h2>ערכת נושא</h2><div>{(["system","light","dark"] as ThemePreference[]).map((item) => <button key={item} onClick={() => void setAppearance(item)}>{item === "system" ? "לפי Windows" : item === "light" ? "בהיר" : "כהה"}</button>)}</div></section>}{group === "security" && !query && String(values.ssl_trust_mode) === "legacy_insecure" && <p className="management-notice">מצב התאימות הישן מבטל אימות תעודות עבור יעדים מאושרים. השתמש בו רק כאשר אין חלופה בטוחה.</p>}<div className="management-fields">{fields.filter((field) => field.key !== "api_mode" && field.key !== selectedModelKey).map((field) => field.secret ? <SecretField key={field.key} field={field} onChanged={load} /> : <Field key={field.key} field={field} value={values[field.key]} onSave={save} />)}{!fields.length && <p className="management-empty">לא נמצאו הגדרות תואמות.</p>}</div></div>;
-}
-
-function TasksView() {
-  const [items, setItems] = useState<Json[]>([]); const [prompt, setPrompt] = useState(""); const [delay, setDelay] = useState(5); const [repeat, setRepeat] = useState("once"); const [weeklyDays, setWeeklyDays] = useState("0"); const [conversationMode, setConversationMode] = useState("current"); const [error, setError] = useState(""); const [editing, setEditing] = useState<Json | null>(null);
-  const load = useCallback(async () => setItems((await coreApi<{ items: Json[] }>("GET", "/v2/management/tasks")).items), []); useEffect(() => { void load(); }, [load]);
-  const action = async (payload: Json) => { try { const result = await coreApi<{ items: Json[] }>("POST", "/v2/management/tasks", payload, true); setItems(result.items); setError(""); } catch (reason) { setError(String(reason)); } };
-  const days = weeklyDays.split(",").map((value) => Number.parseInt(value.trim(), 10)).filter((value) => Number.isInteger(value) && value >= 0 && value <= 6);
-  return <div className="management-page"><section className="management-hero"><div><h2>מרכז משימות</h2><p>משימות חד־פעמיות ומחזוריות נשארות בבעלות Python Core ומנותבות לשיחה שנבחרה.</p></div><button onClick={() => void load()}>רענן</button></section><form className="task-create" onSubmit={(event) => { event.preventDefault(); void action({ action: "create", prompt, delay_minutes: delay, repeat, interval_minutes: repeat === "interval" ? Math.max(1, delay) : undefined, days_of_week: repeat === "weekly" ? days : undefined, conversation_mode: conversationMode }).then(() => setPrompt("")); }}><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="מה Smarti יבצע?" required /><label>בעוד <input type="number" min="0" value={delay} onChange={(event) => setDelay(Number(event.target.value))} /> דקות</label><select value={repeat} onChange={(event) => setRepeat(event.target.value)}><option value="once">חד־פעמית</option><option value="interval">מחזורית</option><option value="weekly">שבועית</option></select>{repeat === "weekly" && <label>ימי שבוע (0=שני, 6=ראשון)<input dir="ltr" value={weeklyDays} onChange={(event) => setWeeklyDays(event.target.value)} /></label>}<select value={conversationMode} onChange={(event) => setConversationMode(event.target.value)}><option value="current">שיחת המקור</option><option value="new">שיחה חדשה</option><option value="dedicated">שיחה ייעודית</option></select><button>יצירת משימה</button></form>{error && <p className="management-notice">{error}</p>}<div className="management-cards">{items.map((item) => <article key={String(item.id)}><header><b>{String(item.id)}</b><span>{String(item.status)}</span></header><p>{String(item.prompt || item.message || "")}</p><small>{String(item.run_at || "")} · {String(item.repeat || "once")} · {String(item.conversation_mode || "current")}</small><footer><button onClick={() => setEditing(item)}>עריכה</button><button disabled={["running", "cancelling"].includes(String(item.status))} onClick={() => void action({ action: "retry", id: item.id })}>{String(item.status) === "cancelled" ? "המשך" : "הרץ שוב"}</button><button disabled={!['scheduled','running'].includes(String(item.status))} onClick={() => void action({ action: "cancel", id: item.id })}>השהה/בטל</button><button disabled={["running", "cancelling"].includes(String(item.status))} onClick={() => void action({ action: "delete", id: item.id })}>מחק</button></footer></article>)}{!items.length && <p className="management-empty">אין משימות רקע.</p>}</div>{editing && <InputDialog title="עריכת משימה" label="תוכן המשימה" initial={String(editing.prompt || editing.message || "")} onCancel={() => setEditing(null)} onConfirm={(value) => { void action({ action: "edit", id: editing.id, prompt: value }); setEditing(null); }} />}</div>;
-}
-
-function MemoryView() {
-  const [items, setItems] = useState<Json[]>([]); const [query, setQuery] = useState(""); const [selected, setSelected] = useState<Json | null>(null); const [editing, setEditing] = useState<Json | null>(null);
-  const load = useCallback(async () => setItems((await coreApi<{ items: Json[] }>("GET", `/v2/management/memories?query=${encodeURIComponent(query)}&status=all`)).items), [query]); useEffect(() => { const timer = setTimeout(() => void load(), 220); return () => clearTimeout(timer); }, [load]);
-  const act = async (id: unknown, action: string) => { const result = await coreApi<Json>(action === "delete" ? "DELETE" : "PATCH", `/v2/management/memories/${encodePath(String(id))}`, { action }, true); if (["details", "reveal"].includes(action)) setSelected(result); else await load(); };
-  const saveEdit = async (content: string) => { if (!editing) return; await coreApi("PATCH", `/v2/management/memories/${encodePath(String(editing.id))}`, { action: "edit", content }, true); setEditing(null); await load(); };
-  return <div className="management-page"><section className="management-hero"><div><h2>ניהול זיכרון</h2><p>תוכן רגיש נשאר ממוסך עד לפעולת חשיפה מפורשת. פעולות CRUD כאן אינן הוכחה ללכידה או שליפה אוטומטית של זיכרון.</p></div><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="חיפוש בזיכרון" /></section>{selected && <article className="memory-details"><button onClick={() => setSelected(null)}>×</button><h3>{String(selected.subject || "פרטי זיכרון")}</h3><pre dir="auto">{String(selected.content || selected.masked_content || "")}</pre>{selected.sensitivity !== "none" && <button onClick={() => void act(selected.id, "reveal")}>חשיפה מפורשת</button>}</article>}<div className="management-cards compact">{items.map((item) => <article key={String(item.id)}><header><b>{String(item.subject || "זיכרון")}</b><span>{String(item.sensitivity || "רגיל")}</span></header><p>{String(item.content || item.masked_content || "")}</p><small>{String(item.type || "")} · {String(item.updated_at || "")}</small><footer><button onClick={() => void act(item.id, "details")}>פרטים</button><button onClick={() => setEditing(item)}>עריכה</button><button onClick={() => void act(item.id, item.status === "archive" ? "restore" : "archive")}>{item.status === "archive" ? "שחזור" : "ארכוב"}</button><button onClick={() => void act(item.id, "delete")}>מחיקה</button></footer></article>)}</div>{editing && <InputDialog title="עריכת זיכרון" label="תוכן הזיכרון" initial={String(editing.content || editing.masked_content || "")} onCancel={() => setEditing(null)} onConfirm={(value) => void saveEdit(value)} />}</div>;
-}
-
-function ToolsView() {
-  const [data, setData] = useState<{ builtins: Json[]; extensions: Json[] }>({ builtins: [], extensions: [] }); const [query, setQuery] = useState(""); const [installing, setInstalling] = useState<"skill" | "custom" | "mcp" | null>(null); const load = useCallback(async () => setData(await coreApi<{ builtins: Json[]; extensions: Json[] }>("GET", "/v2/management/tools")), []); useEffect(() => { void load(); }, [load]);
-  const action = async (payload: Json) => setData(await coreApi<{ builtins: Json[]; extensions: Json[] }>("POST", "/v2/management/tools", payload, true));
-  const visible: Json[] = [...data.builtins.map((item) => ({ ...item, kind: "builtin" } as Json)), ...data.extensions].filter((item) => `${String(item.name || "")} ${String(item.description || "")}`.toLowerCase().includes(query.toLowerCase()));
-  const install = (value: string) => { if (!installing) return; void action(installing === "skill" ? { action: "install_skill", path: value } : installing === "custom" ? { action: "install_custom", path: value } : { action: "install_mcp", package: value }); setInstalling(null); };
-  return <div className="management-page"><section className="management-hero"><div><h2>ניהול כלים</h2><p>כלים מובנים, Python, MCP ו־Skills עם מצב אמון מפורש ואזהרות לפני הרחבה חיצונית.</p></div><button onClick={() => void action({ action: "refresh" })}>רענון הרחבות</button></section><div className="extension-actions"><button onClick={() => setInstalling("skill")}>התקנת Skill</button><button onClick={() => setInstalling("custom")}>התקנת כלי Python</button><button onClick={() => setInstalling("mcp")}>הוספת MCP</button></div><input className="management-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="חיפוש כלי או מיומנות" /><div className="management-cards compact">{visible.map((item, index) => <article key={`${item.kind}-${item.name}-${index}`}><header><b dir="ltr">{String(item.name)}</b><span>{String(item.kind)}</span></header><p>{String(item.description || item.trust || "")}</p><footer>{item.kind === "builtin" ? <button onClick={() => void action({ action: "set_enabled", kind: "builtin", name: item.name, enabled: !item.enabled })}>{item.enabled ? "כיבוי" : "הפעלה"}</button> : <button onClick={() => void action({ action: "set_trust", kind: item.kind, name: item.name, trusted: item.trust !== "trusted" })}>{item.trust === "trusted" ? "הסרת אמון" : "מתן אמון"}</button>}</footer></article>)}</div>{installing && <InputDialog title={installing === "mcp" ? "הוספת MCP" : "התקנת הרחבה מקומית"} label={installing === "mcp" ? "שם חבילה או נתיב config" : "נתיב מקומי"} confirmLabel="התקנה" onCancel={() => setInstalling(null)} onConfirm={install} />}</div>;
-}
-
-function DiagnosticsView() {
-  const [items, setItems] = useState<Json[]>([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState("עוד לא בוצעה בדיקה."); const [repairing, setRepairing] = useState<Json | null>(null);
-  const scan = async (include_network: boolean) => { setBusy(true); setMessage("הבדיקה פועלת…"); try { const data = await coreApi<{ items: Json[] }>("POST", "/v2/management/diagnostics", { include_network }, true); setItems(data.items); setMessage(`הבדיקה הסתיימה: ${data.items.length} תוצאות.`); } catch (reason) { setMessage(String(reason)); } finally { setBusy(false); } };
-  const repair = async () => { if (!repairing) return; await coreApi("POST", "/v2/management/diagnostics", { action: "repair", repair_id: repairing.id }, true); setRepairing(null); await scan(false); };
-  return <div className="management-page"><section className="diagnostic-hero"><strong>{items.length ? Math.max(0, 100 - items.filter((item) => item.status === "error").length * 24 - items.filter((item) => item.status === "warning").length * 9) : "—"}</strong><div><h2>Smarti Diagnostic</h2><p>{message}</p></div><button disabled={busy} onClick={() => void scan(false)}>בדיקה מהירה</button><button disabled={busy} onClick={() => void scan(true)}>בדיקה מלאה</button></section><div className="management-cards">{items.map((item) => <article key={String(item.id)} className={`status-${item.status}`}><header><b>{String(item.title_he)}</b><span>{String(item.status)}</span></header><p>{String(item.explanation_he)}</p><details><summary>פרטים טכניים</summary><pre dir="ltr">{String(item.technical_detail)}</pre></details>{Boolean(item.repair_action) && <footer><button onClick={() => setRepairing(item.repair_action as Json)}>{String((item.repair_action as Json).title_he)}</button></footer>}</article>)}</div>{repairing && <ConfirmDialog title="אישור תיקון" description={`לבצע את התיקון המאושר: ${String(repairing.title_he)}? הפעולה תבוצע ב־Python Core.`} onCancel={() => setRepairing(null)} onConfirm={() => void repair()} />}</div>;
-}
-
-function UsageView() { const cacheKey = "smarti.management.usage-cache"; const [data, setData] = useState<Json | null>(() => { try { return JSON.parse(sessionStorage.getItem(cacheKey) || "null"); } catch { return null; } }); useEffect(() => { void coreApi<Json>("GET", "/v2/management/usage").then((value) => { setData(value); sessionStorage.setItem(cacheKey, JSON.stringify(value)); }); }, []); return <div className="management-page"><section className="management-hero"><div><h2>נתוני שימוש (טוקנים)</h2><p>טעינה ראשונית מהמטמון המקומי ורענון אסינכרוני, ללא בקשת מודל.</p></div><strong>{Number(data?.total_tokens || 0).toLocaleString("he-IL")}</strong></section><div className="management-cards compact">{(data?.models as Json[] || []).map((item) => <article key={String(item.model)}><header><b>{String(item.model)}</b><span>{Number(item.tokens || 0).toLocaleString("he-IL")}</span></header></article>)}</div></div>; }
-function LogsView() { const [lines, setLines] = useState<string[]>([]); const [path, setPath] = useState(""); const [personal, setPersonal] = useState(false); const load = useCallback(async () => { const value = await coreApi<{ lines: string[]; path: string }>("GET", `/v2/management/logs?limit=1000&personal=${personal ? "shown" : "hidden"}`); setLines(value.lines); setPath(value.path); }, [personal]); useEffect(() => { void load(); }, [load]); const exportLog = () => { const href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" })); const a = document.createElement("a"); a.href = href; a.download = "SmartiAI-log.txt"; a.click(); URL.revokeObjectURL(href); }; return <div className="management-page logs-page"><section className="management-hero"><div><h2>Developer Trace</h2><p>התוכן האישי מוסתר כברירת מחדל; מטא־נתונים טכניים נשמרים.<br /><span dir="ltr">{path}</span></p></div><label>הצג תוכן אישי <input type="checkbox" checked={personal} onChange={(event) => setPersonal(event.target.checked)} /></label><button onClick={exportLog}>ייצוא</button></section><pre dir="ltr">{lines.join("\n") || "אין עדיין רשומות לוג."}</pre></div>; }
-function AboutView({ theme }: { theme: ResolvedTheme }) { const [data, setData] = useState<Json>({}); const [update, setUpdate] = useState<Update | null>(null); const [updateStatus, setUpdateStatus] = useState(""); const icons = legacyAssets(theme); useEffect(() => { void coreApi<Json>("GET", "/v2/management/about").then(setData); }, []); const checkUpdate = async () => { setUpdateStatus("בודק עדכונים חתומים…"); try { const found = await check(); setUpdate(found); setUpdateStatus(found ? `גרסה ${found.version} זמינה.` : "Smarti מעודכן."); } catch (reason) { setUpdateStatus(`בדיקת העדכון נכשלה: ${String(reason)}`); } }; const install = async () => { if (!update) return; setUpdateStatus("מוריד ומאמת חתימה…"); try { await update.downloadAndInstall((event) => { if (event.event === "Finished") setUpdateStatus("העדכון אומת והותקן. מפעיל מחדש…"); }); await relaunch(); } catch (reason) { setUpdateStatus(`העדכון בוטל או נכשל ללא שינוי בגרסה המותקנת: ${String(reason)}`); } }; return <div className="management-page about-page"><section><img className="about-logo" src={icons.logo} alt="SmartiAI" /><h2>{String(data.name || "Smarti AI Agent for Windows")}</h2><b>גרסה {String(data.version || "")}</b><p>{String(data.description || "")}</p><small>Python {String(data.python || "")} · Control Plane {String(data.contract_version || "")}</small><div className="update-controls"><button onClick={() => void checkUpdate()}>בדיקת עדכונים</button>{update && <><button onClick={() => void install()}>הורדה, אימות והתקנה</button><button onClick={() => { setUpdate(null); setUpdateStatus("העדכון נדחה. לא בוצע שינוי."); }}>לא עכשיו</button></>}<p role="status">{updateStatus}</p></div><p>Smarti פועל תחת תנאי הרישיון, מדיניות הפרטיות והודעות התלויות המצורפות להתקנה. רכיבי Runtime נשארים בבעלות ובגרסאות המוצגות כאן.</p><a href="https://github.com/menachem-dadon/SmartiAI-Agent-for-Windows" target="_blank" rel="noreferrer">פתח את מאגר GitHub</a></section></div>; }
-
-export function ManagementCenter({ initial = "settings", onClose, setTheme, theme }: { initial?: Section; onClose: () => void; setTheme: (theme: ThemePreference) => void; theme: ResolvedTheme }) {
-  const [section, setSection] = useState<Section>(initial);
+export function ManagementCenter({
+  initial = "settings_ai",
+  onClose,
+  onOpenWorkbench,
+  setTheme,
+  theme,
+}: {
+  initial?: ManagementSection;
+  onClose: () => void;
+  onOpenWorkbench?: (tab: "browser" | "files") => void;
+  setTheme: (theme: ThemePreference) => void;
+  theme: ResolvedTheme;
+}) {
+  const [section, setSection] = useState<ManagementSection>(initial);
   const icons = legacyAssets(theme);
-  return <div className="management-overlay" role="dialog" aria-modal="true" aria-label="הגדרות וניהול"><header><button onClick={onClose} aria-label="חזרה לצ'אט"><LegacyIcon src={icons.back} size={21} /></button><h1>הגדרות וניהול</h1></header><div className="management-layout"><nav>{sections.map((item) => <div className="management-nav-entry" key={item.id}>{item.group && <small>{item.group}</small>}<button className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)}><LegacyIcon src={icons[item.icon]} size={19} />{item.label}</button></div>)}</nav><main>{section === "settings" && <SettingsView setTheme={setTheme} />}{section === "tasks" && <TasksView />}{section === "memory" && <MemoryView />}{section === "tools" && <ToolsView />}{section === "diagnostics" && <DiagnosticsView />}{section === "usage" && <UsageView />}{section === "logs" && <LogsView />}{section === "about" && <AboutView theme={theme} />}</main></div></div>;
+  return (
+    <div
+      className="management-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="הגדרות וניהול"
+    >
+      <header>
+        <button onClick={onClose} aria-label="חזרה לצ׳אט">
+          <LegacyIcon src={icons.back} size={21} />
+        </button>
+        <h1>הגדרות וניהול</h1>
+      </header>
+      <div className="management-layout">
+        <nav aria-label="ניווט הגדרות וניהול">
+          {managementNavigation.map((group) => (
+            <section key={group.group}>
+              <small>{group.group}</small>
+              {group.items.map((item) => (
+                <button
+                  key={item.id}
+                  className={section === item.id ? "active" : ""}
+                  onClick={() => setSection(item.id)}
+                >
+                  {item.icon && <LegacyIcon src={icons[item.icon]} size={19} />}
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </section>
+          ))}
+        </nav>
+        <main>
+          {section === "workspace" && (
+            <WorkspaceView onOpenWorkbench={onOpenWorkbench} />
+          )}
+          {section === "tasks" && <TasksView />}
+          {section === "memory" && <MemoryView />}
+          {section === "tools" && <ToolsView theme={theme} />}
+          {section === "diagnostics" && <DiagnosticsView />}
+          {section === "usage" && <UsageView />}
+          {section === "logs" && <LogsView />}
+          {section.startsWith("settings_") && (
+            <SettingsView
+              section={section as SettingsSection}
+              setTheme={setTheme}
+              theme={theme}
+              onNavigate={setSection}
+              updateControls={<UpdateControls compact theme={theme} />}
+            />
+          )}
+          {section === "about" && <AboutView theme={theme} />}
+        </main>
+      </div>
+    </div>
+  );
 }
+
+export const point16BVisibleSettings = settingDefinitions.map(
+  (item) => item.label,
+);

@@ -41,6 +41,42 @@ function Reset-ScopedDirectory([string]$Path, [string]$AllowedRoot) {
 }
 function Read-Json([string]$Path) { Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json }
 function Normalize-Version([string]$Value) { ([string]$Value).Trim().TrimStart([char[]]@('v','V')) }
+function Invoke-PackagedSmoke(
+    [string]$AppPath,
+    [string]$WorkingDirectory,
+    [string]$SmokeVariable,
+    [string]$SmokeFile,
+    [string]$DataDirectory,
+    [int]$TimeoutMilliseconds = 120000
+) {
+    $saved = @{}
+    foreach ($name in @($SmokeVariable, "SMARTI_DATA_DIR", "SMARTI_DETERMINISTIC_PRODUCT_SMOKE", "SMARTI_PROJECT_ROOT", "SMARTI_PYTHON", "SMARTI_CORE_BINARY")) {
+        $saved[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+    }
+    try {
+        [Environment]::SetEnvironmentVariable($SmokeVariable, $SmokeFile, "Process")
+        [Environment]::SetEnvironmentVariable("SMARTI_DATA_DIR", $DataDirectory, "Process")
+        [Environment]::SetEnvironmentVariable("SMARTI_DETERMINISTIC_PRODUCT_SMOKE", "1", "Process")
+        foreach ($name in @("SMARTI_PROJECT_ROOT", "SMARTI_PYTHON", "SMARTI_CORE_BINARY")) {
+            [Environment]::SetEnvironmentVariable($name, $null, "Process")
+        }
+        $process = Start-Process -FilePath $AppPath -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            $process.Kill()
+            throw "Packaged smoke timed out: $SmokeVariable"
+        }
+        if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $SmokeFile)) {
+            throw "Packaged smoke failed for $SmokeVariable with exit code $($process.ExitCode)."
+        }
+        $result = Read-Json $SmokeFile
+        if (-not $result.ok) { throw "Packaged smoke reported failure: $($result | ConvertTo-Json -Compress -Depth 8)" }
+        return $result
+    } finally {
+        foreach ($name in $saved.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $saved[$name], "Process")
+        }
+    }
+}
 function Assert-VersionSync {
     $common = Select-String -LiteralPath (Join-Path $repo "smarti\common.py") -Pattern '^APP_VERSION\s*=\s*["'']([^"'']+)' | Select-Object -First 1
     $values = @(
@@ -142,17 +178,26 @@ Compress-Archive -Path (Join-Path $portableRoot "*") -DestinationPath $zipOut -C
 if (-not $SkipPackageSmoke) {
     $smokeDir = Join-Path $work "package-smoke"
     New-Item -ItemType Directory -Force -Path $smokeDir | Out-Null
-    $smokeFile = Join-Path $smokeDir "supervisor.json"
-    $oldSmoke = $env:SMARTI_SUPERVISOR_SMOKE_FILE; $oldData = $env:SMARTI_DATA_DIR
-    try {
-        $env:SMARTI_SUPERVISOR_SMOKE_FILE = $smokeFile
-        $env:SMARTI_DATA_DIR = Join-Path $smokeDir "data"
-        $process = Start-Process -FilePath (Join-Path $portableRoot "SmartiAI.exe") -WorkingDirectory $portableRoot -WindowStyle Hidden -PassThru
-        if (-not $process.WaitForExit(90000)) { $process.Kill(); throw "Packaged supervisor smoke timed out." }
-        if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $smokeFile)) { throw "Packaged supervisor smoke failed with exit code $($process.ExitCode)." }
-        $smoke = Read-Json $smokeFile
-        if (-not $smoke.ok) { throw "Packaged supervisor smoke reported failure: $($smoke | ConvertTo-Json -Compress)" }
-    } finally { $env:SMARTI_SUPERVISOR_SMOKE_FILE = $oldSmoke; $env:SMARTI_DATA_DIR = $oldData }
+    $supervisorSmoke = Invoke-PackagedSmoke `
+        -AppPath (Join-Path $portableRoot "SmartiAI.exe") `
+        -WorkingDirectory $portableRoot `
+        -SmokeVariable "SMARTI_SUPERVISOR_SMOKE_FILE" `
+        -SmokeFile (Join-Path $smokeDir "supervisor.json") `
+        -DataDirectory (Join-Path $smokeDir "supervisor-data")
+    $browserSmoke = Invoke-PackagedSmoke `
+        -AppPath (Join-Path $portableRoot "SmartiAI.exe") `
+        -WorkingDirectory $portableRoot `
+        -SmokeVariable "SMARTI_BROWSER_SMOKE_FILE" `
+        -SmokeFile (Join-Path $smokeDir "browser.json") `
+        -DataDirectory (Join-Path $smokeDir "browser-data")
+    $packageSmokeReport = [ordered]@{
+        requested = $true
+        passed = $true
+        supervisor = $supervisorSmoke
+        browser = $browserSmoke
+    }
+} else {
+    $packageSmokeReport = [ordered]@{ requested = $false; passed = $false }
 }
 
 $artifacts = @($installerOut, $zipOut)
@@ -164,7 +209,7 @@ $report = [ordered]@{
     updaterSigned = (-not $AllowUnsignedLocal)
     authenticode = Get-SignatureStatus $installerOut
     artifacts = @($artifacts | ForEach-Object { $file = Get-Item -LiteralPath $_; [ordered]@{ path = $file.FullName; bytes = $file.Length; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant() } })
-    packageSmoke = (-not $SkipPackageSmoke)
+    packageSmoke = $packageSmokeReport
     evidenceBoundary = "No clean Windows 10/11 VM, upgrade, uninstall or Authenticode claim is implied by this local build report."
 }
 $reportPath = Join-Path $release "SmartiAI-Agent-for-Windows-$(Normalize-Version $Version)-manifest.json"

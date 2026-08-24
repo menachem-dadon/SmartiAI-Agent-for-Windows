@@ -5,7 +5,8 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
+    WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 #[cfg(not(windows))]
@@ -14,6 +15,7 @@ use tauri_plugin_notification::NotificationExt;
 pub struct DesktopState {
     quitting: AtomicBool,
     close_to_tray: AtomicBool,
+    workspace_ready: AtomicBool,
 }
 
 impl Default for DesktopState {
@@ -21,6 +23,7 @@ impl Default for DesktopState {
         Self {
             quitting: AtomicBool::new(false),
             close_to_tray: AtomicBool::new(true),
+            workspace_ready: AtomicBool::new(false),
         }
     }
 }
@@ -79,6 +82,14 @@ pub fn activation_from_args(arguments: Vec<String>) -> DesktopActivation {
 }
 
 fn placement_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    if let Some(data_dir) = std::env::var_os("SMARTI_DATA_DIR") {
+        return Some(
+            std::path::PathBuf::from(data_dir)
+                .join("tauri-desktop")
+                .join("data")
+                .join("window-placement.json"),
+        );
+    }
     app.path()
         .app_data_dir()
         .ok()
@@ -111,18 +122,18 @@ fn save_placement(app: &AppHandle, window: &WebviewWindow) {
     }
 }
 
-fn restore_placement(app: &AppHandle, window: &WebviewWindow) {
+fn restore_placement(app: &AppHandle, window: &WebviewWindow) -> bool {
     let Some(path) = placement_path(app) else {
-        return;
+        return false;
     };
     let Ok(data) = fs::read(path) else {
-        return;
+        return false;
     };
     let Ok(value) = serde_json::from_slice::<WindowPlacement>(&data) else {
-        return;
+        return false;
     };
     if !(720..=8192).contains(&value.width) || !(560..=8192).contains(&value.height) {
-        return;
+        return false;
     }
     let visible = window.available_monitors().ok().is_some_and(|monitors| {
         monitors.iter().any(|monitor| {
@@ -143,6 +154,7 @@ fn restore_placement(app: &AppHandle, window: &WebviewWindow) {
     } else {
         let _ = window.center();
     }
+    true
 }
 
 #[cfg(windows)]
@@ -171,13 +183,18 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let window = app
         .get_webview_window("main")
         .ok_or("main window missing")?;
-    restore_placement(app, &window);
     apply_windows_identity(&window);
     let app_for_window = app.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-            if let Some(window) = app_for_window.get_webview_window("main") {
-                save_placement(&app_for_window, &window);
+            if app_for_window
+                .state::<DesktopState>()
+                .workspace_ready
+                .load(Ordering::Acquire)
+            {
+                if let Some(window) = app_for_window.get_webview_window("main") {
+                    save_placement(&app_for_window, &window);
+                }
             }
         }
         WindowEvent::CloseRequested { api, .. }
@@ -254,6 +271,132 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         })
         .build(app)?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_finish_startup(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<DesktopState>();
+    if state.workspace_ready.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window missing")?;
+    window
+        .set_min_size(Some(LogicalSize::new(720.0, 560.0)))
+        .map_err(|error| error.to_string())?;
+    window
+        .set_resizable(true)
+        .map_err(|error| error.to_string())?;
+    if !restore_placement(&app, &window) {
+        let (width, height) = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .map(|monitor| {
+                let scale = monitor.scale_factor().max(0.5);
+                let size = monitor.size();
+                workspace_default_size(size.width as f64 / scale, size.height as f64 / scale)
+            })
+            .unwrap_or((1180.0, 760.0));
+        window
+            .set_size(LogicalSize::new(width, height))
+            .map_err(|error| error.to_string())?;
+        window.center().map_err(|error| error.to_string())?;
+    }
+    state.workspace_ready.store(true, Ordering::Release);
+    Ok(())
+}
+
+fn workspace_default_size(available_width: f64, available_height: f64) -> (f64, f64) {
+    (
+        (available_width - 72.0).clamp(920.0, 1380.0),
+        (available_height - 72.0).clamp(620.0, 900.0),
+    )
+}
+
+fn voice_overlay_position(main: &WebviewWindow, width: f64) -> LogicalPosition<f64> {
+    let scale = main.scale_factor().unwrap_or(1.0).max(0.5);
+    let position = main.outer_position().unwrap_or(PhysicalPosition::new(0, 0));
+    let size = main.outer_size().unwrap_or(PhysicalSize::new(980, 680));
+    let main_x = position.x as f64 / scale;
+    let main_y = position.y as f64 / scale;
+    let main_width = size.width as f64 / scale;
+    let mut y = main_y - 82.0;
+    if y < 8.0 {
+        y = main_y + 12.0;
+    }
+    LogicalPosition::new((main_x + (main_width - width) / 2.0).max(8.0), y.max(8.0))
+}
+
+#[tauri::command]
+pub fn desktop_show_voice_overlay(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("voice-overlay") {
+        window.show().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    create_voice_overlay(&app, true).map(|_| ())
+}
+
+pub(crate) fn create_voice_overlay(app: &AppHandle, show: bool) -> Result<WebviewWindow, String> {
+    let main = app
+        .get_webview_window("main")
+        .ok_or("main window missing")?;
+    let main_foreground = main.is_visible().unwrap_or(false)
+        && !main.is_minimized().unwrap_or(false)
+        && main.is_focused().unwrap_or(false);
+    let expanded = !main_foreground;
+    let width = voice_overlay_width(main_foreground);
+    let url = WebviewUrl::App(
+        format!("index.html?voice-overlay=1&expanded={}", u8::from(expanded)).into(),
+    );
+    let overlay = WebviewWindowBuilder::new(app, "voice-overlay", url)
+        .title("SmartiAI Voice")
+        .inner_size(width, 70.0)
+        .min_inner_size(width, 70.0)
+        .max_inner_size(width, 70.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(false)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .visible(false)
+        .build()
+        .map_err(|error| error.to_string())?;
+    overlay
+        .set_position(voice_overlay_position(&main, width))
+        .map_err(|error| error.to_string())?;
+    if show {
+        overlay.show().map_err(|error| error.to_string())?;
+    }
+    Ok(overlay)
+}
+
+fn voice_overlay_width(main_foreground: bool) -> f64 {
+    if main_foreground {
+        298.0
+    } else {
+        342.0
+    }
+}
+
+#[tauri::command]
+pub fn desktop_hide_voice_overlay(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("voice-overlay") {
+        let _ = window.close();
+    }
+}
+
+#[tauri::command]
+pub fn desktop_focus_main(app: AppHandle) -> Result<(), String> {
+    let main = app
+        .get_webview_window("main")
+        .ok_or("main window missing")?;
+    main.show().map_err(|error| error.to_string())?;
+    main.unminimize().map_err(|error| error.to_string())?;
+    main.set_focus().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -455,5 +598,13 @@ mod tests {
             activation_from_args(vec!["smarti.exe".into()]).command,
             "show"
         );
+    }
+
+    #[test]
+    fn legacy_shell_and_voice_window_sizes_are_exact() {
+        assert_eq!(workspace_default_size(1920.0, 1080.0), (1380.0, 900.0));
+        assert_eq!(workspace_default_size(1024.0, 768.0), (952.0, 696.0));
+        assert_eq!(voice_overlay_width(true), 298.0);
+        assert_eq!(voice_overlay_width(false), 342.0);
     }
 }

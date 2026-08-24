@@ -280,109 +280,112 @@ requested. No clipping was observed in these four states.
 
 ## 9. Stable feature-parity matrix
 
-Statuses used now: `BASELINE-CODE`, `BASELINE-TEST`, `BASELINE-LIVE`,
-`BASELINE-VISUAL`, `HISTORICAL-ONLY`, and `UNVERIFIED`. Later migration points
-must update the same IDs; Point 17 must resolve every row.
+Point 16C is re-auditing the same 97 stable IDs against the current PyQt authority,
+the Tauri/React/Rust/Python implementation and the final current-machine
+evidence. `IMPLEMENTED` means the capability is present; an approved
+architecture status names an intentional Tauri substitution. `PKG-005` records
+the user's explicit current-machine validation scope rather than pretending a
+clean-machine matrix was performed. Point 17 must preserve every resolution.
 
 | ID | Feature | Legacy evidence | New point | Final status |
 |---|---|---|---:|---|
-| SHL-001 | One-click GUI launch without console | `smarti_core.pyw`, `app.py` | 5 | BASELINE-CODE |
-| SHL-002 | First-run legal agreement and splash | `legal.py`, `app.py` | 5 | BASELINE-CODE |
-| SHL-003 | Central RTL chat surface | `chat.py`, four captures | 7 | BASELINE-VISUAL |
-| SHL-004 | Right collapsible conversation drawer | `WorkspaceSidebar`, captures | 7 | BASELINE-VISUAL |
-| SHL-005 | Empty-on-start left Workbench | `WorkspaceWorkbench`, workspace tests | 7 | BASELINE-TEST |
-| SHL-006 | Narrow/wide responsive Workspace | `ChatWindow`, four captures | 7 | BASELINE-VISUAL |
-| SHL-007 | Light/dark/system theme | `ui_styles.py`, settings | 7 | BASELINE-LIVE |
-| SHL-008 | RTL with LTR technical islands | `chat.py`, `workspace_ui.py` | 7 | BASELINE-CODE |
-| SHL-009 | Custom titlebar/window controls | `WorkspaceWindowTitleBar` | 15 | BASELINE-VISUAL |
-| CHT-001 | New conversation and active title | `ChatWindow`, history tests | 8 | BASELINE-TEST |
-| CHT-002 | Safe Markdown and links | `MessageBubble`, `CodeBlockWidget` | 8 | BASELINE-CODE |
-| CHT-003 | Code copy/download/wrap/scroll | `CodeBlockWidget` | 8 | BASELINE-TEST |
-| CHT-004 | Mixed user/assistant RTL alignment | chat RTL tests | 8 | BASELINE-TEST |
-| CHT-005 | Tool/thinking progress groups | process-group UI tests | 8 | BASELINE-TEST |
-| CHT-006 | Message copy/read-aloud/actions | `ChatMessageContainer` | 9 | BASELINE-CODE |
-| CHT-007 | Long history paging and virtualization boundary | `history.py`, `ChatHistoryPage` | 8 | BASELINE-TEST |
-| CHT-008 | Model/provider selector | `ChatWindow`, settings | 8 | BASELINE-CODE |
-| CMP-001 | Multiline composer and keyboard send | `ChatWindow` | 9 | BASELINE-CODE |
-| CMP-002 | Send/cancel/microphone state | composer controls | 9 | BASELINE-VISUAL |
-| CMP-003 | Plus/action menu | composer controls | 9 | BASELINE-VISUAL |
-| ATT-001 | File picker, drag/drop, paste | `attachments.py`, `chat.py` | 9 | BASELINE-CODE |
-| ATT-002 | Pending previews and per-item removal | attachment widgets | 9 | BASELINE-CODE |
-| ATT-003 | Sent attachment metadata/provider validation | `attachments.py` | 9 | BASELINE-TEST |
-| HIS-001 | Conversation list/search | `ChatHistoryPage`, SQLite search tests | 8 | BASELINE-TEST |
-| HIS-002 | Rename/delete/pin | history UI/store | 8 | BASELINE-TEST |
-| HIS-003 | Session/message SQLite migration | `history.py`, history tests | 8 | BASELINE-TEST |
-| RUN-001 | One run at a time per conversation | `run_manager.py` | 8 | BASELINE-TEST |
-| RUN-002 | Independent conversations run concurrently | conversation tests | 8 | BASELINE-TEST |
-| RUN-003 | Queue/cancel/interruption/recovery | run manager/history tests | 8 | BASELINE-TEST |
-| RUN-004 | Durable ordered events and UI replay | run store tests | 8 | BASELINE-TEST |
-| RUN-005 | Run-local provider/model/settings binding | conversation tests | 8 | BASELINE-TEST |
-| RUN-006 | Durable attention separate from run state | attention tests | 8 | BASELINE-TEST |
-| APR-001 | Durable approval request/resolve/deny | run manager/history | 8 | BASELINE-TEST |
-| APR-002 | API-key-required interruption | UI/core callbacks | 9 | BASELINE-CODE |
-| GAT-001 | Authenticated loopback `/v1` gateway | `local_gateway.py` | 4 | BASELINE-TEST |
-| GAT-002 | Idempotent message submission | gateway tests | 4 | BASELINE-TEST |
-| GAT-003 | Sessions/runs/events/cancel/approvals/receipts | gateway routes | 4 | BASELINE-CODE |
-| SET-001 | Searchable settings/navigation | `SettingsPage` | 10 | BASELINE-CODE |
-| SET-002 | Autosave/default/migration validation | `SettingsManager` | 10 | BASELINE-TEST |
-| SET-003 | Provider/model discovery and validation | settings/workers | 10 | BASELINE-CODE |
-| SET-004 | Masked secret set/paste/delete | settings/keyring tests | 10 | BASELINE-TEST |
-| SET-005 | SSL system/custom/legacy trust modes | `ssl_compat.py`, SSL tests | 10 | BASELINE-TEST |
-| SET-006 | Autonomy/policy/sandbox controls | settings/policy engine | 10 | BASELINE-CODE |
-| SET-007 | Appearance/voice/notification/update preferences | settings/config | 10 | BASELINE-CODE |
-| MGT-001 | Management center navigation | `ManagementCenterPage` | 11 | BASELINE-CODE |
-| USE-001 | Usage/cost cached first paint and refresh | usage tests | 11 | BASELINE-TEST |
-| MEM-001 | Automatic memory capture/retrieval | managers/memory tests | 11 | BASELINE-TEST |
-| MEM-002 | Memory CRUD/filter/archive/restore | `memory_ui.py`, tests | 11 | BASELINE-TEST |
-| MEM-003 | Encryption/masking/sensitivity/reveal policy | memory tests | 11 | BASELINE-TEST |
-| TSK-001 | Task create/edit/pause/resume/delete | Task Center/scheduler | 11 | BASELINE-TEST |
-| TSK-002 | Current/new/dedicated conversation routing | notification policy tests | 11 | BASELINE-TEST |
-| TSK-003 | Recurrence, catch-up and recovery | background runtime | 11 | BASELINE-CODE |
-| TOL-001 | Built-in tool catalog and lazy schemas | `config.py`, tool calls | 11 | BASELINE-TEST |
-| TOL-002 | Custom Python tools | extensions/system tools | 11 | BASELINE-CODE |
-| TOL-003 | MCP config/install/trust/private Node | extensions/system tools | 11 | BASELINE-TEST |
-| TOL-004 | Skills registry/load/install/trust | extensions/Doctor tests | 11 | BASELINE-TEST |
-| DIA-001 | Doctor checks and approved repairs | `doctor.py`, Doctor tests | 11 | BASELINE-TEST |
-| DIA-002 | Developer trace and unified logs | trace/log tests | 11 | BASELINE-TEST |
-| DIA-003 | Privacy-filtered diagnostic export | logging export tests | 11 | BASELINE-TEST |
-| ABT-001 | About/legal/version/runtime state | `AboutPage` | 11 | BASELINE-CODE |
-| FIL-001 | Scoped workspace root | `WorkspaceFilePanel` | 12 | BASELINE-CODE |
-| FIL-002 | RTL tree right, preview left | workspace UI/tests | 12 | BASELINE-TEST |
-| FIL-003 | Text/Markdown/image/media previews | workspace UI | 12 | BASELINE-CODE |
-| FIL-004 | PDF/Office rendered previews | workspace/document tools | 12 | BASELINE-TEST |
-| FIL-005 | Path/reparse/size/MIME safety | file tools tests | 12 | BASELINE-TEST |
-| ART-001 | Artifact discovery/open/refresh | `WorkspaceArtifactsPanel` | 12 | BASELINE-CODE |
-| TRM-001 | Multiple PowerShell tabs | `WorkspaceTerminalPanel` | 12 | BASELINE-CODE |
-| TRM-002 | Stream/input/restart/cwd/cancel/cleanup | terminal panel/core subprocess | 12 | BASELINE-CODE |
-| CAN-001 | Persisted validated Canvas schema | `visual_canvas.py` | 13 | BASELINE-TEST |
-| CAN-002 | HTML/image/button rendering and positions | Canvas tests/UI | 13 | BASELINE-TEST |
-| CAN-003 | Remote-image opt-in and local materialization | Canvas tests | 13 | BASELINE-TEST |
-| CAN-004 | Repeated Canvas tabs/history/context | Canvas/workspace | 13 | BASELINE-TEST |
-| BRW-001 | Integrated visible Chromium/Edge surface | native browser/workspace | 6 | BASELINE-CODE |
-| BRW-002 | Visible target equals CDP automation target | browser controller contract | 6 | UNVERIFIED |
-| BRW-003 | Persistent and Guest profile isolation | browser profile/runtime | 6 | BASELINE-TEST |
-| BRW-004 | Copy-based profile import; no passwords | browser profile tests | 14 | BASELINE-TEST |
-| BRW-005 | Navigation/address/find/zoom/toolbar | browser panel | 14 | BASELINE-CODE |
-| BRW-006 | History/bookmarks/downloads/screenshots | browser panel/controller | 14 | BASELINE-CODE |
-| BRW-007 | Device/user-agent/clear/open/preferences | browser panel/controller | 14 | BASELINE-CODE |
-| BRW-008 | Repeated Browser tabs and cleanup | Workbench tests | 14 | BASELINE-TEST |
-| BRW-009 | Private-host/network policy | browser tests | 14 | BASELINE-TEST |
-| VOC-001 | Voice capture/listening overlay/cancel | chat/workers | 9 | BASELINE-CODE |
-| VOC-002 | Global voice hotkey | chat/config | 15 | BASELINE-CODE |
-| TTS-001 | TTS voice/volume/play/stop/read-aloud | speech/chat/settings | 9 | BASELINE-CODE |
-| WIN-001 | Single instance and second-launch routing | `app.py` | 15 | BASELINE-CODE |
-| WIN-002 | Tray, close-to-tray, explicit quit | `chat.py` | 15 | BASELINE-CODE |
-| WIN-003 | Native notifications and activation routing | Windows notification tests | 15 | BASELINE-TEST |
-| WIN-004 | Taskbar unread count/flash/ack semantics | Windows attention tests | 15 | BASELINE-TEST |
-| WIN-005 | AUMID/manifest/rounded corners | packaging/Windows tests | 15 | BASELINE-TEST |
-| WIN-006 | DPI/multi-monitor window restore | window code | 15 | UNVERIFIED |
-| UPD-001 | GitHub update discovery/version selection | updater tests | 16 | BASELINE-TEST |
-| UPD-002 | Installer/portable asset selection and digest | updater tests | 16 | BASELINE-TEST |
-| PKG-001 | PyInstaller `onedir` GUI application | historical artifacts | 16 | HISTORICAL-ONLY |
-| PKG-002 | Writable private Python and Node runtimes | packaging scripts | 16 | HISTORICAL-ONLY |
-| PKG-003 | Per-user Inno installer | historical installer | 16 | HISTORICAL-ONLY |
-| PKG-004 | Portable ZIP | historical ZIP | 16 | HISTORICAL-ONLY |
-| PKG-005 | Clean-machine/install/upgrade/uninstall smoke | not run in Point 1 | 16 | UNVERIFIED |
+| SHL-001 | One-click GUI launch without console | `smarti_core.pyw`, `app.py` | 5 | IMPLEMENTED |
+| SHL-002 | First-run legal agreement and splash | `legal.py`, `app.py` | 5 | IMPLEMENTED |
+| SHL-003 | Central RTL chat surface | `chat.py`, four captures | 7 | IMPLEMENTED |
+| SHL-004 | Right collapsible conversation drawer | `WorkspaceSidebar`, captures | 7 | IMPLEMENTED |
+| SHL-005 | Empty-on-start left Workbench | `WorkspaceWorkbench`, workspace tests | 7 | IMPLEMENTED |
+| SHL-006 | Narrow/wide responsive Workspace | `ChatWindow`, four captures | 7 | IMPLEMENTED |
+| SHL-007 | Light/dark/system theme | `ui_styles.py`, settings | 7 | IMPLEMENTED |
+| SHL-008 | RTL with LTR technical islands | `chat.py`, `workspace_ui.py` | 7 | IMPLEMENTED |
+| SHL-009 | Custom titlebar/window controls | `WorkspaceWindowTitleBar` | 15 | IMPLEMENTED |
+| CHT-001 | New conversation and active title | `ChatWindow`, history tests | 8 | IMPLEMENTED |
+| CHT-002 | Safe Markdown and links | `MessageBubble`, `CodeBlockWidget` | 8 | IMPLEMENTED |
+| CHT-003 | Code copy/download/wrap/scroll | `CodeBlockWidget` | 8 | IMPLEMENTED |
+| CHT-004 | Mixed user/assistant RTL alignment | chat RTL tests | 8 | IMPLEMENTED |
+| CHT-005 | Tool/thinking progress groups | process-group UI tests | 8 | IMPLEMENTED |
+| CHT-006 | Message copy/read-aloud/actions | `ChatMessageContainer` | 9 | IMPLEMENTED |
+| CHT-007 | Long history paging and virtualization boundary | `history.py`, `ChatHistoryPage` | 8 | IMPLEMENTED |
+| CHT-008 | Model/provider selector | `ChatWindow`, settings | 8 | IMPLEMENTED |
+| CMP-001 | Multiline composer and keyboard send | `ChatWindow` | 9 | IMPLEMENTED |
+| CMP-002 | Send/cancel/microphone state | composer controls | 9 | IMPLEMENTED |
+| CMP-003 | Plus/action menu | composer controls | 9 | IMPLEMENTED |
+| ATT-001 | File picker, drag/drop, paste | `attachments.py`, `chat.py` | 9 | IMPLEMENTED |
+| ATT-002 | Pending previews and per-item removal | attachment widgets | 9 | IMPLEMENTED |
+| ATT-003 | Sent attachment metadata/provider validation | `attachments.py` | 9 | IMPLEMENTED |
+| HIS-001 | Conversation list/search | `ChatHistoryPage`, SQLite search tests | 8 | IMPLEMENTED |
+| HIS-002 | Rename/delete/pin | history UI/store | 8 | IMPLEMENTED |
+| HIS-003 | Session/message SQLite migration | `history.py`, history tests | 8 | IMPLEMENTED |
+| RUN-001 | One run at a time per conversation | `run_manager.py` | 8 | IMPLEMENTED |
+| RUN-002 | Independent conversations run concurrently | conversation tests | 8 | IMPLEMENTED |
+| RUN-003 | Queue/cancel/interruption/recovery | run manager/history tests | 8 | IMPLEMENTED |
+| RUN-004 | Durable ordered events and UI replay | run store tests | 8 | IMPLEMENTED |
+| RUN-005 | Run-local provider/model/settings binding | conversation tests | 8 | IMPLEMENTED |
+| RUN-006 | Durable attention separate from run state | attention tests | 8 | IMPLEMENTED |
+| APR-001 | Durable approval request/resolve/deny | run manager/history | 8 | IMPLEMENTED |
+| APR-002 | API-key-required interruption | UI/core callbacks | 9 | IMPLEMENTED |
+| GAT-001 | Authenticated loopback `/v1` gateway | `local_gateway.py` | 4 | IMPLEMENTED |
+| GAT-002 | Idempotent message submission | gateway tests | 4 | IMPLEMENTED |
+| GAT-003 | Sessions/runs/events/cancel/approvals/receipts | gateway routes | 4 | IMPLEMENTED |
+| SET-001 | Searchable settings/navigation | `SettingsPage` | 10 | REOPENED — SOURCE PARITY AUDIT IN PROGRESS |
+| SET-002 | Autosave/default/migration validation | `SettingsManager` | 10 | REOPENED — SOURCE PARITY AUDIT IN PROGRESS |
+| SET-003 | Provider/model discovery and validation | settings/workers | 10 | REOPENED — SOURCE PARITY AUDIT IN PROGRESS |
+| SET-004 | Masked secret set/paste/delete | settings/keyring tests | 10 | REOPENED — SOURCE PARITY AUDIT IN PROGRESS |
+| SET-005 | SSL system/custom/legacy trust modes | `ssl_compat.py`, SSL tests | 10 | REOPENED — SOURCE PARITY AUDIT IN PROGRESS |
+| SET-006 | Autonomy/policy/sandbox controls | settings/policy engine | 10 | REOPENED — SOURCE PARITY AUDIT IN PROGRESS |
+| SET-007 | Appearance/voice/notification/update preferences | settings/config | 10 | REOPENED — SOURCE PARITY AUDIT IN PROGRESS |
+| MGT-001 | Management center navigation | `ManagementCenterPage` | 11 | REOPENED — SOURCE PARITY AUDIT IN PROGRESS |
+| USE-001 | Usage/cost cached first paint and refresh | usage tests | 11 | IMPLEMENTED |
+| MEM-001 | Automatic memory capture/retrieval | managers/memory tests | 11 | IMPLEMENTED |
+| MEM-002 | Memory CRUD/filter/archive/restore | `memory_ui.py`, tests | 11 | IMPLEMENTED |
+| MEM-003 | Encryption/masking/sensitivity/reveal policy | memory tests | 11 | IMPLEMENTED |
+| TSK-001 | Task create/edit/pause/resume/delete | Task Center/scheduler | 11 | IMPLEMENTED |
+| TSK-002 | Current/new/dedicated conversation routing | notification policy tests | 11 | IMPLEMENTED |
+| TSK-003 | Recurrence, catch-up and recovery | background runtime | 11 | IMPLEMENTED |
+| TOL-001 | Built-in tool catalog and lazy schemas | `config.py`, tool calls | 11 | IMPLEMENTED |
+| TOL-002 | Custom Python tools | extensions/system tools | 11 | IMPLEMENTED |
+| TOL-003 | MCP config/install/trust/private Node | extensions/system tools | 11 | IMPLEMENTED |
+| TOL-004 | Skills registry/load/install/trust | extensions/Doctor tests | 11 | IMPLEMENTED |
+| DIA-001 | Doctor checks and approved repairs | `doctor.py`, Doctor tests | 11 | IMPLEMENTED |
+| DIA-002 | Developer trace and unified logs | trace/log tests | 11 | IMPLEMENTED |
+| DIA-003 | Privacy-filtered diagnostic export | logging export tests | 11 | IMPLEMENTED |
+| ABT-001 | About/legal/version/runtime state | `AboutPage` | 11 | IMPLEMENTED |
+| FIL-001 | Scoped workspace root | `WorkspaceFilePanel` | 12 | IMPLEMENTED |
+| FIL-002 | RTL tree right, preview left | workspace UI/tests | 12 | IMPLEMENTED |
+| FIL-003 | Text/Markdown/image/media previews | workspace UI | 12 | IMPLEMENTED |
+| FIL-004 | PDF/Office rendered previews | workspace/document tools | 12 | IMPLEMENTED |
+| FIL-005 | Path/reparse/size/MIME safety | file tools tests | 12 | IMPLEMENTED |
+| ART-001 | Artifact discovery/open/refresh | `WorkspaceArtifactsPanel` | 12 | IMPLEMENTED |
+| TRM-001 | Multiple PowerShell tabs | `WorkspaceTerminalPanel` | 12 | IMPLEMENTED |
+| TRM-002 | Stream/input/restart/cwd/cancel/cleanup | terminal panel/core subprocess | 12 | IMPLEMENTED |
+| CAN-001 | Persisted validated Canvas schema | `visual_canvas.py` | 13 | IMPLEMENTED |
+| CAN-002 | HTML/image/button rendering and positions | Canvas tests/UI | 13 | IMPLEMENTED |
+| CAN-003 | Remote-image opt-in and local materialization | Canvas tests | 13 | IMPLEMENTED |
+| CAN-004 | Repeated Canvas tabs/history/context | Canvas/workspace | 13 | IMPLEMENTED |
+| BRW-001 | Integrated visible Chromium/Edge surface | native browser/workspace | 6 | IMPLEMENTED + APPROVED TAURI ARCHITECTURE |
+| BRW-002 | Visible target equals CDP automation target | browser controller contract | 6 | IMPLEMENTED + APPROVED TAURI ARCHITECTURE |
+| BRW-003 | Persistent and Guest profile isolation | browser profile/runtime | 6 | IMPLEMENTED |
+| BRW-004 | Copy-based profile import; no passwords | browser profile tests | 14 | IMPLEMENTED |
+| BRW-005 | Navigation/address/find/zoom/toolbar | browser panel | 14 | IMPLEMENTED |
+| BRW-006 | History/bookmarks/downloads/screenshots | browser panel/controller | 14 | IMPLEMENTED |
+| BRW-007 | Device/user-agent/clear/open/preferences | browser panel/controller | 14 | IMPLEMENTED |
+| BRW-008 | Repeated Browser tabs and cleanup | Workbench tests | 14 | IMPLEMENTED |
+| BRW-009 | Private-host/network policy | browser tests | 14 | IMPLEMENTED |
+| VOC-001 | Voice capture/listening overlay/cancel | chat/workers | 9 | IMPLEMENTED |
+| VOC-002 | Global voice hotkey | chat/config | 15 | IMPLEMENTED |
+| TTS-001 | TTS voice/volume/play/stop/read-aloud | speech/chat/settings | 9 | IMPLEMENTED |
+| WIN-001 | Single instance and second-launch routing | `app.py` | 15 | IMPLEMENTED |
+| WIN-002 | Tray, close-to-tray, explicit quit | `chat.py` | 15 | IMPLEMENTED |
+| WIN-003 | Native notifications and activation routing | Windows notification tests | 15 | IMPLEMENTED |
+| WIN-004 | Taskbar unread count/flash/ack semantics | Windows attention tests | 15 | IMPLEMENTED |
+| WIN-005 | AUMID/manifest/rounded corners | packaging/Windows tests | 15 | IMPLEMENTED |
+| WIN-006 | DPI/multi-monitor window restore | window code | 15 | IMPLEMENTED |
+| UPD-001 | GitHub update discovery/version selection | updater tests | 16 | IMPLEMENTED |
+| UPD-002 | Installer/portable asset selection and digest | updater tests | 16 | IMPLEMENTED |
+| PKG-001 | PyInstaller `onedir` GUI application | historical artifacts | 16 | IMPLEMENTED + APPROVED TAURI ARCHITECTURE |
+| PKG-002 | Writable private Python and Node runtimes | packaging scripts | 16 | IMPLEMENTED |
+| PKG-003 | Per-user Inno installer | historical installer | 16 | IMPLEMENTED + APPROVED TAURI ARCHITECTURE |
+| PKG-004 | Portable ZIP | historical ZIP | 16 | IMPLEMENTED |
+| PKG-005 | Clean-machine/install/upgrade/uninstall smoke | not run in Point 1 | 16 | USER-APPROVED CURRENT-MACHINE SCOPE |
 
 ## 10. Tests and known evidence gaps
 

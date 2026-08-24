@@ -117,10 +117,17 @@ def main(argv=None):
 
     try:
         handshake = service.start()
-        _write_message(handshake)
-        if args.smoke:
+        deterministic_product_smoke = (
+            args.smoke
+            or os.environ.get("SMARTI_DETERMINISTIC_PRODUCT_SMOKE", "").strip() == "1"
+        )
+        if deterministic_product_smoke:
+            # The desktop/package smoke must exercise the real durable run loop
+            # without consuming provider credentials or making a paid request.
             service.core.settings["conversation_title_generation_mode"] = "local"
             service.core.send_message = lambda text, **_kwargs: f"deterministic:{text}"
+        _write_message(handshake)
+        if args.smoke:
             health = _health_request(handshake, token)
             bootstrap = _v2_request(handshake, token, "/v2/bootstrap")
             session = _v2_request(

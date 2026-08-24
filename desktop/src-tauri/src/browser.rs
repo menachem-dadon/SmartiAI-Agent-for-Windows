@@ -141,7 +141,7 @@ impl BrowserBroker {
         }
     }
 
-    fn snapshot(&self) -> BrowserSnapshot {
+    pub(crate) fn snapshot(&self) -> BrowserSnapshot {
         let inner = self.inner.lock().expect("browser broker mutex poisoned");
         let tabs = inner
             .tab_order
@@ -720,7 +720,10 @@ pub fn run_foundation_smoke(app: AppHandle, broker: BrowserBroker, result_path: 
             let webauthn = cdp_for_tab(&app, &guest_two, "Runtime.evaluate", json!({"expression":"typeof PublicKeyCredential === 'function'","returnByValue":true}))?;
             let tabs_before_popup = broker.snapshot().tabs.len();
             cdp_for_tab(&app, &guest_two, "Runtime.evaluate", json!({"expression":"window.open('/popup','_blank')","returnByValue":true,"userGesture":true}))?;
-            std::thread::sleep(Duration::from_secs(2));
+            let popup_deadline = Instant::now() + Duration::from_secs(5);
+            while broker.snapshot().tabs.len() == tabs_before_popup && Instant::now() < popup_deadline {
+                std::thread::sleep(Duration::from_millis(100));
+            }
             let popup_routed_to_tab = broker.snapshot().tabs.len() == tabs_before_popup + 1;
             let same_target = snapshot.get("targetId") == Some(&Value::String(first_tab.target_id.clone()));
             let authority_value = authority.pointer("/result/value").and_then(Value::as_str).unwrap_or("pending");

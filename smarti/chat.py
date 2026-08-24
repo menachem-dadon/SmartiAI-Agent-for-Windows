@@ -3485,8 +3485,8 @@ class ConversationActivityIndicator(QWidget):
         self._timer.timeout.connect(self._advance)
         if self.runtime_status in {"queued", "running", "cancelling"}:
             self._timer.start()
-        if self.runtime_status == "waiting_for_approval":
-            self.setToolTip("סמארטי ממתין לאישור")
+        if self.runtime_status in {"waiting_for_approval", "waiting_for_input"}:
+            self.setToolTip("סמארטי ממתין לקלט ממך")
         elif self.runtime_status in {"queued", "running", "cancelling"}:
             self.setToolTip("סמארטי עובד בשיחה הזאת")
         elif self.unread_count:
@@ -3506,7 +3506,7 @@ class ConversationActivityIndicator(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             rect = QRectF(4.0, 4.0, 16.0, 16.0)
             painter.drawArc(rect, int((90 - self.angle) * 16), int(-245 * 16))
-        elif self.runtime_status == "waiting_for_approval":
+        elif self.runtime_status in {"waiting_for_approval", "waiting_for_input"}:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#f59e0b"))
             painter.drawEllipse(QRectF(5.0, 5.0, 14.0, 14.0))
@@ -8316,7 +8316,7 @@ class ChatWindow(QMainWindow):
         session_id = self._active_session_id()
         runs = self.core.chat_store.list_runs(
             session_id=session_id,
-            statuses={"queued", "running", "waiting_for_approval", "cancelling"},
+            statuses={"queued", "running", "waiting_for_approval", "waiting_for_input", "cancelling"},
             limit=20,
         )
         for run in reversed(runs):

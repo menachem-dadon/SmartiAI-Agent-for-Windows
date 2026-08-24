@@ -42,6 +42,17 @@ export interface PatchSettingsRequest {
 export interface SetSecretRequest {
   value: string;
 }
+export interface LegalAcceptanceRequest {
+  accepted: boolean;
+  version: string;
+}
+export interface SettingsActionRequest {
+  action: "reset" | "codex_status" | "codex_check" | "codex_login" | "codex_logout" | "email_test" | "ssl_test" | "ssl_import_ca" | "log_clear";
+  ssl_trust_mode?: "system" | "custom_ca" | "legacy_insecure";
+  ssl_custom_ca_path?: string;
+  source_path?: string;
+  confirmation?: string;
+}
 export interface ValidateProviderRequest {
   secret?: string;
   local_url?: string;
@@ -58,6 +69,10 @@ export interface RegisterAttachmentRequest {
 export interface StartTtsRequest {
   text: string;
 }
+export interface ProvideRunApiKeyRequest {
+  secret_key: string;
+  value: string;
+}
 export interface TaskActionRequest {
   action: "create" | "edit" | "cancel" | "retry" | "resume" | "delete";
   id?: string;
@@ -69,7 +84,7 @@ export interface TaskActionRequest {
   conversation_mode?: "current" | "new" | "dedicated";
 }
 export interface MemoryActionRequest {
-  action: "details" | "reveal" | "edit" | "archive" | "restore" | "delete";
+  action: "details" | "reveal" | "edit" | "pin" | "archive" | "restore" | "delete";
   subject?: string;
   content?: string;
   category?: string;
@@ -77,9 +92,25 @@ export interface MemoryActionRequest {
   tags?: Array<string>;
   importance?: number;
   pinned?: boolean;
+  memory_type?: string;
+  ttl_hours?: number;
+}
+export interface MemoryCollectionActionRequest {
+  action: "create" | "bulk_archive" | "bulk_restore" | "bulk_delete" | "import" | "export" | "clear";
+  ids?: Array<string>;
+  subject?: string;
+  content?: string;
+  category?: string;
+  memory_type?: string;
+  tags?: Array<string>;
+  importance?: number;
+  ttl_hours?: number;
+  pinned?: boolean;
+  path?: string;
+  confirmation?: string;
 }
 export interface ToolActionRequest {
-  action: "set_trust" | "set_enabled" | "refresh" | "install_skill" | "install_custom" | "install_mcp";
+  action: "set_trust" | "set_enabled" | "refresh" | "install_skill" | "install_custom" | "install_mcp" | "delete";
   kind?: "builtin" | "custom" | "mcp" | "skill";
   name?: string;
   trusted?: boolean;
@@ -88,7 +119,7 @@ export interface ToolActionRequest {
   package?: string;
 }
 export interface DiagnosticActionRequest {
-  action?: "scan" | "repair";
+  action?: "scan" | "repair" | "cancel";
   include_network?: boolean;
   repair_id?: string;
 }

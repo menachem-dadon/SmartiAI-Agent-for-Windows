@@ -20,8 +20,9 @@ from smarti.local_gateway import SmartiLocalGateway
 from smarti.run_manager import ConversationRunManager
 from smarti.core_service import SmartiCoreService
 from smarti.control_plane_contract import contract_document, typescript_definitions
-from smarti.desktop_services import sanitize_desktop_log_lines
+from smarti.desktop_services import sanitize_desktop_log_lines, tools_snapshot
 from smarti.canvas_model import new_canvas_artifact
+from smarti.voice_service import VoiceSessionController
 
 
 class _FakeCore:
@@ -200,6 +201,41 @@ class ConversationRunStoreTests(unittest.TestCase):
 
 
 class ConversationRunManagerTests(unittest.TestCase):
+    def test_api_key_interruption_is_durable_and_unblocks_without_persisting_secret(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core = _FakeCore(Path(directory) / "history.json")
+            manager = ConversationRunManager(core)
+            core.run_manager = manager
+            session_id = core.chat_store.create_session(set_active=False)["id"]
+            run_id = core.chat_store.create_run(session_id, "needs key")
+            result = []
+            worker = threading.Thread(
+                target=lambda: result.append(manager.request_api_key(
+                    run_id, session_id, "openai_api_key", "OpenAI",
+                    "חסר מפתח", "הזן מפתח", "https://example.test/key",
+                )),
+                daemon=True,
+            )
+            worker.start()
+            for _ in range(100):
+                if any(item["event_type"] == "api_key_required" for item in core.chat_store.run_events(run_id)):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(manager.resolve_api_key_request(run_id, "openai_api_key", "super-secret"))
+            worker.join(2)
+            self.assertEqual(result, ["super-secret"])
+            serialized = json.dumps(core.chat_store.run_events(run_id), ensure_ascii=False)
+            self.assertIn("api_key_required", serialized)
+            self.assertIn("api_key_submitted", serialized)
+            required = next(
+                item for item in core.chat_store.run_events(run_id)
+                if item["event_type"] == "api_key_required"
+            )
+            self.assertIn("Create new secret key", required["payload"]["key_instructions"])
+            self.assertEqual(required["payload"]["provider"], "openai")
+            self.assertNotIn("super-secret", serialized)
+            manager.shutdown(wait=True)
+
     def test_restart_marks_executing_run_interrupted_and_keeps_attention(self):
         with tempfile.TemporaryDirectory() as directory:
             core = _FakeCore(Path(directory) / "history.json")
@@ -360,6 +396,42 @@ class ConversationRunManagerTests(unittest.TestCase):
             manager.shutdown(wait=True)
 
 
+class DesktopToolSnapshotTests(unittest.TestCase):
+    def test_skills_are_structured_registry_rows_and_never_split_into_characters(self):
+        class Registry:
+            def trust_status(self, kind, name):
+                return "trusted" if name != "disabled-skill" else "disabled"
+
+        core = SimpleNamespace(
+            settings={
+                "tools_config": {"sample_tool": True, "mcp_demo": False},
+                "skills_config": {"skill-one": True, "disabled-skill": False},
+            },
+            tool_registry=Registry(),
+            skill_registry={
+                "skill-one": {"description": "מדריך מלא", "source": "local"},
+                "disabled-skill": {"description": "כבוי", "source": "builtin"},
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            tools_dir = Path(directory) / "tools"
+            mcp_dir = Path(directory) / "mcp"
+            tools_dir.mkdir(); mcp_dir.mkdir()
+            (tools_dir / "sample_tool.pyw").write_text("", encoding="utf-8")
+            (mcp_dir / "demo.txt").write_text("{}", encoding="utf-8")
+            with mock.patch("smarti.desktop_services.TOOLS_DIR", str(tools_dir)), mock.patch("smarti.desktop_services.MCP_TOOLS_DIR", str(mcp_dir)):
+                snapshot = tools_snapshot(core)
+
+        rows = {(item["kind"], item["name"]): item for item in snapshot["extensions"]}
+        self.assertEqual(set(rows), {
+            ("custom", "sample_tool"), ("mcp", "demo"),
+            ("skill", "skill-one"), ("skill", "disabled-skill"),
+        })
+        self.assertTrue(rows[("skill", "skill-one")]["enabled"])
+        self.assertFalse(rows[("skill", "disabled-skill")]["enabled"])
+        self.assertFalse(rows[("skill", "disabled-skill")]["removable"])
+
+
 class LocalGatewayTests(unittest.TestCase):
     def test_desktop_log_filter_hides_personal_payloads_but_keeps_diagnostics(self):
         rows = sanitize_desktop_log_lines([
@@ -387,6 +459,86 @@ class LocalGatewayTests(unittest.TestCase):
         )
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, dict(response.headers), json.loads(response.read().decode("utf-8"))
+
+    def test_tools_route_uses_persistent_core_trust_and_surfaces_install_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core = _FakeCore(Path(directory) / "history.json")
+            core.run_manager = ConversationRunManager(core)
+            core.skill_registry = {}
+            core.tool_registry = SimpleNamespace(trust_status=lambda _kind, _name: "trusted")
+            trust_calls = []
+            core.set_tool_trust = lambda kind, name, trusted, metadata=None: trust_calls.append((kind, name, trusted, metadata))
+            core.install_local_skill_package = lambda _path: "ERROR: invalid Skill bundle"
+            gateway = SmartiLocalGateway(core, "test-token", port=0)
+            self.assertTrue(gateway.start())
+            try:
+                status, _, _ = self._request(
+                    gateway, "/v2/management/tools", method="POST",
+                    payload={"action": "set_trust", "kind": "skill", "name": "demo", "trusted": True},
+                    headers={"Idempotency-Key": "trust-demo"},
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(trust_calls[0][:3], ("skill", "demo", True))
+                with self.assertRaises(urllib.error.HTTPError) as install_error:
+                    self._request(
+                        gateway, "/v2/management/tools", method="POST",
+                        payload={"action": "install_skill", "path": str(Path(directory) / "bad.zip")},
+                        headers={"Idempotency-Key": "install-bad"},
+                    )
+                self.assertEqual(install_error.exception.code, 400)
+                body = json.loads(install_error.exception.read().decode("utf-8"))
+                self.assertIn("invalid Skill bundle", body["detail"])
+            finally:
+                gateway.stop()
+                core.run_manager.shutdown(wait=True)
+
+    def test_active_provider_secret_change_rebuilds_the_runtime_model(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core = _FakeCore(Path(directory) / "history.json")
+            core.settings["api_mode"] = "openai"
+            core.run_manager = ConversationRunManager(core)
+            core._save_settings = lambda: None
+            core.setup_count = 0
+            core.setup_model = lambda: setattr(core, "setup_count", core.setup_count + 1)
+            core.mark_secret_for_deletion = lambda key: core.settings.__setitem__(key, "")
+            gateway = SmartiLocalGateway(core, "test-token", port=0)
+            self.assertTrue(gateway.start())
+            try:
+                self._request(
+                    gateway, "/v2/settings/secrets/openai_api_key", method="PUT",
+                    payload={"value": "new-secret"}, headers={"Idempotency-Key": "secret-set"},
+                )
+                self._request(
+                    gateway, "/v2/settings/secrets/openai_api_key", method="DELETE",
+                    headers={"Idempotency-Key": "secret-delete"},
+                )
+                self.assertEqual(core.setup_count, 2)
+                self.assertEqual(core.settings["openai_api_key"], "")
+            finally:
+                gateway.stop()
+                core.run_manager.shutdown(wait=True)
+
+    def test_diagnostic_refuses_to_compete_with_an_active_agent_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core = _FakeCore(Path(directory) / "history.json")
+            core.run_manager = ConversationRunManager(core)
+            session_id = core.chat_store.create_session(set_active=False)["id"]
+            core.chat_store.create_run(session_id, "still queued")
+            gateway = SmartiLocalGateway(core, "test-token", port=0)
+            self.assertTrue(gateway.start())
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self._request(
+                        gateway, "/v2/management/diagnostics", method="POST",
+                        payload={"action": "scan", "include_network": False},
+                        headers={"Idempotency-Key": "diagnostic-active-run"},
+                    )
+                self.assertEqual(error.exception.code, 400)
+                body = json.loads(error.exception.read().decode("utf-8"))
+                self.assertEqual(body["detail"], "diagnostic_blocked_while_agent_running")
+            finally:
+                gateway.stop()
+                core.run_manager.shutdown(wait=True)
 
     def test_gateway_requires_token_and_deduplicates_message_submission(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -429,6 +581,8 @@ class LocalGatewayTests(unittest.TestCase):
             "getSettings", "registerAttachment", "subscribeEvents", "readCodexQuota",
             "getModelReasoning", "setModelReasoning", "manageTask", "manageMemory",
             "manageTools", "diagnostics", "workspaceTree", "createTerminal",
+            "legalStatus", "acceptLegal", "settingsAction", "manageMemories", "clearUsage",
+            "diagnosticProgress", "listTtsVoices",
         }.issubset(operation_ids))
         generated_json = json.loads(Path("desktop-contract/v2.contract.json").read_text(encoding="utf-8"))
         generated_types = Path("desktop-contract/v2.generated.d.ts").read_text(encoding="utf-8")
@@ -495,6 +649,37 @@ class LocalGatewayTests(unittest.TestCase):
                 self.assertEqual(replayed["data"]["conversation"]["id"], session_id)
                 self.assertEqual(replay_headers["Idempotency-Replayed"], "true")
 
+                core.chat_store.append_message("assistant", "שלום", {}, session_id=session_id)
+                _, _, exported = self._request(
+                    gateway, f"/v2/conversations/{session_id}/export"
+                )
+                self.assertIn("schema_version", exported["data"])
+                self.assertEqual(exported["data"]["session"]["id"], session_id)
+                self.assertEqual(exported["data"]["session"]["messages"][-1]["content"], "שלום")
+
+                key_run_id = core.chat_store.create_run(session_id, "key")
+                supplied = []
+                key_waiter = threading.Thread(
+                    target=lambda: supplied.append(core.run_manager.request_api_key(
+                        key_run_id, session_id, "openai_api_key", "OpenAI",
+                        "חסר מפתח", "הזן מפתח", "https://example.test/key",
+                    )),
+                    daemon=True,
+                )
+                key_waiter.start()
+                for _ in range(100):
+                    if any(item["event_type"] == "api_key_required" for item in core.chat_store.run_events(key_run_id)):
+                        break
+                    time.sleep(0.01)
+                _, _, key_reply = self._request(
+                    gateway, f"/v2/runs/{key_run_id}/api-key", method="POST",
+                    payload={"secret_key": "openai_api_key", "value": "route-secret"},
+                )
+                key_waiter.join(2)
+                self.assertTrue(key_reply["data"]["accepted"])
+                self.assertEqual(supplied, ["route-secret"])
+                self.assertNotIn("route-secret", json.dumps(core.chat_store.run_events(key_run_id)))
+
                 attachment_path = Path(directory) / "שלום.txt"
                 attachment_path.write_text("attachment-data", encoding="utf-8")
                 _, _, registered = self._request(
@@ -534,6 +719,26 @@ class LocalGatewayTests(unittest.TestCase):
                 self.assertEqual(core.spoken, ["שלום"])
                 self._request(gateway, "/v2/audio/tts/stop", method="POST", payload={})
                 self.assertTrue(core.speech_stopped)
+
+                statuses = []
+                gateway._voice = VoiceSessionController(
+                    lambda: core.settings,
+                    recognizer=lambda _settings, _cancel, status: (
+                        status("מקשיב..."), statuses.append("מקשיב..."), "שלום סמארטי"
+                    )[-1],
+                )
+                _, _, voice_started = self._request(
+                    gateway, "/v2/audio/voice", method="POST", payload={}
+                )
+                voice_session = voice_started["data"]["session_id"]
+                for _ in range(100):
+                    _, _, voice = self._request(gateway, "/v2/audio/voice/status")
+                    if not voice["data"]["active"]:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(voice["data"]["session_id"], voice_session)
+                self.assertEqual(voice["data"]["transcript"], "שלום סמארטי")
+                self.assertEqual(statuses, ["מקשיב..."])
 
                 quota_payload = {
                     "available": True, "plan_type": "plus",
@@ -649,10 +854,97 @@ class LocalGatewayTests(unittest.TestCase):
             gateway = SmartiLocalGateway(core, "test-token", port=0)
             self.assertTrue(gateway.start())
             try:
+                _, _, legal = self._request(gateway, "/v2/management/legal")
+                self.assertFalse(legal["data"]["accepted"])
+                with self.assertRaises(urllib.error.HTTPError) as wrong_legal:
+                    self._request(
+                        gateway, "/v2/management/legal", method="POST",
+                        payload={"accepted": True, "version": "old-version"},
+                    )
+                self.assertEqual(wrong_legal.exception.code, 400)
+                _, _, accepted = self._request(
+                    gateway, "/v2/management/legal", method="POST",
+                    payload={"accepted": True, "version": legal["data"]["version"]},
+                )
+                self.assertTrue(accepted["data"]["accepted"])
+
+                _, _, diagnostic_progress = self._request(gateway, "/v2/management/diagnostics")
+                self.assertEqual(diagnostic_progress["data"]["status"], "idle")
+                self.assertFalse(diagnostic_progress["data"]["running"])
+
                 _, _, schema = self._request(gateway, "/v2/settings/schema")
                 self.assertIn("providers", {item["id"] for item in schema["data"]["groups"]})
                 self.assertTrue(schema["data"]["fields"]["openai_api_key"]["secret"])
+                openai_provider = next(
+                    item for item in schema["data"]["providers"]
+                    if item["id"] == "openai"
+                )
+                self.assertEqual(openai_provider["secret_key"], "openai_api_key")
+                self.assertEqual(openai_provider["help_url"], "https://platform.openai.com/api-keys")
+                self.assertIn("Create new secret key", openai_provider["key_instructions"])
+                self.assertEqual(
+                    schema["data"]["secret_help"]["tavily_api_key"]["help_url"],
+                    "https://app.tavily.com/home",
+                )
                 self.assertNotIn("plain", json.dumps(schema, ensure_ascii=False))
+
+                with mock.patch(
+                    "smarti.local_gateway.list_tts_voices",
+                    return_value=[{"id": "he-IL-HilaNeural", "name": "הילה"}],
+                ):
+                    _, _, voices = self._request(gateway, "/v2/audio/tts/voices")
+                self.assertEqual(
+                    voices["data"]["items"],
+                    [{"id": "he-IL-HilaNeural", "name": "הילה"}],
+                )
+
+                ssl_response = mock.MagicMock()
+                ssl_response.__enter__.return_value.status = 204
+                original_urlopen = urllib.request.urlopen
+                def selective_urlopen(target, *args, **kwargs):
+                    url = str(getattr(target, "full_url", target))
+                    if url == "https://www.gstatic.com/generate_204":
+                        return ssl_response
+                    return original_urlopen(target, *args, **kwargs)
+                with mock.patch("smarti.ssl_compat.create_ssl_context", return_value=object()) as create_context, mock.patch(
+                    "urllib.request.urlopen", side_effect=selective_urlopen,
+                ):
+                    _, _, ssl_test = self._request(
+                        gateway, "/v2/management/settings/actions", method="POST",
+                        payload={"action": "ssl_test", "ssl_trust_mode": "legacy_insecure", "ssl_custom_ca_path": ""},
+                    )
+                self.assertTrue(ssl_test["data"]["ok"])
+                self.assertFalse(ssl_test["data"]["verified"])
+                pending_ssl_settings = create_context.call_args.args[0]
+                self.assertEqual(pending_ssl_settings["ssl_trust_mode"], "legacy_insecure")
+                self.assertTrue(pending_ssl_settings["allow_insecure_ssl_compat"])
+
+                managed_ca = str(root / "managed-ca.pem")
+                with mock.patch("smarti.ssl_compat.import_custom_ca", return_value=managed_ca), mock.patch(
+                    "smarti.ssl_compat.validate_custom_ca", return_value=(True, "תעודה תקינה"),
+                ), mock.patch(
+                    "smarti.ssl_compat.describe_custom_ca", return_value={"name": "Filter Root"},
+                ):
+                    _, _, imported_ca = self._request(
+                        gateway, "/v2/management/settings/actions", method="POST",
+                        payload={"action": "ssl_import_ca", "source_path": str(root / "filter.crt")},
+                    )
+                self.assertEqual(imported_ca["data"]["path"], managed_ca)
+                self.assertEqual(imported_ca["data"]["metadata"]["name"], "Filter Root")
+
+                with self.assertRaises(urllib.error.HTTPError) as unconfirmed_log_clear:
+                    self._request(
+                        gateway, "/v2/management/settings/actions", method="POST",
+                        payload={"action": "log_clear", "confirmation": "לא"},
+                    )
+                self.assertEqual(unconfirmed_log_clear.exception.code, 400)
+                with mock.patch("smarti.common.clear_unified_log_file") as clear_log:
+                    _, _, cleared_log = self._request(
+                        gateway, "/v2/management/settings/actions", method="POST",
+                        payload={"action": "log_clear", "confirmation": "נקה לוג"},
+                    )
+                clear_log.assert_called_once_with()
+                self.assertTrue(cleared_log["data"]["cleared"])
 
                 self._request(gateway, "/v2/workbench/root", method="PATCH", payload={"path": str(root)})
                 _, _, tree = self._request(gateway, "/v2/workbench/tree?depth=2")
@@ -722,6 +1014,80 @@ class LocalGatewayTests(unittest.TestCase):
                     )
                     self.assertEqual(len(report["data"]["history"]), 1)
                     self.assertEqual(report["data"]["cookie_stats"]["skipped_encrypted"], 2)
+            finally:
+                gateway.stop()
+                core.run_manager.shutdown(wait=True)
+
+    def test_v2_diagnostic_progress_and_cancellation_are_live(self):
+        class Result:
+            def to_dict(self):
+                return {"id": "test.progress", "status": "pass", "title_he": "בדיקה"}
+
+        started = threading.Event()
+        instances = []
+
+        class SlowDiagnostic:
+            def __init__(self, _core):
+                self.stopped = False
+                instances.append(self)
+
+            def request_stop(self):
+                self.stopped = True
+
+            def run(self, _include_network, progress_callback, result_callback):
+                progress_callback(1, 3, "בדיקה ראשונה")
+                result = Result()
+                result_callback(result)
+                started.set()
+                time.sleep(0.35)
+                if self.stopped:
+                    return [result]
+                progress_callback(2, 3, "בדיקה שנייה")
+                return [result]
+
+            def perform_repair(self, _action_id):
+                return "ok"
+
+        with tempfile.TemporaryDirectory() as directory:
+            core = _FakeCore(Path(directory) / "history.json")
+            core.run_manager = ConversationRunManager(core)
+            gateway = SmartiLocalGateway(core, "test-token", port=0)
+            self.assertTrue(gateway.start())
+            responses = []
+            failures = []
+
+            def run_scan():
+                try:
+                    responses.append(self._request(
+                        gateway, "/v2/management/diagnostics", method="POST",
+                        payload={"action": "scan", "include_network": False},
+                    ))
+                except Exception as exc:
+                    failures.append(exc)
+
+            try:
+                with mock.patch("smarti.doctor.SmartiDiagnostic", SlowDiagnostic):
+                    worker = threading.Thread(target=run_scan, daemon=True)
+                    worker.start()
+                    self.assertTrue(started.wait(5))
+                    _, _, progress = self._request(gateway, "/v2/management/diagnostics")
+                    self.assertTrue(progress["data"]["running"])
+                    self.assertEqual(progress["data"]["current"], 1)
+                    self.assertEqual(progress["data"]["total"], 3)
+                    self.assertEqual(progress["data"]["label"], "בדיקה ראשונה")
+                    _, _, cancelled = self._request(
+                        gateway, "/v2/management/diagnostics", method="POST",
+                        payload={"action": "cancel"},
+                    )
+                    self.assertTrue(cancelled["data"]["cancel_requested"])
+                    worker.join(5)
+                self.assertFalse(worker.is_alive())
+                self.assertFalse(failures)
+                self.assertEqual(len(responses), 1)
+                self.assertTrue(instances[0].stopped)
+                _, _, final = self._request(gateway, "/v2/management/diagnostics")
+                self.assertFalse(final["data"]["running"])
+                self.assertEqual(final["data"]["status"], "cancelled")
             finally:
                 gateway.stop()
                 core.run_manager.shutdown(wait=True)

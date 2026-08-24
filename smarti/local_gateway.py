@@ -19,8 +19,10 @@ from aiohttp import WSMsgType, web
 from .attachments import attachment_from_path
 from .common import (
     APP_VERSION, AUTONOMY_PROFILES, MODEL_PROVIDER_ORDER, SENSITIVE_SETTING_KEYS,
-    USER_DATA_DIR, fetch_text_models_for_provider, mask_secret_value,
+    USER_DATA_DIR, LEGAL_AGREEMENT_EFFECTIVE_DATE, LEGAL_AGREEMENT_TITLE,
+    LEGAL_AGREEMENT_VERSION, fetch_text_models_for_provider, list_tts_voices, mask_secret_value,
     model_reasoning_options, model_reasoning_setting, normalize_provider_name,
+    provider_display_name, provider_help_url, provider_key_instructions,
     provider_secret_key, sanitize_secret_value, set_model_reasoning_setting,
 )
 from .config import DEFAULT_SETTINGS, PUBLIC_BUILTIN_TOOLS
@@ -37,6 +39,7 @@ from .desktop_services import (
     safe_task_rows, settings_schema_document, task_action, tools_snapshot,
     usage_snapshot,
 )
+from .voice_service import VoiceSessionController
 
 
 class RequestValidationError(ValueError):
@@ -141,7 +144,14 @@ class SmartiLocalGateway:
         self._attachments = ScopedAttachmentRegistry()
         self._workspace = WorkspaceScope(core)
         self._terminal_sessions = TerminalRegistry(self._workspace)
+        self._voice = VoiceSessionController(lambda: self.core.settings)
         self._idempotency_lock = threading.RLock()
+        self._diagnostic_lock = threading.RLock()
+        self._active_diagnostic = None
+        self._diagnostic_progress = {
+            "running": False, "current": 0, "total": 0,
+            "label": "", "status": "idle", "completed_items": 0,
+        }
         self._runtime_file = os.path.join(USER_DATA_DIR, "local-gateway.json")
 
     @staticmethod
@@ -434,6 +444,15 @@ class SmartiLocalGateway:
             self._query_int(request, "limit", 32, 1, 500),
         ))
 
+    async def _conversation_export(self, request):
+        try:
+            payload = self.core.chat_store.session_export_payload(
+                request.match_info["session_id"]
+            )
+        except ValueError:
+            return self._error(request, 404, "session_not_found")
+        return self._ok(request, payload)
+
     async def _submit_run(self, request):
         session_id = request.match_info["session_id"]
         if not self.core.chat_store.has_session(session_id):
@@ -488,6 +507,19 @@ class SmartiLocalGateway:
             item["event_id"], item["session_id"], item["request_id"] = item.pop("id", 0), str(run.get("session_id") or ""), request_id
         return self._ok(request, {"items": items})
 
+    async def _provide_run_api_key(self, request):
+        run_id = request.match_info["run_id"]
+        return await self._idempotent(
+            request,
+            "provideRunApiKey",
+            lambda payload: ({
+                "run_id": run_id,
+                "accepted": self.core.run_manager.resolve_api_key_request(
+                    run_id, payload["secret_key"], payload["value"]
+                ),
+            }, 200),
+        )
+
     async def _events_replay(self, request):
         cursor = self._query_int(request, "after_event_id", 0, 0, 2_000_000_000)
         session_id = str(request.query.get("session_id") or "")
@@ -507,6 +539,18 @@ class SmartiLocalGateway:
 
     async def _tts_status(self, request):
         return self._ok(request, {"is_playing": bool(getattr(self.core, "_tts_is_playing", False))})
+
+    async def _tts_voices(self, request):
+        return self._ok(request, {"items": list_tts_voices()})
+
+    async def _voice_start(self, request):
+        return self._ok(request, self._voice.start(), 202)
+
+    async def _voice_stop(self, request):
+        return self._ok(request, self._voice.cancel())
+
+    async def _voice_status(self, request):
+        return self._ok(request, self._voice.snapshot())
 
     async def _approvals(self, request):
         return self._ok(request, {"items": self.core.chat_store.pending_approvals(request.query.get("session_id") or None)})
@@ -529,6 +573,24 @@ class SmartiLocalGateway:
 
     async def _settings_schema(self, request):
         schema = settings_schema_document()
+        schema["providers"] = [
+            {
+                "id": provider,
+                "label": provider_display_name(provider),
+                "secret_key": provider_secret_key(provider) or "",
+                "help_url": provider_help_url(provider) or "",
+                "key_instructions": provider_key_instructions(provider) or "",
+                "requires_api_key": bool(provider_secret_key(provider)),
+            }
+            for provider in MODEL_PROVIDER_ORDER
+        ]
+        schema["secret_help"] = {
+            "tavily_api_key": {
+                "label": "Tavily",
+                "help_url": provider_help_url(secret_key="tavily_api_key"),
+                "key_instructions": provider_key_instructions(secret_key="tavily_api_key"),
+            },
+        }
         if "api_mode" in schema["fields"]:
             schema["fields"]["api_mode"]["options"] = list(MODEL_PROVIDER_ORDER)
         if "ssl_trust_mode" in schema["fields"]:
@@ -543,6 +605,123 @@ class SmartiLocalGateway:
             }
         return self._ok(request, schema)
 
+    async def _legal(self, request):
+        acceptance = self.core.settings.get("legal_acceptance")
+        acceptance = acceptance if isinstance(acceptance, dict) else {}
+        accepted = bool(acceptance.get("accepted")) and acceptance.get("version") == LEGAL_AGREEMENT_VERSION
+        if request.method == "GET":
+            return self._ok(request, {
+                "accepted": accepted,
+                "version": LEGAL_AGREEMENT_VERSION,
+                "effective_date": LEGAL_AGREEMENT_EFFECTIVE_DATE,
+                "title": LEGAL_AGREEMENT_TITLE,
+                "accepted_at": str(acceptance.get("accepted_at") or "") if accepted else "",
+            })
+        payload = await self._body(request, "legalAcceptance")
+        if payload.get("accepted") is not True or payload.get("version") != LEGAL_AGREEMENT_VERSION:
+            raise RequestValidationError("explicit_current_legal_acceptance_required", ["accepted", "version"])
+        self.core.settings["legal_acceptance"] = {
+            "accepted": True,
+            "version": LEGAL_AGREEMENT_VERSION,
+            "accepted_at": datetime.now().isoformat(timespec="seconds"),
+            "accepted_app_version": APP_VERSION,
+            "document_title": LEGAL_AGREEMENT_TITLE,
+        }
+        self.core._save_settings()
+        logger = getattr(self.core, "audit_logger", None)
+        if logger:
+            logger.record("legal_agreement_accepted", {"version": LEGAL_AGREEMENT_VERSION, "app_version": APP_VERSION}, self.core.settings)
+        return self._ok(request, {"accepted": True, "version": LEGAL_AGREEMENT_VERSION})
+
+    async def _settings_action(self, request):
+        payload = await self._body(request, "settingsAction")
+        action = str(payload.get("action") or "").strip().lower()
+        if action == "reset":
+            backup_path = self.core.reset_settings_to_defaults()
+            return self._ok(request, {"reset": True, "backup_path": str(backup_path or ""), **self._safe_settings()})
+        if action in {"codex_status", "codex_check", "codex_login", "codex_logout"}:
+            from dataclasses import asdict
+            from .codex_signin import CodexSignInProvider
+            provider = CodexSignInProvider(USER_DATA_DIR)
+            method = {
+                "codex_status": provider.connection_status,
+                "codex_check": provider.check_connection,
+                "codex_login": provider.login,
+                "codex_logout": provider.logout,
+            }[action]
+            status = await asyncio.to_thread(method)
+            if status.state == "connected":
+                self.core.settings["api_mode"] = "openai_codex_signin"
+                self.core._save_settings()
+                setup_model = getattr(self.core, "setup_model", None)
+                if callable(setup_model):
+                    setup_model()
+            return self._ok(request, asdict(status))
+        if action == "email_test":
+            from .desktop_services import test_email_settings
+            ok, message = await asyncio.to_thread(test_email_settings, self.core.settings)
+            return self._ok(request, {"ok": bool(ok), "message": str(message)})
+        if action == "log_clear":
+            if str(payload.get("confirmation") or "") != "נקה לוג":
+                raise RequestValidationError("log_clear_confirmation_required", ["confirmation"])
+            from .common import clear_unified_log_file
+            await asyncio.to_thread(clear_unified_log_file)
+            logging.info("DEVELOPER_LOG | cleared | selected=unified | source=tauri")
+            return self._ok(request, {"cleared": True, **log_snapshot(500, False)})
+        if action == "ssl_import_ca":
+            from .ssl_compat import describe_custom_ca, import_custom_ca, validate_custom_ca
+            source_path = str(payload.get("source_path") or "").strip()
+            if not source_path:
+                raise RequestValidationError("ssl_certificate_path_required", ["source_path"])
+            try:
+                managed_path = await asyncio.to_thread(import_custom_ca, source_path, USER_DATA_DIR)
+                ok, message = await asyncio.to_thread(validate_custom_ca, managed_path)
+                if not ok:
+                    raise RequestValidationError(str(message or "invalid_ssl_certificate"), ["source_path"])
+                return self._ok(request, {
+                    "ok": True,
+                    "path": str(managed_path),
+                    "message": str(message or "התעודה אומתה."),
+                    "metadata": describe_custom_ca(managed_path),
+                })
+            except RequestValidationError:
+                raise
+            except Exception as exc:
+                raise RequestValidationError(f"ssl_certificate_import_failed: {exc}", ["source_path"]) from exc
+        if action == "ssl_test":
+            from .ssl_compat import create_ssl_context, normalize_ssl_trust_mode, validate_custom_ca
+            import urllib.request
+            settings = copy.deepcopy(self.core.settings)
+            mode = normalize_ssl_trust_mode(payload.get("ssl_trust_mode") or settings.get("ssl_trust_mode"))
+            custom_path = str(payload.get("ssl_custom_ca_path") or settings.get("ssl_custom_ca_path") or "").strip()
+            settings.update({
+                "ssl_trust_mode": mode,
+                "ssl_custom_ca_path": custom_path,
+                "allow_insecure_ssl_compat": mode == "legacy_insecure",
+                "ssl_legacy_insecure_allowed_hosts": [],
+            })
+            if mode == "custom_ca":
+                ok, message = await asyncio.to_thread(validate_custom_ca, custom_path)
+                if not ok:
+                    return self._ok(request, {"ok": False, "verified": False, "message": str(message)})
+            def test_ssl():
+                context = create_ssl_context(settings, url="https://www.gstatic.com/generate_204")
+                request = urllib.request.Request("https://www.gstatic.com/generate_204", headers={"User-Agent": "SmartiAI-SSL-Test"})
+                with urllib.request.urlopen(request, timeout=15, context=context) as response:
+                    return int(getattr(response, "status", 0) or 0)
+            try:
+                status = await asyncio.to_thread(test_ssl)
+                verified = mode != "legacy_insecure"
+                message = (
+                    f"החיבור אומת בהצלחה מול www.gstatic.com (HTTP {status})."
+                    if verified else
+                    "הקישוריות הצליחה, אך זהות השרת לא אומתה בגלל הבחירה במצב ללא אימות."
+                )
+                return self._ok(request, {"ok": status in {200, 204}, "verified": verified, "status_code": status, "host": "www.gstatic.com", "message": message})
+            except Exception as exc:
+                return self._ok(request, {"ok": False, "verified": False, "message": f"הבדיקה נכשלה ולא בוצע מעבר אוטומטי למצב פחות בטוח: {exc}"})
+        raise RequestValidationError("unknown_settings_action", ["action"])
+
     async def _tasks(self, request):
         if request.method == "GET":
             return self._ok(request, {"items": safe_task_rows(self.core)})
@@ -551,9 +730,44 @@ class SmartiLocalGateway:
         return self._ok(request, task_action(self.core, action, payload))
 
     async def _memories(self, request):
+        if request.method == "POST":
+            payload = await self._body(request, "memoryCollectionAction")
+            manager = getattr(self.core, "memory_manager", None)
+            if manager is None:
+                raise RequestValidationError("memory_manager_unavailable")
+            action = str(payload.get("action") or "").strip().lower()
+            if action == "create":
+                memory_id = manager.add(
+                    str(payload.get("memory_type") or "long_term"), str(payload.get("content") or ""),
+                    subject=str(payload.get("subject") or ""), category=str(payload.get("category") or ""),
+                    tags=payload.get("tags") or [], importance=payload.get("importance", 3),
+                    ttl_hours=payload.get("ttl_hours"), pinned=bool(payload.get("pinned")), source="desktop_manual",
+                )
+                result = {"created": bool(memory_id), "id": memory_id}
+            elif action == "bulk_archive":
+                result = {"changed": sum(bool(manager.archive_entry(item, reason="desktop_bulk")) for item in payload.get("ids", []))}
+            elif action == "bulk_restore":
+                result = {"changed": sum(bool(manager.restore_entry(item)) for item in payload.get("ids", []))}
+            elif action == "bulk_delete":
+                result = {"changed": sum(bool(manager.forget(item)) for item in payload.get("ids", []))}
+            elif action == "import":
+                result = manager.import_memory(str(payload.get("path") or ""), user_authorized=True)
+            elif action == "export":
+                path = manager.export_memory(str(payload.get("path") or ""), encrypted=True, include_sensitive=True)
+                result = {"path": path}
+            elif action == "clear":
+                if payload.get("confirmation") != "מחק הכול":
+                    raise RequestValidationError("memory_clear_confirmation_required", ["confirmation"])
+                result = {"removed": manager.clear()}
+            else:
+                raise RequestValidationError("unknown_memory_collection_action", ["action"])
+            return self._ok(request, {**result, **memory_rows(self.core, status="all")})
         return self._ok(request, memory_rows(
             self.core, request.query.get("query", ""), request.query.get("status", "active"),
-            request.query.get("memory_type", "any"),
+            request.query.get("memory_type", "any"), category=request.query.get("category", ""),
+            sensitivity=request.query.get("sensitivity", "any"), date_range=request.query.get("date_range", "any"),
+            expiry=request.query.get("expiry", "any"), sort_by=request.query.get("sort_by", "updated_desc"),
+            page=request.query.get("page", 1), page_size=request.query.get("page_size", 8),
         ))
 
     async def _memory_item(self, request):
@@ -567,7 +781,10 @@ class SmartiLocalGateway:
         payload = await self._body(request, "toolAction")
         action, kind, name = (str(payload.get(key) or "").strip() for key in ("action", "kind", "name"))
         if action == "set_trust" and kind in {"custom", "mcp", "skill"} and name:
-            self.core.tool_registry.set_trust(kind, name, bool(payload.get("trusted")), metadata={"trusted_from": "tauri_desktop"})
+            self.core.set_tool_trust(
+                kind, name, bool(payload.get("trusted")),
+                metadata={"trusted_from": "tauri_desktop"},
+            )
         elif action == "set_enabled" and kind == "builtin" and name in PUBLIC_BUILTIN_TOOLS:
             config = copy.deepcopy(self.core.settings.get("tools_config", {}))
             config[name] = bool(payload.get("enabled"))
@@ -579,17 +796,31 @@ class SmartiLocalGateway:
         elif action == "refresh":
             self.core.refresh_extension_catalogs(force=True, rebuild_prompt=True)
         elif action == "install_skill":
-            self.core.install_local_skill_package(str(payload.get("path") or ""))
+            result = self.core.install_local_skill_package(str(payload.get("path") or ""))
+            if not str(result).startswith("SUCCESS:"):
+                raise RequestValidationError(str(result), ["path"])
         elif action == "install_custom":
-            self.core.install_python_tool_from_path(str(payload.get("path") or ""))
+            result = self.core.install_python_tool_from_path(str(payload.get("path") or ""))
+            if not str(result).startswith("SUCCESS:"):
+                raise RequestValidationError(str(result), ["path"])
         elif action == "install_mcp":
-            self.core.install_mcp_manual(package=str(payload.get("package") or ""), config_path=str(payload.get("path") or ""))
+            result = self.core.install_mcp_manual(package=str(payload.get("package") or ""), config_path=str(payload.get("path") or ""))
+            if not str(result).startswith("SUCCESS:"):
+                raise RequestValidationError(str(result), ["package", "path"])
+        elif action == "delete" and kind in {"custom", "mcp", "skill"} and name:
+            result = self.core.delete_external_tool_artifact(kind, name)
+            if str(result).startswith("ERROR"):
+                raise RequestValidationError(str(result), ["name"])
+            self.core.refresh_extension_catalogs(force=True, rebuild_prompt=True)
         else:
             raise RequestValidationError("unknown_tool_action", ["action"])
         return self._ok(request, tools_snapshot(self.core))
 
     async def _usage(self, request):
-        return self._ok(request, usage_snapshot(self.core))
+        if request.method == "DELETE":
+            from .desktop_services import clear_usage
+            return self._ok(request, clear_usage(self.core))
+        return self._ok(request, usage_snapshot(self.core, request.query.get("timeframe", "all")))
 
     async def _logs(self, request):
         return self._ok(request, log_snapshot(request.query.get("limit", 500), request.query.get("personal", "hidden") != "shown"))
@@ -604,12 +835,66 @@ class SmartiLocalGateway:
 
     async def _diagnostics(self, request):
         from .doctor import SmartiDiagnostic
+        if request.method == "GET":
+            with self._diagnostic_lock:
+                return self._ok(request, copy.deepcopy(self._diagnostic_progress))
         payload = await self._body(request, "diagnosticAction")
+        if payload.get("action") == "cancel":
+            with self._diagnostic_lock:
+                diagnostic = self._active_diagnostic
+                if diagnostic is not None:
+                    self._diagnostic_progress["status"] = "cancelling"
+            if diagnostic is not None:
+                diagnostic.request_stop()
+            return self._ok(request, {"cancel_requested": diagnostic is not None})
+        active_runs = self.core.chat_store.list_runs(
+            statuses={"queued", "running", "waiting_for_approval", "waiting_for_input", "cancelling"},
+            limit=1,
+        )
+        if active_runs:
+            raise RequestValidationError("diagnostic_blocked_while_agent_running")
         if payload.get("action") == "repair":
             action_id = str(payload.get("repair_id") or "")
             message = await asyncio.to_thread(SmartiDiagnostic(self.core).perform_repair, action_id)
             return self._ok(request, {"message": str(message)})
-        results = await asyncio.to_thread(SmartiDiagnostic(self.core).run, bool(payload.get("include_network")))
+        diagnostic = SmartiDiagnostic(self.core)
+        with self._diagnostic_lock:
+            if self._active_diagnostic is not None:
+                raise RequestValidationError("diagnostic_already_running")
+            self._active_diagnostic = diagnostic
+            self._diagnostic_progress = {
+                "running": True, "current": 0, "total": 0,
+                "label": "מכין בדיקות Python Core", "status": "running",
+                "completed_items": 0,
+            }
+
+        def report_progress(current, total, label):
+            with self._diagnostic_lock:
+                self._diagnostic_progress.update({
+                    "running": True, "current": int(current), "total": int(total),
+                    "label": str(label or ""), "status": "running",
+                })
+
+        def report_result(_result):
+            with self._diagnostic_lock:
+                self._diagnostic_progress["completed_items"] += 1
+        try:
+            results = await asyncio.to_thread(
+                diagnostic.run,
+                bool(payload.get("include_network")),
+                report_progress,
+                report_result,
+            )
+        finally:
+            with self._diagnostic_lock:
+                cancelled = self._diagnostic_progress.get("status") == "cancelling"
+                self._diagnostic_progress.update({
+                    "running": False,
+                    "status": "cancelled" if cancelled else "completed",
+                    "label": "הבדיקה הופסקה" if cancelled else "הבדיקה הסתיימה",
+                })
+                if self._active_diagnostic is diagnostic:
+                    self._active_diagnostic = None
         return self._ok(request, {"items": [item.to_dict() for item in results]})
 
     async def _workspace_root(self, request):
@@ -802,11 +1087,15 @@ class SmartiLocalGateway:
             def set_value(payload):
                 self.core.settings[key] = sanitize_secret_value(payload["value"])
                 self.core._save_settings()
+                if key == provider_secret_key(self.core.settings.get("api_mode")):
+                    self.core.setup_model()
                 return {"secret_key": key, "configured": True, "masked": mask_secret_value(self.core.settings[key])}, 200
             return await self._idempotent(request, "setSecret", set_value)
         def delete_secret():
             self.core.mark_secret_for_deletion(key)
             self.core._save_settings()
+            if key == provider_secret_key(self.core.settings.get("api_mode")):
+                self.core.setup_model()
             return {"secret_key": key, "configured": False, "deleted": True}, 200
         return await self._idempotent_empty(request, delete_secret)
 
@@ -950,12 +1239,14 @@ class SmartiLocalGateway:
         app.router.add_patch("/v2/conversations/{session_id}", self._conversation_item)
         app.router.add_delete("/v2/conversations/{session_id}", self._conversation_item)
         app.router.add_get("/v2/conversations/{session_id}/messages", self._messages)
+        app.router.add_get("/v2/conversations/{session_id}/export", self._conversation_export)
         app.router.add_post("/v2/conversations/{session_id}/runs", self._submit_run)
         app.router.add_post("/v2/conversations/{session_id}/read", self._mark_read)
         app.router.add_get("/v2/runs", self._runs)
         app.router.add_get("/v2/runs/{run_id}", self._run_item)
         app.router.add_post("/v2/runs/{run_id}/cancel", self._cancel_run)
         app.router.add_get("/v2/runs/{run_id}/events", self._run_events)
+        app.router.add_post("/v2/runs/{run_id}/api-key", self._provide_run_api_key)
         app.router.add_get("/v2/events/replay", self._events_replay)
         app.router.add_get("/v2/approvals", self._approvals)
         app.router.add_post("/v2/approvals/{approval_id}/resolve", self._resolve_approval)
@@ -964,17 +1255,23 @@ class SmartiLocalGateway:
         app.router.add_patch("/v2/settings", self._settings)
         app.router.add_put("/v2/settings/secrets/{secret_key}", self._secret)
         app.router.add_delete("/v2/settings/secrets/{secret_key}", self._secret)
+        app.router.add_get("/v2/management/legal", self._legal)
+        app.router.add_post("/v2/management/legal", self._legal)
+        app.router.add_post("/v2/management/settings/actions", self._settings_action)
         app.router.add_get("/v2/management/tasks", self._tasks)
         app.router.add_post("/v2/management/tasks", self._tasks)
         app.router.add_get("/v2/management/memories", self._memories)
+        app.router.add_post("/v2/management/memories", self._memories)
         app.router.add_get("/v2/management/memories/{memory_id}", self._memory_item)
         app.router.add_patch("/v2/management/memories/{memory_id}", self._memory_item)
         app.router.add_delete("/v2/management/memories/{memory_id}", self._memory_item)
         app.router.add_get("/v2/management/tools", self._tools)
         app.router.add_post("/v2/management/tools", self._tools)
         app.router.add_get("/v2/management/usage", self._usage)
+        app.router.add_delete("/v2/management/usage", self._usage)
         app.router.add_get("/v2/management/logs", self._logs)
         app.router.add_get("/v2/management/about", self._about)
+        app.router.add_get("/v2/management/diagnostics", self._diagnostics)
         app.router.add_post("/v2/management/diagnostics", self._diagnostics)
         app.router.add_get("/v2/workbench/root", self._workspace_root)
         app.router.add_patch("/v2/workbench/root", self._workspace_root)
@@ -1003,6 +1300,10 @@ class SmartiLocalGateway:
         app.router.add_post("/v2/audio/tts", self._tts_start)
         app.router.add_post("/v2/audio/tts/stop", self._tts_stop)
         app.router.add_get("/v2/audio/tts/status", self._tts_status)
+        app.router.add_get("/v2/audio/tts/voices", self._tts_voices)
+        app.router.add_post("/v2/audio/voice", self._voice_start)
+        app.router.add_post("/v2/audio/voice/stop", self._voice_stop)
+        app.router.add_get("/v2/audio/voice/status", self._voice_status)
         app.router.add_get("/v2/events", self._events)
         return app
 

@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ClipboardEvent,
@@ -90,6 +91,14 @@ type CodexQuota = {
   weekly?: QuotaWindow | null;
   fetched_at?: number;
 };
+type VoiceState = {
+  session_id: string;
+  active: boolean;
+  status: string;
+  transcript: string;
+  error: string;
+  cancelled: boolean;
+};
 function resetText(timestamp?: number): string {
   if (!timestamp) return "";
   const remaining = Math.max(0, Math.floor(timestamp - Date.now() / 1000));
@@ -124,17 +133,6 @@ export function Composer({
   onSend,
   onCancel,
 }: ComposerProps) {
-  type SpeechRecognitionLike = {
-    lang: string;
-    continuous: boolean;
-    onresult: (event: {
-      results: ArrayLike<{ 0: { transcript: string } }>;
-    }) => void;
-    onend: () => void;
-    onerror: () => void;
-    start: () => void;
-    stop: () => void;
-  };
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
   const [status, setStatus] = useState("");
@@ -146,14 +144,8 @@ export function Composer({
   const picker = useRef<HTMLInputElement>(null);
   const modelMenu = useRef<HTMLDetailsElement>(null);
   const autonomyMenu = useRef<HTMLDetailsElement>(null);
-  const activeRecognition = useRef<SpeechRecognitionLike | null>(null);
-  useEffect(
-    () => () => {
-      activeRecognition.current?.stop();
-      activeRecognition.current = null;
-    },
-    [],
-  );
+  const voiceSession = useRef("");
+  const voiceConsumed = useRef("");
   const refreshQuota = async (minimumAgeSeconds = 0) => {
     if (
       provider !== "openai_codex_signin" ||
@@ -177,6 +169,12 @@ export function Composer({
       setQuotaLoading(false);
     }
   };
+  useLayoutEffect(() => {
+    const node = area.current;
+    if (!node) return;
+    node.style.height = "auto";
+    node.style.height = `${Math.min(150, Math.max(38, node.scrollHeight))}px`;
+  }, [text]);
   useEffect(() => {
     if (provider !== "openai_codex_signin") {
       setQuota(null);
@@ -216,9 +214,9 @@ export function Composer({
     event.preventDefault();
     const files = Array.from(event.dataTransfer.files);
     if (files.length)
-      void Promise.all(files.map(pastedFile)).then((items) =>
-        onAttachments([...attachments, ...items]),
-      );
+      void Promise.all(files.map(pastedFile))
+        .then((items) => onAttachments([...attachments, ...items]))
+        .catch((reason) => setStatus(String(reason)));
   };
   const send = async () => {
     if ((!text.trim() && !attachments.length) || disabled) return;
@@ -226,8 +224,9 @@ export function Composer({
     setText("");
     try {
       await onSend(value);
-    } catch {
+    } catch (reason) {
       setText(value);
+      setStatus(`ההודעה לא נשלחה: ${String(reason)}`);
     }
   };
   const key = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -236,55 +235,90 @@ export function Composer({
       void send();
     }
   };
-  const stopListening = (cancelled = true) => {
-    activeRecognition.current?.stop();
-    activeRecognition.current = null;
-    setListening(false);
-    setStatus(cancelled ? "ההאזנה בוטלה" : "");
-    area.current?.focus();
+  const stopListening = async (cancelled = true) => {
+    try {
+      await coreApi("POST", "/v2/audio/voice/stop", {}, true);
+    } finally {
+      await invoke("desktop_hide_voice_overlay").catch(() => undefined);
+      setListening(false);
+      setStatus(cancelled ? "ההאזנה בוטלה" : "");
+      area.current?.focus();
+    }
   };
-  const listen = () => {
-    if (activeRecognition.current) {
-      stopListening();
+  const listen = async () => {
+    if (listening) {
+      await stopListening();
       return;
     }
-    const Recognition = (
-      window as unknown as {
-        webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-      }
-    ).webkitSpeechRecognition;
-    if (!Recognition) {
-      setStatus("זיהוי קולי אינו זמין ב־WebView זה");
-      return;
-    }
-    const recognizer = new Recognition();
-    activeRecognition.current = recognizer;
-    recognizer.lang = "he-IL";
-    recognizer.continuous = false;
-    recognizer.onresult = (event) =>
-      setText(
-        (current) =>
-          `${current}${current ? " " : ""}${event.results[0][0].transcript}`,
+    try {
+      const state = await coreApi<VoiceState>(
+        "POST",
+        "/v2/audio/voice",
+        {},
+        true,
       );
-    recognizer.onend = () => {
-      activeRecognition.current = null;
+      voiceSession.current = state.session_id;
+      voiceConsumed.current = "";
+      await invoke("desktop_show_voice_overlay");
+      setListening(true);
+      setStatus(state.status || "אפשר לדבר עכשיו");
+    } catch (reason) {
+      void coreApi("POST", "/v2/audio/voice/stop", {}, true).catch(
+        () => undefined,
+      );
       setListening(false);
-      setStatus("");
-    };
-    recognizer.onerror = () => {
-      activeRecognition.current = null;
-      setListening(false);
-      setStatus("לא ניתן היה לזהות דיבור");
-    };
-    setListening(true);
-    setStatus("אפשר לדבר עכשיו");
-    recognizer.start();
+      void invoke("desktop_hide_voice_overlay");
+      setStatus(`לא ניתן להפעיל זיהוי קולי: ${String(reason)}`);
+    }
   };
   useEffect(() => {
-    const activate = () => listen();
+    if (!listening) return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const state = await coreApi<VoiceState>(
+          "GET",
+          "/v2/audio/voice/status",
+        );
+        if (stopped || state.session_id !== voiceSession.current) return;
+        setStatus(state.status || (state.active ? "אפשר לדבר עכשיו" : ""));
+        if (state.active) return;
+        setListening(false);
+        void invoke("desktop_hide_voice_overlay");
+        if (state.error) {
+          setStatus(state.error);
+          return;
+        }
+        if (state.transcript && voiceConsumed.current !== state.session_id) {
+          voiceConsumed.current = state.session_id;
+          setText("");
+          try {
+            await onSend(state.transcript);
+          } catch (reason) {
+            setText(state.transcript);
+            setStatus(`התמלול לא נשלח: ${String(reason)}`);
+          }
+        } else if (state.cancelled) setStatus("ההאזנה בוטלה");
+      } catch (reason) {
+        if (!stopped) {
+          setListening(false);
+          void invoke("desktop_hide_voice_overlay");
+          setStatus(`האזנה נפסקה: ${String(reason)}`);
+        }
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 350);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [listening, onSend]);
+  useEffect(() => {
+    const activate = () => void listen();
     window.addEventListener("smarti:voice-hotkey", activate);
     return () => window.removeEventListener("smarti:voice-hotkey", activate);
-  }, []);
+  }, [listening]);
   const icons = legacyAssets(theme);
   const canSend = Boolean(text.trim() || attachments.length);
   const menuKey = (
@@ -315,35 +349,6 @@ export function Composer({
       onDragOver={(event) => event.preventDefault()}
       onDrop={drop}
     >
-      {listening && (
-        <section
-          className="voice-listening-overlay"
-          role="status"
-          aria-live="polite"
-        >
-          <button
-            type="button"
-            aria-label="בטל האזנה"
-            title="בטל האזנה"
-            onClick={() => stopListening()}
-          >
-            <LegacyIcon src={icons.close} size={18} />
-          </button>
-          <button
-            type="button"
-            aria-label="פתח את סמארטי"
-            title="פתח את סמארטי"
-            onClick={() => area.current?.focus()}
-          >
-            <LegacyIcon src={icons.voiceOverlayOpen} size={18} />
-          </button>
-          <div>
-            <strong>האזנה פעילה</strong>
-            <span>{status || "אפשר לדבר עכשיו"}</span>
-          </div>
-          <img src={icons.voiceListening} alt="" />
-        </section>
-      )}
       {!!attachments.length && (
         <div className="pending-attachments">
           {attachments.map((item, index) =>
@@ -398,7 +403,7 @@ export function Composer({
         ref={area}
         rows={1}
         value={text}
-        disabled={disabled || running}
+        disabled={disabled || running || listening}
         placeholder="בקש כל דבר"
         onChange={(event) => setText(event.target.value)}
         onKeyDown={key}
@@ -429,7 +434,13 @@ export function Composer({
                     : "הכתבה קולית"
             }
             disabled={disabled && !running}
-            onClick={running ? onCancel : canSend ? () => void send() : listen}
+            onClick={
+              running
+                ? onCancel
+                : canSend
+                  ? () => void send()
+                  : () => void listen()
+            }
           >
             <LegacyIcon
               src={running ? icons.stop : canSend ? icons.send : icons.mic}

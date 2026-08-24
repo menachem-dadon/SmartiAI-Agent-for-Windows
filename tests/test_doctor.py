@@ -389,6 +389,15 @@ class SmartiDiagnosticTests(unittest.TestCase):
         self.assertIn("extensions.skills", result_ids)
         self.assertNotIn("data.sqlite", result_ids)
 
+    def test_tool_policy_check_counts_catalogs_without_treating_registry_service_as_collection(self):
+        self.core.tool_registry = object()
+        self.core.custom_tools = {"one": {}}
+        self.core.mcp_registry = {"package": {}}
+        self.core.skill_registry = {"skill": {}}
+        result = doctor.SmartiDiagnostic(self.core).check_tool_catalog_policy()
+        self.assertIn(result.status, {doctor.STATUS_PASS, doctor.STATUS_SKIPPED})
+        self.assertIn("python_tools=1", result.technical_detail)
+
 
 class ThemedDiagnosticIconTests(unittest.TestCase):
     def setUp(self):
