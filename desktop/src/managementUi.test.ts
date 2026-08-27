@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
+import { readFileSync } from "node:fs";
 import {
   cleanup,
   fireEvent,
@@ -26,9 +27,28 @@ import { ApiKeyRequiredDialog } from "./App";
 import { ToolsView } from "./ManagementPages";
 
 type InvokeCall = { command: string; args: Record<string, unknown> };
+const managementStyles = readFileSync(
+  "src/App.css",
+  "utf8",
+);
 afterEach(() => cleanup());
 
 describe("Point 16C source-derived settings behavior", () => {
+  it("scrolls the full management viewport around a transparent centered content shell", () => {
+    expect(managementStyles).toMatch(
+      /\.management-scroll-viewport\s*\{[^}]*overflow-x:\s*hidden[^}]*overflow-y:\s*auto/s,
+    );
+    expect(managementStyles).toMatch(
+      /\.management-content-shell\s*\{[^}]*margin-inline:\s*auto[^}]*overflow:\s*visible[^}]*background:\s*transparent/s,
+    );
+    expect(managementStyles).toMatch(
+      /\.source-settings-page\s*\{[^}]*height:\s*auto[^}]*overflow:\s*visible/s,
+    );
+    expect(managementStyles).toMatch(
+      /\.source-settings-scroll\s*\{[^}]*overflow:\s*visible[^}]*background:\s*transparent/s,
+    );
+  });
+
   it("keeps the PyQt ManagementCenter registration order and source icon fallbacks", () => {
     expect(managementNavigation.map((group) => group.group)).toEqual([
       "ניהול",

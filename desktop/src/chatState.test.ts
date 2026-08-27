@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { ACTIVE_RUN_STATES, mergeMessages, pendingApiKeyRequest, semanticStep } from "./chatState";
+import {
+  ACTIVE_RUN_STATES,
+  mergeMessages,
+  pendingApiKeyRequest,
+  recentConversations,
+  semanticStep,
+} from "./chatState";
 
 describe("durable chat state", () => {
   test("keeps concurrent active states scoped by run", () => {
@@ -12,6 +18,16 @@ describe("durable chat state", () => {
     const older = [{ role: "user" as const, content: "ישן", created_at: "1" }];
     const current = [{ role: "user" as const, content: "ישן", created_at: "1" }, { role: "assistant" as const, content: "חדש", created_at: "2" }];
     expect(mergeMessages(older, current).map((item) => item.content)).toEqual(["ישן", "חדש"]);
+  });
+
+  test("keeps a new conversation out of recents until its first message is stored", () => {
+    const empty = { id: "empty", title: "שיחה חדשה", message_count: 0 };
+    const started = { id: "started", title: "שלום", message_count: 1 };
+
+    expect(recentConversations([empty, started])).toEqual([started]);
+    expect(recentConversations([{ ...empty, message_count: 1 }])).toEqual([
+      { ...empty, message_count: 1 },
+    ]);
   });
 
   test("renders semantic tool activity", () => {

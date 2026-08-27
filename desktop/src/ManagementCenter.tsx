@@ -66,26 +66,28 @@ export function ManagementCenter({
             </section>
           ))}
         </nav>
-        <main>
-          {section === "workspace" && (
-            <WorkspaceView onOpenWorkbench={onOpenWorkbench} />
-          )}
-          {section === "tasks" && <TasksView />}
-          {section === "memory" && <MemoryView />}
-          {section === "tools" && <ToolsView theme={theme} />}
-          {section === "diagnostics" && <DiagnosticsView />}
-          {section === "usage" && <UsageView />}
-          {section === "logs" && <LogsView />}
-          {section.startsWith("settings_") && (
-            <SettingsView
-              section={section as SettingsSection}
-              setTheme={setTheme}
-              theme={theme}
-              onNavigate={setSection}
-              updateControls={<UpdateControls compact theme={theme} />}
-            />
-          )}
-          {section === "about" && <AboutView theme={theme} />}
+        <main className="management-scroll-viewport">
+          <div className="management-content-shell">
+            {section === "workspace" && (
+              <WorkspaceView onOpenWorkbench={onOpenWorkbench} />
+            )}
+            {section === "tasks" && <TasksView />}
+            {section === "memory" && <MemoryView />}
+            {section === "tools" && <ToolsView theme={theme} />}
+            {section === "diagnostics" && <DiagnosticsView />}
+            {section === "usage" && <UsageView />}
+            {section === "logs" && <LogsView />}
+            {section.startsWith("settings_") && (
+              <SettingsView
+                section={section as SettingsSection}
+                setTheme={setTheme}
+                theme={theme}
+                onNavigate={setSection}
+                updateControls={<UpdateControls compact theme={theme} />}
+              />
+            )}
+            {section === "about" && <AboutView theme={theme} />}
+          </div>
         </main>
       </div>
     </div>

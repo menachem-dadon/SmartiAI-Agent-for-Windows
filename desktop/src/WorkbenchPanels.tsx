@@ -12,6 +12,7 @@ import {
   type WorkbenchTab,
   type WorkbenchTabRecord,
 } from "./workspaceState";
+import { useDismissiblePopup } from "./popupDismissal";
 
 type TreeItem = {
   name: string;
@@ -342,6 +343,7 @@ export function WorkbenchSurface({
   const [tabs, setTabs] = useState<Tab[]>(() => restored?.tabs || []);
   const [active, setActive] = useState(() => restored?.active || "");
   const [menu, setMenu] = useState(false);
+  const addMenu = useRef<HTMLDivElement | null>(null);
   const draggedTab = useRef("");
   useEffect(() => {
     if (restoredApplied.current || !restored) return;
@@ -386,6 +388,11 @@ export function WorkbenchSurface({
     setTabs(next.tabs);
   };
   const current = tabs.find((tab) => tab.id === active);
+  useDismissiblePopup({
+    open: menu,
+    roots: [addMenu],
+    onDismiss: () => setMenu(false),
+  });
   return (
     <>
       <header className="workbench-head" dir="ltr">
@@ -421,7 +428,7 @@ export function WorkbenchSurface({
             </button>
           ))}
         </div>
-        <div className="workbench-add">
+        <div className="workbench-add" ref={addMenu}>
           <button
             type="button"
             aria-label="פתיחת לשונית"

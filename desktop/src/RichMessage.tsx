@@ -8,6 +8,12 @@ import { LegacyIcon, legacyAssets } from "./legacyAssets";
 import { coreApi } from "./coreApi";
 import { IconButton } from "./ui";
 import { legacyUi } from "./legacyUiParity";
+import {
+  agentToolGroupIcon,
+  agentToolIcon,
+  agentToolIconName,
+  type AgentToolIconName,
+} from "./agentToolIcons";
 
 const copy = async (text: string) => navigator.clipboard.writeText(text);
 const WINDOWS_PATH = /^[A-Za-z]:[\\/]/;
@@ -56,7 +62,57 @@ function codeLanguage(children: unknown): string {
   return (
     String(
       (children as { props?: { className?: string } })?.props?.className || "",
-    ).replace(/^language-/, "") || "TEXT"
+    ).replace(/^language-/, "") || "text"
+  );
+}
+export function codeDisplayLanguage(value: string): string {
+  const language = String(value || "text").trim().toLowerCase() || "text";
+  const display: Record<string, string> = {
+    text: "Text",
+    txt: "Text",
+    python: "Python",
+    py: "Python",
+    javascript: "JavaScript",
+    js: "JavaScript",
+    typescript: "TypeScript",
+    ts: "TypeScript",
+    tsx: "TSX",
+    jsx: "JSX",
+    csharp: "C#",
+    cs: "C#",
+    cpp: "C++",
+    "c++": "C++",
+    json: "JSON",
+    html: "HTML",
+    css: "CSS",
+    scss: "SCSS",
+    sql: "SQL",
+    xml: "XML",
+    yaml: "YAML",
+    yml: "YAML",
+    jsonc: "JSONC",
+    md: "Markdown",
+    markdown: "Markdown",
+    powershell: "PowerShell",
+    pwsh: "PowerShell",
+    ps1: "PowerShell",
+    bash: "Bash",
+    sh: "Shell",
+    shell: "Shell",
+    zsh: "Zsh",
+    kotlin: "Kotlin",
+    kt: "Kotlin",
+    rust: "Rust",
+    rs: "Rust",
+    php: "PHP",
+    ruby: "Ruby",
+    rb: "Ruby",
+  };
+  return (
+    display[language] ||
+    language
+      .replace(/[-_]+/g, " ")
+      .replace(/\b\w/g, (character) => character.toUpperCase())
   );
 }
 async function downloadCode(text: string, language: string) {
@@ -116,6 +172,7 @@ type AgentEvent = {
 type ToolView = {
   key: string;
   name: string;
+  icon: AgentToolIconName;
   status: "running" | "finished" | "error";
   query: string;
   output: string;
@@ -127,6 +184,7 @@ type ProcessRow =
       key: string;
       standalone: boolean;
       label: string;
+      icon: AgentToolIconName;
       tools: ToolView[];
       running: boolean;
     };
@@ -161,6 +219,7 @@ function toolFrom(
   return {
     key: toolKey(value, fallback),
     name: toolName(value),
+    icon: agentToolIconName(value),
     status,
     query: payloadText(
       value.arguments_text ||
@@ -221,6 +280,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
           key: `tools-${index}`,
           standalone: false,
           label: "מריץ כלים",
+          icon: "row_status",
           tools: [],
           running: true,
         };
@@ -241,6 +301,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
           key: `tools-${index}`,
           standalone: false,
           label: "כלים הסתיימו",
+          icon: "row_status",
           tools: [],
           running: false,
         };
@@ -301,6 +362,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
         );
       if (existing) {
         existing.label = label;
+        existing.icon = agentToolIconName(group);
         existing.running = running;
       } else
         rows.push({
@@ -308,6 +370,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
           key: `group-${identity}`,
           standalone: true,
           label,
+          icon: agentToolIconName(group),
           tools: [],
           running,
         });
@@ -496,7 +559,7 @@ export function RichMessage({
                   }
                   key={row.key}
                 >
-                  <LegacyIcon src={icons.agentTool} size={16} />
+                  <LegacyIcon src={agentToolIcon(theme, row.icon)} size={16} />
                   {row.label}
                 </p>
               ) : (
@@ -506,7 +569,21 @@ export function RichMessage({
                     <span className={row.running ? "is-shimmering" : ""}>
                       {row.label}
                     </span>
-                    <LegacyIcon src={icons.agentTool} size={16} />
+                    <LegacyIcon
+                      src={
+                        row.running &&
+                        row.tools.filter((tool) => tool.status === "running")
+                          .length === 1
+                          ? agentToolIcon(
+                              theme,
+                              row.tools.find(
+                                (tool) => tool.status === "running",
+                              )!.icon,
+                            )
+                          : agentToolGroupIcon(theme)
+                      }
+                      size={16}
+                    />
                   </summary>
                   <div>
                     {row.tools.map((tool) => (
@@ -521,7 +598,10 @@ export function RichMessage({
                                 : "הסתיים"}{" "}
                             · {tool.name}
                           </span>
-                          <LegacyIcon src={icons.agentTool} size={16} />
+                          <LegacyIcon
+                            src={agentToolIcon(theme, tool.icon)}
+                            size={16}
+                          />
                         </summary>
                         <div>
                           <strong>קלט ופרמטרי הפעלה</strong>
@@ -620,7 +700,7 @@ export function RichMessage({
                         >
                           <LegacyIcon src={icons.codeDownload} size={18} />
                         </button>
-                        <span>{language.toUpperCase()}</span>
+                        <span>{codeDisplayLanguage(language)}</span>
                       </div>
                       <pre>{children}</pre>
                     </div>

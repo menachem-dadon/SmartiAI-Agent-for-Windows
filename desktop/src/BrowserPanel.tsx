@@ -1,5 +1,6 @@
 import {
   type FormEvent,
+  type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -8,6 +9,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   activeTab,
@@ -50,6 +52,14 @@ type ImportSource = {
   browser_name: string;
   profile_name: string;
 };
+type NativeMenuEntry = {
+  id?: string;
+  text?: string;
+  enabled?: boolean;
+  separator?: boolean;
+  accelerator?: string;
+  action?: () => unknown | Promise<unknown>;
+};
 
 const initialBrowser: BrowserSnapshot = {
   tabs: [],
@@ -85,7 +95,13 @@ export const browserProductCapabilities = {
 } as const;
 
 export type BrowserActivity = { title: string; url: string; loading: boolean; previewDataUrl?: string };
-export function BrowserPanel({ visible, onActivity }: { visible: boolean; onActivity?: (activity: BrowserActivity) => void }) {
+export function BrowserPanel({
+  visible,
+  onActivity,
+}: {
+  visible: boolean;
+  onActivity?: (activity: BrowserActivity) => void;
+}) {
   const [browser, setBrowser] = useState<BrowserSnapshot>(initialBrowser);
   const [hydrated, setHydrated] = useState(false);
   const [address, setAddress] = useState("");
@@ -110,8 +126,16 @@ export function BrowserPanel({ visible, onActivity }: { visible: boolean; onActi
   const addressRef = useRef<HTMLInputElement>(null);
   const initialTabRequested = useRef(false);
   const legacyMigrationAttempted = useRef(false);
+  const nativeMenuGuard = useRef({ active: false, releaseTimer: 0 });
   const browserRef = useRef(browser);
   browserRef.current = browser;
+  useEffect(
+    () => () => {
+      if (nativeMenuGuard.current.releaseTimer)
+        window.clearTimeout(nativeMenuGuard.current.releaseTimer);
+    },
+    [],
+  );
   useEffect(() => {
     void coreApi<{ values?: Record<string, unknown> }>(
       "GET",
@@ -277,6 +301,11 @@ export function BrowserPanel({ visible, onActivity }: { visible: boolean; onActi
     void invoke("browser_set_visible", { visible }).catch(() => undefined);
   }, [visible]);
   useEffect(() => {
+    if (visible) return;
+    setShowFind(false);
+    setPanel("");
+  }, [visible]);
+  useEffect(() => {
     if (
       !visible ||
       !hydrated ||
@@ -330,11 +359,17 @@ export function BrowserPanel({ visible, onActivity }: { visible: boolean; onActi
       }
       const rect = element.getBoundingClientRect();
       if (rect.width < 160 || rect.height < 120) return;
+      const rightInset = panel
+        ? Math.min(360, Math.max(0, rect.width - 160))
+        : 0;
+      const topInset = showFind
+        ? Math.min(46, Math.max(0, rect.height - 120))
+        : 0;
       const bounds = {
         x: Math.round(rect.x),
-        y: Math.round(rect.y),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
+        y: Math.round(rect.y + topInset),
+        width: Math.round(rect.width - rightInset),
+        height: Math.round(rect.height - topInset),
       };
       const key = `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
       if (key === lastBounds) return;
@@ -368,7 +403,7 @@ export function BrowserPanel({ visible, onActivity }: { visible: boolean; onActi
       observer.disconnect();
       window.removeEventListener("resize", sync);
     };
-  }, [visible]);
+  }, [visible, panel, showFind]);
   const current = useMemo(() => activeTab(browser), [browser]);
   useEffect(() => {
     if (!current) return;
@@ -513,6 +548,182 @@ export function BrowserPanel({ visible, onActivity }: { visible: boolean; onActi
     setMobileUserAgent(mobile);
     await invoke("browser_reload", { tabId: current.tabId });
   };
+  const showBrowserMenu = async (
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) => {
+    if (nativeMenuGuard.current.active) return;
+    nativeMenuGuard.current.active = true;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const runMenuAction = (action: () => unknown | Promise<unknown>) => () => {
+      void Promise.resolve()
+        .then(action)
+        .catch((error) => setNotice(String(error)));
+    };
+    const items: NativeMenuEntry[] = [
+      {
+        id: "browser-guest-tab",
+        text: "כרטיסיית Guest",
+        action: runMenuAction(() => newTab("guest")),
+      },
+      {
+        id: "browser-duplicate-tab",
+        text: "שכפול כרטיסייה",
+        enabled: Boolean(current),
+        action: runMenuAction(() =>
+          current
+            ? invoke<BrowserSnapshot>("browser_duplicate", {
+                tabId: current.tabId,
+              }).then(setBrowser)
+            : undefined,
+        ),
+      },
+      {
+        id: "browser-pin-tab",
+        text: current?.pinned ? "ביטול הצמדה" : "הצמדה",
+        enabled: Boolean(current),
+        action: runMenuAction(() =>
+          current
+            ? invoke<BrowserSnapshot>("browser_pin", {
+                tabId: current.tabId,
+                pinned: !current.pinned,
+              }).then(setBrowser)
+            : undefined,
+        ),
+      },
+      { separator: true },
+      {
+        id: "browser-find",
+        text: "חיפוש בדף",
+        enabled: Boolean(current),
+        accelerator: "Ctrl+F",
+        action: runMenuAction(() => setShowFind(true)),
+      },
+      {
+        id: "browser-zoom-in",
+        text: `הגדלה (${zoom}%)`,
+        enabled: Boolean(current),
+        action: runMenuAction(() => setPageZoom(zoom + 10)),
+      },
+      {
+        id: "browser-zoom-out",
+        text: "הקטנה",
+        enabled: Boolean(current),
+        action: runMenuAction(() => setPageZoom(zoom - 10)),
+      },
+      { separator: true },
+      {
+        id: "browser-screenshot",
+        text: "צילום מסך",
+        enabled: Boolean(current),
+        action: runMenuAction(() => capture(false)),
+      },
+      {
+        id: "browser-print",
+        text: "הדפסה / PDF",
+        enabled: Boolean(current),
+        action: runMenuAction(() => capture(true)),
+      },
+      {
+        id: "browser-save-source",
+        text: "שמירת מקור הדף",
+        enabled: Boolean(current),
+        action: runMenuAction(saveSource),
+      },
+      {
+        id: "browser-device-mode",
+        text: deviceMode ? "יציאה ממצב מכשיר" : "מצב מכשיר",
+        enabled: Boolean(current),
+        action: runMenuAction(toggleDeviceMode),
+      },
+      {
+        id: "browser-user-agent",
+        text: mobileUserAgent ? "User Agent רגיל" : "User Agent נייד",
+        enabled: Boolean(current),
+        action: runMenuAction(toggleUserAgent),
+      },
+      ...(developerEnabled
+        ? [
+            {
+              id: "browser-devtools",
+              text: "Developer Tools",
+              enabled: Boolean(current),
+              action: runMenuAction(() =>
+                current
+                  ? invoke("browser_open_devtools", {
+                      tabId: current.tabId,
+                      developerEnabled: true,
+                    })
+                  : undefined,
+              ),
+            },
+          ]
+        : []),
+      { separator: true },
+      {
+        id: "browser-copy-address",
+        text: "העתקת כתובת",
+        enabled: Boolean(current),
+        action: runMenuAction(() =>
+          current ? navigator.clipboard.writeText(current.url) : undefined,
+        ),
+      },
+      {
+        id: "browser-open-external",
+        text: "פתיחה חיצונית",
+        enabled: Boolean(current),
+        action: runMenuAction(() =>
+          current ? openUrl(current.url) : undefined,
+        ),
+      },
+      { separator: true },
+      {
+        id: "browser-library",
+        text: "היסטוריה וסימניות",
+        action: runMenuAction(() => setPanel("library")),
+      },
+      {
+        id: "browser-downloads",
+        text: "הורדות",
+        action: runMenuAction(() => setPanel("downloads")),
+      },
+      {
+        id: "browser-privacy",
+        text: "פרטיות והרשאות",
+        action: runMenuAction(() => setPanel("privacy")),
+      },
+      {
+        id: "browser-import",
+        text: "ייבוא פרופיל",
+        action: runMenuAction(loadSources),
+      },
+    ];
+    try {
+      const window = getCurrentWindow();
+      const [innerPosition, scaleFactor] = await Promise.all([
+        window.innerPosition(),
+        window.scaleFactor(),
+      ]);
+      const selectedId = await invoke<string | null>(
+        "desktop_popup_rtl_menu",
+        {
+          items: items.map(({ action: _action, ...item }) => item),
+          x: Math.round(innerPosition.x + rect.right * scaleFactor),
+          y: Math.round(innerPosition.y + (rect.bottom + 4) * scaleFactor),
+        },
+      );
+      const selected = items.find((item) => item.id === selectedId);
+      selected?.action?.();
+    } catch (error) {
+      setNotice(`פתיחת תפריט הדפדפן נכשלה: ${String(error)}`);
+    } finally {
+      if (nativeMenuGuard.current.releaseTimer)
+        window.clearTimeout(nativeMenuGuard.current.releaseTimer);
+      nativeMenuGuard.current.releaseTimer = window.setTimeout(() => {
+        nativeMenuGuard.current.active = false;
+        nativeMenuGuard.current.releaseTimer = 0;
+      }, 220);
+    }
+  };
   const openLibraryUrl = async (url: string) => {
     setPanel("");
     if (current)
@@ -645,7 +856,9 @@ export function BrowserPanel({ visible, onActivity }: { visible: boolean; onActi
     return () => window.removeEventListener("keydown", keyboard);
   }, [visible, newTab, current, library]);
   return (
-    <div className="embedded-browser">
+    <div
+      className={`embedded-browser ${panel ? "has-native-side-panel" : ""} ${showFind ? "has-native-find-space" : ""}`}
+    >
       <div className="browser-tabs" role="tablist" aria-label="כרטיסיות דפדפן">
         {browser.tabs.map((tab, index) => (
           <button
@@ -753,76 +966,13 @@ export function BrowserPanel({ visible, onActivity }: { visible: boolean; onActi
         <IconButton label="סימנייה" onClick={bookmark}>
           ☆
         </IconButton>
-        <details className="browser-menu">
-          <summary aria-label="תפריט דפדפן">⋮</summary>
-          <div dir="rtl">
-            <button onClick={() => void newTab("guest")}>כרטיסיית Guest</button>
-            <button
-              onClick={() =>
-                current &&
-                void invoke<BrowserSnapshot>("browser_duplicate", {
-                  tabId: current.tabId,
-                }).then(setBrowser)
-              }
-            >
-              שכפול כרטיסייה
-            </button>
-            <button
-              onClick={() =>
-                current &&
-                void invoke<BrowserSnapshot>("browser_pin", {
-                  tabId: current.tabId,
-                  pinned: !current.pinned,
-                }).then(setBrowser)
-              }
-            >
-              {current?.pinned ? "ביטול הצמדה" : "הצמדה"}
-            </button>
-            <button onClick={() => setShowFind(true)}>חיפוש בדף</button>
-            <button onClick={() => void setPageZoom(zoom + 10)}>
-              הגדלה ({zoom}%)
-            </button>
-            <button onClick={() => void setPageZoom(zoom - 10)}>הקטנה</button>
-            <button onClick={() => void capture(false)}>צילום מסך</button>
-            <button onClick={() => void capture(true)}>הדפסה / PDF</button>
-            <button onClick={() => void saveSource()}>שמירת מקור הדף</button>
-            <button onClick={() => void toggleDeviceMode()}>
-              {deviceMode ? "יציאה ממצב מכשיר" : "מצב מכשיר"}
-            </button>
-            <button onClick={() => void toggleUserAgent()}>
-              {mobileUserAgent ? "User Agent רגיל" : "User Agent נייד"}
-            </button>
-            {developerEnabled && (
-              <button
-                onClick={() =>
-                  current &&
-                  void invoke("browser_open_devtools", {
-                    tabId: current.tabId,
-                    developerEnabled: true,
-                  })
-                }
-              >
-                Developer Tools
-              </button>
-            )}
-            <button
-              onClick={() =>
-                current && void navigator.clipboard.writeText(current.url)
-              }
-            >
-              העתקת כתובת
-            </button>
-            <button onClick={() => current && void openUrl(current.url)}>
-              פתיחה חיצונית
-            </button>
-            <button onClick={() => setPanel("library")}>
-              היסטוריה וסימניות
-            </button>
-            <button onClick={() => setPanel("downloads")}>הורדות</button>
-            <button onClick={() => setPanel("privacy")}>פרטיות והרשאות</button>
-            <button onClick={() => void loadSources()}>ייבוא פרופיל</button>
-          </div>
-        </details>
+        <IconButton
+          className="browser-menu-trigger"
+          label="תפריט דפדפן"
+          onClick={(event) => void showBrowserMenu(event)}
+        >
+          ⋮
+        </IconButton>
       </div>
       {showFind && (
         <form

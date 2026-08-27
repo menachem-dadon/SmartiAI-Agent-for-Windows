@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { coreApi, encodePath } from "./coreApi";
 import type { ResolvedTheme, ThemePreference } from "./designSystem";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
+import { useDismissiblePopup } from "./popupDismissal";
 import {
   capabilityLabels,
   matchingSettings,
@@ -778,14 +779,11 @@ function SearchableModelPicker({
       );
     });
   }, [allModels, query]);
-  useEffect(() => {
-    const close = (event: PointerEvent) => {
-      if (root.current && !root.current.contains(event.target as Node))
-        setOpen(false);
-    };
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, []);
+  useDismissiblePopup({
+    open,
+    roots: [root],
+    onDismiss: () => setOpen(false),
+  });
   if (loading)
     return (
       <div className="source-model-loading" role="status">

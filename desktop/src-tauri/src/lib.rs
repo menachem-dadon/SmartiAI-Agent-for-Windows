@@ -1387,6 +1387,7 @@ pub fn run() {
             windows_integration::desktop_set_close_to_tray,
             windows_integration::desktop_notify,
             windows_integration::desktop_set_unread,
+            windows_integration::desktop_popup_rtl_menu,
             windows_integration::desktop_quit,
             restart_after_update,
             browser::browser_status,

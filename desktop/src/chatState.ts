@@ -1,4 +1,4 @@
-import type { ChatMessage, RunEvent } from "./chatTypes";
+import type { ChatMessage, Conversation, RunEvent } from "./chatTypes";
 
 export const ACTIVE_RUN_STATES = new Set(["queued", "running", "waiting_for_approval", "waiting_for_input", "cancelling"]);
 export type ApiKeyRequest = {
@@ -18,6 +18,13 @@ export function mergeMessages(older: ChatMessage[], current: ChatMessage[]) {
     if (seen.has(key)) return false; seen.add(key); return true;
   });
 }
+
+export function recentConversations(conversations: Conversation[]) {
+  return conversations.filter((conversation) =>
+    Number(conversation.message_count || 0) > 0,
+  );
+}
+
 export function semanticStep(event: RunEvent): string | null {
   const value = String(event.payload.value || event.payload.step || event.payload.status || "").trim();
   if (event.event_type === "run_step") return value || "מבצע שלב";

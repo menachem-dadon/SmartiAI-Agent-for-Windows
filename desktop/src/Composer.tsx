@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { PendingAttachment, ReasoningOption } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
+import { DismissibleDetails } from "./popupDismissal";
 import { autonomyLabels } from "./legacyUiParity";
 import { coreApi } from "./coreApi";
 
@@ -449,7 +450,7 @@ export function Composer({
           </button>
         </span>
         {!!favoriteModels.length && (
-          <details
+          <DismissibleDetails
             ref={modelMenu}
             className="quick-pill model-quick-pill"
             onToggle={(event) => {
@@ -595,9 +596,12 @@ export function Composer({
                 </div>
               ))}
             </div>
-          </details>
+          </DismissibleDetails>
         )}
-        <details ref={autonomyMenu} className="quick-pill autonomy-quick-pill">
+        <DismissibleDetails
+          ref={autonomyMenu}
+          className="quick-pill autonomy-quick-pill"
+        >
           <summary title="פרופיל בטיחות">
             <LegacyIcon
               src={
@@ -649,7 +653,7 @@ export function Composer({
               אוטונומי
             </button>
           </div>
-        </details>
+        </DismissibleDetails>
         {provider.toLowerCase() === "local" && (
           <label
             className={`local-fast-mode ${localFastMode ? "is-enabled" : ""}`}

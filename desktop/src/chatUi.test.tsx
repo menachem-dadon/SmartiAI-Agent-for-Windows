@@ -1,14 +1,101 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
+import { readFileSync } from "node:fs";
 import { Composer } from "./Composer";
 import {
+  codeDisplayLanguage,
   formatAgentDuration,
   prepareMessageMarkdown,
   RichMessage,
   safeChatHref,
 } from "./RichMessage";
+import { agentToolIcon, agentToolIconName } from "./agentToolIcons";
+
+const chatStyles = readFileSync(new URL("./App.css", import.meta.url), "utf8");
 
 describe("rich daily chat UI", () => {
+  test("formats code-language labels with their conventional casing", () => {
+    const html = renderToStaticMarkup(
+      <RichMessage
+        message={{ role: "assistant", content: "```python\nprint('ok')\n```" }}
+      />,
+    );
+
+    expect(html).toContain(">Python</span>");
+    expect(html).not.toContain(">PYTHON</span>");
+    expect(codeDisplayLanguage("js")).toBe("JavaScript");
+    expect(codeDisplayLanguage("typescript")).toBe("TypeScript");
+    expect(codeDisplayLanguage("html")).toBe("HTML");
+    expect(codeDisplayLanguage("php")).toBe("PHP");
+    expect(codeDisplayLanguage("powershell")).toBe("PowerShell");
+  });
+
+  test("uses a full-width scroll viewport with transparent, non-clipping content gutters", () => {
+    expect(chatStyles).toContain("--chat-content-width:");
+    expect(chatStyles).toMatch(
+      /\.chat-stage\.has-messages\s*\{[^}]*width:\s*100%[^}]*overflow-x:\s*hidden[^}]*overflow-y:\s*auto/s,
+    );
+    expect(chatStyles).toMatch(
+      /\.message-list\s*\{[^}]*width:\s*calc\(var\(--chat-content-width\) \+ 56px\)[^}]*padding:\s*0 28px 10px[^}]*overflow:\s*visible[^}]*background:\s*transparent/s,
+    );
+    expect(chatStyles).toMatch(
+      /\.chat-message-row\s*\{[^}]*overflow:\s*visible/s,
+    );
+    expect(chatStyles).toMatch(
+      /\.composer\s*\{[^}]*width:\s*var\(--chat-content-width\)/s,
+    );
+    expect(chatStyles).toMatch(
+      /\.agent-tool-row pre\s*\{[^}]*width:\s*100%[^}]*max-width:\s*100%[^}]*overflow:\s*auto/s,
+    );
+  });
+
+  test("uses the original per-tool icon mapping with safe fallbacks", () => {
+    const publicTools = [
+      "get_tool_info",
+      "search_tools",
+      "system_manager",
+      "software_manager",
+      "file_manager",
+      "web_manager",
+      "screen_manager",
+      "background_task_manager",
+      "notification_manager",
+      "memory_manager",
+      "canvas_manager",
+      "email_manager",
+      "browser_automation_manager",
+      "computer_automation_manager",
+      "document_manager",
+      "extension_manager",
+      "create_python_tool",
+    ] as const;
+    for (const action of publicTools)
+      expect(agentToolIconName({ action })).toBe(action);
+
+    const fileIcon = agentToolIconName({
+      action: "file_manager",
+      effective_action: "filesystem_operation",
+      arguments: { action: "atomic_write_text" },
+    });
+    expect(fileIcon).toBe("file_manager");
+    expect(agentToolIcon("light", fileIcon)).not.toBe(
+      agentToolIcon("light", "row_status"),
+    );
+    expect(
+      agentToolIconName({
+        action: "extension_manager",
+        arguments: { action: "run_mcp" },
+      }),
+    ).toBe("mcp");
+    expect(
+      agentToolIconName({
+        action: "extension_manager",
+        arguments: { action: "load_skill" },
+      }),
+    ).toBe("skill");
+    expect(agentToolIconName({ action: "unknown_tool" })).toBe("row_status");
+  });
+
   test("renders safe markdown, mixed direction, tool details and message actions", () => {
     const html = renderToStaticMarkup(
       <RichMessage

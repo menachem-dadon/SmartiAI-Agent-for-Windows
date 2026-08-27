@@ -14,6 +14,7 @@ import {
   ACTIVE_RUN_STATES,
   mergeMessages,
   pendingApiKeyRequest,
+  recentConversations,
   type ApiKeyRequest,
 } from "./chatState";
 import type {
@@ -39,6 +40,10 @@ import {
 import { RichMessage } from "./RichMessage";
 import { Alert, Button, IconButton } from "./ui";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
+import {
+  DismissibleDetails,
+  useDismissiblePopup,
+} from "./popupDismissal";
 import {
   clampWorkbenchResize,
   initialWorkspaceState,
@@ -259,6 +264,8 @@ export default function App() {
     initialWorkspaceState,
   );
   const [managementOpen, setManagementOpen] = useState(false);
+  const managementTrigger = useRef<HTMLSpanElement | null>(null);
+  const managementPopup = useRef<HTMLDivElement | null>(null);
   const [managementSection, setManagementSection] =
     useState<ManagementSection | null>(null);
   const { resolved, setPreference } = useTheme();
@@ -307,6 +314,11 @@ export default function App() {
   const [legalStatus, setLegalStatus] = useState<LegalStatus | null>(null);
   const [legalChecked, setLegalChecked] = useState(false);
   const [voiceHotkey, setVoiceHotkey] = useState("Ctrl+Shift+Space");
+  useDismissiblePopup({
+    open: managementOpen,
+    roots: [managementTrigger, managementPopup],
+    onDismiss: () => setManagementOpen(false),
+  });
   const [keepRunningInTray, setKeepRunningInTray] = useState(true);
   const notifiedUnread = useRef<Record<string, number>>({});
   const [conversationDialog, setConversationDialog] = useState<{
@@ -1202,7 +1214,7 @@ export default function App() {
                     {historyError}
                   </p>
                 )}
-                {conversations.map((item) => {
+                {recentConversations(conversations).map((item) => {
                   const state = activityState(item);
                   return (
                     <div
@@ -1234,7 +1246,7 @@ export default function App() {
                           className={`conversation-activity ${state === "running" ? "is-busy" : state === "waiting_for_approval" ? "needs-input" : "has-unread"}`}
                         />
                       )}
-                      <details className="conversation-menu">
+                      <DismissibleDetails className="conversation-menu">
                         <summary aria-label={`פעולות עבור ${item.title}`}>
                           <LegacyIcon src={icons.menu} size={18} />
                         </summary>
@@ -1272,7 +1284,7 @@ export default function App() {
                             מחק שיחה
                           </button>
                         </div>
-                      </details>
+                      </DismissibleDetails>
                     </div>
                   );
                 })}
@@ -1284,7 +1296,7 @@ export default function App() {
               </div>
             </>
           )}
-          <details className="profile-menu">
+          <DismissibleDetails className="profile-menu">
             <summary className="profile-button" aria-label="פרופיל והגדרות">
               <span aria-hidden="true" />
               {workspace.conversationDrawerOpen && <b>פרופיל משתמש</b>}
@@ -1316,18 +1328,20 @@ export default function App() {
                 אודות
               </button>
             </div>
-          </details>
+          </DismissibleDetails>
         </aside>
         <section className="chat-column" aria-label="צ׳אט מרכזי">
           <div className="chat-toolbar">
             <div className="chat-toolbar-controls" dir="ltr">
-              <IconButton
-                label="פעולות שיחה"
-                aria-expanded={managementOpen}
-                onClick={() => setManagementOpen((open) => !open)}
-              >
-                <LegacyIcon src={icons.menu} size={26} />
-              </IconButton>
+              <span className="chat-menu-trigger" ref={managementTrigger}>
+                <IconButton
+                  label="פעולות שיחה"
+                  aria-expanded={managementOpen}
+                  onClick={() => setManagementOpen((open) => !open)}
+                >
+                  <LegacyIcon src={icons.menu} size={26} />
+                </IconButton>
+              </span>
               <IconButton
                 label={
                   workspace.workbenchOpen
@@ -1361,7 +1375,7 @@ export default function App() {
             )}
             <h1>{activeConversation?.title || "שיחה חדשה"}</h1>
             {managementOpen && (
-              <div className="legacy-management-menu">
+              <div className="legacy-management-menu" ref={managementPopup}>
                 {activeConversation ? (
                   <>
                     <button
