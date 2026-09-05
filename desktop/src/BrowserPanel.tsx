@@ -21,6 +21,7 @@ import {
 } from "./browserState";
 import { coreApi } from "./coreApi";
 import { IconButton } from "./ui";
+import { useNativeBrowserSurface } from "./useNativeBrowserSurface";
 
 type HistoryEntry = {
   id: string;
@@ -97,9 +98,11 @@ export const browserProductCapabilities = {
 export type BrowserActivity = { title: string; url: string; loading: boolean; previewDataUrl?: string };
 export function BrowserPanel({
   visible,
+  geometryRevision,
   onActivity,
 }: {
   visible: boolean;
+  geometryRevision?: boolean | string;
   onActivity?: (activity: BrowserActivity) => void;
 }) {
   const [browser, setBrowser] = useState<BrowserSnapshot>(initialBrowser);
@@ -122,7 +125,9 @@ export function BrowserPanel({
   const [sources, setSources] = useState<ImportSource[]>([]);
   const [sourceId, setSourceId] = useState("");
   const [importing, setImporting] = useState(false);
-  const viewportRef = useRef<HTMLDivElement>(null);
+  const { viewportRef, boundsReady: nativeBoundsReady } = useNativeBrowserSurface(visible, geometryRevision, Boolean(panel), showFind);
+  const [surfacePreview, setSurfacePreview] = useState<{ tabId: string; url: string; dataUrl: string } | null>(null);
+  const previewInFlight = useRef(false);
   const addressRef = useRef<HTMLInputElement>(null);
   const initialTabRequested = useRef(false);
   const legacyMigrationAttempted = useRef(false);
@@ -298,9 +303,6 @@ export function BrowserPanel({
     };
   }, [refresh, recordNavigation]);
   useEffect(() => {
-    void invoke("browser_set_visible", { visible }).catch(() => undefined);
-  }, [visible]);
-  useEffect(() => {
     if (visible) return;
     setShowFind(false);
     setPanel("");
@@ -310,6 +312,7 @@ export function BrowserPanel({
       !visible ||
       !hydrated ||
       initialTabRequested.current ||
+      !nativeBoundsReady ||
       browser.tabs.length > 0
     )
       return;
@@ -342,88 +345,36 @@ export function BrowserPanel({
       }
     };
     void restore();
-  }, [browser.tabs.length, hydrated, visible, refresh]);
-  useEffect(() => {
-    const element = viewportRef.current;
-    if (!element || !visible) return;
-    let frame = 0;
-    let inFlight = false;
-    let dirty = false;
-    let disposed = false;
-    let lastBounds = "";
-    const flush = async () => {
-      if (disposed) return;
-      if (inFlight) {
-        dirty = true;
-        return;
-      }
-      const rect = element.getBoundingClientRect();
-      if (rect.width < 160 || rect.height < 120) return;
-      const rightInset = panel
-        ? Math.min(360, Math.max(0, rect.width - 160))
-        : 0;
-      const topInset = showFind
-        ? Math.min(46, Math.max(0, rect.height - 120))
-        : 0;
-      const bounds = {
-        x: Math.round(rect.x),
-        y: Math.round(rect.y + topInset),
-        width: Math.round(rect.width - rightInset),
-        height: Math.round(rect.height - topInset),
-      };
-      const key = `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`;
-      if (key === lastBounds) return;
-      inFlight = true;
-      lastBounds = key;
-      try {
-        await invoke("browser_set_bounds", { bounds });
-      } catch {
-        lastBounds = "";
-      } finally {
-        inFlight = false;
-        if (dirty && !disposed) {
-          dirty = false;
-          void flush();
-        }
-      }
-    };
-    const sync = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => void flush());
-    };
-    const observer = new ResizeObserver(sync);
-    observer.observe(element);
-    window.addEventListener("resize", sync);
-    sync();
-    const settled = window.setTimeout(sync, 380);
-    return () => {
-      disposed = true;
-      cancelAnimationFrame(frame);
-      clearTimeout(settled);
-      observer.disconnect();
-      window.removeEventListener("resize", sync);
-    };
-  }, [visible, panel, showFind]);
+  }, [browser.tabs.length, hydrated, visible, nativeBoundsReady, refresh]);
   const current = useMemo(() => activeTab(browser), [browser]);
   useEffect(() => {
     if (!current) return;
     onActivity?.({ title: pageTitle(current), url: current.url, loading: current.loading });
   }, [current?.tabId, current?.title, current?.url, current?.loading, onActivity]);
   useEffect(() => {
-    if (visible || !current || !/^https?:/i.test(current.url) || !onActivity) return;
+    if (!current || !/^https?:/i.test(current.url)) return;
     let stopped = false;
     const preview = async () => {
+      if (previewInFlight.current) return;
+      previewInFlight.current = true;
       try {
-        const result = await runCdp(current, "Page.captureScreenshot", { format: "jpeg", quality: 55, captureBeyondViewport: false });
+        const result = await runCdp(current, "Page.captureScreenshot", { format: "jpeg", quality: 80, captureBeyondViewport: false });
         const data = String(result.result.data || "");
-        if (!stopped && data) onActivity({ title: pageTitle(current), url: current.url, loading: current.loading, previewDataUrl: `data:image/jpeg;base64,${data}` });
+        if (!stopped && data) {
+          const dataUrl = `data:image/jpeg;base64,${data}`;
+          setSurfacePreview({ tabId: current.tabId, url: current.url, dataUrl });
+          if (!visible) onActivity?.({ title: pageTitle(current), url: current.url, loading: current.loading, previewDataUrl: dataUrl });
+        }
       } catch {
         // A hidden/crashed page keeps its last activity text without affecting chat.
+      } finally {
+        previewInFlight.current = false;
       }
     };
-    void preview();
-    const timer = window.setInterval(() => void preview(), 1800);
-    return () => { stopped = true; clearInterval(timer); };
+    // One bounded cache serves both the transition and the closed preview.
+    const first = window.setTimeout(() => void preview(), visible ? 500 : 0);
+    const timer = window.setInterval(() => void preview(), 2500);
+    return () => { stopped = true; clearTimeout(first); clearInterval(timer); };
   }, [visible, current?.tabId, current?.url, current?.loading, onActivity, runCdp]);
   useEffect(() => {
     if (current) setAddress(current.url);
@@ -999,6 +950,9 @@ export function BrowserPanel({
         ref={viewportRef}
         aria-label="תוכן הדפדפן"
       >
+        {surfacePreview && surfacePreview.tabId === current?.tabId && surfacePreview.url === current.url && (
+          <img className="browser-motion-preview" src={surfacePreview.dataUrl} alt="" aria-hidden="true" draggable={false} />
+        )}
         {browser.tabs.length === 0 && <span>פותח את Smarti Browser…</span>}
       </div>
       <div className="browser-status">

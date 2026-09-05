@@ -85,10 +85,9 @@ beforeEach(() => {
   });
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    callback(0);
-    return 1;
+    return window.setTimeout(() => callback(performance.now()), 16);
   });
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
     x: 10,
     y: 200,
@@ -109,8 +108,90 @@ afterEach(() => {
 });
 
 describe("native browser overlay visibility", () => {
-  it("opens the ellipsis menu above WebView2 without hiding or resizing it", async () => {
+  it("keeps native bounds idle during the CSS slide and positions only the final frame", async () => {
+    const frame = (visible: boolean, revision: string) => <aside className="workbench"><BrowserPanel visible={visible} geometryRevision={revision} /></aside>;
+    const { rerender } = render(frame(true, "open"));
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    expect(lastNativeBounds()).toBeUndefined();
+    expect(lastNativeVisibility()).toEqual({ visible: false });
+    await waitFor(() => expect(lastNativeVisibility()).toEqual({ visible: true }));
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === "browser_set_bounds")).toHaveLength(1);
+    rerender(frame(false, "closed"));
+    expect(lastNativeVisibility()).toEqual({ visible: false });
+    rerender(frame(true, "reopen"));
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    rerender(frame(false, "reverse"));
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
+    expect(lastNativeVisibility()).toEqual({ visible: false });
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === "browser_set_bounds")).toHaveLength(1);
+  });
+
+  it("uses the CSS completion event instead of waiting for an unrelated timer", async () => {
+    const { container } = render(<aside className="workbench"><BrowserPanel visible geometryRevision="open" /></aside>);
+    const workbench = container.querySelector(".workbench")!;
+    const event = new Event("transitionend", { bubbles: true });
+    Object.defineProperty(event, "propertyName", { value: "transform" });
+    fireEvent(workbench, event);
+    await waitFor(() => expect(lastNativeVisibility()).toEqual({ visible: true }));
+    const calls = mocks.invoke.mock.calls.filter(([command]) => command === "browser_set_bounds").length;
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === "browser_set_bounds")).toHaveLength(calls);
+  });
+
+  it("keeps a non-interactive cached page image available while the native surface is hidden", async () => {
+    mocks.invoke.mockImplementation(async (command: string, args?: { action?: { method?: string } }) => {
+      if (command === "browser_status" || command === "browser_metadata") return snapshot;
+      if (command === "browser_action" && args?.action?.method === "Page.captureScreenshot")
+        return { result: { data: "cached-page" } };
+      return undefined;
+    });
+    const { container, rerender } = render(<BrowserPanel visible />);
+    await waitFor(() => expect(container.querySelector(".browser-motion-preview")?.getAttribute("src")).toBe("data:image/jpeg;base64,cached-page"));
+    rerender(<BrowserPanel visible={false} />);
+    expect(container.querySelector(".browser-motion-preview")?.getAttribute("aria-hidden")).toBe("true");
+    expect(lastNativeVisibility()).toEqual({ visible: false });
+  });
+
+  it("skips the transition delay when reduced motion is requested", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    render(<aside className="workbench"><BrowserPanel visible geometryRevision="open" /></aside>);
+    await waitFor(() => expect(lastNativeVisibility()).toEqual({ visible: true }));
+    expect(mocks.invoke.mock.calls.some(([command, args]) => command === "browser_set_visible" && !args.visible)).toBe(false);
+  });
+
+  it("does not reveal at rejected bounds and uses a bounded retry", async () => {
+    let rejectBounds = true;
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "browser_status" || command === "browser_metadata") return snapshot;
+      if (command === "browser_set_bounds" && rejectBounds) throw new Error("bounds rejected");
+      return undefined;
+    });
     render(<BrowserPanel visible />);
+    await waitFor(() => expect(lastNativeBounds()).toBeDefined());
+    expect(lastNativeVisibility()).toBeUndefined();
+    rejectBounds = false;
+    await waitFor(() => expect(lastNativeVisibility()).toEqual({ visible: true }));
+  });
+
+  it("does not reveal after closing while the first bounds request is pending", async () => {
+    let finishBounds: (() => void) | undefined;
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "browser_status" || command === "browser_metadata") return snapshot;
+      if (command === "browser_set_bounds") return new Promise<void>((resolve) => { finishBounds = resolve; });
+      return undefined;
+    });
+    const { rerender } = render(<BrowserPanel visible />);
+    await waitFor(() => expect(finishBounds).toBeDefined());
+    rerender(<BrowserPanel visible={false} />);
+    finishBounds!();
+    await waitFor(() => expect(lastNativeVisibility()).toEqual({ visible: false }));
+    expect(mocks.invoke.mock.calls.some(([command, args]) => command === "browser_set_visible" && args.visible)).toBe(false);
+  });
+
+  it("opens the ellipsis menu above WebView2 without hiding or resizing it", async () => {
+    render(
+      <BrowserPanel visible geometryRevision />,
+    );
 
     await waitFor(() =>
       expect(lastNativeVisibility()).toEqual({ visible: true }),
@@ -120,6 +201,15 @@ describe("native browser overlay visibility", () => {
         bounds: { x: 10, y: 200, width: 800, height: 600 },
       }),
     );
+    const firstBoundsCall = mocks.invoke.mock.calls.findIndex(
+      ([command]) => command === "browser_set_bounds",
+    );
+    const firstVisibleFrame = mocks.invoke.mock.calls.findIndex(
+      ([command, args]) =>
+        command === "browser_set_visible" && args.visible === true,
+    );
+    expect(firstBoundsCall).toBeGreaterThanOrEqual(0);
+    expect(firstVisibleFrame).toBeGreaterThan(firstBoundsCall);
 
     const trigger = screen.getByRole("button", { name: "תפריט דפדפן" });
     const browser = trigger.closest(".embedded-browser");

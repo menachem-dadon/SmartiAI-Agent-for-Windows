@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -49,12 +49,14 @@ import {
   initialWorkspaceState,
   parseWorkbenchSnapshot,
   workspaceColumns,
+  workspaceWorkbenchWidth,
   workspaceReducer,
   type WorkbenchSnapshot,
   type WorkbenchTab,
 } from "./workspaceState";
 import { activityState, legacyUi, workspaceIsNarrow } from "./legacyUiParity";
 import "./App.css";
+import { useChatLayoutMotion } from "./workspaceMotion";
 
 const initialCore: CoreSnapshot = {
   state: "starting",
@@ -299,8 +301,11 @@ export default function App() {
   const [narrowWorkspace, setNarrowWorkspace] = useState(() =>
     workspaceIsNarrow(innerWidth),
   );
+  const narrowWorkspaceRef = useRef(narrowWorkspace);
   const [viewportWidth, setViewportWidth] = useState(() => innerWidth);
   const [workbenchWidth, setWorkbenchWidth] = useState<number | null>(null);
+  const [workspaceResizing, setWorkspaceResizing] = useState(false);
+  const chatMotionRef = useChatLayoutMotion(`${workspace.workbenchOpen}:${workspace.conversationDrawerOpen}:${narrowWorkspace}`);
   const [uiPreferences, setUiPreferences] = useState<Record<string, unknown>>(
     {},
   );
@@ -500,18 +505,39 @@ export default function App() {
     };
   }, [core.generation, core.state]);
   useEffect(() => {
-    const responsive = () => {
-      const narrow = workspaceIsNarrow(innerWidth);
-      setViewportWidth(innerWidth);
+    let frame = 0;
+    let settled = 0;
+    const applyResponsiveLayout = (syncWidePreference: boolean) => {
+      const width = innerWidth;
+      const narrow = workspaceIsNarrow(width);
+      const breakpointChanged = narrowWorkspaceRef.current !== narrow;
+      narrowWorkspaceRef.current = narrow;
+      setViewportWidth((current) => (current === width ? current : width));
       setWorkbenchWidth(null);
       setNarrowWorkspace(narrow);
-      if (narrow) dispatch({ type: "responsive-narrow" });
-      else if (!Boolean(uiPreferences.workspace_sidebar_collapsed))
-        dispatch({ type: "set-conversations", open: true });
+      if (breakpointChanged && narrow)
+        dispatch({ type: "responsive-narrow" });
+      else if (!narrow && (breakpointChanged || syncWidePreference))
+        dispatch({
+          type: "set-conversations",
+          open: !Boolean(uiPreferences.workspace_sidebar_collapsed),
+        });
     };
-    responsive();
+    const responsive = () => {
+      setWorkspaceResizing(true);
+      cancelAnimationFrame(frame);
+      clearTimeout(settled);
+      frame = requestAnimationFrame(() => applyResponsiveLayout(false));
+      settled = window.setTimeout(() => setWorkspaceResizing(false), 150);
+    };
+    setWorkspaceResizing(false);
+    applyResponsiveLayout(true);
     window.addEventListener("resize", responsive);
-    return () => window.removeEventListener("resize", responsive);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(settled);
+      window.removeEventListener("resize", responsive);
+    };
   }, [uiPreferences.workspace_sidebar_collapsed]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -654,12 +680,12 @@ export default function App() {
     const keyboard = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (managementSection) setManagementSection(null);
-        else {
-          setManagementOpen(false);
-          if (workspace.workbenchOpen) {
-            dispatch({ type: "close-workbench" });
-            void saveUiPreferencePatch({ workspace_workbench_open: false });
-          }
+        else if (managementOpen) setManagementOpen(false);
+        else if (narrowWorkspace && workspace.conversationDrawerOpen)
+          dispatch({ type: "set-conversations", open: false });
+        else if (workspace.workbenchOpen) {
+          dispatch({ type: "close-workbench" });
+          void saveUiPreferencePatch({ workspace_workbench_open: false });
         }
       }
       if (event.ctrlKey && event.key.toLowerCase() === "b") {
@@ -667,7 +693,13 @@ export default function App() {
         dispatch(
           workspace.workbenchOpen
             ? { type: "close-workbench" }
-            : { type: "open-workbench", tab: "browser" },
+            : narrowWorkspace
+              ? {
+                  type: "activate-narrow-surface",
+                  surface: "workbench",
+                  tab: "browser",
+                }
+              : { type: "open-workbench", tab: "browser" },
         );
         void saveUiPreferencePatch({
           workspace_workbench_open: !workspace.workbenchOpen,
@@ -680,7 +712,14 @@ export default function App() {
     };
     window.addEventListener("keydown", keyboard);
     return () => window.removeEventListener("keydown", keyboard);
-  }, [workspace.workbenchOpen, managementSection, saveUiPreferencePatch]);
+  }, [
+    managementOpen,
+    managementSection,
+    narrowWorkspace,
+    saveUiPreferencePatch,
+    workspace.conversationDrawerOpen,
+    workspace.workbenchOpen,
+  ]);
 
   const activeConversation = conversations.find((item) => item.id === activeId);
   const activeRun = runs.find(
@@ -715,6 +754,8 @@ export default function App() {
       setMessages([]);
       setPage(null);
       setAttachments([]);
+      if (narrowWorkspace)
+        dispatch({ type: "set-conversations", open: false });
     } catch (reason) {
       setError(String(reason));
     }
@@ -722,6 +763,8 @@ export default function App() {
   const selectConversation = async (id: string) => {
     setActiveId(id);
     setAttachments([]);
+    if (narrowWorkspace)
+      dispatch({ type: "set-conversations", open: false });
   };
   const renameConversation = async (item: Conversation) => {
     setRenameValue(item.title);
@@ -833,11 +876,29 @@ export default function App() {
   };
   const toggleConversationDrawer = async () => {
     const open = !workspace.conversationDrawerOpen;
-    dispatch({ type: "set-conversations", open });
+    const previous = workspace;
+    const closesWorkbench =
+      narrowWorkspace && open && workspace.workbenchOpen;
+    dispatch(
+      closesWorkbench
+        ? { type: "activate-narrow-surface", surface: "conversations" }
+        : { type: "set-conversations", open },
+    );
+    const patch = narrowWorkspace
+      ? closesWorkbench
+        ? { workspace_workbench_open: false }
+        : null
+      : { workspace_sidebar_collapsed: !open };
+    if (!patch) return;
     try {
-      await saveUiPreferencePatch({ workspace_sidebar_collapsed: !open });
+      await saveUiPreferencePatch(patch);
     } catch (reason) {
-      dispatch({ type: "set-conversations", open: !open });
+      dispatch({
+        type: "restore-layout",
+        conversations: previous.conversationDrawerOpen,
+        workbench: previous.workbenchOpen,
+        tab: previous.activeWorkbenchTab,
+      });
       setError(`לא ניתן לשמור את מצב תפריט הצד: ${String(reason)}`);
     }
   };
@@ -970,15 +1031,24 @@ export default function App() {
     (open: boolean, tab: WorkbenchTab = "browser") => {
       if (open) setWorkbenchWidth(null);
       dispatch(
-        open ? { type: "open-workbench", tab } : { type: "close-workbench" },
+        open
+          ? narrowWorkspace
+            ? { type: "activate-narrow-surface", surface: "workbench", tab }
+            : { type: "open-workbench", tab }
+          : { type: "close-workbench" },
       );
       void saveUiPreferencePatch({ workspace_workbench_open: open }).catch(
         (reason) =>
           setError(`לא ניתן לשמור את מצב אזור העבודה: ${String(reason)}`),
       );
     },
-    [saveUiPreferencePatch],
+    [narrowWorkspace, saveUiPreferencePatch],
   );
+  const dismissWorkspaceOverlay = () => {
+    if (workspace.workbenchOpen) setWorkbenchOpen(false);
+    else if (workspace.conversationDrawerOpen)
+      dispatch({ type: "set-conversations", open: false });
+  };
   const beginWorkbenchResize = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (narrowWorkspace || !workspace.workbenchOpen) return;
@@ -1136,15 +1206,33 @@ export default function App() {
     >
       <WindowTitleBar />
       <section
-        className={`workspace ${workspace.workbenchOpen ? "has-workbench" : ""} ${narrowWorkspace && workspace.workbenchOpen ? "is-workbench-narrow" : ""}`}
+        className={`workspace ${workspace.workbenchOpen ? "has-workbench" : ""} ${narrowWorkspace ? "is-overlay-layout" : ""} ${workspaceResizing ? "is-resizing" : ""}`}
+        data-layout={narrowWorkspace ? "overlay" : "split"}
         style={{
+          "--workbench-track-width": `${workspaceWorkbenchWidth(workspace, viewportWidth, workbenchWidth)}px`,
           gridTemplateColumns: workspaceColumns(
             workspace,
             viewportWidth,
             workbenchWidth,
           ),
-        }}
+        } as CSSProperties}
       >
+        <button
+          type="button"
+          className={`workspace-overlay-backdrop ${narrowWorkspace && (workspace.conversationDrawerOpen || workspace.workbenchOpen) ? "is-active" : ""}`}
+          aria-label="סגירת החלונית הפתוחה"
+          aria-hidden={
+            !narrowWorkspace ||
+            (!workspace.conversationDrawerOpen && !workspace.workbenchOpen)
+          }
+          tabIndex={
+            narrowWorkspace &&
+            (workspace.conversationDrawerOpen || workspace.workbenchOpen)
+              ? 0
+              : -1
+          }
+          onClick={dismissWorkspaceOverlay}
+        />
         <aside
           className={`conversation-drawer ${workspace.conversationDrawerOpen ? "is-open" : "is-rail"}`}
           aria-label="שיחות"
@@ -1164,14 +1252,15 @@ export default function App() {
               <LegacyIcon src={icons.sidebarExpand} size={19} />
               <strong>SmartiAI</strong>
             </button>
-            {workspace.conversationDrawerOpen && (
-              <IconButton
-                label="כיווץ תפריט הצד"
-                onClick={() => void toggleConversationDrawer()}
-              >
-                <LegacyIcon src={icons.sidebarCollapse} />
-              </IconButton>
-            )}
+            <IconButton
+              className="drawer-collapse-control"
+              label="כיווץ תפריט הצד"
+              aria-hidden={!workspace.conversationDrawerOpen}
+              tabIndex={workspace.conversationDrawerOpen ? 0 : -1}
+              onClick={() => void toggleConversationDrawer()}
+            >
+              <LegacyIcon src={icons.sidebarCollapse} />
+            </IconButton>
           </div>
           <button
             className="new-chat-button"
@@ -1181,9 +1270,11 @@ export default function App() {
             <LegacyIcon src={icons.newChat} />
             <span>שיחה חדשה</span>
           </button>
-          {workspace.conversationDrawerOpen && (
-            <>
-              <label className="conversation-search">
+          <div
+            className="drawer-expanded-content"
+            aria-hidden={!workspace.conversationDrawerOpen}
+          >
+            <label className="conversation-search">
                 <LegacyIcon src={icons.search} size={26} />
                 <input
                   dir="rtl"
@@ -1202,8 +1293,8 @@ export default function App() {
                     ×
                   </button>
                 )}
-              </label>
-              <div className="conversation-list">
+            </label>
+            <div className="conversation-list">
                 {historyLoading && (
                   <p className="drawer-state" role="status">
                     טוען שיחות…
@@ -1293,13 +1384,12 @@ export default function App() {
                     {query ? "לא נמצאו שיחות" : "עדיין אין שיחות"}
                   </p>
                 )}
-              </div>
-            </>
-          )}
+            </div>
+          </div>
           <DismissibleDetails className="profile-menu">
             <summary className="profile-button" aria-label="פרופיל והגדרות">
               <span aria-hidden="true" />
-              {workspace.conversationDrawerOpen && <b>פרופיל משתמש</b>}
+              <b>פרופיל משתמש</b>
             </summary>
             <div>
               <button
@@ -1330,7 +1420,7 @@ export default function App() {
             </div>
           </DismissibleDetails>
         </aside>
-        <section className="chat-column" aria-label="צ׳אט מרכזי">
+        <section className="chat-column" ref={chatMotionRef} aria-label="צ׳אט מרכזי">
           <div className="chat-toolbar">
             <div className="chat-toolbar-controls" dir="ltr">
               <span className="chat-menu-trigger" ref={managementTrigger}>
@@ -1342,26 +1432,15 @@ export default function App() {
                   <LegacyIcon src={icons.menu} size={26} />
                 </IconButton>
               </span>
-              <IconButton
-                label={
-                  workspace.workbenchOpen
-                    ? "כיווץ אזור העבודה"
-                    : "פתיחת אזור העבודה"
-                }
-                onClick={() =>
-                  workspace.workbenchOpen
-                    ? setWorkbenchOpen(false)
-                    : openWorkbench("browser")
-                }
-              >
-                <LegacyIcon
-                  src={
-                    workspace.workbenchOpen
-                      ? icons.workbenchClose
-                      : icons.workbenchOpen
-                  }
-                />
-              </IconButton>
+              {!workspace.workbenchOpen && (
+                <IconButton
+                  className="chat-workbench-open-control"
+                  label="פתיחת סביבת העבודה"
+                  onClick={() => openWorkbench("browser")}
+                >
+                  <LegacyIcon src={icons.workbenchOpen} />
+                </IconButton>
+              )}
             </div>
             {availableUpdateVersion && (
               <button
@@ -1669,12 +1748,14 @@ export default function App() {
             <WorkbenchSurface
               initial={workspace.activeWorkbenchTab}
               visible={workspace.workbenchOpen}
+              motionRevision={`${workspace.workbenchOpen}:${narrowWorkspace}:${workspace.conversationDrawerOpen}`}
               restored={workbenchRestore}
               onStateChange={persistWorkbench}
               onBrowserActivity={setBrowserActivity}
               sessionId={activeId}
               onCanvasAction={(text) => void send(text)}
               onClose={() => setWorkbenchOpen(false)}
+              closeIcon={icons.workbenchClose}
             />
           )}
         </aside>

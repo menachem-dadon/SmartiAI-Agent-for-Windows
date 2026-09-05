@@ -1,3 +1,5 @@
+import { workspaceIsNarrow } from "./legacyUiParity";
+
 export type WorkbenchTab = "browser" | "files" | "terminal" | "canvas" | "artifacts";
 
 export interface WorkspaceState {
@@ -20,16 +22,32 @@ export type WorkspaceAction =
   | { type: "set-conversations"; open: boolean }
   | { type: "open-workbench"; tab: WorkbenchTab }
   | { type: "close-workbench" }
+  | { type: "activate-narrow-surface"; surface: "conversations"; tab?: never }
+  | { type: "activate-narrow-surface"; surface: "workbench"; tab: WorkbenchTab }
   | { type: "restore-layout"; conversations: boolean; workbench: boolean; tab: WorkbenchTab | null }
   | { type: "responsive-narrow" };
 
 export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction): WorkspaceState {
   if (action.type === "toggle-conversations") return { ...state, conversationDrawerOpen: !state.conversationDrawerOpen };
-  if (action.type === "set-conversations") return { ...state, conversationDrawerOpen: action.open };
+  if (action.type === "set-conversations")
+    return state.conversationDrawerOpen === action.open
+      ? state
+      : { ...state, conversationDrawerOpen: action.open };
   if (action.type === "open-workbench") return { ...state, workbenchOpen: true, activeWorkbenchTab: action.tab };
-  if (action.type === "close-workbench") return { ...state, workbenchOpen: false, activeWorkbenchTab: null };
+  if (action.type === "close-workbench")
+    return !state.workbenchOpen && state.activeWorkbenchTab === null
+      ? state
+      : { ...state, workbenchOpen: false, activeWorkbenchTab: null };
+  if (action.type === "activate-narrow-surface") {
+    if (action.surface === "conversations")
+      return { conversationDrawerOpen: true, workbenchOpen: false, activeWorkbenchTab: null };
+    return { conversationDrawerOpen: false, workbenchOpen: true, activeWorkbenchTab: action.tab };
+  }
   if (action.type === "restore-layout") return { conversationDrawerOpen: action.conversations, workbenchOpen: action.workbench, activeWorkbenchTab: action.workbench ? action.tab : null };
-  if (action.type === "responsive-narrow") return { ...state, conversationDrawerOpen: false };
+  if (action.type === "responsive-narrow")
+    return state.conversationDrawerOpen
+      ? { ...state, conversationDrawerOpen: false }
+      : state;
   return state;
 }
 
@@ -94,7 +112,7 @@ export function workspaceOpenSizes(totalWidth: number, sidebarWidth: number): {
 } {
   const usable = Math.max(320, Math.trunc(totalWidth) - Math.trunc(sidebarWidth));
   const narrow = usable < 920;
-  if (narrow) return { narrow, workbench: usable, chat: 0 };
+  if (narrow) return { narrow, workbench: usable, chat: usable };
   const workbench = Math.min(Math.max(480, Math.trunc(usable * 0.52)), usable - 520);
   return { narrow, workbench, chat: usable - workbench };
 }
@@ -108,17 +126,28 @@ export function clampWorkbenchResize(
   return Math.max(320, Math.min(Math.trunc(desiredWidth), usable - 320));
 }
 
+// The surface keeps its open size while translating out of view. Only the
+// reserved grid track collapses, so native pages do not reflow during toggles.
+export function workspaceWorkbenchWidth(
+  state: WorkspaceState,
+  totalWidth = 1380,
+  workbenchOverride: number | null = null,
+): number {
+  const sidebarWidth = state.conversationDrawerOpen ? 286 : 58;
+  return workbenchOverride === null
+    ? workspaceOpenSizes(totalWidth, sidebarWidth).workbench
+    : clampWorkbenchResize(totalWidth, sidebarWidth, workbenchOverride);
+}
+
 export function workspaceColumns(
   state: WorkspaceState,
   totalWidth = 1380,
   workbenchOverride: number | null = null,
 ): string {
+  if (workspaceIsNarrow(totalWidth))
+    return "var(--rail-width) minmax(0, 1fr) 0px";
   const sidebar = state.conversationDrawerOpen ? "var(--drawer-width)" : "var(--rail-width)";
   if (!state.workbenchOpen) return `${sidebar} minmax(0, 1fr) 0px`;
-  const sidebarWidth = state.conversationDrawerOpen ? 286 : 58;
-  const sizes = workspaceOpenSizes(totalWidth, sidebarWidth);
-  const workbench = workbenchOverride === null
-    ? sizes.workbench
-    : clampWorkbenchResize(totalWidth, sidebarWidth, workbenchOverride);
-  return `${sidebar} minmax(0, ${sizes.chat}px) ${workbench}px`;
+  const workbench = workspaceWorkbenchWidth(state, totalWidth, workbenchOverride);
+  return `${sidebar} minmax(0, 1fr) ${workbench}px`;
 }

@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::time::Instant;
 use tauri::{
     webview::{DownloadEvent, PageLoadEvent},
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder, WebviewUrl,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Webview, WebviewBuilder, WebviewUrl,
 };
 
 const CDP_TIMEOUT: Duration = Duration::from_secs(12);
@@ -38,8 +38,12 @@ impl BrowserBounds {
             || !self.y.is_finite()
             || !self.width.is_finite()
             || !self.height.is_finite()
-            || self.x < 0.0
+            // The native child slides off the left edge with the Workbench.
+            // Keep coordinates bounded, but do not clamp a valid translation:
+            // clamping/resizing here makes the page unfold in reverse.
+            || self.x.abs() > 32_768.0
             || self.y < 0.0
+            || self.y > 32_768.0
             || self.width < 160.0
             || self.height < 120.0
             || self.width > 16_384.0
@@ -1258,10 +1262,10 @@ pub async fn browser_set_bounds(
     for tab in broker.snapshot().tabs {
         if let Some(webview) = app.get_webview(&tab.webview_label) {
             webview
-                .set_position(LogicalPosition::new(bounds.x, bounds.y))
-                .map_err(|error| error.to_string())?;
-            webview
-                .set_size(LogicalSize::new(bounds.width, bounds.height))
+                .set_bounds(Rect {
+                    position: LogicalPosition::new(bounds.x, bounds.y).into(),
+                    size: LogicalSize::new(bounds.width, bounds.height).into(),
+                })
                 .map_err(|error| error.to_string())?;
         }
     }
@@ -1278,12 +1282,14 @@ pub async fn browser_set_visible(
     for tab in snapshot.tabs {
         if let Some(webview) = app.get_webview(&tab.webview_label) {
             if visible && tab.active {
+                // Visibility/geometry must not wait for a frozen page's CDP
+                // response (which can take seconds). Queue the native show first.
+                webview.show().map_err(|error| error.to_string())?;
                 let _ = cdp_call(
                     &webview,
                     "Page.setWebLifecycleState".into(),
                     json!({"state":"active"}).to_string(),
                 );
-                webview.show().map_err(|error| error.to_string())?;
             } else {
                 webview.hide().map_err(|error| error.to_string())?;
                 let _ = cdp_call(
@@ -1460,7 +1466,7 @@ mod tests {
     }
 
     #[test]
-    fn bounds_reject_overlay_and_resource_abuse() {
+    fn bounds_allow_offscreen_horizontal_motion_but_reject_resource_abuse() {
         assert!(BrowserBounds {
             x: 0.0,
             y: 0.0,
@@ -1477,6 +1483,22 @@ mod tests {
         }
         .validate()
         .is_ok());
+        let sliding = BrowserBounds {
+            x: -920.0,
+            y: 110.0,
+            width: 900.0,
+            height: 600.0,
+        };
+        assert!(sliding.validate().is_ok());
+        for x in [f64::NAN, f64::INFINITY, -32_769.0, 32_769.0] {
+            assert!(BrowserBounds { x, ..sliding.clone() }.validate().is_err());
+        }
+        for y in [-1.0, 32_769.0] {
+            assert!(BrowserBounds { y, ..sliding.clone() }.validate().is_err());
+        }
+        for width in [0.0, 159.0, 16_385.0, f64::INFINITY] {
+            assert!(BrowserBounds { width, ..sliding.clone() }.validate().is_err());
+        }
     }
 
     #[test]

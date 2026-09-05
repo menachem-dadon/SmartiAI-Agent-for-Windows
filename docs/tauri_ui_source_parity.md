@@ -62,6 +62,52 @@ indicator; and 342/298 by 70 px voice overlay sizes.
 
 ## Traceability matrix
 
+### 2026-08-30 responsive motion follow-up
+
+**Current implementation (supersedes the earlier same-day attempt):** the user still
+reported stutter and explicitly declined further live testing. The current
+drawer keeps its 286 px layout and reveals it using `clip-path`; rail icons and
+text slots no longer change width, gap or flex basis. The grid commits its final
+sizes once, and `useChatLayoutMotion` animates only the painted chat layer.
+All panel motion uses the same 320 ms easing; the backdrop no longer animates
+blur. `useNativeBrowserSurface` hides the native surface during motion, leaves
+a cached, non-interactive page image in the DOM, and sets final native bounds
+before showing WebView2 at transition completion (with a bounded fallback).
+There is no per-frame native IPC geometry loop. Reversals cancel pending
+handoffs, and reduced motion skips the delay. Verification for this replacement
+is automated only: 32 focused tests, TypeScript/Vite build and diff whitespace
+checks passed. No new live check was performed, as requested. The live
+observations below belong to the preceding attempt.
+
+**Earlier attempt, retained as historical evidence:**
+
+The user reported that the prior responsive correction still clipped the
+collapsed Smarti logo and let the native browser unfold after its frame.
+The remaining header flex gap is now zero in rail mode. Workbench keeps its
+open width while sliding from the physical left edge in both split and overlay
+layouts; only its reserved chat-grid track collapses. No CSS scale or opacity
+animation is applied to the native-browser surface.
+
+`BrowserBounds` now accepts bounded negative horizontal coordinates during that
+slide. The host applies position and size together with `Webview::set_bounds`.
+Frontend bounds sampling follows animation frames, coalesces pending requests,
+and runs during closing as well as opening. Native visibility follows the first
+accepted bounds and its CDP lifecycle response does not stall geometry updates.
+The browser remains mounted until the exit motion completes.
+
+Automated follow-up: 65 frontend tests and five focused Rust browser tests pass,
+including negative coordinates, delayed page wake-up, rejected geometry and
+closing before the first bounds response. TypeScript/Vite build and native debug
+binary build also pass. This does not close the product-wide parity/release gate.
+
+Live follow-up used the newly built `desktop/src-tauri/target/debug/smarti-desktop.exe`
+(2026-08-30), not the installed legacy executable. The wide-window rail logo was
+fully contained, and the open native browser and settled closed Workbench were
+observed. Small-window and in-motion visual sign-off remain pending: concurrent
+user input/minimization interrupted the desktop checks. The in-app browser test
+surface also failed to attach; earlier fixture checks are not fresh evidence for
+this follow-up.
+
 `MATCHED` means source value and state behavior are represented in the current
 React/CSS implementation and guarded by a named deterministic check.
 
@@ -70,7 +116,7 @@ React/CSS implementation and guarded by a named deterministic check.
 | Global RTL and themes | `app.main`, `apply_app_theme`, `THEME_PALETTES`; app RTL, Segoe UI, exact dark/light palette | `App`, `useTheme`, `.theme-dark/.theme-light`; `designSystem.test.ts`, `legacyUiParity.test.ts` | MATCHED |
 | Window title bar | `WorkspaceWindowTitleBar`; LTR, 36 px, 46x36 controls, minimize/maximize/restore/close, double-click maximize | `WindowTitleBar`, `.window-titlebar`; source labels and native Tauri window calls | MATCHED |
 | Workspace order | `QSplitter`: Workbench left, chat center, sidebar right; Workbench starts at zero | `workspaceColumns`, RTL grid; `workspaceState.test.ts` | MATCHED |
-| Responsive Workspace | usable width below 920 collapses sidebar; open Workbench owns the narrow surface and chat is hidden; at wide/full size the user-directed reading-density correction gives chat about 35vw (440 px floor) and the Workbench the remainder; native browser bounds serialize resize updates so an older animation frame cannot overrun the chat | `workspaceColumns`, `workspaceIsNarrow`, `.has-workbench`, `BrowserPanel` latest-bounds synchronization; workspace tests and minimal 1536 px live check | MATCHED + USER ADJUSTMENT |
+| Responsive Workspace | usable width below 920 collapses the sidebar; per the 2026-08-28 user correction, chat stays mounted beneath mutually-exclusive drawer/Workbench overlays; wide/full size retains the source split formula; native browser bounds serialize and follow the complete panel transition | `workspaceColumns`, `workspaceIsNarrow`, `.is-overlay-layout`, `BrowserPanel` transition-bound synchronization; workspace/CSS tests and compact fixture checks | USER-DIRECTED RESPONSIVE OVERRIDE — AUDIT OPEN |
 | Sidebar shell | `WorkspaceSidebar`; 286/58 width, 10/12/10/10 margins, 8 gap, original logo/assets and profile at bottom | `conversation-drawer`, `drawer-head`, `legacyAssets`; parity/component tests | MATCHED |
 | Sidebar collapse | brand/collapse controls, collapsed logo changes to expand icon on hover, history hidden, manual state persisted at `ui_preferences.workspace_sidebar_collapsed` | `toggleConversationDrawer`, rail hover CSS, `/v2/settings` patch | MATCHED |
 | New conversation | 42 px RTL nav row, original icon/text and action | `.new-chat-button`, `createConversation`; UI/workspace tests | MATCHED |
@@ -79,7 +125,7 @@ React/CSS implementation and guarded by a named deterministic check.
 | Activity states | `runtime_status` priority: approval, cancelling, running, queued; then unread; 24 px spinner/approval, 10 px unread dot and source tooltips | `activityState`, `.conversation-activity`; `legacyUiParity.test.ts` | MATCHED |
 | Conversation menu | pin/unpin, rename, JSON export, separator, delete; RTL 12 px rounded popup and 9/30/9/10 item padding | `.conversation-menu`, internal rename/delete dialogs; component/parity tests | MATCHED |
 | Profile menu | usage, settings, diagnostic, separator, about; RTL and anchored above profile control | `.profile-menu` and source text/order | MATCHED |
-| Chat top bar | 58 px LTR row, menu then Workbench control then optional update then RTL elided title; original assets | `.chat-toolbar`, `.chat-toolbar-controls`, `App` | MATCHED |
+| Chat top bar | 58 px LTR row, menu then Workbench-open control then optional update then RTL elided title; closing moves to the Workbench header edge so it remains reachable when the compact overlay covers chat | `.chat-toolbar`, `.chat-toolbar-controls`, `.workbench-close-control`, `App`, `WorkbenchSurface` | USER-DIRECTED RESPONSIVE OVERRIDE — AUDIT OPEN |
 | Empty chat | centered `WelcomeWidget`, max 860, source greeting, 26 px bold and RTL wrapping | `.legacy-welcome`, `displayName` greeting | MATCHED |
 | Timeline | chat body is centered and capped to a readable `clamp(520px,35vw,760px)` when Workbench is closed, fills the approximately 35vw chat column with 14 px gutters when open, keeps RTL top alignment and the older-page control | `.chat-stage`, `.message-list`, `.has-workbench`, `loadOlder` | USER ADJUSTMENT |
 | User message | right anchored, 76% minus 30 px max, 20/16 margins, 22 px radius, exact theme gradients/border/text/shadow | `RichMessage`, user CSS; parity values and chat component tests | MATCHED |
@@ -119,12 +165,12 @@ authority and reload path; it is not current acceptance.
 |---|---|---|---|---|
 | Initial splash | `app.main`, `AnimatedSplash`; 500x310, radius 30, logo/title/subtitle/version, status and progress | `App` startup branch, `.status-card`; Tauri starts at exactly 500x310, undecorated, non-resizable and transparent | `CoreSupervisor` emits `core://state`; `desktop_finish_startup` changes the same window to a resizable Workspace only after health/bootstrap | Hidden supervisor smoke measured 500x310; inspected `startup-dark-500x310.png`; CURRENT MATCHED |
 | Crash/fatal/repair | `finish_startup` error and startup status vocabulary | `copyForState`, startup recovery card, restart action and bounded redacted stderr tail | `core_restart` creates one new supervisor generation; live state is re-emitted and bootstrap is replayed | supervisor crash/restart smoke and Rust tests; CURRENT MATCHED + TAURI RECOVERY |
-| Workspace window creation | `ChatWindow` minimum 720x560; screen minus 72, clamped to 920-1380 by 620-900; centered | `desktop_finish_startup`, custom 36 px title bar and `workspaceWindowReady` gate | guarded `window-placement.json`; `SMARTI_DATA_DIR` isolates placement in tests; restore validates dimensions/monitor visibility | hidden smoke measured 1380x792 on the current logical screen; Rust geometry test; CURRENT MATCHED |
+| Workspace window creation | `ChatWindow` minimum 720x560; screen minus 72, clamped to 920-1380 by 620-900; centered | `desktop_finish_startup` now opens at 84% width and 80% height of the monitor work area to match the supplied Codex screenshot, centered and unmaximized; DPI-aware with a screen-fitting minimum; existing title-bar maximize/restore | versioned `window-placement.json` resets older sizes once, then retains user choices; missing/invalid/off-screen placement uses the wide default; `SMARTI_DATA_DIR` isolates placement | Six focused Rust tests passed; 2026-09-05 source Tauri launch verified the exact debug executable and saved native geometry 1613x816 at (154,102), unmaximized; left open for user comparison; USER-DIRECTED DEFAULT-SIZE OVERRIDE; manual acceptance pending, no package validation |
 | Title controls | `WorkspaceWindowTitleBar`; minimize, maximize/restore, close and double-click maximize | `WindowTitleBar`; `appWindow.minimize/toggleMaximize/close`, dynamic restore glyph/label | native Tauri window; close request flows through close-to-tray policy | frontend typecheck and Rust host compile/smoke; CURRENT MATCHED |
-| Three-column ownership | `workspace_splitter`: Workbench left, chat center, drawer right, LTR splitter order | RTL grid with `workspaceColumns`; DOM order remains drawer/chat/Workbench | pure reducer restores open/closed state after Core bootstrap | `workspaceState.test.ts`; wide screenshots; CURRENT MATCHED |
-| Source splitter sizing | `_workspace_open_sizes`: narrow below usable 920; otherwise `min(max(480, usable*0.52), usable-520)` | `workspaceOpenSizes`, grid columns and `.is-workbench-narrow` | recalculated on viewport/sidebar change; chat is hidden only in the source narrow branch | exact boundary/value tests and 1380/820 screenshots; CURRENT MATCHED |
+| Three-column ownership | `workspace_splitter`: Workbench left, chat center, drawer right, LTR splitter order | Wide RTL grid keeps drawer/chat/Workbench; at the same compact breakpoint the chat remains the base surface and drawer/Workbench become right/left overlays | pure reducer restores open/closed state after Core bootstrap and makes compact overlays mutually exclusive | `workspaceState.test.ts`; inspected wide/compact fixture routes; USER-DIRECTED RESPONSIVE OVERRIDE 2026-08-28 — AUDIT OPEN |
+| Source splitter sizing | `_workspace_open_sizes`: narrow below usable 920; otherwise `min(max(480, usable*0.52), usable-520)` | `workspaceOpenSizes` retains the wide 52% rule; compact `workspaceColumns` reserves the 58 px rail and CSS layers a bounded Workbench over the still-mounted chat | recalculated on viewport/sidebar change; compact mode no longer zeroes or hides chat per the explicit 2026-08-28 request | exact boundary/value/overlay CSS tests and inspected 1380x792, 1024x720, 820x700 and 720x560 fixtures; USER-DIRECTED RESPONSIVE OVERRIDE — AUDIT OPEN |
 | Manual Workbench resize | `QSplitter` one-pixel handle and `splitterMoved` refresh | `.workbench-resize-handle`, pointer capture and `clampWorkbenchResize`; double-click restores calculated width | transient like the source; persisted tab/open state is not conflated with a made-up splitter preference | computed state tests plus inspected wide layout; CURRENT MATCHED |
-| Drawer expand/collapse | `WorkspaceSidebar.set_collapsed`, 286/58, responsive auto-collapse and manual preference | `toggleConversationDrawer`, rail/expanded branches and source assets | PATCH `/v2/settings` -> `ui_preferences.workspace_sidebar_collapsed`; bootstrap restores unless narrow | gateway settings coverage and narrow screenshot; CURRENT MATCHED |
+| Drawer expand/collapse | `WorkspaceSidebar.set_collapsed`, 286/58, responsive auto-collapse and manual preference | `toggleConversationDrawer`, rail/expanded branches and source assets; the 58 px rail removes hidden controls from flex sizing, centers every icon, and delays nowrap labels until the panel has usable width | wide manual state persists in `ui_preferences.workspace_sidebar_collapsed`; compact overlay toggles are transient and do not overwrite the wide preference | reducer/CSS coverage plus inspected compact fixture and live Tauri rail; USER-DIRECTED RESPONSIVE OVERRIDE — AUDIT OPEN |
 | Theme | `apply_app_theme` and palette helpers; system/light/dark | `useTheme`, Core bootstrap `ui_preferences.theme_mode`, exact theme tokens/assets | Settings authority persists theme; local storage only prevents pre-bootstrap flash | theme unit tests and inspected light/dark screenshots; CURRENT MATCHED |
 | Close/tray/activation | tray menu, close-to-tray, single instance and bring-to-front | `desktop_set_close_to_tray`, `desktop://activation`, `desktop_quit` | Rust `DesktopState`, single-instance plugin and native tray; no conversation is acknowledged by merely showing the app | 22 Rust tests and hidden supervisor smoke; CURRENT MATCHED + TAURI NATIVE |
 | Unread/notification attention | `TaskbarAttentionController`, `WindowsNotificationCenter` | conversation projection invokes `desktop_set_unread` and scoped `desktop_notify` only while hidden | history unread count remains Core-owned; activation selects the supplied session before read receipt | Rust host compile plus history/gateway tests; CURRENT MATCHED + TAURI NATIVE |
@@ -180,14 +226,14 @@ authority and reload path; it is not current acceptance.
 
 | Control/state | Authoritative PyQt source | React/native handler | Authority, persistence and reload | Evidence/status |
 |---|---|---|---|---|
-| Frame/empty state | `WorkspaceWorkbench`; 8 px outer margin/padding, 18 radius, 46 header, original empty actions | `WorkbenchSurface`, `.workbench-*`, source labels/actions | Workbench component remains mounted after bootstrap even when its column is closed | screenshots/component build; CURRENT MATCHED |
+| Frame/empty state | `WorkspaceWorkbench`; 8 px outer margin/padding, 18 radius, 46 header, original empty actions | `WorkbenchSurface`, `.workbench-*`, source labels/actions plus a header-edge close control | the outer Workbench surface animates in both directions; compact close never depends on the covered chat toolbar | component/CSS tests and compact interaction fixture; USER-DIRECTED RESPONSIVE OVERRIDE — AUDIT OPEN |
 | Tab focus/repeat/singleton | repeated Files/Browser/Terminal; one Canvas/Artifacts; movable tabs and next-tab selection on close | `openWorkbenchTab`, `reorderWorkbenchTabs`, `closeWorkbenchTab`, draggable tab buttons and plus menu | snapshot stores ordered `{id,kind,title}` plus active ID; bootstrap validates and restores up to 20 tabs | `workspaceState.test.ts`; CURRENT MATCHED |
 | Open/close persistence | source Workbench on-demand lifecycle and visible active tab | `setWorkbenchOpen`, `persistWorkbench`; inactive panels are hidden, not unmounted | `ui_preferences.workspace_workbench_open/workspace_workbench`; Core reload restores active kind/tab order | state/settings tests; CURRENT MATCHED |
 | Files | selected root, tree right/preview left, safe preview/open | `FilesPanel` -> Workbench tree/file/open routes | `WorkspaceScope` enforces realpath/traversal/symlink/size/depth boundaries and persists root | real Hebrew-workspace integration within 123 tests; CURRENT MATCHED |
 | Artifacts | generated-file inventory/open | `ArtifactsPanel` route and actions | Core artifact discovery and safe external-open authority | Workspace integration tests; CURRENT MATCHED |
 | Terminal | independent hidden UTF-8 PowerShell sessions with input/restart/close | each terminal tab owns a mounted `TerminalPanel`; inactive tabs retain session reference | `TerminalRegistry` owns process lifecycle/output/cwd and cleans up on gateway shutdown | real PowerShell/Hebrew cwd test; CURRENT MATCHED |
 | Canvas | singleton active/closed Canvas tab, layout/actions | `CanvasPanel`, message Canvas card opens/focuses Workbench | conversation-scoped Canvas model/routes persist/reopen materialized artifacts; action re-enters chat only after trusted confirmation | Canvas/frontend/Python tests; CURRENT MATCHED + SANDBOX HARDENED |
-| Smarti Browser lifecycle | legacy integrated browser within Workbench; approved Tauri-owned same-visible-target architecture | every Browser tab remains mounted; only active+visible WebView is shown; repeated tabs and same target broker retained | Rust `BrowserBroker` owns tab/target/profile state; no external Chrome/Edge HWND or remote-debug port | browser state/Rust tests and historical same-target smoke; CURRENT MATCHED + APPROVED TAURI ARCHITECTURE |
+| Smarti Browser lifecycle | legacy integrated browser within Workbench; approved Tauri-owned same-visible-target architecture | every Browser tab remains mounted; only active+visible WebView is shown; native bounds are coalesced through the CSS transition and the first WebView2 frame is revealed only after its transformed Workbench bounds are applied | Rust `BrowserBroker` owns tab/target/profile state; no external Chrome/Edge HWND or remote-debug port | browser command-order/frontend/state/Rust tests plus live Tauri final-frame inspection; CURRENT MATCHED + APPROVED TAURI ARCHITECTURE |
 | Background browser preview | source 236x142 preview while browser has activity and Workbench closes | hidden browser screenshot activity updates `browser-preview-card`; expand reopens Browser | CDP screenshot comes from the same broker target at bounded cadence; activity survives panel hiding | compiled frontend/Rust browser tests and current source audit; CURRENT MATCHED |
 | Browser source/screenshot saves | source page-source and screenshot save actions | `BrowserPanel` invokes `save_text_file`/`save_binary_file` | same visible target supplies data; native Windows dialog chooses the destination | Rust compile/browser policy tests; CURRENT MATCHED |
 

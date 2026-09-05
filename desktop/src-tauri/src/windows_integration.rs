@@ -36,13 +36,25 @@ pub struct DesktopActivation {
     pub arguments: Vec<String>,
 }
 
+const WINDOW_LAYOUT_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct WindowPlacement {
+    #[serde(default)]
+    layout_version: u32,
     x: i32,
     y: i32,
     width: u32,
     height: u32,
     maximized: bool,
+}
+
+impl WindowPlacement {
+    fn can_restore(&self) -> bool {
+        self.layout_version == WINDOW_LAYOUT_VERSION
+            && (1..=8192).contains(&self.width)
+            && (1..=8192).contains(&self.height)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -229,6 +241,9 @@ fn placement_path(app: &AppHandle) -> Option<std::path::PathBuf> {
 }
 
 fn save_placement(app: &AppHandle, window: &WebviewWindow) {
+    if window.is_minimized().unwrap_or(false) {
+        return;
+    }
     let (Ok(position), Ok(size), Ok(maximized)) = (
         window.outer_position(),
         window.outer_size(),
@@ -237,10 +252,11 @@ fn save_placement(app: &AppHandle, window: &WebviewWindow) {
         return;
     };
     let placement = WindowPlacement {
+        layout_version: WINDOW_LAYOUT_VERSION,
         x: position.x,
         y: position.y,
-        width: size.width.max(720),
-        height: size.height.max(560),
+        width: size.width,
+        height: size.height,
         maximized,
     };
     let Some(path) = placement_path(app) else {
@@ -264,29 +280,37 @@ fn restore_placement(app: &AppHandle, window: &WebviewWindow) -> bool {
     let Ok(value) = serde_json::from_slice::<WindowPlacement>(&data) else {
         return false;
     };
-    if !(720..=8192).contains(&value.width) || !(560..=8192).contains(&value.height) {
+    // Apply the wide default once for pre-existing compact placements. Subsequent
+    // user resizes keep their normal persistence behavior.
+    if !value.can_restore() {
         return false;
     }
     let visible = window.available_monitors().ok().is_some_and(|monitors| {
         monitors.iter().any(|monitor| {
-            let p = monitor.position();
-            let s = monitor.size();
-            value.x < p.x + s.width as i32
-                && value.y < p.y + s.height as i32
-                && value.x + 120 > p.x
-                && value.y + 80 > p.y
+            let area = monitor.work_area();
+            let p = area.position;
+            let s = area.size;
+            (value.x as i64) < p.x as i64 + s.width as i64
+                && (value.y as i64) < p.y as i64 + s.height as i64
+                && value.x as i64 + 120 > p.x as i64
+                && value.y as i64 + 80 > p.y as i64
         })
     });
-    if visible {
-        let _ = window.set_position(PhysicalPosition::new(value.x, value.y));
-        let _ = window.set_size(PhysicalSize::new(value.width, value.height));
-        if value.maximized {
-            let _ = window.maximize();
-        }
-    } else {
-        let _ = window.center();
+    if !visible {
+        // A disconnected monitor must use the full default-size path, rather
+        // than merely centering the still-small startup shell.
+        return false;
     }
-    true
+    if window
+        .set_position(PhysicalPosition::new(value.x, value.y))
+        .is_err()
+        || window
+            .set_size(PhysicalSize::new(value.width, value.height))
+            .is_err()
+    {
+        return false;
+    }
+    !value.maximized || window.maximize().is_ok()
 }
 
 #[cfg(windows)]
@@ -414,36 +438,60 @@ pub fn desktop_finish_startup(app: AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or("main window missing")?;
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let (width, height) = monitor
+        .as_ref()
+        .map(|monitor| {
+            let scale = monitor.scale_factor().max(0.5);
+            let size = monitor.work_area().size;
+            workspace_default_size(size.width as f64 / scale, size.height as f64 / scale)
+        })
+        .unwrap_or((1180.0, 760.0));
     window
-        .set_min_size(Some(LogicalSize::new(720.0, 560.0)))
+        .set_min_size(Some(LogicalSize::new(width.min(720.0), height.min(560.0))))
         .map_err(|error| error.to_string())?;
     window
         .set_resizable(true)
         .map_err(|error| error.to_string())?;
     if !restore_placement(&app, &window) {
-        let (width, height) = window
-            .current_monitor()
-            .ok()
-            .flatten()
-            .map(|monitor| {
-                let scale = monitor.scale_factor().max(0.5);
-                let size = monitor.size();
-                workspace_default_size(size.width as f64 / scale, size.height as f64 / scale)
-            })
-            .unwrap_or((1180.0, 760.0));
+        window.unmaximize().map_err(|error| error.to_string())?;
         window
             .set_size(LogicalSize::new(width, height))
             .map_err(|error| error.to_string())?;
-        window.center().map_err(|error| error.to_string())?;
+        if let Some(monitor) = monitor {
+            let area = monitor.work_area();
+            let scale = monitor.scale_factor().max(0.5);
+            window
+                .set_position(PhysicalPosition::new(
+                    area.position.x
+                        + ((area.size.width as f64 - width * scale) / 2.0).round() as i32,
+                    area.position.y
+                        + ((area.size.height as f64 - height * scale) / 2.0).round() as i32,
+                ))
+                .map_err(|error| error.to_string())?;
+        } else {
+            window.center().map_err(|error| error.to_string())?;
+        }
     }
     state.workspace_ready.store(true, Ordering::Release);
+    save_placement(&app, &window);
     Ok(())
 }
 
 fn workspace_default_size(available_width: f64, available_height: f64) -> (f64, f64) {
     (
-        (available_width - 72.0).clamp(920.0, 1380.0),
-        (available_height - 72.0).clamp(620.0, 900.0),
+        (available_width * 0.84)
+            .round()
+            .max(720.0)
+            .min((available_width - 32.0).max(1.0)),
+        (available_height * 0.8)
+            .round()
+            .max(560.0)
+            .min((available_height - 32.0).max(1.0)),
     )
 }
 
@@ -733,9 +781,34 @@ mod tests {
     }
 
     #[test]
-    fn legacy_shell_and_voice_window_sizes_are_exact() {
-        assert_eq!(workspace_default_size(1920.0, 1080.0), (1380.0, 900.0));
-        assert_eq!(workspace_default_size(1024.0, 768.0), (952.0, 696.0));
+    fn workspace_default_scales_with_available_work_area() {
+        assert_eq!(workspace_default_size(1920.0, 1040.0), (1613.0, 832.0));
+        assert_eq!(workspace_default_size(2560.0, 1400.0), (2150.0, 1120.0));
+        // A 4K work area at 200% DPI has the same logical size as Full HD.
+        assert_eq!(
+            workspace_default_size(3840.0 / 2.0, 2080.0 / 2.0),
+            (1613.0, 832.0)
+        );
+        assert_eq!(workspace_default_size(1024.0, 728.0), (860.0, 582.0));
+        assert_eq!(workspace_default_size(800.0, 600.0), (720.0, 560.0));
+        assert_eq!(workspace_default_size(640.0, 480.0), (608.0, 448.0));
+    }
+
+    #[test]
+    fn old_placements_reset_once_and_new_user_sizes_remain_restorable() {
+        let mut placement: WindowPlacement =
+            serde_json::from_str(r#"{"x":100,"y":100,"width":720,"height":560,"maximized":false}"#)
+                .unwrap();
+        assert!(!placement.can_restore());
+        placement.layout_version = WINDOW_LAYOUT_VERSION;
+        let saved = serde_json::to_vec(&placement).unwrap();
+        let restored: WindowPlacement = serde_json::from_slice(&saved).unwrap();
+        assert!(restored.can_restore());
+        assert_eq!((restored.width, restored.height), (720, 560));
+    }
+
+    #[test]
+    fn legacy_voice_window_sizes_are_exact() {
         assert_eq!(voice_overlay_width(true), 298.0);
         assert_eq!(voice_overlay_width(false), 342.0);
     }

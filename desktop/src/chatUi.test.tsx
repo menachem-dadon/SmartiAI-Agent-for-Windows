@@ -10,6 +10,7 @@ import {
   safeChatHref,
 } from "./RichMessage";
 import { agentToolIcon, agentToolIconName } from "./agentToolIcons";
+import { WorkbenchSurface } from "./WorkbenchPanels";
 
 const chatStyles = readFileSync(new URL("./App.css", import.meta.url), "utf8");
 
@@ -47,6 +48,54 @@ describe("rich daily chat UI", () => {
     expect(chatStyles).toMatch(
       /\.agent-tool-row pre\s*\{[^}]*width:\s*100%[^}]*max-width:\s*100%[^}]*overflow:\s*auto/s,
     );
+  });
+
+  test("keeps compact side surfaces above a visible chat instead of replacing it", () => {
+    expect(chatStyles).toMatch(
+      /\.workspace\.is-overlay-layout\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*var\(--rail-width\) minmax\(0,1fr\) 0/s,
+    );
+    expect(chatStyles).toMatch(
+      /\.conversation-drawer\s*\{[^}]*position:\s*absolute[^}]*right:\s*0[^}]*width:\s*min\(var\(--drawer-width\)[^}]*transition:\s*clip-path/s,
+    );
+    expect(chatStyles).toMatch(
+      /\.conversation-drawer\.is-rail\s*\{[^}]*clip-path:\s*inset\(0 0 0 calc\(100% - var\(--rail-width\)\)\)/s,
+    );
+    expect(chatStyles).toMatch(
+      /\.conversation-drawer\.is-rail \.drawer-collapse-control\s*\{[^}]*pointer-events:\s*none/s,
+    );
+    expect(chatStyles).not.toMatch(/transition:[^;}]*(?:grid-template-columns|max-width|flex-basis|backdrop-filter)/);
+    expect(chatStyles).not.toContain("will-change: width");
+    expect(chatStyles).toMatch(
+      /\.workspace\.is-overlay-layout \.workbench\s*\{[^}]*position:\s*absolute[^}]*left:\s*8px[^}]*grid-column:\s*auto[^}]*pointer-events:\s*none[^}]*transform:/s,
+    );
+    expect(chatStyles).toMatch(
+      /\.workspace\.is-overlay-layout \.workbench\.is-open\s*\{[^}]*pointer-events:\s*auto[^}]*transform:\s*translateX\(0\)/s,
+    );
+    expect(chatStyles).not.toContain(".workspace.is-workbench-narrow .chat-column { visibility: hidden; }");
+    const workbenchMotion = chatStyles.match(/\.workspace\.is-overlay-layout \.workbench\s*\{([^}]*)\}/)?.[1];
+    expect(workbenchMotion).not.toContain("scale(");
+    expect(workbenchMotion).toContain("opacity: 1");
+    expect(chatStyles).toContain("--ease-premium:");
+    expect(chatStyles).toMatch(
+      /\.workspace\.is-overlay-layout \.workspace-overlay-backdrop\.is-active\s*\{[^}]*opacity:\s*1[^}]*pointer-events:\s*auto/s,
+    );
+  });
+
+  test("keeps the Workbench close control inside its own header", () => {
+    const html = renderToStaticMarkup(
+      <WorkbenchSurface
+        initial={null}
+        visible
+        restored={{ tabs: [], active: "" }}
+        closeIcon="/close.svg"
+        sessionId="test"
+        onCanvasAction={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('class="ui-icon-button workbench-close-control"');
+    expect(html).toContain('aria-label="סגירת סביבת העבודה"');
   });
 
   test("uses the original per-tool icon mapping with safe fallbacks", () => {

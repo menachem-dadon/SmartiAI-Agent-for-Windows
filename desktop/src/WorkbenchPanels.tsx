@@ -13,6 +13,8 @@ import {
   type WorkbenchTabRecord,
 } from "./workspaceState";
 import { useDismissiblePopup } from "./popupDismissal";
+import { LegacyIcon } from "./legacyAssets";
+import { IconButton } from "./ui";
 
 type TreeItem = {
   name: string;
@@ -322,19 +324,23 @@ function TerminalPanel({ onSession }: { onSession?: (id: string) => void }) {
 export function WorkbenchSurface({
   initial,
   visible,
+  motionRevision,
   restored,
   onStateChange,
   onBrowserActivity,
   onClose,
+  closeIcon,
   sessionId,
   onCanvasAction,
 }: {
   initial: WorkbenchTab | null;
   visible: boolean;
+  motionRevision?: boolean | string;
   restored?: WorkbenchSnapshot | null;
   onStateChange?: (state: WorkbenchSnapshot) => void;
   onBrowserActivity?: (activity: BrowserActivity) => void;
   onClose: () => void;
+  closeIcon: string;
   sessionId: string;
   onCanvasAction: (text: string) => void;
 }) {
@@ -455,11 +461,18 @@ export function WorkbenchSurface({
             </div>
           )}
         </div>
+        <IconButton
+          className="workbench-close-control"
+          label="סגירת סביבת העבודה"
+          onClick={onClose}
+        >
+          <LegacyIcon src={closeIcon} size={20} />
+        </IconButton>
       </header>
       <div className="workbench-body">
         {!current && <div className="workbench-empty"><h2>מה תרצה לפתוח?</h2><button type="button" onClick={() => add("files", true)}>▣ קבצים</button><button type="button" onClick={() => add("browser", true)}>◎ דפדפן</button><button type="button" onClick={() => add("terminal", true)}>&gt;_ מסוף</button></div>}
         {tabs.map((tab) => <section className="workbench-panel" hidden={tab.id !== active} key={tab.id} aria-label={tab.title}>
-          {tab.kind === "browser" && <BrowserPanel visible={visible && tab.id === active} onActivity={onBrowserActivity} />}
+          {tab.kind === "browser" && <BrowserPanel visible={visible && tab.id === active} geometryRevision={motionRevision} onActivity={onBrowserActivity} />}
           {tab.kind === "files" && <FilesPanel />}
           {tab.kind === "terminal" && <TerminalPanel />}
           {tab.kind === "artifacts" && <ArtifactsPanel />}

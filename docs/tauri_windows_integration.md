@@ -19,9 +19,18 @@ The Tauri/Rust host now owns Windows application behavior. Qt is not involved.
 - the Rust host sets `SmartiAI.Desktop` AUMID, Windows 11 rounded-corner
   preference, restores size/position only when it intersects a current monitor,
   and keeps the custom 36 px Tauri title/drag surface.
+- The default Workspace is centered at 84% of the width and 80% of the height of
+  the current monitor's available work area, matching the supplied Codex screenshot
+  proportions with DPI scaling and taskbar space accounted for. It opens in normal
+  window mode; the title-bar maximize/restore button remains available. The
+  720x560 minimum is reduced only when necessary to fit a smaller work area.
+- On the first launch with this sizing policy, older saved placements are reset
+  to the wide default. Later user size/position choices are retained. Missing,
+  invalid or disconnected-monitor placements also fall back to the wide default;
+  minimized windows do not overwrite the saved placement. The 500x310 loading
+  splash retains its separate startup size.
 
 The notification provider and some window effects still depend on the user's
 Windows notification/privacy policy. Multi-monitor and DPI automation cannot
 substitute for the physical user matrix; the saved placement is guarded so a
 removed monitor cannot strand the window off-screen.
-

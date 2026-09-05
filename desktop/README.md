@@ -61,6 +61,7 @@ the user's desktop or data:
 
 - `?visual-fixture=point16a&theme=dark&workbench=1`
 - `?visual-fixture=point16a&theme=light&workbench=0`
+- `?visual-fixture=point16a&theme=dark&drawer=1` (compact-width drawer overlay)
 - `?visual-fixture=point16b-management&theme=dark`
 - `?visual-fixture=point16b-management&theme=light`
 - `?visual-fixture=point16b-legal&theme=dark`
