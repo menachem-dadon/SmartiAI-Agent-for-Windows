@@ -526,6 +526,7 @@ export function RichMessage({
   return (
     <article
       className={`chat-message-row chat-message-row--${message.role} ${backgroundTask ? "is-background-task" : ""}`}
+      data-run-id={String(message.metadata?.run_id || "") || undefined}
       dir="auto"
     >
       {active && !rows.length && !message.content && (

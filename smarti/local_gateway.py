@@ -411,7 +411,10 @@ class SmartiLocalGateway:
             items = store.list_sessions(request.query.get("q", ""), include_empty="latest")
             limit = self._query_int(request, "limit", 50, 1, 200)
             offset = self._query_int(request, "offset", 0, 0, 1000000)
-            return self._ok(request, {"items": items[offset:offset + limit], "total": len(items), "offset": offset, "limit": limit})
+            return self._ok(request, {
+                "items": items[offset:offset + limit], "total": len(items), "offset": offset, "limit": limit,
+                "attention_items": store.unread_attention_items(),
+            })
         def create(payload):
             session = store.create_session(False, payload.get("workspace_id") or None)
             if str(payload.get("title") or "").strip():
@@ -479,7 +482,9 @@ class SmartiLocalGateway:
         session_id = request.match_info["session_id"]
         return await self._idempotent(request, "markRead", lambda payload: ({
             "session_id": session_id,
-            "marked_read": self.core.chat_store.mark_session_read(session_id, payload.get("actor_id") or "desktop_v2"),
+            "marked_read": self.core.chat_store.mark_session_read(
+                session_id, payload.get("actor_id") or "desktop_v2", payload.get("attention_ids"),
+            ),
         }, 200))
 
     async def _runs(self, request):

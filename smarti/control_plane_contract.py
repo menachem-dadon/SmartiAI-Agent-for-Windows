@@ -58,6 +58,7 @@ REQUEST_SCHEMAS = {
     }),
     "markRead": _object({
         "actor_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "attention_ids": {"type": "array", "maxItems": 10000, "items": IDENTIFIER},
     }),
     "resolveApproval": _object({
         "approved": {"type": "boolean"},

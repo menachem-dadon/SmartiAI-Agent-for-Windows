@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tauri::{
-    image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
@@ -16,6 +15,7 @@ pub struct DesktopState {
     quitting: AtomicBool,
     close_to_tray: AtomicBool,
     workspace_ready: AtomicBool,
+    unread_count: AtomicU32,
 }
 
 impl Default for DesktopState {
@@ -24,6 +24,7 @@ impl Default for DesktopState {
             quitting: AtomicBool::new(false),
             close_to_tray: AtomicBool::new(true),
             workspace_ready: AtomicBool::new(false),
+            unread_count: AtomicU32::new(u32::MAX),
         }
     }
 }
@@ -33,6 +34,7 @@ impl Default for DesktopState {
 pub struct DesktopActivation {
     pub command: String,
     pub session_id: String,
+    pub run_id: Option<String>,
     pub arguments: Vec<String>,
 }
 
@@ -217,6 +219,7 @@ pub fn activation_from_args(arguments: Vec<String>) -> DesktopActivation {
     DesktopActivation {
         command,
         session_id,
+        run_id: None,
         arguments: arguments
             .into_iter()
             .take(32)
@@ -398,6 +401,7 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 DesktopActivation {
                     command: event.id().as_ref().to_string(),
                     session_id: String::new(),
+                    run_id: None,
                     arguments: vec![],
                 },
             ),
@@ -420,6 +424,7 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     DesktopActivation {
                         command: "show".into(),
                         session_id: String::new(),
+                        run_id: None,
                         arguments: vec![],
                     },
                 );
@@ -596,6 +601,7 @@ pub fn desktop_set_voice_hotkey(app: AppHandle, shortcut: String) -> Result<(), 
                     DesktopActivation {
                         command: "voice".into(),
                         session_id: String::new(),
+                        run_id: None,
                         arguments: vec![],
                     },
                 );
@@ -617,6 +623,7 @@ pub fn desktop_notify(
     title: String,
     body: String,
     session_id: String,
+    run_id: Option<String>,
 ) -> Result<(), String> {
     let title: String = title.chars().take(160).collect();
     let body: String = body.chars().take(1000).collect();
@@ -624,6 +631,7 @@ pub fn desktop_notify(
     {
         let activation_app = app.clone();
         let activation_session = session_id.clone();
+        let activation_run = run_id.clone();
         tauri_winrt_notification::Toast::new("SmartiAI.Desktop")
             .title(&title)
             .text1(&body)
@@ -634,6 +642,7 @@ pub fn desktop_notify(
                     DesktopActivation {
                         command: "notification".into(),
                         session_id: activation_session.clone(),
+                        run_id: activation_run.clone(),
                         arguments: vec![],
                     },
                 );
@@ -656,6 +665,7 @@ pub fn desktop_notify(
         DesktopActivation {
             command: "notification".into(),
             session_id,
+            run_id,
             arguments: vec![],
         },
     );
@@ -664,6 +674,10 @@ pub fn desktop_notify(
 
 #[tauri::command]
 pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
+    let state = app.state::<DesktopState>();
+    if state.unread_count.load(Ordering::Acquire) == count {
+        return Ok(());
+    }
     let window = app
         .get_webview_window("main")
         .ok_or("main window missing")?;
@@ -675,78 +689,29 @@ pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
     window
         .set_title(&taskbar_title)
         .map_err(|error| error.to_string())?;
-    let badge = (count > 0).then(|| unread_badge(count));
+    let badge = if count > 0 { Some(crate::taskbar_badge::unread_badge(count)?) } else { None };
     window
         .set_overlay_icon(badge)
         .map_err(|error| error.to_string())?;
     #[cfg(windows)]
-    if count > 0 && !window.is_focused().unwrap_or(false) {
+    if count == 0 || !window.is_focused().unwrap_or(false) {
         use windows::Win32::UI::WindowsAndMessaging::{
-            FlashWindowEx, FLASHWINFO, FLASHW_ALL, FLASHW_TIMERNOFG,
+            FlashWindowEx, FLASHWINFO, FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG,
         };
         if let Ok(hwnd) = window.hwnd() {
             let info = FLASHWINFO {
                 cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
                 hwnd,
-                dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+                dwFlags: if count == 0 { FLASHW_STOP } else { FLASHW_ALL | FLASHW_TIMERNOFG },
                 uCount: 3,
                 dwTimeout: 0,
             };
             let _ = unsafe { FlashWindowEx(&info) };
         }
     }
+    state.unread_count.store(count, Ordering::Release);
     let _ = app.emit("desktop://unread", count);
     Ok(())
-}
-
-fn unread_badge(count: u32) -> Image<'static> {
-    const DIGITS: [[u8; 5]; 10] = [
-        [0b111, 0b101, 0b101, 0b101, 0b111],
-        [0b010, 0b110, 0b010, 0b010, 0b111],
-        [0b111, 0b001, 0b111, 0b100, 0b111],
-        [0b111, 0b001, 0b111, 0b001, 0b111],
-        [0b101, 0b101, 0b111, 0b001, 0b001],
-        [0b111, 0b100, 0b111, 0b001, 0b111],
-        [0b111, 0b100, 0b111, 0b101, 0b111],
-        [0b111, 0b001, 0b010, 0b010, 0b010],
-        [0b111, 0b101, 0b111, 0b101, 0b111],
-        [0b111, 0b101, 0b111, 0b001, 0b111],
-    ];
-    let mut rgba = vec![0u8; 16 * 16 * 4];
-    for y in 0..16i32 {
-        for x in 0..16i32 {
-            if (x - 8).pow(2) + (y - 8).pow(2) <= 58 {
-                let offset = ((y * 16 + x) * 4) as usize;
-                rgba[offset..offset + 4].copy_from_slice(&[220, 36, 52, 255]);
-            }
-        }
-    }
-    let text = if count > 99 {
-        "99".to_string()
-    } else {
-        count.to_string()
-    };
-    let start_x = if text.len() == 1 { 6 } else { 3 };
-    for (digit_index, character) in text.chars().enumerate() {
-        let digit = character.to_digit(10).unwrap_or(0) as usize;
-        for (row, bits) in DIGITS[digit].iter().enumerate() {
-            for column in 0..3 {
-                if bits & (1 << (2 - column)) != 0 {
-                    for dy in 0..2 {
-                        for dx in 0..2 {
-                            let x = start_x + digit_index * 7 + column * 2 + dx;
-                            let y = 3 + row * 2 + dy;
-                            if x < 16 && y < 16 {
-                                let offset = (y * 16 + x) * 4;
-                                rgba[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Image::new_owned(rgba, 16, 16)
 }
 
 #[tauri::command]

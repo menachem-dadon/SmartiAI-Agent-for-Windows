@@ -40,7 +40,7 @@ class ContextCompactionMixin:
             return 1_050_000
         if "gpt-5.4-mini" in model_lower or re.search(r"(^|[/_-])gpt-5-mini(?:$|[/_-])", model_lower):
             return 400_000
-        if any(name in model_lower for name in ("gpt-5.4", "gpt-5.5", "gpt-5.6")):
+        if any(name in model_lower for name in ("gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6-astra")):
             return 1_050_000
         if "gpt-5" in model_lower:
             return 400_000

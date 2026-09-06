@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, RunEvent};
 
 mod browser;
+mod taskbar_badge;
 mod windows_integration;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);

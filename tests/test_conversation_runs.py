@@ -82,6 +82,27 @@ class _FakeCore:
 
 
 class ConversationRunStoreTests(unittest.TestCase):
+    def test_page_receipt_does_not_read_later_attention_or_another_conversation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "history.json")
+            store = ChatSessionStore(path)
+            session = store.create_session(set_active=False)["id"]
+            other = store.create_session(set_active=False)["id"]
+            store.append_message("assistant", "seen response", session_id=session)
+            seen = store.create_attention(session)
+            foreign = store.create_attention(other)
+            page = store.messages_page(session)
+            self.assertEqual(page["unread_attention_ids"], [seen])
+            late = store.create_attention(session)
+            self.assertEqual(store.mark_session_read(session, attention_ids=[]), 0)
+            self.assertEqual(store.mark_session_read(session, attention_ids=[seen, foreign]), 1)
+            self.assertEqual(store.mark_session_read(session, attention_ids=[seen]), 0)
+            reopened = ChatSessionStore(path)
+            self.assertEqual({item["id"] for item in reopened.unread_attention_items()}, {late, foreign})
+            self.assertEqual(reopened.unread_count(), 2)
+            # Paging backwards is not a receipt for newer, unseen answers.
+            self.assertEqual(reopened.messages_page(session, before_ordinal=99)["unread_attention_ids"], [])
+
     def test_message_page_projects_persisted_attachments_for_desktop_rendering(self):
         with tempfile.TemporaryDirectory() as directory:
             store = ChatSessionStore(str(Path(directory) / "history.json"))
@@ -433,6 +454,35 @@ class DesktopToolSnapshotTests(unittest.TestCase):
 
 
 class LocalGatewayTests(unittest.TestCase):
+    def test_desktop_attention_is_global_and_read_receipts_are_snapshot_scoped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core = _FakeCore(Path(directory) / "history.json")
+            core.run_manager = ConversationRunManager(core)
+            store = core.chat_store
+            session = store.create_session(set_active=False)["id"]
+            other = store.create_session(set_active=False)["id"]
+            store.append_message("assistant", "ready", session_id=session)
+            seen = store.create_attention(session)
+            foreign = store.create_attention(other, kind="approval")
+            gateway = SmartiLocalGateway(core, "test-token", port=0)
+            self.assertTrue(gateway.start())
+            try:
+                _, _, listing = self._request(gateway, "/v2/conversations?q=absent-title&offset=999&limit=1")
+                self.assertEqual(listing["data"]["items"], [])
+                self.assertEqual({item["id"] for item in listing["data"]["attention_items"]}, {seen, foreign})
+                _, _, page = self._request(gateway, f"/v2/conversations/{session}/messages")
+                late = store.create_attention(session)
+                _, _, receipt = self._request(
+                    gateway, f"/v2/conversations/{session}/read", method="POST",
+                    payload={"actor_id": "tauri-desktop", "attention_ids": page["data"]["unread_attention_ids"]},
+                    headers={"Idempotency-Key": "read-visible-page"},
+                )
+                self.assertEqual(receipt["data"]["marked_read"], 1)
+                self.assertEqual({item["id"] for item in store.unread_attention_items()}, {late, foreign})
+            finally:
+                gateway.stop()
+                core.run_manager.shutdown(wait=True)
+
     def test_desktop_log_filter_hides_personal_payloads_but_keeps_diagnostics(self):
         rows = sanitize_desktop_log_lines([
             '2026-08-23 03:00:00 | INFO | PERSONAL | kind=user_message | content=סוד',

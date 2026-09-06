@@ -32,6 +32,7 @@ export interface SubmitRunRequest {
 }
 export interface MarkReadRequest {
   actor_id?: string;
+  attention_ids?: Array<string>;
 }
 export interface ResolveApprovalRequest {
   approved: boolean;

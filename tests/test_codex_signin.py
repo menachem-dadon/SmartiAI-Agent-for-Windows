@@ -10,7 +10,7 @@ from unittest import mock
 from pathlib import Path
 
 from smarti.codex_signin import CodexConnectionStatus, CodexProtocolError, CodexSignInError, CodexSignInProvider
-from smarti.common import provider_fallback_models
+from smarti.common import provider_fallback_models, model_reasoning_options, model_reasoning_setting, set_model_reasoning_setting
 from smarti.common import SmartiCancelled
 from smarti.config import DEFAULT_SETTINGS
 from smarti.core import SmartiCore
@@ -162,6 +162,7 @@ class CodexSignInProviderTests(unittest.TestCase):
             provider_fallback_models("openai_codex_signin"),
             [
                 "codex default",
+                "gpt-6-astra",
                 "gpt-5.6-sol",
                 "gpt-5.6-terra",
                 "gpt-5.6-luna",
@@ -316,6 +317,34 @@ class CodexSignInProviderTests(unittest.TestCase):
         config_values = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--config"]
         self.assertIn('model_reasoning_effort="max"', config_values)
         self.assertEqual(args[args.index("--model") + 1], "gpt-5.6-sol")
+
+    def test_astra_reasoning_options_persist_and_reach_the_official_cli(self):
+        provider, model = "openai_codex_signin", "gpt-6-astra"
+        levels = ("auto", "low", "medium", "high", "xhigh", "max")
+        self.assertEqual(tuple(dict(model_reasoning_options(provider, model))), levels)
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
+        )
+        self.provider._run = mock.Mock(return_value=(0, self._codex_jsonl_response(), ""))
+        settings = {}
+        for effort in levels:
+            with self.subTest(effort=effort):
+                set_model_reasoning_setting(settings, provider, model, effort)
+                saved = model_reasoning_setting(settings, provider, model)
+                self.assertEqual(saved, effort)
+                self.provider.complete(
+                    [{"role": "user", "content": "שלום"}], model=model, reasoning_effort=saved,
+                )
+                args = self.provider._run.call_args.args[0]
+                self.assertEqual(args[args.index("--model") + 1], model)
+                self.assertIn("--output-schema", args)
+                self.assertIn("--ignore-user-config", args)
+                configs = [args[i + 1] for i, value in enumerate(args[:-1]) if value == "--config"]
+                reasoning = [value for value in configs if value.startswith("model_reasoning_effort=")]
+                self.assertEqual(reasoning, [] if effort == "auto" else [f'model_reasoning_effort="{effort}"'])
+        for invalid in ("none", "minimal", "ultra"):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(set_model_reasoning_setting(settings, provider, model, invalid), "auto")
 
     def test_noninteractive_codex_process_can_be_cancelled_during_a_long_request(self):
         provider = CodexSignInProvider(self.temp.name, executable=sys.executable)
@@ -662,6 +691,7 @@ class LongTaskSettingsTests(unittest.TestCase):
         core = self._context_compaction_core(window=0)
 
         self.assertEqual(core._model_context_window_tokens("gpt-5.6-sol"), 1_050_000)
+        self.assertEqual(core._model_context_window_tokens("gpt-6-astra"), 1_050_000)
         self.assertEqual(core._model_context_window_tokens("gpt-5.4-mini"), 400_000)
 
     def test_tool_feedback_is_not_cut_at_an_arbitrary_character_limit(self):

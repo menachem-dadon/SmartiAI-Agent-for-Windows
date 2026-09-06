@@ -126,6 +126,15 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 200
+        },
+        "attention_ids": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
         }
       },
       "required": [],

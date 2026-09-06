@@ -66,9 +66,9 @@ export function useDismissiblePopup({
 
 export const DismissibleDetails = forwardRef<
   HTMLDetailsElement,
-  DetailsHTMLAttributes<HTMLDetailsElement>
+  DetailsHTMLAttributes<HTMLDetailsElement> & { popupRef?: PopupRoot }
 >(function DismissibleDetails(
-  { onClick, onKeyDown, onToggle, ...props },
+  { onClick, onKeyDown, onToggle, popupRef, ...props },
   forwardedRef,
 ) {
   const detailsRef = useRef<HTMLDetailsElement | null>(null);
@@ -76,7 +76,7 @@ export const DismissibleDetails = forwardRef<
   useImperativeHandle(forwardedRef, () => detailsRef.current!, []);
   useDismissiblePopup({
     open,
-    roots: [detailsRef],
+    roots: popupRef ? [detailsRef, popupRef] : [detailsRef],
     onDismiss: () => {
       if (detailsRef.current) detailsRef.current.open = false;
       setOpen(false);

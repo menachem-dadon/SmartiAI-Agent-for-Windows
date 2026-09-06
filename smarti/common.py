@@ -146,6 +146,7 @@ MODEL_PROVIDER_CONFIGS = {
         "default_model": "codex default",
         "fallback_models": [
             "codex default",
+            "gpt-6-astra",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",

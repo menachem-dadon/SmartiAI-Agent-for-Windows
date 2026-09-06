@@ -618,6 +618,12 @@ class ChatSessionStore:
                     where += " AND ordinal<?"
                     params.append(cursor)
             params.append(page_limit)
+            # Capture attention before messages while holding the store lock. A
+            # later completion must not be acknowledged by this page's receipt.
+            unread_attention_ids = [str(row["id"]) for row in db.execute(
+                "SELECT id FROM attention_items WHERE session_id=? AND read_at IS NULL",
+                (target,),
+            )] if before_ordinal is None else []
             rows = db.execute(
                 f"SELECT * FROM messages WHERE {where} ORDER BY ordinal DESC LIMIT ?",
                 tuple(params),
@@ -642,6 +648,7 @@ class ChatSessionStore:
                 "has_older": older_count > 0,
                 "older_count": older_count,
                 "next_before_ordinal": next_cursor,
+                "unread_attention_ids": unread_attention_ids,
             }
 
     def _summary_for_session(self, session, query=""):
@@ -1552,15 +1559,32 @@ class ChatSessionStore:
                 return str(row["id"]) if row else ""
         return identifier
 
-    def mark_session_read(self, session_id, actor_id="desktop"):
+    def unread_attention_items(self):
+        """Global attention snapshot, independent of sidebar search and paging."""
+        with self._lock, self._connect() as db:
+            return [dict(row) for row in db.execute(
+                """
+                SELECT a.id, a.session_id, a.run_id, a.kind, s.title
+                FROM attention_items a JOIN sessions s ON s.id=a.session_id
+                WHERE a.read_at IS NULL ORDER BY a.rowid
+                """
+            )]
+
+    def mark_session_read(self, session_id, actor_id="desktop", attention_ids=None):
         now = _now_iso()
         with self._lock, self._connect() as db:
             target = str(session_id or "")
             if not db.execute("SELECT 1 FROM sessions WHERE id=?", (target,)).fetchone():
                 return 0
+            clause = ""
+            identifiers = [] if attention_ids is None else list(dict.fromkeys(attention_ids))
+            if attention_ids is not None:
+                if not identifiers:
+                    return 0
+                clause = f" AND id IN ({','.join('?' for _ in identifiers)})"
             result = db.execute(
-                "UPDATE attention_items SET read_at=? WHERE session_id=? AND read_at IS NULL",
-                (now, target),
+                "UPDATE attention_items SET read_at=? WHERE session_id=? AND read_at IS NULL" + clause,
+                (now, target, *identifiers),
             )
             last_event = db.execute(
                 """

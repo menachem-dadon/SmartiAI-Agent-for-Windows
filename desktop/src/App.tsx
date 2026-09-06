@@ -22,6 +22,7 @@ import type {
   Bootstrap,
   ChatMessage,
   Conversation,
+  ConversationList,
   MessagePage,
   PendingAttachment,
   ReasoningOption,
@@ -57,6 +58,8 @@ import {
 import { activityState, legacyUi, workspaceIsNarrow } from "./legacyUiParity";
 import "./App.css";
 import { useChatLayoutMotion } from "./workspaceMotion";
+import { useConversationAttention } from "./conversationAttention";
+import { useReplyNavigation, type ReplyNavigation } from "./replyNavigation";
 
 const initialCore: CoreSnapshot = {
   state: "starting",
@@ -272,17 +275,41 @@ export default function App() {
     useState<ManagementSection | null>(null);
   const { resolved, setPreference } = useTheme();
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeId, setActiveId] = useState("");
+  const [activeId, setActiveIdState] = useState("");
+  const activeIdRef = useRef("");
+  const messageRequest = useRef(0);
+  const loadedAttentionIds = useRef(new Set<string>());
+  const listRequest = useRef(0);
+  const runtimeListRequest = useRef(0);
+  const navigationRevision = useRef(0);
+  const navigationTarget = useRef("");
+  const [navigation, setNavigation] = useState<ReplyNavigation | null>(null);
+  const [loadedNavigationRevision, setLoadedNavigationRevision] = useState(0);
+  const [readyNavigationRevision, setReadyNavigationRevision] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [page, setPage] = useState<MessagePage | null>(null);
+  const setActiveId = useCallback((id: string) => {
+    if (activeIdRef.current !== id) {
+      ++messageRequest.current;
+      setMessages([]);
+      setPage(null);
+      loadedAttentionIds.current.clear();
+    }
+    activeIdRef.current = id;
+    setActiveIdState(id);
+  }, []);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [query, setQuery] = useState("");
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [error, setError] = useState("");
+  const attention = useConversationAttention(setError);
+  const [foreground, setForeground] = useState(() => !document.hidden && document.hasFocus());
   const [availableUpdateVersion, setAvailableUpdateVersion] = useState("");
   const [reconnecting, setReconnecting] = useState(false);
   const [provider, setProvider] = useState("");
@@ -325,7 +352,8 @@ export default function App() {
     onDismiss: () => setManagementOpen(false),
   });
   const [keepRunningInTray, setKeepRunningInTray] = useState(true);
-  const notifiedUnread = useRef<Record<string, number>>({});
+  const notifiedAttention = useRef(new Set<string>());
+  const unreadUpdate = useRef(Promise.resolve());
   const [conversationDialog, setConversationDialog] = useState<{
     kind: "rename" | "delete";
     item: Conversation;
@@ -362,37 +390,61 @@ export default function App() {
       setPage(null);
       return;
     }
+    const request = ++messageRequest.current;
+    const revision = navigationRevision.current;
+    const targetRun = navigationTarget.current;
     const value = await coreApi<MessagePage>(
       "GET",
       `/v2/conversations/${encodePath(sessionId)}/messages?limit=48`,
     );
+    if (sessionId !== activeIdRef.current || request !== messageRequest.current) return;
+    // An older toast can refer to a reply outside the newest history page.
+    // Include that page before positioning; pending runs are found by their user message.
+    while (targetRun && value.has_older && value.next_before_ordinal !== null &&
+        !value.messages.some((message) => message.metadata?.run_id === targetRun)) {
+      const older = await coreApi<MessagePage>("GET",
+        `/v2/conversations/${encodePath(sessionId)}/messages?limit=48&before=${value.next_before_ordinal}`,
+      );
+      if (sessionId !== activeIdRef.current || request !== messageRequest.current) return;
+      value.messages = mergeMessages(older.messages, value.messages);
+      value.has_older = older.has_older;
+      value.older_count = older.older_count;
+      value.next_before_ordinal = older.next_before_ordinal;
+    }
+    navigationTarget.current = "";
+    setLoadedNavigationRevision(revision);
+    loadedAttentionIds.current = new Set(value.unread_attention_ids || []);
     setPage(value);
     setMessages(value.messages);
   }, []);
+  const refreshConversations = useCallback(async (search = queryRef.current) => {
+    const request = ++listRequest.current;
+    const data = await coreApi<ConversationList>(
+      "GET", `/v2/conversations?q=${encodeURIComponent(search)}&limit=100`,
+    );
+    if (request !== listRequest.current) return null;
+    setConversations(data.items);
+    attention.replace(data.attention_items);
+    return data;
+  }, [attention.replace]);
   const refreshLists = useCallback(
-    async (search = query) => {
+    async (search = queryRef.current) => {
+      const request = ++runtimeListRequest.current;
       const [conversationData, runData, approvalData] = await Promise.all([
-        coreApi<{ items: Conversation[] }>(
-          "GET",
-          `/v2/conversations?q=${encodeURIComponent(search)}&limit=100`,
-        ),
+        refreshConversations(search),
         coreApi<{ items: RunRecord[] }>("GET", "/v2/runs?limit=100"),
         coreApi<{ items: Approval[] }>("GET", "/v2/approvals"),
       ]);
-      setConversations(conversationData.items);
-      setRuns(runData.items);
-      setApprovals(approvalData.items);
+      if (request === runtimeListRequest.current) {
+        setRuns(runData.items);
+        setApprovals(approvalData.items);
+      }
+      return conversationData;
     },
-    [query],
+    [refreshConversations],
   );
-  const bootstrap = useCallback(async () => {
-    setReconnecting(false);
-    const data = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
+  const syncComposerSettings = useCallback((data: Bootstrap) => {
     const values = data.settings?.values || {};
-    const preferences =
-      values.ui_preferences && typeof values.ui_preferences === "object"
-        ? (values.ui_preferences as Record<string, unknown>)
-        : {};
     const favorites = Array.isArray(values.favorite_models)
       ? values.favorite_models.filter((item): item is FavoriteModel =>
           Boolean(
@@ -403,13 +455,10 @@ export default function App() {
           ),
         )
       : [];
-    setConversations(data.conversations);
-    setApprovals(data.pending_approvals);
     setProvider(data.chat_models.provider);
     setModel(data.chat_models.model);
     setReasoningEffort(data.chat_models.reasoning_effort || "auto");
     setReasoningOptions(data.chat_models.reasoning_options || []);
-    setDisplayName(data.display_name || "");
     setFavoriteModels(favorites);
     setModelSelectionSource(
       values.selected_model_source &&
@@ -423,6 +472,30 @@ export default function App() {
         : "balanced",
     );
     setLocalFastMode(Boolean(values.local_fast_mode_enabled));
+  }, []);
+  const previousManagementSection = useRef(managementSection);
+  useEffect(() => {
+    const closed = previousManagementSection.current !== null && managementSection === null;
+    previousManagementSection.current = managementSection;
+    if (!closed) return;
+    let cancelled = false;
+    void coreApi<Bootstrap>("GET", "/v2/bootstrap")
+      .then((data) => { if (!cancelled) syncComposerSettings(data); })
+      .catch((reason) => { if (!cancelled) setError(String(reason)); });
+    return () => { cancelled = true; };
+  }, [managementSection, syncComposerSettings]);
+  const bootstrap = useCallback(async () => {
+    setReconnecting(false);
+    const data = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
+    const values = data.settings?.values || {};
+    const preferences =
+      values.ui_preferences && typeof values.ui_preferences === "object"
+        ? (values.ui_preferences as Record<string, unknown>)
+        : {};
+    syncComposerSettings(data);
+    setConversations(data.conversations);
+    setApprovals(data.pending_approvals);
+    setDisplayName(data.display_name || "");
     setVoiceHotkey(
       typeof values.voice_hotkey === "string"
         ? values.voice_hotkey
@@ -451,12 +524,12 @@ export default function App() {
       workbench: Boolean(preferences.workspace_workbench_open && restoredTab),
       tab: restoredTab,
     });
-    const first = activeId || data.conversations[0]?.id || "";
+    const first = activeIdRef.current || data.conversations[0]?.id || "";
     setActiveId(first);
     if (first) await loadMessages(first);
     await refreshLists();
     setBootstrapReady(true);
-  }, [activeId, loadMessages, refreshLists, setPreference]);
+  }, [loadMessages, refreshLists, setPreference, setActiveId, syncComposerSettings]);
 
   useEffect(() => {
     let alive = true;
@@ -609,18 +682,51 @@ export default function App() {
   }, [bootstrapReady, core.state]);
   useEffect(() => {
     if (!activeId || core.state !== "ready") return;
-    void loadMessages(activeId)
-      .then(() =>
-        coreApi(
-          "POST",
-          `/v2/conversations/${encodePath(activeId)}/read`,
-          { actor_id: "tauri-desktop" },
-          true,
-        ),
-      )
-      .then(() => refreshLists())
+    let cancelled = false;
+    const revision = navigationRevision.current;
+    void Promise.all([
+      loadMessages(activeId),
+      navigation?.sessionId === activeId ? refreshLists() : Promise.resolve(),
+    ])
+      .then(() => {
+        if (!cancelled) setReadyNavigationRevision(revision);
+      })
       .catch((reason) => setError(String(reason)));
-  }, [activeId, core.state]);
+    return () => { cancelled = true; };
+  }, [activeId, core.state, navigation, loadMessages, refreshLists]);
+  useEffect(() => {
+    let alive = true;
+    const update = () => setForeground(!document.hidden && document.hasFocus());
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    document.addEventListener("visibilitychange", update);
+    const subscription = getCurrentWindow().onFocusChanged(({ payload }) => {
+      if (alive) setForeground(payload && !document.hidden);
+    });
+    return () => {
+      alive = false;
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+      document.removeEventListener("visibilitychange", update);
+      void subscription.then((dispose) => dispose());
+    };
+  }, []);
+  useEffect(() => {
+    if (foreground && activeIdRef.current && core.state === "ready")
+      void loadMessages(activeIdRef.current).catch((reason) => setError(String(reason)));
+  }, [foreground, core.state, loadMessages]);
+  useEffect(() => {
+    if (!foreground || document.hidden || managementSection || !workspaceWindowReady ||
+        core.state !== "ready" || !activeId || page?.session_id !== activeId) return;
+    if (navigation?.sessionId === activeId && readyNavigationRevision !== navigation.revision) return;
+    void attention.acknowledge(activeId, page.unread_attention_ids || []);
+  }, [foreground, managementSection, workspaceWindowReady, core.state, activeId, page,
+    navigation, readyNavigationRevision, attention.acknowledge]);
+  const chatViewportRef = useReplyNavigation(
+    navigation, page?.session_id || "",
+    workspaceWindowReady && !managementSection && loadedNavigationRevision === navigation?.revision &&
+      readyNavigationRevision === navigation?.revision,
+  );
   useEffect(() => {
     if (!activeRunId || core.state !== "ready") return;
     void coreApi<{ items: RunEvent[] }>(
@@ -642,29 +748,39 @@ export default function App() {
   useEffect(() => {
     if (core.state !== "ready") return;
     let stopped = false;
+    let polling = false;
     const poll = async () => {
+      if (polling || stopped) return;
+      polling = true;
       try {
         const cursor = Number(sessionStorage.getItem(cursorKey) || 0);
         const data = await coreApi<{ items: RunEvent[] }>(
           "GET",
           `/v2/events/replay?after_event_id=${cursor}`,
         );
+        if (stopped) return;
+        let conversationData: ConversationList | null;
         if (data.items.length) {
           sessionStorage.setItem(
             cursorKey,
             String(Math.max(...data.items.map((item) => item.event_id))),
           );
           setEvents((current) => [...current, ...data.items].slice(-500));
-          await refreshLists();
-          if (
-            activeId &&
-            data.items.some((item) => item.session_id === activeId)
-          )
-            await loadMessages(activeId);
-        }
+          conversationData = await refreshLists();
+        } else conversationData = await refreshConversations();
+        if (stopped) return;
+        // Read receipts have no run event. Refresh the global projection even
+        // during quiet polls, including reads from other clients and late attention.
+        const unseenAttention = foreground && conversationData?.attention_items.some((item) =>
+          item.session_id === activeId && !loadedAttentionIds.current.has(item.id),
+        );
+        if (activeId && (unseenAttention || data.items.some((item) => item.session_id === activeId)))
+          await loadMessages(activeId);
         setReconnecting(false);
       } catch {
         setReconnecting(true);
+      } finally {
+        polling = false;
       }
     };
     void poll();
@@ -675,7 +791,7 @@ export default function App() {
       stopped = true;
       clearInterval(timer);
     };
-  }, [core.generation, core.state, activeId]);
+  }, [core.generation, core.state, activeId, foreground, refreshConversations, refreshLists, loadMessages]);
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -760,10 +876,14 @@ export default function App() {
       setError(String(reason));
     }
   };
-  const selectConversation = async (id: string) => {
+  const selectConversation = async (id: string, runId?: string) => {
+    setManagementSection(null);
+    setManagementOpen(false);
+    navigationTarget.current = runId || "";
+    setNavigation({ sessionId: id, revision: ++navigationRevision.current, runId });
     setActiveId(id);
     setAttachments([]);
-    if (narrowWorkspace)
+    if (narrowWorkspaceRef.current)
       dispatch({ type: "set-conversations", open: false });
   };
   const renameConversation = async (item: Conversation) => {
@@ -904,10 +1024,13 @@ export default function App() {
   };
   const loadOlder = async () => {
     if (!page?.next_before_ordinal || !activeId) return;
+    const sessionId = activeId;
+    const revision = navigationRevision.current;
     const older = await coreApi<MessagePage>(
       "GET",
       `/v2/conversations/${encodePath(activeId)}/messages?limit=48&before=${page.next_before_ordinal}`,
     );
+    if (activeIdRef.current !== sessionId || navigationRevision.current !== revision) return;
     setMessages((current) => mergeMessages(older.messages, current));
     setPage((current) =>
       current
@@ -1101,30 +1224,32 @@ export default function App() {
     void invoke("desktop_set_close_to_tray", { enabled: keepRunningInTray });
   }, [keepRunningInTray]);
   useEffect(() => {
-    const unread = conversations.reduce(
-      (sum, item) => sum + Number(item.unread_count || 0),
-      0,
-    );
-    void invoke("desktop_set_unread", { count: unread });
-    for (const item of conversations) {
-      const current = Number(item.unread_count || 0);
-      const previous = notifiedUnread.current[item.id] || 0;
-      if (current > previous && document.hidden)
+    const count = attention.items.length;
+    // Native commands can finish out of order; keep overlay updates ordered.
+    unreadUpdate.current = unreadUpdate.current
+      .then(async () => { await invoke("desktop_set_unread", { count }); })
+      .catch((reason) => setError(`לא ניתן לעדכן את מונה המשימות: ${String(reason)}`));
+  }, [attention.items.length]);
+  useEffect(() => {
+    for (const item of attention.items) {
+      if (notifiedAttention.current.has(item.id)) continue;
+      notifiedAttention.current.add(item.id);
+      if (!foreground)
         void invoke("desktop_notify", {
-          title: "תגובה חדשה מ־Smarti",
+          title: ["approval", "api_key"].includes(item.kind) ? "Smarti ממתין להתייחסותך" : "תגובה חדשה מ־Smarti",
           body: item.title,
-          sessionId: item.id,
+          sessionId: item.session_id,
+          runId: item.run_id,
         });
-      notifiedUnread.current[item.id] = current;
     }
-  }, [conversations]);
+  }, [attention.items, foreground]);
   useEffect(() => {
     let alive = true;
-    const subscription = listen<{ command: string; sessionId?: string }>(
+    const subscription = listen<{ command: string; sessionId?: string; runId?: string }>(
       "desktop://activation",
       ({ payload }) => {
         if (!alive) return;
-        if (payload.sessionId) setActiveId(payload.sessionId);
+        if (payload.sessionId) void selectConversation(payload.sessionId, payload.runId);
         if (payload.command === "new-chat") void createConversation();
         if (payload.command === "voice")
           window.dispatchEvent(new Event("smarti:voice-hotkey"));
@@ -1306,7 +1431,9 @@ export default function App() {
                   </p>
                 )}
                 {recentConversations(conversations).map((item) => {
-                  const state = activityState(item);
+                  const state = activityState({ ...item, unread_count:
+                    attention.items.filter((entry) => entry.session_id === item.id).length,
+                  });
                   return (
                     <div
                       className={`conversation-row ${item.id === activeId ? "is-active" : ""}`}
@@ -1317,7 +1444,7 @@ export default function App() {
                         type="button"
                         onClick={() => void selectConversation(item.id)}
                       >
-                        <span>
+                        <span className="conversation-label">
                           <strong>{item.title}</strong>
                           <small>{conversationMeta(item)}</small>
                         </span>
@@ -1513,6 +1640,7 @@ export default function App() {
             </div>
           )}
           <div
+            ref={chatViewportRef}
             className={`chat-stage ${messages.length || activeRun ? "has-messages" : ""}`}
           >
             {page?.has_older && (
@@ -1695,6 +1823,7 @@ export default function App() {
             localFastMode={localFastMode}
             onFavoriteModel={selectFavoriteModel}
             onReasoningEffort={changeReasoning}
+            onManageModels={() => setManagementSection("settings_ai")}
             onAutonomyMode={changeAutonomy}
             onLocalFastMode={changeLocalFastMode}
             onAttachments={setAttachments}
