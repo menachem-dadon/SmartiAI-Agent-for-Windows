@@ -114,6 +114,9 @@
         "model_name": {
           "type": "string",
           "maxLength": 300
+        },
+        "is_voice": {
+          "type": "boolean"
         }
       },
       "required": [],
@@ -306,11 +309,28 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 100000
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         }
       },
       "required": [
         "text"
       ],
+      "additionalProperties": false
+    },
+    "stopTts": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [],
       "additionalProperties": false
     },
     "provideRunApiKey": {
@@ -1035,7 +1055,7 @@
       "path": "/v2/audio/tts/stop",
       "operation_id": "stopTts",
       "summary_he": "עצירת הקראה דרך Core",
-      "request_schema": null
+      "request_schema": "stopTts"
     },
     {
       "method": "GET",

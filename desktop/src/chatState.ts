@@ -30,7 +30,6 @@ export function semanticStep(event: RunEvent): string | null {
   if (event.event_type === "run_step") return value || "מבצע שלב";
   if (event.event_type === "tool_started") return `מפעיל ${String(event.payload.tool || event.payload.name || "כלי")}`;
   if (event.event_type === "tool_finished") return `${String(event.payload.tool || event.payload.name || "הכלי")} הסתיים`;
-  if (event.event_type === "approval_requested") return "ממתין לאישור";
   if (event.event_type === "api_key_required") return "ממתין למפתח API";
   if (event.event_type === "run_started") return "התחיל לעבוד";
   return null;

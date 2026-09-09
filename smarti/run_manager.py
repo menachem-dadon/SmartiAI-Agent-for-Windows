@@ -413,6 +413,16 @@ class ConversationRunManager:
                 {"status": handle.status, "response": handle.response},
                 persist=False,
             )
+            if handle.status == "completed" and work["metadata"].get("channel") == "desktop":
+                settings = self.core.settings
+                if settings.get("read_aloud_all", False) or (
+                    settings.get("read_aloud_voice_only", True) and work["metadata"].get("is_voice", False)
+                ):
+                    try:
+                        self.core.start_speaking(handle.response, owner_id=f"run:{run_id}")
+                    except Exception:
+                        # Audio failure must not turn a completed model answer into a failed run.
+                        logging.exception("Could not start automatic answer speech")
         except Exception as exc:
             error = str(exc)
             handle.error = error
@@ -455,6 +465,10 @@ class ConversationRunManager:
                 persist=False,
             )
         finally:
+            try:
+                self._cancel_run_approvals(run_id)
+            except Exception:
+                logging.exception("Could not clear approvals for finished run %s", run_id)
             handle.done_event.set()
             with self._lock:
                 self._threads.pop(run_id, None)
@@ -480,9 +494,12 @@ class ConversationRunManager:
         with self._lock:
             handle = self._handles.get(identifier)
             if not handle:
-                return self.core.chat_store.request_run_cancel(identifier)
+                changed = self.core.chat_store.request_run_cancel(identifier)
+                self._cancel_run_approvals(identifier)
+                return changed
             handle.cancel_event.set()
             self.core.chat_store.request_run_cancel(identifier)
+            self._cancel_run_approvals(identifier)
             if handle.status == "queued":
                 handle.status = "cancelled"
             return True
@@ -507,42 +524,42 @@ class ConversationRunManager:
                 sort_keys=True,
             ).encode("utf-8")
         ).hexdigest()
-        approval_id = self.core.chat_store.create_approval(
-            run_id,
-            session_id,
-            title=title,
-            prompt=prompt,
-            risk_level=risk_level,
-            payload_hash=payload_hash,
-        )
+        approval_id = uuid.uuid4().hex
         waiter = {"event": threading.Event(), "approved": False}
         with self._lock:
+            run = self.core.chat_store.run(run_id) or {}
+            handle = self._handles.get(str(run_id))
+            if (self._closed or run.get("session_id") != str(session_id)
+                    or run.get("status") not in {"running", "waiting_for_approval", "waiting_for_input"}
+                    or run.get("cancel_requested") or (handle and handle.cancel_event.is_set())):
+                return False
+            # Register before publishing the durable request. A polling client
+            # can answer immediately, including while another call is asking.
             self._approval_waiters[approval_id] = waiter
-        self.core.chat_store.transition_run(
-            run_id,
-            "waiting_for_approval",
-            expected_statuses={"running"},
-        )
-        self.core.chat_store.create_attention(
-            session_id,
-            run_id,
-            "approval",
-            {"approval_id": approval_id, "risk_level": str(risk_level or "medium")},
-        )
-        self._emit(
-            "approval_requested",
-            run_id,
-            session_id,
-            {
-                "approval_id": approval_id,
-                "title": str(title or ""),
-                "prompt": str(prompt or ""),
-                "risk_level": str(risk_level or "medium"),
-                "payload_hash": payload_hash,
-                "interactive_callback": bool(callback),
-            },
-            persist=True,
-        )
+            try:
+                self.core.chat_store.create_approval(
+                    run_id, session_id, title=title, prompt=prompt,
+                    risk_level=risk_level, payload_hash=payload_hash, approval_id=approval_id,
+                )
+                self.core.chat_store.transition_run(
+                    run_id, "waiting_for_approval", expected_statuses={"running"},
+                )
+                self.core.chat_store.create_attention(
+                    session_id, run_id, "approval",
+                    {"approval_id": approval_id, "risk_level": str(risk_level or "medium")},
+                )
+                self._emit(
+                    "approval_requested", run_id, session_id,
+                    {
+                        "approval_id": approval_id, "title": str(title or ""),
+                        "prompt": str(prompt or ""), "risk_level": str(risk_level or "medium"),
+                        "payload_hash": payload_hash, "interactive_callback": bool(callback),
+                    },
+                )
+            except Exception:
+                self._approval_waiters.pop(approval_id, None)
+                self.resolve_approval(approval_id, False, status="cancelled")
+                raise
         if callback:
             try:
                 self.resolve_approval(approval_id, bool(callback(title, prompt, risk_level)))
@@ -557,33 +574,62 @@ class ConversationRunManager:
             deadline = time.monotonic() + timeout
             handle = self.handle(run_id)
             while not waiter["event"].wait(0.25):
-                if (handle and handle.cancel_event.is_set()) or time.monotonic() >= deadline:
+                if self._closed or (handle and handle.cancel_event.is_set()) or time.monotonic() >= deadline:
                     self.resolve_approval(approval_id, False, status="expired" if time.monotonic() >= deadline else "cancelled")
                     break
-        approved = bool(waiter.get("approved"))
         with self._lock:
             self._approval_waiters.pop(approval_id, None)
-        if approved:
-            self.core.chat_store.transition_run(
-                run_id,
-                "running",
-                expected_statuses={"waiting_for_approval"},
+            run = self.core.chat_store.run(run_id) or {}
+            return bool(waiter.get("approved")) and not self._closed and not (
+                run.get("cancel_requested") or run.get("status") in TERMINAL_RUN_STATUSES
+                or (handle and handle.cancel_event.is_set())
             )
-        return approved
 
     def resolve_approval(self, approval_id, approved, status=None):
         decision = str(status or ("approved" if approved else "denied"))
-        changed = self.core.chat_store.resolve_approval(
-            approval_id,
-            decision,
-            {"source": "runtime", "approved": bool(approved)},
-        )
         with self._lock:
+            pending = self.core.chat_store.pending_approvals()
+            approval = next((item for item in pending if item["id"] == str(approval_id)), None)
+            if not approval:
+                return False
+            run_id = approval["run_id"]
+            run = self.core.chat_store.run(run_id) or {}
+            handle = self._handles.get(run_id)
+            if (self._closed or run.get("cancel_requested")
+                    or run.get("status") in TERMINAL_RUN_STATUSES
+                    or (handle and handle.cancel_event.is_set())):
+                decision = "cancelled"
+            changed = self.core.chat_store.resolve_approval(
+                approval_id, decision,
+                {"source": "runtime", "approved": decision == "approved"},
+            )
+            if not changed:
+                return False
+            # Denial also releases this interruption. Other pending requests
+            # keep their own waiters and keep the run waiting for approval.
+            if (not self._closed and not run.get("cancel_requested") and not any(
+                    item["run_id"] == run_id and item["id"] != str(approval_id) for item in pending)):
+                key_waiter = self._api_key_waiters.get(run_id)
+                self.core.chat_store.transition_run(
+                    run_id,
+                    "waiting_for_input" if key_waiter and not key_waiter["event"].is_set() else "running",
+                    expected_statuses={"waiting_for_approval"},
+                )
+            self._emit(
+                "approval_resolved", run_id, approval["session_id"],
+                {"approval_id": str(approval_id), "status": decision, "approved": decision == "approved"},
+            )
             waiter = self._approval_waiters.get(str(approval_id or ""))
             if waiter:
-                waiter["approved"] = bool(approved) and decision == "approved"
+                waiter["approved"] = decision == "approved"
                 waiter["event"].set()
         return bool(changed)
+
+    def _cancel_run_approvals(self, run_id):
+        with self._lock:
+            for approval in self.core.chat_store.pending_approvals():
+                if approval["run_id"] == str(run_id):
+                    self.resolve_approval(approval["id"], False, status="cancelled")
 
     def request_api_key(
         self, run_id, session_id, secret_key, provider_label, title, message,
@@ -597,11 +643,9 @@ class ConversationRunManager:
         }
         with self._lock:
             self._api_key_waiters[str(run_id)] = waiter
-        self.core.chat_store.transition_run(
-            run_id,
-            "waiting_for_input",
-            expected_statuses={"running"},
-        )
+            self.core.chat_store.transition_run(
+                run_id, "waiting_for_input", expected_statuses={"running", "waiting_for_approval"},
+            )
         self.core.chat_store.create_attention(
             session_id,
             run_id,
@@ -649,19 +693,18 @@ class ConversationRunManager:
                 return False
             handle = self._handles.get(str(run_id or ""))
             session_id = handle.session_id if handle else ""
+            self._emit(
+                "api_key_submitted", run_id, session_id,
+                {"secret_key": str(secret_key or "")}, persist=True,
+            )
+            self.core.chat_store.transition_run(
+                run_id,
+                "waiting_for_approval" if any(
+                    item["run_id"] == str(run_id) for item in self.core.chat_store.pending_approvals()
+                ) else "running",
+                expected_statuses={"waiting_for_input"},
+            )
             waiter["event"].set()
-        self._emit(
-            "api_key_submitted",
-            run_id,
-            session_id,
-            {"secret_key": str(secret_key or "")},
-            persist=True,
-        )
-        self.core.chat_store.transition_run(
-            run_id,
-            "running",
-            expected_statuses={"waiting_for_input"},
-        )
         return True
 
     def shutdown(self, wait=False):
@@ -669,6 +712,8 @@ class ConversationRunManager:
             self._closed = True
             handles = list(self._handles.values())
             workers = list(self._threads.values())
+            for approval in self.core.chat_store.pending_approvals():
+                self.resolve_approval(approval["id"], False, status="cancelled")
         for handle in handles:
             if not handle.done_event.is_set():
                 handle.cancel_event.set()

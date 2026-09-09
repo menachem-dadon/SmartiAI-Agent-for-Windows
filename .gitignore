@@ -28,6 +28,8 @@ tests/*
 !tests/test_document_manager.py
 !tests/test_logging_export_and_windows_ui.py
 !tests/test_conversation_runs.py
+!tests/test_conversation_approvals.py
+!tests/test_settings_sync.py
 !tests/test_workspace.py
 
 

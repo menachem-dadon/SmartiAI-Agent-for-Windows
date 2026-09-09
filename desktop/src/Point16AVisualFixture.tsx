@@ -15,6 +15,7 @@ import {
 } from "./workspaceState";
 import "./App.css";
 import { useChatLayoutMotion, WORKSPACE_MOTION_MS } from "./workspaceMotion";
+import { WindowCaptionIcon } from "./WindowTitleBar";
 
 const messages: ChatMessage[] = [
   {
@@ -152,7 +153,9 @@ export function Point16AVisualFixture() {
     <main className={`smarti-app theme-${theme}`} dir="rtl" data-theme={theme}>
       <header className="window-titlebar" dir="ltr">
         <div className="window-drag-region" />
-        <button type="button">—</button><button type="button">□</button><button className="window-close" type="button">×</button>
+        <button type="button" aria-label="מזער"><WindowCaptionIcon action="minimize" /></button>
+        <button type="button" aria-label="הגדל"><WindowCaptionIcon action="maximize" /></button>
+        <button className="window-close" type="button" aria-label="סגירה"><WindowCaptionIcon action="close" /></button>
       </header>
       <section
         className={`workspace ${state.workbenchOpen ? "has-workbench" : ""} ${narrow ? "is-overlay-layout" : ""}`}

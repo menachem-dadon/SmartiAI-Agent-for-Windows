@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import App from "./App";
 import { coreApi } from "./coreApi";
@@ -127,6 +127,22 @@ async function start() {
   await waitFor(() => expect(badge()).toEqual({ count: attention.length }));
 }
 
+test("new conversation leaves the title unset so either automatic naming mode can run", async () => {
+  await start();
+  const request = vi.mocked(coreApi).getMockImplementation()!;
+  vi.mocked(coreApi).mockImplementation(async (method, path, body, mutation) => {
+    if (method === "POST" && path === "/v2/conversations") {
+      const conversation = { id: "new", title: "שיחה חדשה", message_count: 0 };
+      conversations.unshift(conversation);
+      messages.new = [];
+      return { conversation } as any;
+    }
+    return request(method, path, body, mutation);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "שיחה חדשה" }));
+  await waitFor(() => expect(coreApi).toHaveBeenCalledWith("POST", "/v2/conversations", {}, true));
+});
+
 describe("conversation read state and reply navigation", () => {
   test("clears the dot and decrements only its taskbar count before the receipt finishes", async () => {
     await start();
@@ -221,13 +237,55 @@ describe("conversation read state and reply navigation", () => {
     attention[0].kind = "approval";
     await start();
     await act(async () => native.handlers.get("desktop://activation")!({ payload: { command: "notification", sessionId: "b" } }));
-    await screen.findByRole("dialog", { name: "Approve file" });
+    const panel = await screen.findByRole("region", { name: "בקשות הרשאה" });
+    expect(within(panel).getByText("Approve file")).toBeDefined();
+    expect(document.querySelector(".chat-stage")!.contains(panel)).toBe(false);
+    expect(panel.querySelector('[aria-modal="true"]')).toBeNull();
     await waitFor(() => expect(document.querySelector<HTMLElement>(".chat-stage")!.scrollTop).toBe(1384));
     expect(readCalls).toContainEqual({ session: "b", ids: ["unread-b"] });
     // Reading the request never resolves the underlying permission.
     expect(row("b").querySelector(".needs-input")).not.toBeNull();
     expect(vi.mocked(coreApi).mock.calls.some(([, path]) => path.endsWith("/resolve"))).toBe(false);
   });
+});
+
+test("multiple permissions survive switching conversations and answering out of order", async () => {
+  approvals = [
+    { id: "a-first", run_id: "run-a", session_id: "a", title: "First action", prompt: "First details", risk_level: "low", created_at: "" },
+    { id: "a-second", run_id: "run-a", session_id: "a", title: "Second action", prompt: "Second details", risk_level: "high", created_at: "" },
+    { id: "b-first", run_id: "run-b", session_id: "b", title: "Other conversation", prompt: "Other details", risk_level: "low", created_at: "" },
+  ];
+  const request = vi.mocked(coreApi).getMockImplementation()!;
+  const gate = deferred<void>();
+  vi.mocked(coreApi).mockImplementation(async (method, path, body, mutation) => {
+    if (method === "POST" && path.endsWith("/resolve")) {
+      await gate.promise;
+      approvals = approvals.filter((item) => !path.includes(`/${item.id}/`));
+      return { resolved: true } as any;
+    }
+    return request(method, path, body, mutation);
+  });
+  await start();
+  expect(screen.getByText("First action")).toBeDefined();
+  expect(screen.getByText("Second action")).toBeDefined();
+  expect(screen.queryByText("Other conversation")).toBeNull();
+  const second = screen.getByText("Second action").closest("details")!;
+  fireEvent.click(within(second).getByRole("button", { name: "אשר" }));
+  expect(within(second).getByRole<HTMLButtonElement>("button", { name: "דחה" }).disabled).toBe(true);
+  open("b");
+  await screen.findByText("Other conversation");
+  expect(screen.queryByText("First action")).toBeNull();
+  await act(async () => gate.resolve());
+  expect(screen.getByText("Other conversation")).toBeDefined();
+  open("a");
+  await screen.findByText("First action");
+  expect(screen.queryByText("Second action")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "דחה" }));
+  await waitFor(() => expect(screen.queryByRole("region", { name: "בקשות הרשאה" })).toBeNull());
+  expect(coreApi).toHaveBeenCalledWith("POST", "/v2/approvals/a-second/resolve", { approved: true }, true);
+  expect(coreApi).toHaveBeenCalledWith("POST", "/v2/approvals/a-first/resolve", { approved: false }, true);
+  open("b");
+  await screen.findByText("Other conversation");
 });
 
 test("stale snapshots cannot resurrect a receipt, while failed receipts restore the dot and can be retried", async () => {

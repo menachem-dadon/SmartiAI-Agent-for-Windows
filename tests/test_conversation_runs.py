@@ -10,11 +10,13 @@ from unittest import mock
 import urllib.error
 import urllib.request
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 from smarti.chat import ChatWindow
+from smarti.core import SmartiCore
 from smarti.history import ChatSessionStore
 from smarti.local_gateway import SmartiLocalGateway
 from smarti.run_manager import ConversationRunManager
@@ -23,6 +25,7 @@ from smarti.control_plane_contract import contract_document, typescript_definiti
 from smarti.desktop_services import sanitize_desktop_log_lines, tools_snapshot
 from smarti.canvas_model import new_canvas_artifact
 from smarti.voice_service import VoiceSessionController
+from smarti.tts_service import TtsSessionController
 
 
 class _FakeCore:
@@ -41,6 +44,7 @@ class _FakeCore:
         self.release = threading.Event()
         self.spoken = []
         self.speech_stopped = False
+        self._tts_session = TtsSessionController(lambda text, cancel: self.speak_text(text), lambda playing: None)
 
     @contextmanager
     def bind_run_context(
@@ -69,8 +73,15 @@ class _FakeCore:
     def speak_text(self, text):
         self.spoken.append(str(text))
 
-    def stop_speaking(self):
+    def start_speaking(self, text, owner_id=""):
+        return self._tts_session.start(text, owner_id=owner_id)
+
+    def speech_status(self):
+        return self._tts_session.snapshot()
+
+    def stop_speaking(self, request_id=None):
         self.speech_stopped = True
+        return self._tts_session.stop(request_id)
 
     def _record_run_assistant_message(self, session_id, run_id, user_text, response, **kwargs):
         self.chat_store.append_message(
@@ -509,6 +520,80 @@ class LocalGatewayTests(unittest.TestCase):
         )
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, dict(response.headers), json.loads(response.read().decode("utf-8"))
+
+    def test_v2_new_conversations_generate_local_and_ai_titles(self):
+        for mode in ("local", "ai"):
+            for payload in ({}, {"title": "שיחה חדשה"}):
+                with self.subTest(mode=mode, payload=payload), tempfile.TemporaryDirectory() as directory:
+                    core = _FakeCore(Path(directory) / "history.json")
+                    core.mode = "local"
+                    core.settings["conversation_title_generation_mode"] = mode
+                    core._local_fast_conversation_title = SmartiCore._local_fast_conversation_title
+                    core.generate_conversation_title = SmartiCore.generate_conversation_title.__get__(core)
+                    core._schedule_conversation_title = SmartiCore._schedule_conversation_title.__get__(core)
+                    core._pending_title_lock = threading.RLock()
+                    core._pending_title_sessions = set()
+                    core._log_usage = mock.Mock()
+                    core._handle_api_request_with_retry = mock.Mock(return_value=("סיכום המסמך והנקודות המרכזיות", {}))
+                    title_updated = threading.Event()
+                    expected = "סכם את המסמך המצורף" if mode == "local" else "סיכום המסמך והנקודות המרכזיות"
+                    core._emit_notification = lambda kind, data: (
+                        title_updated.set() if kind == "chat_title_updated" and data.get("title") == expected else None
+                    )
+                    core.run_manager = ConversationRunManager(core)
+                    core._title_executor = ThreadPoolExecutor(max_workers=1)
+                    gateway = SmartiLocalGateway(core, "test-token", port=0)
+                    try:
+                        self.assertTrue(gateway.start())
+                        _, _, created = self._request(gateway, "/v2/conversations", method="POST", payload=payload)
+                        session = created["data"]["conversation"]
+                        self.assertFalse(session["title_user_edited"])
+                        session_id = session["id"]
+                        self._request(
+                            gateway, f"/v2/conversations/{session_id}/runs", method="POST",
+                            payload={"text": "סכם את המסמך המצורף", "provider_mode": "local", "model_name": "model-a"},
+                        )
+                        self.assertTrue(title_updated.wait(2))
+                        _, _, listing = self._request(gateway, "/v2/conversations")
+                        item = next(item for item in listing["data"]["items"] if item["id"] == session_id)
+                        self.assertEqual(item["title"], expected)
+                        saved = ChatSessionStore(str(Path(directory) / "history.json")).session_metadata(session_id)
+                        self.assertEqual(saved["title"], expected)
+                        self.assertTrue(saved["title_generated"])
+                        self.assertFalse(saved["title_user_edited"])
+                        if mode == "ai":
+                            core._handle_api_request_with_retry.assert_called_once()
+                            self.assertEqual(core._handle_api_request_with_retry.call_args.kwargs["request_options"]["purpose"], "title")
+                        else:
+                            core._handle_api_request_with_retry.assert_not_called()
+                    finally:
+                        gateway.stop()
+                        core.run_manager.shutdown(wait=True)
+                        core._title_executor.shutdown(wait=True)
+
+    def test_v2_explicit_conversation_names_remain_protected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core = _FakeCore(Path(directory) / "history.json")
+            core.run_manager = ConversationRunManager(core)
+            gateway = SmartiLocalGateway(core, "test-token", port=0)
+            try:
+                self.assertTrue(gateway.start())
+                _, _, created = self._request(
+                    gateway, "/v2/conversations", method="POST", payload={"title": "כותרת שבחרתי"},
+                )
+                session_id = created["data"]["conversation"]["id"]
+                self.assertFalse(core.chat_store.should_generate_title_for_next_turn(session_id))
+                self.assertFalse(core.chat_store.apply_initial_title(session_id, "כותרת אוטומטית"))
+                self.assertEqual(core.chat_store.session_metadata(session_id)["title"], "כותרת שבחרתי")
+                self._request(
+                    gateway, f"/v2/conversations/{session_id}", method="PATCH", payload={"title": "שיחה חדשה"},
+                )
+                self.assertFalse(core.chat_store.should_generate_title_for_next_turn(session_id))
+                self.assertFalse(core.chat_store.apply_initial_title(session_id, "כותרת אוטומטית"))
+                self.assertEqual(core.chat_store.session_metadata(session_id)["title"], "שיחה חדשה")
+            finally:
+                gateway.stop()
+                core.run_manager.shutdown(wait=True)
 
     def test_tools_route_uses_persistent_core_trust_and_surfaces_install_errors(self):
         with tempfile.TemporaryDirectory() as directory:

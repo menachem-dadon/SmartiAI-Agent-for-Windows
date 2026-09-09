@@ -38,7 +38,7 @@ interface ComposerProps {
   onAutonomyMode?: (mode: string) => void | Promise<void>;
   onLocalFastMode?: (enabled: boolean) => void | Promise<void>;
   onAttachments: (items: PendingAttachment[]) => void;
-  onSend: (text: string) => Promise<void>;
+  onSend: (text: string, isVoice?: boolean) => Promise<void>;
   onCancel: () => void;
 }
 
@@ -301,7 +301,7 @@ export function Composer({
           voiceConsumed.current = state.session_id;
           setText("");
           try {
-            await onSend(state.transcript);
+            await onSend(state.transcript, true);
           } catch (reason) {
             setText(state.transcript);
             setStatus(`התמלול לא נשלח: ${String(reason)}`);

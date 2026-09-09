@@ -20,6 +20,7 @@ import {
   type BrowserTab,
 } from "./browserState";
 import { coreApi } from "./coreApi";
+import { subscribeSettingsChanges } from "./settingsChanges";
 import { IconButton } from "./ui";
 import { useNativeBrowserSurface } from "./useNativeBrowserSurface";
 
@@ -142,12 +143,20 @@ export function BrowserPanel({
     [],
   );
   useEffect(() => {
-    void coreApi<{ values?: Record<string, unknown> }>(
-      "GET",
-      "/v2/settings",
-    ).then((settings) =>
-      setDeveloperEnabled(Boolean(settings.values?.enable_developer_trace)),
-    );
+    let request = 0;
+    let disposed = false;
+    const refresh = () => {
+      const current = ++request;
+      void coreApi<{ values?: Record<string, unknown> }>("GET", "/v2/settings")
+        .then((settings) => {
+          if (!disposed && current === request)
+            setDeveloperEnabled(Boolean(settings.values?.enable_developer_trace));
+        })
+        .catch(() => undefined);
+    };
+    const unsubscribe = subscribeSettingsChanges(refresh);
+    refresh();
+    return () => { disposed = true; unsubscribe(); };
   }, []);
   const persistLibrary = (update: (value: BrowserLibrary) => BrowserLibrary) =>
     setLibrary((current) => {

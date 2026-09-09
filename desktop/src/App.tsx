@@ -59,7 +59,10 @@ import { activityState, legacyUi, workspaceIsNarrow } from "./legacyUiParity";
 import "./App.css";
 import { useChatLayoutMotion } from "./workspaceMotion";
 import { useConversationAttention } from "./conversationAttention";
+import { settingsRevision, subscribeSettingsChanges } from "./settingsChanges";
+import { ConversationApprovals, useApprovalQueue } from "./conversationApprovals";
 import { useReplyNavigation, type ReplyNavigation } from "./replyNavigation";
+import { WindowTitleBar } from "./WindowTitleBar";
 
 const initialCore: CoreSnapshot = {
   state: "starting",
@@ -186,56 +189,6 @@ function conversationMeta(item: Conversation): string {
   return `${date}${date ? " · " : ""}${item.message_count || 0} הודעות`;
 }
 
-function WindowTitleBar() {
-  const appWindow = getCurrentWindow();
-  const [maximized, setMaximized] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    const sync = () =>
-      void appWindow.isMaximized().then((value) => {
-        if (alive) setMaximized(value);
-      });
-    sync();
-    const listener = appWindow.onResized(sync);
-    return () => {
-      alive = false;
-      void listener.then((dispose) => dispose());
-    };
-  }, [appWindow]);
-  return (
-    <header
-      className="window-titlebar"
-      dir="ltr"
-      onDoubleClick={() => void appWindow.toggleMaximize()}
-    >
-      <div className="window-drag-region" data-tauri-drag-region />
-      <button
-        type="button"
-        aria-label="מזער"
-        onClick={() => void appWindow.minimize()}
-      >
-        —
-      </button>
-      <button
-        type="button"
-        aria-label={maximized ? "שחזר" : "הגדל"}
-        title={maximized ? "שחזר" : "הגדל"}
-        onClick={() => void appWindow.toggleMaximize()}
-      >
-        {maximized ? "❐" : "□"}
-      </button>
-      <button
-        type="button"
-        className="window-close"
-        aria-label="סגירה"
-        onClick={() => void appWindow.close()}
-      >
-        ×
-      </button>
-    </header>
-  );
-}
-
 function useTheme() {
   const [preference, setPreferenceState] = useState<ThemePreference>(() =>
     parseThemePreference(localStorage.getItem(THEME_STORAGE_KEY)),
@@ -300,7 +253,7 @@ export default function App() {
   }, []);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [events, setEvents] = useState<RunEvent[]>([]);
-  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const approvalQueue = useApprovalQueue();
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [query, setQuery] = useState("");
   const queryRef = useRef(query);
@@ -437,13 +390,13 @@ export default function App() {
       ]);
       if (request === runtimeListRequest.current) {
         setRuns(runData.items);
-        setApprovals(approvalData.items);
+        approvalQueue.replace(approvalData.items);
       }
       return conversationData;
     },
-    [refreshConversations],
+    [refreshConversations, approvalQueue.replace],
   );
-  const syncComposerSettings = useCallback((data: Bootstrap) => {
+  const syncSettings = useCallback((data: Bootstrap) => {
     const values = data.settings?.values || {};
     const favorites = Array.isArray(values.favorite_models)
       ? values.favorite_models.filter((item): item is FavoriteModel =>
@@ -472,30 +425,10 @@ export default function App() {
         : "balanced",
     );
     setLocalFastMode(Boolean(values.local_fast_mode_enabled));
-  }, []);
-  const previousManagementSection = useRef(managementSection);
-  useEffect(() => {
-    const closed = previousManagementSection.current !== null && managementSection === null;
-    previousManagementSection.current = managementSection;
-    if (!closed) return;
-    let cancelled = false;
-    void coreApi<Bootstrap>("GET", "/v2/bootstrap")
-      .then((data) => { if (!cancelled) syncComposerSettings(data); })
-      .catch((reason) => { if (!cancelled) setError(String(reason)); });
-    return () => { cancelled = true; };
-  }, [managementSection, syncComposerSettings]);
-  const bootstrap = useCallback(async () => {
-    setReconnecting(false);
-    const data = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
-    const values = data.settings?.values || {};
     const preferences =
       values.ui_preferences && typeof values.ui_preferences === "object"
         ? (values.ui_preferences as Record<string, unknown>)
         : {};
-    syncComposerSettings(data);
-    setConversations(data.conversations);
-    setApprovals(data.pending_approvals);
-    setDisplayName(data.display_name || "");
     setVoiceHotkey(
       typeof values.voice_hotkey === "string"
         ? values.voice_hotkey
@@ -508,6 +441,37 @@ export default function App() {
     setPreference(
       themeMode === "light" || themeMode === "dark" ? themeMode : "system",
     );
+    setAvailableUpdateVersion(String(values.updates_last_available_version || ""));
+  }, [setPreference]);
+  useEffect(() => {
+    if (core.state !== "ready") return;
+    let request = 0;
+    let disposed = false;
+    const unsubscribe = subscribeSettingsChanges(() => {
+      const current = ++request;
+      void coreApi<Bootstrap>("GET", "/v2/bootstrap")
+        .then((data) => {
+          if (!disposed && current === request) syncSettings(data);
+        })
+        .catch((reason) => {
+          if (!disposed && current === request) setError(String(reason));
+        });
+    });
+    return () => { disposed = true; unsubscribe(); };
+  }, [core.state, core.generation, syncSettings]);
+  const bootstrap = useCallback(async () => {
+    setReconnecting(false);
+    const revision = settingsRevision();
+    const data = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
+    const values = data.settings?.values || {};
+    const preferences =
+      values.ui_preferences && typeof values.ui_preferences === "object"
+        ? (values.ui_preferences as Record<string, unknown>)
+        : {};
+    if (revision === settingsRevision()) syncSettings(data);
+    setConversations(data.conversations);
+    approvalQueue.replace(data.pending_approvals);
+    setDisplayName(data.display_name || "");
     const restoredWorkbench = parseWorkbenchSnapshot(
       preferences.workspace_workbench,
     );
@@ -529,7 +493,7 @@ export default function App() {
     if (first) await loadMessages(first);
     await refreshLists();
     setBootstrapReady(true);
-  }, [loadMessages, refreshLists, setPreference, setActiveId, syncComposerSettings]);
+  }, [loadMessages, refreshLists, setActiveId, syncSettings]);
 
   useEffect(() => {
     let alive = true;
@@ -843,7 +807,7 @@ export default function App() {
       item.session_id === activeId && ACTIVE_RUN_STATES.has(item.status),
   );
   const activeEvents = events.filter((item) => item.session_id === activeId);
-  const activeApprovals = approvals.filter(
+  const activeApprovals = approvalQueue.items.filter(
     (item) => item.session_id === activeId,
   );
   const activeApiKeyRequest = pendingApiKeyRequest(activeEvents);
@@ -862,7 +826,7 @@ export default function App() {
       const data = await coreApi<{ conversation: Conversation }>(
         "POST",
         "/v2/conversations",
-        { title: "שיחה חדשה" },
+        {},
         true,
       );
       setConversations((current) => [data.conversation, ...current]);
@@ -943,7 +907,7 @@ export default function App() {
     setConversationDialog(null);
     await refreshLists();
   };
-  const send = async (text: string) => {
+  const send = async (text: string, isVoice = false) => {
     setError("");
     let sessionId = activeId;
     if (!sessionId) {
@@ -977,6 +941,7 @@ export default function App() {
         provider_mode: provider,
         model_name: model,
         source: "tauri_desktop",
+        is_voice: isVoice,
       },
       true,
     );
@@ -1044,13 +1009,8 @@ export default function App() {
     );
   };
   const resolveApproval = async (approval: Approval, approved: boolean) => {
-    await coreApi(
-      "POST",
-      `/v2/approvals/${encodePath(approval.id)}/resolve`,
-      { approved },
-      true,
-    );
-    await refreshLists();
+    await approvalQueue.resolve(approval, approved);
+    await refreshLists().catch((reason) => setError(String(reason)));
   };
   const loadReasoning = async (nextProvider: string, nextModel: string) => {
     const data = await coreApi<{
@@ -1675,6 +1635,7 @@ export default function App() {
                           : []
                       }
                       active={messageActive}
+                      runStatus={messageActive ? activeRun?.status : undefined}
                       theme={resolved}
                       onOpenCanvas={() => openWorkbench("canvas")}
                     />
@@ -1690,6 +1651,7 @@ export default function App() {
                     }}
                     events={eventsForRun(activeRun.id)}
                     active
+                    runStatus={activeRun.status}
                     theme={resolved}
                     onOpenCanvas={() => openWorkbench("canvas")}
                   />
@@ -1697,59 +1659,12 @@ export default function App() {
               </div>
             )}
           </div>
-          {!!activeApprovals.length &&
-            (() => {
-              const approval = activeApprovals[0];
-              const risk =
-                approval.risk_level === "high"
-                  ? "סיכון גבוה"
-                  : approval.risk_level === "low"
-                    ? "סיכון נמוך"
-                    : "סיכון בינוני";
-              return (
-                <div className="action-confirm-backdrop">
-                  <section
-                    className={`action-confirm-card risk-${approval.risk_level}`}
-                    role="dialog"
-                    aria-modal="true"
-                    aria-labelledby="approval-title"
-                  >
-                    <div className="action-confirm-head">
-                      <span>!</span>
-                      <div>
-                        <small>בקשת הרשאה</small>
-                        <h2 id="approval-title">
-                          {approval.title || "אישור פעולה"}
-                        </h2>
-                        <b>{risk}</b>
-                      </div>
-                    </div>
-                    <h3>פרטי הפעולה</h3>
-                    <pre dir="auto" tabIndex={0}>
-                      {approval.prompt}
-                    </pre>
-                    <p>אשר רק אם הפעולה תואמת למה שביקשת מסמארטי לבצע.</p>
-                    <footer>
-                      <button
-                        type="button"
-                        className="reject"
-                        onClick={() => void resolveApproval(approval, false)}
-                      >
-                        דחה
-                      </button>
-                      <button
-                        type="button"
-                        className="accept"
-                        autoFocus
-                        onClick={() => void resolveApproval(approval, true)}
-                      >
-                        אשר
-                      </button>
-                    </footer>
-                  </section>
-                </div>
-              );
-            })()}
+          <ConversationApprovals
+            items={activeApprovals}
+            busy={approvalQueue.busy}
+            errors={approvalQueue.errors}
+            onResolve={(approval, approved) => void resolveApproval(approval, approved)}
+          />
           {activeApiKeyRequest && (
             <ApiKeyRequiredDialog
               key={`${activeApiKeyRequest.runId}:${activeApiKeyRequest.secretKey}`}

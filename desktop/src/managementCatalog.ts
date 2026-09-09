@@ -189,11 +189,12 @@ export function readSetting(values: Record<string, unknown>, path: string): unkn
   return path.split(".").reduce<unknown>((current, key) => current && typeof current === "object" ? (current as Record<string, unknown>)[key] : undefined, values);
 }
 
-export function patchForSetting(values: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> {
+export function patchForSetting(_values: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> {
   const [root, nested] = path.split(".", 2);
   if (!nested) return { [root]: value };
-  const current = values[root] && typeof values[root] === "object" ? values[root] as Record<string, unknown> : {};
-  return { [root]: { ...current, [nested]: value } };
+  // Core merges nested patches with the latest saved values. Sending siblings
+  // from this page's snapshot can overwrite a newer save from another control.
+  return { [root]: { [nested]: value } };
 }
 
 export function matchingSettings(section: SettingsSection, query: string, advanced: boolean): SettingDefinition[] {

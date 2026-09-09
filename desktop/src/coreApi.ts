@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { publishSettingsChange } from "./settingsChanges";
 
 interface RawResponse { status: number; body: { data?: unknown; error?: string; detail?: string } }
 export class CoreApiError extends Error { constructor(message: string, public status = 0) { super(message); } }
@@ -11,8 +12,8 @@ export async function coreApi<T>(method: string, path: string, body?: unknown, i
   if (response.status < 200 || response.status >= 300 || response.body.error) {
     throw new CoreApiError(response.body.detail || response.body.error || `Core API ${response.status}`, response.status);
   }
+  publishSettingsChange(method, path, body);
   return response.body.data as T;
 }
 
 export function encodePath(value: string) { return encodeURIComponent(value); }
-

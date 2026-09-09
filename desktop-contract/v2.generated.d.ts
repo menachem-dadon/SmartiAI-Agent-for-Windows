@@ -29,6 +29,7 @@ export interface SubmitRunRequest {
   source?: string;
   provider_mode?: string;
   model_name?: string;
+  is_voice?: boolean;
 }
 export interface MarkReadRequest {
   actor_id?: string;
@@ -69,6 +70,10 @@ export interface RegisterAttachmentRequest {
 }
 export interface StartTtsRequest {
   text: string;
+  owner_id?: string;
+}
+export interface StopTtsRequest {
+  request_id?: string;
 }
 export interface ProvideRunApiKeyRequest {
   secret_key: string;

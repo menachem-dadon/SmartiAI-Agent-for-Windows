@@ -55,6 +55,7 @@ REQUEST_SCHEMAS = {
         "source": {"type": "string", "maxLength": 100},
         "provider_mode": {"type": "string", "maxLength": 100},
         "model_name": {"type": "string", "maxLength": 300},
+        "is_voice": {"type": "boolean"},
     }),
     "markRead": _object({
         "actor_id": {"type": "string", "minLength": 1, "maxLength": 200},
@@ -95,7 +96,9 @@ REQUEST_SCHEMAS = {
     }, ("path",)),
     "startTts": _object({
         "text": {"type": "string", "minLength": 1, "maxLength": 100000},
+        "owner_id": IDENTIFIER,
     }, ("text",)),
+    "stopTts": _object({"request_id": IDENTIFIER}),
     "provideRunApiKey": _object({
         "secret_key": {"type": "string", "minLength": 1, "maxLength": 100},
         "value": {"type": "string", "minLength": 1, "maxLength": 65536},
@@ -202,7 +205,7 @@ OPERATIONS = [
     ("POST", "/v2/attachments", "registerAttachment", "רישום קובץ לידית זמנית", "registerAttachment"),
     ("GET", "/v2/attachments/{handle}", "readAttachment", "קריאת קובץ דרך ידית תחומה", None),
     ("POST", "/v2/audio/tts", "startTts", "התחלת הקראה דרך Core", "startTts"),
-    ("POST", "/v2/audio/tts/stop", "stopTts", "עצירת הקראה דרך Core", None),
+    ("POST", "/v2/audio/tts/stop", "stopTts", "עצירת הקראה דרך Core", "stopTts"),
     ("GET", "/v2/audio/tts/status", "ttsStatus", "מצב הקראה של Core", None),
     ("POST", "/v2/audio/voice", "startVoice", "התחלת האזנה דרך שירות הקול של Core", None),
     ("POST", "/v2/audio/voice/stop", "stopVoice", "ביטול האזנה של Core", None),

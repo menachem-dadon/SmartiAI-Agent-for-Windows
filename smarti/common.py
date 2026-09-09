@@ -572,8 +572,9 @@ MARKDOWN_INSTALLED = importlib.util.find_spec("markdown") is not None
 PILLOW_INSTALLED = importlib.util.find_spec("PIL") is not None
 KEYBOARD_INSTALLED = importlib.util.find_spec("keyboard") is not None
 SPEECH_INSTALLED = importlib.util.find_spec("speech_recognition") is not None
-GTTS_INSTALLED = importlib.util.find_spec("gtts") is not None and importlib.util.find_spec("pygame") is not None
-EDGE_TTS_INSTALLED = importlib.util.find_spec("edge_tts") is not None and importlib.util.find_spec("pygame") is not None
+_TTS_PLAYBACK_AVAILABLE = os.name == "nt" or importlib.util.find_spec("pygame") is not None
+GTTS_INSTALLED = importlib.util.find_spec("gtts") is not None and _TTS_PLAYBACK_AVAILABLE
+EDGE_TTS_INSTALLED = importlib.util.find_spec("edge_tts") is not None and _TTS_PLAYBACK_AVAILABLE
 TTS_INSTALLED = GTTS_INSTALLED or EDGE_TTS_INSTALLED
 
 GOOGLE_HEBREW_TTS_VOICES = [

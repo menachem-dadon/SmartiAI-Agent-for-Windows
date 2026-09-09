@@ -26,6 +26,7 @@ from .common import (
     provider_secret_key, sanitize_secret_value, set_model_reasoning_setting,
 )
 from .config import DEFAULT_SETTINGS, PUBLIC_BUILTIN_TOOLS
+from .history import DEFAULT_CHAT_TITLE
 from .control_plane_contract import CONTRACT_VERSION, contract_document, validate_request
 from .canvas_model import (
     canvas_artifacts_from_messages,
@@ -366,7 +367,7 @@ class SmartiLocalGateway:
         })
 
     async def _v2_bootstrap(self, request):
-        current_provider = normalize_provider_name(getattr(self.core, "mode", "") or self.core.settings.get("mode") or "gemini")
+        current_provider = normalize_provider_name(self.core.settings.get("api_mode") or getattr(self.core, "mode", "") or "gemini")
         current_model = str(self.core.settings.get(f"selected_{current_provider}_model") or "")
         return self._ok(request, {
             "version": {"product": APP_VERSION, "contract": CONTRACT_VERSION},
@@ -417,8 +418,11 @@ class SmartiLocalGateway:
             })
         def create(payload):
             session = store.create_session(False, payload.get("workspace_id") or None)
-            if str(payload.get("title") or "").strip():
-                store.rename_session(session["id"], payload["title"])
+            title = str(payload.get("title") or "").strip()
+            # Older desktop clients send the placeholder as the creation title.
+            # Only a chosen name should disable automatic first-turn naming.
+            if title and title != DEFAULT_CHAT_TITLE:
+                store.rename_session(session["id"], title)
             return {"conversation": store.session_metadata(session["id"])}, 201
         return await self._idempotent(request, "createConversation", create)
 
@@ -471,7 +475,7 @@ class SmartiLocalGateway:
             model_name = str(payload.get("model_name") or self.core.settings.get(f"selected_{provider_mode}_model") or "").strip()
             handle = self.core.run_manager.submit(
                 session_id, text, attachments=attachments, source=str(payload.get("source") or "desktop_v2"),
-                metadata={"channel": "desktop", "request_id": request["request_id"], "provider_mode": provider_mode, "model_name": model_name},
+                metadata={"channel": "desktop", "request_id": request["request_id"], "provider_mode": provider_mode, "model_name": model_name, "is_voice": bool(payload.get("is_voice", False))},
                 workspace_id=str(payload.get("workspace_id") or "") or None,
             )
             self.core.chat_store.append_run_event(handle.run_id, "command_accepted", {"request_id": request["request_id"]})
@@ -535,15 +539,21 @@ class SmartiLocalGateway:
         text = str(payload.get("text") or "").strip()
         if not text or len(text) > 100_000:
             raise RequestValidationError("tts_text_required", ["text"])
-        threading.Thread(target=self.core.speak_text, args=(text,), daemon=True, name="SmartiDesktopTTS").start()
-        return self._ok(request, {"started": True}, 202)
+        try:
+            state = self.core.start_speaking(text, owner_id=payload.get("owner_id", ""))
+        except ValueError as exc:
+            return self._error(request, 422, "tts_text_required", str(exc))
+        except RuntimeError as exc:
+            return self._error(request, 503, "tts_unavailable", str(exc))
+        return self._ok(request, {"started": True, **state}, 202)
 
     async def _tts_stop(self, request):
-        self.core.stop_speaking()
-        return self._ok(request, {"stopped": True})
+        payload = await self._body(request, "stopTts")
+        state = self.core.stop_speaking(payload.get("request_id"))
+        return self._ok(request, {"stopped": not state["is_playing"], **state})
 
     async def _tts_status(self, request):
-        return self._ok(request, {"is_playing": bool(getattr(self.core, "_tts_is_playing", False))})
+        return self._ok(request, self.core.speech_status())
 
     async def _tts_voices(self, request):
         return self._ok(request, {"items": list_tts_voices()})
@@ -1053,9 +1063,23 @@ class SmartiLocalGateway:
                 raise RequestValidationError("unknown_or_secret_setting", bad)
             for key, value in values.items():
                 default = DEFAULT_SETTINGS[key]
-                if default is not None and not isinstance(value, type(default)):
+                # JSON encodes 1.0 as 1. Decimal controls must accept both,
+                # while booleans must never be accepted as numeric settings.
+                if isinstance(default, float) and type(value) in (int, float):
+                    values[key] = float(value)
+                elif default is not None and type(value) is not type(default):
                     raise RequestValidationError("setting_type_mismatch", [key])
-            self.core.settings.update(copy.deepcopy(values))
+            for key, value in values.items():
+                if key in {"ui_preferences", "budgets", "privacy"}:
+                    current = self.core.settings.get(key)
+                    self.core.settings[key] = {
+                        **copy.deepcopy(current if isinstance(current, dict) else DEFAULT_SETTINGS[key]),
+                        **copy.deepcopy(value),
+                    }
+                else:
+                    self.core.settings[key] = copy.deepcopy(value)
+            if "privacy_redact_logs" in values:
+                self.core.settings.setdefault("privacy", {})["redact_logs"] = values["privacy_redact_logs"]
             autonomy_mode = str(values.get("autonomy_mode") or "")
             if autonomy_mode in AUTONOMY_PROFILES:
                 profile = AUTONOMY_PROFILES[autonomy_mode]

@@ -8,6 +8,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { coreApi, encodePath } from "./coreApi";
+import { useSpeechPlayback } from "./speechPlayback";
 import type { ResolvedTheme, ThemePreference } from "./designSystem";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
 import { useDismissiblePopup } from "./popupDismissal";
@@ -1837,6 +1838,7 @@ export function SettingsView({
   const [ttsPreviewText, setTtsPreviewText] = useState(
     "שלום, זו תצוגה מקדימה של הקול הנוכחי.",
   );
+  const speechPreview = useSpeechPlayback("settings:tts-preview");
   const [emailTestStatus, setEmailTestStatus] = useState(
     "הבדיקה תרוץ רק בלחיצה.",
   );
@@ -1953,10 +1955,6 @@ export function SettingsView({
     setEmailTestStatus(
       result.ok ? result.message : `החיבור נכשל: ${result.message}`,
     );
-  };
-  const previewTts = async () => {
-    await coreApi("POST", "/v2/audio/tts", { text: ttsPreviewText }, true);
-    setSaveStatus("מנגן תצוגה מקדימה…");
   };
   const resetSettings = async () => {
     setSaveStatus("מאפס…");
@@ -2201,12 +2199,14 @@ export function SettingsView({
                               <button
                                 type="button"
                                 className="source-secondary-button"
-                                onClick={() => void previewTts()}
+                                onClick={() => void speechPreview.toggle(ttsPreviewText)}
+                                disabled={speechPreview.pending}
                               >
                                 <LegacyIcon src={icons.speaker} size={18} />
-                                השמע
+                                {speechPreview.speaking ? "עצור הקראה" : "השמע"}
                               </button>
                             </div>
+                            {speechPreview.error && <p role="alert">{speechPreview.error}</p>}
                           </SourceSettingField>
                         )}
                         {definition.path === "updates_auto_check" &&

@@ -136,6 +136,8 @@ class LifecycleMixin:
         self.background_task_step_callback = None
         self.background_task_finish_callback = None
         self.tts_lock = threading.Lock()
+        from ..tts_service import TtsSessionController
+        self._tts_session = TtsSessionController(self._synthesize_and_play, self._on_speech_status)
         self._stop_speech_flag = False
         self._tts_is_playing = False
         self._background_cancel_events = {}
@@ -189,6 +191,8 @@ class LifecycleMixin:
         }
 
     def shutdown_runtime(self, wait=False):
+        if getattr(self, "_tts_session", None):
+            self.stop_speaking()
         gateway = getattr(self, "local_gateway", None)
         if gateway:
             gateway.stop()

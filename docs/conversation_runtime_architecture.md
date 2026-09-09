@@ -68,7 +68,24 @@ The Smarti browser and Windows computer-control surface are singleton resources.
 }
 ```
 
-Important event types are `run_available`, `run_started`, `run_status`, `run_step`, `approval_requested`, and `run_finished`.
+Important event types are `run_available`, `run_started`, `run_status`, `run_step`, `approval_requested`, `approval_resolved`, and `run_finished`.
+
+Approval waits belong to the run manager's durable permission queue, outside the
+agent's tool-progress history. The Web desktop reads pending requests from
+bootstrap and `/v2/approvals` into an App-scoped queue keyed by approval ID. A
+nonmodal panel above the composer shows every request for the selected
+conversation; navigation never dismisses or answers a request. Each decision
+has its own in-flight/error state, and stale polling responses cannot restore a
+request that this client already resolved.
+
+The manager registers a waiter before publishing a request and serializes
+creation, resolution, and cancellation. Only the first decision can release a
+waiter. Resolving one parallel request leaves the run waiting while another is
+pending; approval, denial, or expiry of the final request releases the wait.
+Cancellation and run completion clear outstanding permissions for that run.
+The decision is persisted and emitted as `approval_resolved` before waking the
+tool caller. Reloading the UI preserves requests while the Core is running;
+restarting the Core retains the interrupted-run recovery policy described above.
 
 The history sidebar projects these events from SQLite:
 

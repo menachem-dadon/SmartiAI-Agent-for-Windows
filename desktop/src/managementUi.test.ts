@@ -83,7 +83,7 @@ describe("Point 16C source-derived settings behavior", () => {
     };
     expect(
       patchForSetting(values, "ui_preferences.theme_mode", "light"),
-    ).toEqual({ ui_preferences: { theme_mode: "light", keep: true } });
+    ).toEqual({ ui_preferences: { theme_mode: "light" } });
     expect(patchForSetting(values, "budgets.daily_token_budget", 5000)).toEqual(
       { budgets: { daily_token_budget: 5000 } },
     );

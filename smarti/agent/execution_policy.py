@@ -174,8 +174,6 @@ class ExecutionPolicyMixin:
         run_id = str(getattr(self._execution_context, "run_id", "") or "")
         session_id = str(getattr(self._execution_context, "target_session_id", "") or "")
         if run_id and session_id and getattr(self, "run_manager", None):
-            if self.status_callback:
-                self.status_callback("ממתין לאישור משתמש...")
             return self.run_manager.request_approval(
                 run_id,
                 session_id,

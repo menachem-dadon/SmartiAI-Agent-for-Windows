@@ -1,13 +1,15 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage, RunEvent } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
-import { coreApi } from "./coreApi";
 import { IconButton } from "./ui";
 import { legacyUi } from "./legacyUiParity";
+import { MessageTable } from "./MessageTable";
+import { useSpeechPlayback } from "./speechPlayback";
 import {
   agentToolGroupIcon,
   agentToolIcon,
@@ -164,6 +166,7 @@ function SentImage({
 
 type AgentEvent = {
   type: string;
+  liveEventId?: number;
   text?: string;
   tools?: unknown[];
   results?: unknown[];
@@ -241,13 +244,15 @@ function toolFrom(
 function eventFromRun(event: RunEvent): AgentEvent | null {
   if (event.event_type === "run_step") {
     const value = event.payload.value;
-    if (value && typeof value === "object") return value as AgentEvent;
+    if (value && typeof value === "object")
+      return { ...(value as AgentEvent), liveEventId: event.event_id };
     const text = String(value || event.payload.step || "").trim();
-    return text ? { type: "report", text } : null;
+    return text ? { type: "report", text, liveEventId: event.event_id } : null;
   }
   if (event.event_type === "tool_started")
     return {
       type: "tool_start",
+      liveEventId: event.event_id,
       tools: [
         { ...event.payload, action: event.payload.tool || event.payload.name },
       ],
@@ -255,14 +260,13 @@ function eventFromRun(event: RunEvent): AgentEvent | null {
   if (event.event_type === "tool_finished")
     return {
       type: "tool_finish",
+      liveEventId: event.event_id,
       results: [
         { ...event.payload, action: event.payload.tool || event.payload.name },
       ],
     };
-  if (event.event_type === "approval_requested")
-    return { type: "report", text: "ממתין לאישור" };
   if (event.event_type === "api_key_required")
-    return { type: "report", text: "ממתין למפתח API" };
+    return { type: "report", text: "ממתין למפתח API", liveEventId: event.event_id };
   return null;
 }
 export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
@@ -271,6 +275,9 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
   for (const [index, event] of agentEvents.entries()) {
     if (event.type === "report") {
       const text = String(event.text || "").trim();
+      // Older clients projected approval waits into process history. Permission
+      // state is now owned by the durable approval queue, including on replay.
+      if (/^ממתין לאישור(?: משתמש)?\.{0,3}$/u.test(text)) continue;
       if (text) rows.push({ kind: "report", key: `report-${index}`, text });
       current = null;
     } else if (event.type === "tool_start") {
@@ -288,25 +295,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
       }
       for (const [toolIndex, tool] of (event.tools || []).entries())
         current.tools.push(toolFrom(tool, "running", `${index}-${toolIndex}`));
-      const count = current.tools.length;
-      current.label =
-        count === 1
-          ? `מריץ: ${current.tools[0].name}`
-          : `מריץ ${count} כלים במקביל`;
-      current.running = true;
     } else if (event.type === "tool_finish") {
-      if (!current || current.standalone) {
-        current = {
-          kind: "tools",
-          key: `tools-${index}`,
-          standalone: false,
-          label: "כלים הסתיימו",
-          icon: "row_status",
-          tools: [],
-          running: false,
-        };
-        rows.push(current);
-      }
       for (const [resultIndex, result] of (event.results || []).entries()) {
         const record =
           result && typeof result === "object"
@@ -321,21 +310,40 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
           failed ? "error" : "finished",
           `${index}-${resultIndex}`,
         );
-        const existing = [...current.tools]
+        // A report can arrive while tools are running. Match their original
+        // rows, and finish only the reported calls (including parallel calls
+        // to the same tool that complete out of order).
+        const identity = record.event_id || record.tool_call_id || record.call_id;
+        const existing = rows
+          .flatMap((row) => row.kind === "tools" ? row.tools : [])
           .reverse()
           .find(
             (tool) =>
-              tool.key === finished.key ||
-              (tool.name === finished.name && tool.status === "running"),
+              identity
+                ? tool.key === finished.key
+                : tool.name === finished.name && tool.status === "running",
           );
-        if (existing) Object.assign(existing, finished);
-        else current.tools.push(finished);
+        if (existing) {
+          Object.assign(existing, finished, {
+            key: existing.key,
+            query: finished.query || existing.query,
+          });
+        } else {
+          if (!current || current.standalone) {
+            current = {
+              kind: "tools",
+              key: `tools-${index}`,
+              standalone: false,
+              label: "כלים הסתיימו",
+              icon: "row_status",
+              tools: [],
+              running: false,
+            };
+            rows.push(current);
+          }
+          current.tools.push(finished);
+        }
       }
-      for (const tool of current.tools)
-        if (tool.status === "running") tool.status = "finished";
-      current.running = false;
-      const count = current.tools.length;
-      current.label = count === 1 ? "הורץ כלי 1" : `הורצו ${count} כלים`;
     } else if (
       event.type === "tool_group_start" ||
       event.type === "tool_group_finish"
@@ -377,8 +385,34 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
       current = null;
     }
   }
+  for (const row of rows) {
+    if (row.kind !== "tools" || row.standalone) continue;
+    const running = row.tools.filter((tool) => tool.status === "running");
+    row.running = running.length > 0;
+    row.label = running.length
+      ? running.length === 1
+        ? `מריץ: ${running[0].name}`
+        : `מריץ ${running.length} כלים במקביל`
+      : row.tools.length === 1 ? "הורץ כלי 1" : `הורצו ${row.tools.length} כלים`;
+  }
   return rows;
 }
+
+function AgentStatusText({ active, children }: { active: boolean; children: ReactNode }) {
+  return <span className={`agent-status-text${active ? " is-shimmering" : ""}`}>{children}</span>;
+}
+
+function DelayedThinking() {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisible(true), 300);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return visible
+    ? <p className="agent-initial-thinking"><AgentStatusText active>חושב...</AgentStatusText></p>
+    : null;
+}
+
 export function formatAgentDuration(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds || 0));
   const hours = Math.floor(safe / 3600);
@@ -395,32 +429,32 @@ export function RichMessage({
   events = [],
   theme = "dark",
   active = false,
+  runStatus,
   onOpenCanvas,
 }: {
   message: ChatMessage;
   events?: RunEvent[];
   theme?: ResolvedTheme;
   active?: boolean;
+  runStatus?: string;
   onOpenCanvas?: (canvasId: string) => void;
 }) {
   const [processOpen, setProcessOpen] = useState(active);
-  const [speaking, setSpeaking] = useState(false);
+  const speechOwner = useId();
+  const speech = useSpeechPlayback(message.metadata?.run_id
+    ? `run:${message.metadata.run_id}` : `message:${speechOwner}`);
+  const { speaking } = speech;
   const [userExpanded, setUserExpanded] = useState(false);
+  const [userContentHeight, setUserContentHeight] = useState(0);
+  const contentId = useId();
   const [, setElapsedTick] = useState(0);
   const [collapsible, setCollapsible] = useState(false);
   const [linkError, setLinkError] = useState("");
   const contentRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!speaking) return;
-    const timer = window.setInterval(() => {
-      void coreApi<{ is_playing: boolean }>("GET", "/v2/audio/tts/status").then(
-        (state) => {
-          if (!state.is_playing) setSpeaking(false);
-        },
-      );
-    }, 900);
-    return () => clearInterval(timer);
-  }, [speaking]);
+  // Keep each table mounted while streamed content and elapsed time update.
+  const renderTable = useMemo(() =>
+    (props: ComponentProps<typeof MessageTable>) => <MessageTable {...props} theme={theme} />,
+  [theme]);
   useEffect(() => {
     if (!active) {
       setProcessOpen(false);
@@ -433,37 +467,34 @@ export function RichMessage({
     );
     return () => clearInterval(timer);
   }, [active]);
-  const speak = async () => {
-    if (speaking) {
-      await coreApi("POST", "/v2/audio/tts/stop", {}, true);
-      setSpeaking(false);
-      return;
-    }
-    setSpeaking(true);
-    try {
-      await coreApi("POST", "/v2/audio/tts", { text: message.content }, true);
-    } catch {
-      setSpeaking(false);
-    }
-  };
   const storedProcess =
     message.role === "assistant" &&
     message.metadata?.agent_process &&
     typeof message.metadata.agent_process === "object"
       ? (message.metadata.agent_process as AgentProcessMetadata)
       : null;
-  const agentEvents = useMemo(
-    () =>
-      message.role !== "assistant"
-        ? []
-        : storedProcess?.events?.length
-          ? storedProcess.events
-          : events
-              .map(eventFromRun)
-              .filter((item): item is AgentEvent => Boolean(item)),
-    [events, message.role, storedProcess],
-  );
+  const agentEvents = useMemo(() => {
+    if (message.role !== "assistant") return [];
+    if (storedProcess?.events?.length) return storedProcess.events;
+    // Initial run loading and replay polling can deliver the same event.
+    // Count each tool call once so a duplicate start cannot keep it running.
+    return [...new Map(events.map((event) => [event.event_id, event])).values()]
+      .map(eventFromRun)
+      .filter((item): item is AgentEvent => Boolean(item));
+  }, [events, message.role, storedProcess]);
   const rows = useMemo(() => processRows(agentEvents), [agentEvents]);
+  const canThink = active && message.role === "assistant" && !message.content &&
+    (!runStatus || runStatus === "queued" || runStatus === "running") &&
+    !rows.some((row) => row.kind === "tools" && row.running);
+  // Reset the short pause when visible process content changes. Repeated
+  // thinking/status events and ordinary rerenders must not postpone it.
+  let lastActivityIndex = agentEvents.length - 1;
+  while (lastActivityIndex >= 0 && ![
+    "report", "tool_start", "tool_finish", "tool_group_start", "tool_group_finish",
+  ].includes(agentEvents[lastActivityIndex].type)) lastActivityIndex -= 1;
+  const thinkingKey = `${String(message.metadata?.run_id || "")}:${
+    agentEvents[lastActivityIndex]?.liveEventId ?? lastActivityIndex
+  }`;
   const firstLiveAt = events
     .map((event) => Date.parse(event.created_at))
     .filter(Number.isFinite)
@@ -481,9 +512,13 @@ export function RichMessage({
     }
     const measure = () => {
       const line = Number.parseFloat(getComputedStyle(node).lineHeight) || 23;
+      // Measure the unclipped content so both directions have a real height
+      // target, including after wrapping, fonts or embedded content change.
+      const height = node.scrollHeight;
+      setUserContentHeight(height);
       setCollapsible(
         message.content.split("\n").length > legacyUi.userCollapsedLines ||
-          node.scrollHeight > line * legacyUi.userCollapsedLines + 2,
+          height > line * legacyUi.userCollapsedLines + 2,
       );
     };
     measure();
@@ -529,9 +564,6 @@ export function RichMessage({
       data-run-id={String(message.metadata?.run_id || "") || undefined}
       dir="auto"
     >
-      {active && !rows.length && !message.content && (
-        <p className="agent-initial-thinking is-shimmering">חושב...</p>
-      )}
       {!!rows.length && (
         <details
           className="agent-process"
@@ -540,10 +572,10 @@ export function RichMessage({
         >
           <summary>
             <LegacyIcon src={icons.dropdown} size={16} />
-            <span className={active ? "is-shimmering" : ""}>
+            <AgentStatusText active={active}>
               {active ? "סמארטי עובד" : "סמארטי עבד"}{" "}
               {formatAgentDuration(elapsed)}
-            </span>
+            </AgentStatusText>
           </summary>
           <div className="agent-process-details">
             {rows.map((row) =>
@@ -553,23 +585,19 @@ export function RichMessage({
                 </p>
               ) : row.standalone ? (
                 <p
-                  className={
-                    row.running
-                      ? "agent-standalone is-shimmering"
-                      : "agent-standalone"
-                  }
+                  className="agent-standalone"
                   key={row.key}
                 >
                   <LegacyIcon src={agentToolIcon(theme, row.icon)} size={16} />
-                  {row.label}
+                  <AgentStatusText active={active && row.running}>{row.label}</AgentStatusText>
                 </p>
               ) : (
                 <details className="agent-tool-group" key={row.key}>
                   <summary>
                     <LegacyIcon src={icons.dropdown} size={14} />
-                    <span className={row.running ? "is-shimmering" : ""}>
+                    <AgentStatusText active={active && row.running}>
                       {row.label}
-                    </span>
+                    </AgentStatusText>
                     <LegacyIcon
                       src={
                         row.running &&
@@ -591,14 +619,14 @@ export function RichMessage({
                       <details className="agent-tool-row" key={tool.key}>
                         <summary>
                           <LegacyIcon src={icons.dropdown} size={14} />
-                          <span>
+                          <AgentStatusText active={active && tool.status === "running"}>
                             {tool.status === "running"
                               ? "רץ"
                               : tool.status === "error"
                                 ? "שגיאה"
                                 : "הסתיים"}{" "}
                             · {tool.name}
-                          </span>
+                          </AgentStatusText>
                           <LegacyIcon
                             src={agentToolIcon(theme, tool.icon)}
                             size={16}
@@ -623,6 +651,7 @@ export function RichMessage({
           </div>
         </details>
       )}
+      {canThink && <DelayedThinking key={thinkingKey} />}
       <div
         className={`chat-message chat-message--${message.role} ${isError ? "is-error" : ""} ${backgroundTask ? "is-background-task" : ""}`}
       >
@@ -659,60 +688,65 @@ export function RichMessage({
         )}
         {!!message.content && (
           <div
-            ref={contentRef}
-            className={`message-content ${collapsible && !userExpanded ? "is-collapsed" : ""}`}
+            id={contentId}
+            className={`message-content ${collapsible ? "is-collapsible" : ""} ${collapsible && !userExpanded ? "is-collapsed" : ""}`}
+            style={collapsible ? { maxHeight: userExpanded ? userContentHeight : 146 } : undefined}
           >
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              urlTransform={safeChatHref}
-              components={{
-                a: ({ href = "", node: _node, ...props }) => (
-                  <a
-                    {...props}
-                    href={href}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      if (href) void openLink(href);
-                    }}
-                  />
-                ),
-                code: ({ children, className, ...props }) => (
-                  <code {...props} className={className} dir="ltr">
-                    {children}
-                  </code>
-                ),
-                pre: ({ children }) => {
-                  const text = codeText(children);
-                  const language = codeLanguage(children);
-                  return (
-                    <div className="code-frame" dir="ltr">
-                      <div className="code-frame-head">
-                        <button
-                          type="button"
-                          aria-label="העתק קוד"
-                          onClick={() => void copy(text)}
-                        >
-                          <LegacyIcon src={icons.copy} size={18} />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="הורד קובץ"
-                          onClick={() => void downloadCode(text, language)}
-                        >
-                          <LegacyIcon src={icons.codeDownload} size={18} />
-                        </button>
-                        <span>{codeDisplayLanguage(language)}</span>
+            <div ref={contentRef} className="message-content-body">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                urlTransform={safeChatHref}
+                components={{
+                  table: renderTable,
+                  a: ({ href = "", node: _node, ...props }) => (
+                    <a
+                      {...props}
+                      href={href}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        if (href) void openLink(href);
+                      }}
+                    />
+                  ),
+                  code: ({ children, className, ...props }) => (
+                    <code {...props} className={className} dir="ltr">
+                      {children}
+                    </code>
+                  ),
+                  pre: ({ children }) => {
+                    const text = codeText(children);
+                    const language = codeLanguage(children);
+                    return (
+                      <div className="code-frame" dir="ltr">
+                        <div className="code-frame-head">
+                          <button
+                            type="button"
+                            aria-label="העתק קוד"
+                            onClick={() => void copy(text)}
+                          >
+                            <LegacyIcon src={icons.copy} size={18} />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="הורד קובץ"
+                            onClick={() => void downloadCode(text, language)}
+                          >
+                            <LegacyIcon src={icons.codeDownload} size={18} />
+                          </button>
+                          <span>{codeDisplayLanguage(language)}</span>
+                        </div>
+                        <pre>{children}</pre>
                       </div>
-                      <pre>{children}</pre>
-                    </div>
-                  );
-                },
-              }}
-            >
-              {prepareMessageMarkdown(message.content)}
-            </ReactMarkdown>
+                    );
+                  },
+                }}
+              >
+                {prepareMessageMarkdown(message.content)}
+              </ReactMarkdown>
+            </div>
           </div>
         )}
+        {speech.error && <p className="message-link-error" role="alert">{speech.error}</p>}
         {linkError && (
           <p className="message-link-error" role="alert">
             {linkError}
@@ -762,7 +796,8 @@ export function RichMessage({
           {message.role === "assistant" && (
             <IconButton
               label={speaking ? "עצור הקראה" : "הקרא בקול"}
-              onClick={() => void speak()}
+              onClick={() => void speech.toggle(message.content)}
+              disabled={speech.pending}
             >
               {speaking ? "■" : <LegacyIcon src={icons.speaker} size={22} />}
             </IconButton>
@@ -775,7 +810,10 @@ export function RichMessage({
           )}
           {collapsible && (
             <IconButton
+              className="message-expand-button"
               label={userExpanded ? "כווץ הודעה" : "הרחב הודעה"}
+              aria-expanded={userExpanded}
+              aria-controls={contentId}
               onClick={() => setUserExpanded((value) => !value)}
             >
               <LegacyIcon src={icons.dropdown} size={18} />

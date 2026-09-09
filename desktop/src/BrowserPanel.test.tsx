@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSnapshot } from "./browserState";
 
@@ -23,6 +23,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("./coreApi", () => ({ coreApi: mocks.coreApi }));
 
 import { BrowserPanel } from "./BrowserPanel";
+import { publishSettingsChange } from "./settingsChanges";
 
 const snapshot: BrowserSnapshot = {
   tabs: [
@@ -108,6 +109,26 @@ afterEach(() => {
 });
 
 describe("native browser overlay visibility", () => {
+  it("updates developer tools after settings change without recreating the browser", async () => {
+    render(<BrowserPanel visible />);
+    await waitFor(() => expect(lastNativeVisibility()).toEqual({ visible: true }));
+    const menuItems = async () => {
+      // The native menu deliberately suppresses reopen clicks for 220 ms.
+      await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 230)); });
+      const previous = mocks.invoke.mock.calls.filter(([command]) => command === "desktop_popup_rtl_menu").length;
+      fireEvent.click(screen.getByRole("button", { name: "תפריט דפדפן" }));
+      await waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === "desktop_popup_rtl_menu")).toHaveLength(previous + 1));
+      return mocks.invoke.mock.calls.filter(([command]) => command === "desktop_popup_rtl_menu")[previous][1].items;
+    };
+    expect(await menuItems()).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "browser-devtools" })]));
+    mocks.coreApi.mockResolvedValue({ values: { enable_developer_trace: true } });
+    await act(async () => { publishSettingsChange("PATCH", "/v2/settings"); });
+    expect(await menuItems()).toEqual(expect.arrayContaining([expect.objectContaining({ id: "browser-devtools" })]));
+    mocks.coreApi.mockResolvedValue({ values: { enable_developer_trace: false } });
+    await act(async () => { publishSettingsChange("PATCH", "/v2/settings"); });
+    expect(await menuItems()).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "browser-devtools" })]));
+  });
+
   it("keeps native bounds idle during the CSS slide and positions only the final frame", async () => {
     const frame = (visible: boolean, revision: string) => <aside className="workbench"><BrowserPanel visible={visible} geometryRevision={revision} /></aside>;
     const { rerender } = render(frame(true, "open"));
