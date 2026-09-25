@@ -201,6 +201,39 @@ pub fn show_main(app: &AppHandle, activation: DesktopActivation) {
     let _ = app.emit("desktop://activation", activation);
 }
 
+#[cfg(windows)]
+pub fn open_with_dialog(window: &Window, path: &str) -> Result<bool, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{SHOpenWithDialog, OPENASINFO, OAIF_EXEC};
+    use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+    let path_wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let info = OPENASINFO {
+        pcszFile: PCWSTR(path_wide.as_ptr()),
+        pcszClass: PCWSTR::null(),
+        oaifInFlags: OAIF_EXEC,
+    };
+    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
+        .ok()
+        .map_err(|error| format!("Windows Open With COM initialization failed: {error}"))?;
+    let result = (|| {
+        // This runs in Smarti's foreground GUI process, with its main window as
+        // the chooser owner. Windows can then present the chooser over Smarti.
+        unsafe {
+            let _ = SetForegroundWindow(hwnd);
+            SHOpenWithDialog(Some(hwnd), &info)
+        }
+    })();
+    unsafe { CoUninitialize() };
+    match result {
+        Ok(()) => Ok(true),
+        Err(error) if matches!(error.code().0 as u32, 0x800704C7 | 0x80004004) => Ok(false),
+        Err(error) => Err(format!("Windows Open With failed: {error}")),
+    }
+}
+
 pub fn activation_from_args(arguments: Vec<String>) -> DesktopActivation {
     let mut command = "show".to_string();
     let mut session_id = String::new();
@@ -457,7 +490,7 @@ pub fn desktop_finish_startup(app: AppHandle) -> Result<(), String> {
         })
         .unwrap_or((1180.0, 760.0));
     window
-        .set_min_size(Some(LogicalSize::new(width.min(720.0), height.min(560.0))))
+        .set_min_size(Some(LogicalSize::new(width.min(360.0), height.min(320.0))))
         .map_err(|error| error.to_string())?;
     window
         .set_resizable(true)

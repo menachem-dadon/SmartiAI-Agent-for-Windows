@@ -485,7 +485,7 @@ export default function App() {
       conversations:
         !workspaceIsNarrow(innerWidth) &&
         !Boolean(preferences.workspace_sidebar_collapsed),
-      workbench: Boolean(preferences.workspace_workbench_open && restoredTab),
+      workbench: Boolean(preferences.workspace_workbench_open && restoredWorkbench),
       tab: restoredTab,
     });
     const first = activeIdRef.current || data.conversations[0]?.id || "";
@@ -777,9 +777,9 @@ export default function App() {
               ? {
                   type: "activate-narrow-surface",
                   surface: "workbench",
-                  tab: "browser",
+                  tab: null,
                 }
-              : { type: "open-workbench", tab: "browser" },
+              : { type: "open-workbench", tab: null },
         );
         void saveUiPreferencePatch({
           workspace_workbench_open: !workspace.workbenchOpen,
@@ -909,6 +909,7 @@ export default function App() {
   };
   const send = async (text: string, isVoice = false) => {
     setError("");
+    const submittedAttachments = [...attachments];
     let sessionId = activeId;
     if (!sessionId) {
       const data = await coreApi<{ conversation: Conversation }>(
@@ -921,7 +922,7 @@ export default function App() {
       setActiveId(sessionId);
     }
     const handles: string[] = [];
-    for (const item of attachments) {
+    for (const item of submittedAttachments) {
       if (item.size && item.size > 25 * 1024 * 1024)
         throw new Error(`${item.name}: הקובץ גדול מ־25MB`);
       const data = await coreApi<{ attachment: { handle: string } }>(
@@ -945,9 +946,14 @@ export default function App() {
       },
       true,
     );
-    setAttachments([]);
-    await refreshLists();
-    await loadMessages(sessionId);
+    setAttachments((current) => current.filter((item) => !submittedAttachments.includes(item)));
+    // A refresh failure must not restore a draft whose run was already accepted.
+    try {
+      await refreshLists();
+      if (activeIdRef.current === sessionId) await loadMessages(sessionId);
+    } catch (reason) {
+      setError(`ההודעה נשלחה, אך רענון התצוגה נכשל: ${String(reason)}`);
+    }
   };
   const cancel = async () => {
     if (activeRun)
@@ -1111,7 +1117,7 @@ export default function App() {
     }
   };
   const setWorkbenchOpen = useCallback(
-    (open: boolean, tab: WorkbenchTab = "browser") => {
+    (open: boolean, tab: WorkbenchTab | null = null) => {
       if (open) setWorkbenchWidth(null);
       dispatch(
         open
@@ -1523,7 +1529,7 @@ export default function App() {
                 <IconButton
                   className="chat-workbench-open-control"
                   label="פתיחת סביבת העבודה"
-                  onClick={() => openWorkbench("browser")}
+                  onClick={() => setWorkbenchOpen(true)}
                 >
                   <LegacyIcon src={icons.workbenchOpen} />
                 </IconButton>

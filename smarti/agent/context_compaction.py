@@ -75,7 +75,7 @@ class ContextCompactionMixin:
             if not isinstance(value, dict):
                 return
             block_type = str(value.get("type") or "").strip().lower()
-            if block_type in {"image", "image_url", "input_file", "document"}:
+            if block_type in {"image", "image_url", "input_file", "file", "document"}:
                 reserves += 4096
             elif "inlineData" in value or "fileData" in value:
                 reserves += 4096

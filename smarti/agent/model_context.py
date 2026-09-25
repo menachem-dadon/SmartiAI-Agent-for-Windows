@@ -789,27 +789,32 @@ class ModelContextMixin:
         return copy.deepcopy(result)
 
     def _load_settings(self):
-        if not os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'w', encoding='utf-8') as f: json.dump(DEFAULT_SETTINGS, f, ensure_ascii=False, indent=4)
-            return copy.deepcopy(DEFAULT_SETTINGS)
         try:
+            manager = getattr(self, "settings_manager", None) or SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
+            if not os.path.exists(SETTINGS_FILE):
+                loaded = copy.deepcopy(DEFAULT_SETTINGS)
+                manager.save(loaded)
+                return loaded
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                 disk_loaded = json.load(f)
-                manager = getattr(self, "settings_manager", None) or SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
-                loaded, changed = manager.migrate_or_merge(disk_loaded)
-                matrix = copy.deepcopy(DEFAULT_POLICY_MATRIX)
-                if isinstance(loaded.get("policy_matrix"), dict):
-                    for key, value in loaded["policy_matrix"].items():
-                        if key in matrix and str(value).lower() in POLICY_ACTIONS:
-                            matrix[key] = str(value).lower()
-                loaded["policy_matrix"] = matrix
-                if changed:
-                    self.settings = loaded
-                    self._save_settings()
-                return loaded
+            if not isinstance(disk_loaded, dict):
+                raise ValueError("Settings must be a JSON object")
+            loaded, changed = manager.migrate_or_merge(disk_loaded)
+            matrix = copy.deepcopy(DEFAULT_POLICY_MATRIX)
+            if isinstance(loaded.get("policy_matrix"), dict):
+                for key, value in loaded["policy_matrix"].items():
+                    if key in matrix and str(value).lower() in POLICY_ACTIONS:
+                        matrix[key] = str(value).lower()
+            loaded["policy_matrix"] = matrix
+            if changed:
+                self.settings = loaded
+                self._save_settings()
+            return loaded
         except Exception as e:
-            logging.error(f"Settings load failed; using defaults: {e}")
-            return copy.deepcopy(DEFAULT_SETTINGS)
+            logging.exception("Settings load failed; preserving the existing file")
+            raise RuntimeError(
+                f"לא ניתן לטעון את ההגדרות. ההפעלה נעצרה כדי לשמור על הנתונים הקיימים: {SETTINGS_FILE}"
+            ) from e
 
     def _save_settings(self):
         manager = getattr(self, "settings_manager", None)
@@ -846,7 +851,9 @@ class ModelContextMixin:
                     data[key] = protected if protected else ""
                     if not protected:
                         logging.error(f"Secret '{key}' could not be encrypted; it was not written to settings file.")
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
+        if manager is None:
+            manager = SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
+        manager.save(data)
         if secrets_pending_deletion:
             self._secrets_pending_deletion.difference_update(secrets_pending_deletion)
 

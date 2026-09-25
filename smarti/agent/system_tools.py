@@ -1,4 +1,4 @@
-"""Weather, shell, git, project-check, process, clipboard, OCR, custom Python tool, and MCP execution tools."""
+"""Weather, shell, git, project-check, process, clipboard, custom Python tool, and MCP execution tools."""
 from .shared import *
 
 
@@ -328,22 +328,6 @@ class SystemToolsMixin:
             return "SUCCESS: הטקסט הועתק ללוח הגזירים."
         except SmartiCancelled:
             raise
-        except Exception as e:
-            return f"ERROR: {e}"
-
-    def extract_image_text_tool(self, path):
-        path = str(path or "").strip(' "\'')
-        if not os.path.exists(path): return f"ERROR: Not found: {path}"
-        sandbox_ok, sandbox_err = self._ensure_sandbox_path_allowed(path, "read")
-        if not sandbox_ok: return sandbox_err
-        try:
-            import pytesseract
-            from PIL import Image
-        except Exception:
-            return "ERROR: OCR requires pytesseract and Pillow installed, plus the Tesseract engine in PATH."
-        try:
-            text = pytesseract.image_to_string(Image.open(path), lang="heb+eng")
-            return "[UNTRUSTED_OCR_TEXT]\n" + self._truncate_tool_output(text.strip()[:15000])
         except Exception as e:
             return f"ERROR: {e}"
 

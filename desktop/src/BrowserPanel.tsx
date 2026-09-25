@@ -15,6 +15,8 @@ import {
   activeTab,
   nextRequestId,
   pageTitle,
+  workspaceActiveTab,
+  workspaceBrowserTabs,
   type BrowserProfile,
   type BrowserSnapshot,
   type BrowserTab,
@@ -23,6 +25,7 @@ import { coreApi } from "./coreApi";
 import { subscribeSettingsChanges } from "./settingsChanges";
 import { IconButton } from "./ui";
 import { useNativeBrowserSurface } from "./useNativeBrowserSurface";
+import type { BrowserViewportMode } from "./browserViewport";
 
 type HistoryEntry = {
   id: string;
@@ -76,6 +79,7 @@ const emptyLibrary: BrowserLibrary = {
 };
 const libraryKey = "smarti-browser-library-v1";
 const sessionKey = "smarti-browser-session-v1";
+type StoredSessionTab = { url: string; pinned?: boolean; workspaceId?: string };
 const permissionKey = "smarti-browser-permissions-v1";
 const readJson = <T,>(key: string, fallback: T): T => {
   try {
@@ -84,6 +88,10 @@ const readJson = <T,>(key: string, fallback: T): T => {
     return fallback;
   }
 };
+export function forgetBrowserWorkspaceSession(workspaceId: string) {
+  const stored = readJson<StoredSessionTab[]>(sessionKey, []);
+  if (Array.isArray(stored)) localStorage.setItem(sessionKey, JSON.stringify(stored.filter((tab) => tab.workspaceId !== workspaceId)));
+}
 const saveFile = async (base64: string, _mime: string, name: string) => {
   const bytes = Uint8Array.from(atob(base64), (value) => value.charCodeAt(0));
   await invoke("save_binary_file", { suggestedName: name, bytes: Array.from(bytes) });
@@ -101,13 +109,21 @@ export function BrowserPanel({
   visible,
   geometryRevision,
   onActivity,
+  workspaceTabId = "",
 }: {
   visible: boolean;
   geometryRevision?: boolean | string;
   onActivity?: (activity: BrowserActivity) => void;
+  workspaceTabId?: string;
 }) {
   const [browser, setBrowser] = useState<BrowserSnapshot>(initialBrowser);
   const [hydrated, setHydrated] = useState(false);
+  const [restoreComplete, setRestoreComplete] = useState(false);
+  const lastActiveByWorkspace = useRef<Record<string, string>>({});
+  const openingWorkspace = useRef(new Set<string>());
+  const groupTabs = useMemo(() => workspaceBrowserTabs(browser, workspaceTabId), [browser, workspaceTabId]);
+  const current = useMemo(() => workspaceActiveTab(browser, workspaceTabId, lastActiveByWorkspace.current[workspaceTabId]), [browser, workspaceTabId]);
+  const surfaceVisible = visible && (!browser.tabs.length || (current !== null && browser.activeTabId === current.tabId));
   const [address, setAddress] = useState("");
   const [notice, setNotice] = useState("");
   const [findText, setFindText] = useState("");
@@ -120,13 +136,14 @@ export function BrowserPanel({
     readJson(libraryKey, emptyLibrary),
   );
   const [zoom, setZoom] = useState(100);
-  const [deviceMode, setDeviceMode] = useState(false);
+  const [viewportModes, setViewportModes] = useState<Record<string, BrowserViewportMode>>({});
+  const viewportMode = (current && viewportModes[current.tabId]) || "auto";
   const [mobileUserAgent, setMobileUserAgent] = useState(false);
   const [developerEnabled, setDeveloperEnabled] = useState(false);
   const [sources, setSources] = useState<ImportSource[]>([]);
   const [sourceId, setSourceId] = useState("");
   const [importing, setImporting] = useState(false);
-  const { viewportRef, boundsReady: nativeBoundsReady } = useNativeBrowserSurface(visible, geometryRevision, Boolean(panel), showFind);
+  const { viewportRef, boundsReady: nativeBoundsReady, viewportError } = useNativeBrowserSurface(surfaceVisible, geometryRevision, Boolean(panel), showFind, current?.tabId ?? null, viewportMode);
   const [surfacePreview, setSurfacePreview] = useState<{ tabId: string; url: string; dataUrl: string } | null>(null);
   const previewInFlight = useRef(false);
   const addressRef = useRef<HTMLInputElement>(null);
@@ -171,7 +188,7 @@ export function BrowserPanel({
   useEffect(() => {
     if (!visible) return;
     const timer = window.setInterval(() => {
-      const tab = activeTab(browserRef.current);
+      const tab = workspaceActiveTab(browserRef.current, workspaceTabId, lastActiveByWorkspace.current[workspaceTabId]);
       if (tab && !tab.loading) {
         void invoke<BrowserSnapshot>("browser_metadata", { tabId: tab.tabId })
           .then(setBrowser)
@@ -179,7 +196,7 @@ export function BrowserPanel({
       }
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [visible]);
+  }, [visible, workspaceTabId]);
   const runCdp = useCallback(
     async (
       tab: BrowserTab,
@@ -198,7 +215,7 @@ export function BrowserPanel({
   );
   useEffect(() => {
     if (!visible || !hydrated || legacyMigrationAttempted.current) return;
-    const tab = activeTab(browserRef.current);
+    const tab = workspaceActiveTab(browserRef.current, workspaceTabId, lastActiveByWorkspace.current[workspaceTabId]);
     if (!tab || tab.profile !== "persistent") return;
     legacyMigrationAttempted.current = true;
     void coreApi<{
@@ -233,7 +250,7 @@ export function BrowserPanel({
       legacyMigrationAttempted.current = false;
       setNotice(`מיגרציית הדפדפן הישן לא הושלמה: ${String(reason)}`);
     });
-  }, [visible, hydrated, browser.tabs.length, runCdp]);
+  }, [visible, hydrated, browser.tabs.length, runCdp, workspaceTabId]);
   const recordNavigation = useCallback((snapshot: BrowserSnapshot) => {
     const tab = activeTab(snapshot);
     if (
@@ -269,12 +286,13 @@ export function BrowserPanel({
         if (!alive) return;
         setBrowser(payload);
         setHydrated(true);
+        const selected = activeTab(payload);
+        if (selected?.workspaceId) lastActiveByWorkspace.current[selected.workspaceId] = selected.tabId;
         recordNavigation(payload);
         const persistent = payload.tabs
           .filter((tab) => tab.profile === "persistent")
-          .map((tab) => ({ url: tab.url, pinned: tab.pinned }));
-        if (persistent.length)
-          localStorage.setItem(sessionKey, JSON.stringify(persistent));
+          .map((tab) => ({ url: tab.url, pinned: tab.pinned, workspaceId: tab.workspaceId || "" }));
+        localStorage.setItem(sessionKey, JSON.stringify(persistent));
       },
     );
     const downloadListener = listen<Record<string, unknown>>(
@@ -315,47 +333,61 @@ export function BrowserPanel({
     if (visible) return;
     setShowFind(false);
     setPanel("");
-  }, [visible]);
+  }, [visible, workspaceTabId]);
   useEffect(() => {
     if (
       !visible ||
       !hydrated ||
       initialTabRequested.current ||
-      !nativeBoundsReady ||
-      browser.tabs.length > 0
+      (!nativeBoundsReady && browser.tabs.length === 0)
     )
       return;
     initialTabRequested.current = true;
-    const stored = readJson<Array<{ url: string; pinned?: boolean }>>(
+    const stored = readJson<StoredSessionTab[]>(
       sessionKey,
       [],
     );
     const restore = async () => {
       try {
-        if (stored.length) {
+        if (browser.tabs.length) {
+          setRestoreComplete(true);
+          return;
+        }
+        if (Array.isArray(stored) && stored.length) {
           for (const item of stored.slice(0, 12)) {
             const state = await invoke<BrowserSnapshot>("browser_open", {
               profile: "persistent",
               url: item.url,
+              workspaceId: item.workspaceId || workspaceTabId || undefined,
             });
             const tab = activeTab(state);
             if (tab && item.pinned)
               await invoke("browser_pin", { tabId: tab.tabId, pinned: true });
           }
-        } else
-          await invoke("browser_open", {
-            profile: "persistent",
-            url: "https://www.google.com/?hl=he",
-          });
+        }
         await refresh();
+        setRestoreComplete(true);
       } catch (error) {
         initialTabRequested.current = false;
         setNotice(String(error));
       }
     };
     void restore();
-  }, [browser.tabs.length, hydrated, visible, nativeBoundsReady, refresh]);
-  const current = useMemo(() => activeTab(browser), [browser]);
+  }, [browser.tabs.length, hydrated, visible, nativeBoundsReady, refresh, workspaceTabId]);
+  useEffect(() => {
+    if (!visible || !hydrated || !restoreComplete || groupTabs.length || openingWorkspace.current.has(workspaceTabId)) return;
+    openingWorkspace.current.add(workspaceTabId);
+    void invoke<BrowserSnapshot>("browser_open", { profile: "persistent", url: "https://www.google.com/?hl=he", workspaceId: workspaceTabId || undefined })
+      .then(setBrowser)
+      .catch((error) => setNotice(String(error)))
+      .finally(() => openingWorkspace.current.delete(workspaceTabId));
+  }, [visible, hydrated, restoreComplete, groupTabs.length, workspaceTabId]);
+  useEffect(() => {
+    if (!visible || !hydrated || !restoreComplete || !current || browser.activeTabId === current.tabId) return;
+    void invoke<BrowserSnapshot>("browser_activate", { tabId: current.tabId })
+      .then(setBrowser)
+      .catch((error) => setNotice(String(error)));
+  }, [visible, hydrated, restoreComplete, current?.tabId, browser.activeTabId]);
   useEffect(() => {
     if (!current) return;
     onActivity?.({ title: pageTitle(current), url: current.url, loading: current.loading });
@@ -394,9 +426,9 @@ export function BrowserPanel({
       url = "https://www.google.com/?hl=he",
     ) =>
       setBrowser(
-        await invoke<BrowserSnapshot>("browser_open", { profile, url }),
+        await invoke<BrowserSnapshot>("browser_open", { profile, url, workspaceId: workspaceTabId || undefined }),
       ),
-    [],
+    [workspaceTabId],
   );
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -472,19 +504,6 @@ export function BrowserPanel({
       pdf ? "application/pdf" : "image/png",
       `smarti-${Date.now()}.${pdf ? "pdf" : "png"}`,
     );
-  };
-  const toggleDeviceMode = async () => {
-    if (!current) return;
-    if (deviceMode)
-      await runCdp(current, "Emulation.clearDeviceMetricsOverride");
-    else
-      await runCdp(current, "Emulation.setDeviceMetricsOverride", {
-        width: 390,
-        height: 844,
-        deviceScaleFactor: 2,
-        mobile: true,
-      });
-    setDeviceMode(!deviceMode);
   };
   const saveSource = async () => {
     if (!current) return;
@@ -589,12 +608,14 @@ export function BrowserPanel({
         enabled: Boolean(current),
         action: runMenuAction(saveSource),
       },
-      {
-        id: "browser-device-mode",
-        text: deviceMode ? "יציאה ממצב מכשיר" : "מצב מכשיר",
+      ...([ ["auto", "תצוגה אוטומטית לפי הרוחב"], ["mobile", "תצוגת מובייל"], ["desktop", "תצוגת מחשב"] ] as const).map(([mode, label]) => ({
+        id: `browser-viewport-${mode}`,
+        text: `${viewportMode === mode ? "✓ " : ""}${label}`,
         enabled: Boolean(current),
-        action: runMenuAction(toggleDeviceMode),
-      },
+        action: runMenuAction(() => {
+          if (current) setViewportModes(value => ({ ...value, [current.tabId]: mode }));
+        }),
+      })),
       {
         id: "browser-user-agent",
         text: mobileUserAgent ? "User Agent רגיל" : "User Agent נייד",
@@ -778,7 +799,7 @@ export function BrowserPanel({
   useEffect(() => {
     if (!visible) return;
     const keyboard = (event: KeyboardEvent) => {
-      const tab = activeTab(browserRef.current);
+      const tab = workspaceActiveTab(browserRef.current, workspaceTabId, lastActiveByWorkspace.current[workspaceTabId]);
       if (event.ctrlKey && event.key.toLowerCase() === "l") {
         event.preventDefault();
         addressRef.current?.focus();
@@ -792,7 +813,7 @@ export function BrowserPanel({
         event.key.toLowerCase() === "t"
       ) {
         event.preventDefault();
-        void invoke<BrowserSnapshot>("browser_restore_closed")
+        void invoke<BrowserSnapshot>("browser_restore_closed", { workspaceId: workspaceTabId || undefined })
           .then(setBrowser)
           .catch((error) => setNotice(String(error)));
       } else if (event.ctrlKey && event.key.toLowerCase() === "w" && tab) {
@@ -814,18 +835,18 @@ export function BrowserPanel({
     };
     window.addEventListener("keydown", keyboard);
     return () => window.removeEventListener("keydown", keyboard);
-  }, [visible, newTab, current, library]);
+  }, [visible, newTab, current, library, workspaceTabId]);
   return (
     <div
       className={`embedded-browser ${panel ? "has-native-side-panel" : ""} ${showFind ? "has-native-find-space" : ""}`}
     >
       <div className="browser-tabs" role="tablist" aria-label="כרטיסיות דפדפן">
-        {browser.tabs.map((tab, index) => (
+        {groupTabs.map((tab) => (
           <button
             key={tab.tabId}
             draggable
             role="tab"
-            aria-selected={tab.active}
+            aria-selected={tab.tabId === current?.tabId}
             onDragStart={(event) =>
               event.dataTransfer.setData("text/plain", tab.tabId)
             }
@@ -834,7 +855,7 @@ export function BrowserPanel({
               event.preventDefault();
               void invoke<BrowserSnapshot>("browser_reorder", {
                 tabId: event.dataTransfer.getData("text/plain"),
-                index,
+                index: browser.tabs.findIndex((item) => item.tabId === tab.tabId),
               }).then(setBrowser);
             }}
             onClick={() =>
@@ -962,10 +983,10 @@ export function BrowserPanel({
         {surfacePreview && surfacePreview.tabId === current?.tabId && surfacePreview.url === current.url && (
           <img className="browser-motion-preview" src={surfacePreview.dataUrl} alt="" aria-hidden="true" draggable={false} />
         )}
-        {browser.tabs.length === 0 && <span>פותח את Smarti Browser…</span>}
+        {groupTabs.length === 0 && <span>פותח את Smarti Browser…</span>}
       </div>
       <div className="browser-status">
-        {notice ||
+        {notice || viewportError ||
           `${current?.profile === "guest" ? "Guest זמני" : "פרופיל Smarti מתמשך"} · אותו יעד גלוי ומאושר לאוטומציה`}
       </div>
       {panel && (

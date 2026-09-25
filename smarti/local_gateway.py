@@ -1028,7 +1028,7 @@ class SmartiLocalGateway:
     async def _workspace_open(self, request):
         payload = await self._body(request, "openWorkspaceFile")
         try:
-            value = self._workspace.open_external(payload.get("path"))
+            value = self._workspace.open_external(payload.get("path"), payload.get("action", "open"))
         except ValueError as exc:
             raise RequestValidationError(str(exc), ["path"]) from exc
         return self._ok(request, value)

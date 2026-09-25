@@ -628,6 +628,14 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 32767
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "open",
+            "open_with",
+            "prepare_open_with"
+          ]
         }
       },
       "required": [

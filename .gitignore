@@ -16,6 +16,7 @@ tests/*
 !tests/test_codex_signin.py
 !tests/test_codex_quota_ui.py
 !tests/test_context_efficiency.py
+!tests/test_attachments.py
 !tests/test_history_sqlite.py
 !tests/test_memory_profile_policy.py
 !tests/test_memory_management.py

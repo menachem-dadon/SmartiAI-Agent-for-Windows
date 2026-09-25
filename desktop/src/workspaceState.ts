@@ -10,6 +10,13 @@ export interface WorkspaceState {
 
 export type WorkbenchTabRecord = { id: string; kind: WorkbenchTab; title: string };
 export type WorkbenchSnapshot = { tabs: WorkbenchTabRecord[]; active: string };
+export const workbenchLabels: Record<WorkbenchTab, string> = {
+  browser: "דפדפן",
+  files: "קבצים",
+  terminal: "מסוף",
+  canvas: "קנבס",
+  artifacts: "תוצרים",
+};
 
 export const initialWorkspaceState: WorkspaceState = {
   conversationDrawerOpen: true,
@@ -20,10 +27,10 @@ export const initialWorkspaceState: WorkspaceState = {
 export type WorkspaceAction =
   | { type: "toggle-conversations" }
   | { type: "set-conversations"; open: boolean }
-  | { type: "open-workbench"; tab: WorkbenchTab }
+  | { type: "open-workbench"; tab: WorkbenchTab | null }
   | { type: "close-workbench" }
   | { type: "activate-narrow-surface"; surface: "conversations"; tab?: never }
-  | { type: "activate-narrow-surface"; surface: "workbench"; tab: WorkbenchTab }
+  | { type: "activate-narrow-surface"; surface: "workbench"; tab: WorkbenchTab | null }
   | { type: "restore-layout"; conversations: boolean; workbench: boolean; tab: WorkbenchTab | null }
   | { type: "responsive-narrow" };
 
@@ -56,7 +63,7 @@ export function parseWorkbenchSnapshot(value: unknown): WorkbenchSnapshot | null
   if (!value || typeof value !== "object") return null;
   const record = value as { tabs?: unknown; active?: unknown };
   if (!Array.isArray(record.tabs)) return null;
-  const tabs = record.tabs.slice(0, 20).flatMap((item) => {
+  const parsedTabs = record.tabs.slice(0, 20).flatMap((item) => {
     if (!item || typeof item !== "object") return [];
     const candidate = item as Record<string, unknown>;
     const kind = String(candidate.kind || "") as WorkbenchTab;
@@ -64,6 +71,13 @@ export function parseWorkbenchSnapshot(value: unknown): WorkbenchSnapshot | null
     if (!id || !workbenchKinds.has(kind)) return [];
     return [{ id, kind, title: String(candidate.title || kind).slice(0, 100) }];
   });
+  const tabs: WorkbenchTabRecord[] = [];
+  for (const tab of parsedTabs) {
+    const base = workbenchLabels[tab.kind];
+    const suffix = tab.title.startsWith(`${base} `) ? tab.title.slice(base.length + 1) : "";
+    const generatedTitle = tab.title === base || (/^[1-9]\d*$/.test(suffix) && Number(suffix) >= 2);
+    tabs.push({ ...tab, title: generatedTitle ? nextWorkbenchTabTitle(tabs, tab.kind, base) : tab.title });
+  }
   const active = String(record.active || "");
   return { tabs, active: tabs.some((item) => item.id === active) ? active : tabs[0]?.id || "" };
 }
@@ -78,6 +92,19 @@ export function openWorkbenchTab(
   if (existing && (!forceNew || singleton))
     return { ...state, active: existing.id };
   return { tabs: [...state.tabs, tab], active: tab.id };
+}
+
+export function nextWorkbenchTabTitle(
+  tabs: WorkbenchTabRecord[],
+  kind: WorkbenchTab,
+  base: string,
+): string {
+  if (kind === "canvas" || kind === "artifacts") return base;
+  const used = new Set(tabs.filter((tab) => tab.kind === kind).map((tab) => tab.title));
+  if (!used.has(base)) return base;
+  let number = 2;
+  while (used.has(`${base} ${number}`)) number += 1;
+  return `${base} ${number}`;
 }
 
 export function closeWorkbenchTab(

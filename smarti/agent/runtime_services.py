@@ -380,8 +380,8 @@ class RuntimeServicesMixin:
                 return f"מחפש {target}" if target else "מחפש קבצים"
             if manager_op == "search_content":
                 return "מחפש בתוך קבצים"
-            if manager_op == "extract_image_text":
-                return "מחלץ טקסט מתמונה"
+            if manager_op == "attach":
+                return "מצרף קבצים להמשך הניתוח בשיחה"
             if manager_op == "open":
                 return f"פותח {target}" if target else "פותח קובץ"
             if manager_op in {"list_directory", "tree", "stat", "exists", "disk_usage"}:

@@ -573,12 +573,10 @@ class ToolCallMixin:
             if op == "search_content":
                 self._require_unified_fields(op, args, ["directory", "text"])
                 return "deep_content_search", {"directory": args.get("directory"), "text": args.get("text")}
-            if op == "extract_image_text":
-                self._require_unified_fields(op, args, ["path"])
-                return "extract_image_text", {"path": args.get("path")}
             if op == "attach":
-                self._require_unified_fields(op, args, ["path"])
-                return "attach_local_file", {"path": args.get("path")}
+                if not args.get("path") and not args.get("paths"):
+                    raise ValueError("attach requires path or a non-empty paths array.")
+                return "attach_local_file", {"path": args.get("path", ""), "paths": args.get("paths", [])}
             if op in {"trash", "recycle", "delete", "remove"}:
                 self._require_unified_fields(op, args, ["path"])
                 return "filesystem_operation", {**args, "action": "trash"}
@@ -1339,7 +1337,7 @@ class ToolCallMixin:
                         continue
                     if "text" in block:
                         parts.append(str(block.get("text", "")))
-                    elif block.get("type") in {"image", "document", "input_file", "image_url"}:
+                    elif block.get("type") in {"image", "document", "input_file", "file", "image_url"}:
                         parts.append(f"[{block.get('type')} attachment]")
                 return "\n".join(parts)
             return str(content)
@@ -1662,6 +1660,21 @@ class ToolCallMixin:
         if len(feedback_results) == 1:
             item = feedback_results[0]
             self._append_tool_feedback(current_messages, tool_turn_text, item.get("action", ""), item.get("_feedback_text", ""))
+            return True
+        if any(item["_feedback_text"].startswith(("ATTACHMENT_JSON:", "IMAGE_BASE64:")) for item in feedback_results):
+            # Preserve real content blocks in mixed batches, with one assistant turn.
+            merged = []
+            assistant = None
+            for item in feedback_results:
+                messages = []
+                self._append_tool_feedback(messages, tool_turn_text, item.get("action", ""), item["_feedback_text"])
+                assistant = assistant or messages[0]
+                for message in messages[1:]:
+                    content = message.get("parts" if self.mode == "gemini" else "content", [])
+                    if isinstance(content, str):
+                        content = [{"type": "text", "text": content}]
+                    merged.extend(content)
+            current_messages.extend([assistant, {"role": "user", "parts" if self.mode == "gemini" else "content": merged}])
             return True
         blocks = ["[SMARTI_PARALLEL_TOOL_RESULTS_BEGIN]"]
         for idx, item in enumerate(feedback_results, start=1):

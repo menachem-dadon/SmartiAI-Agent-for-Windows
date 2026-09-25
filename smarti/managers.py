@@ -26,14 +26,47 @@ class SettingsManager:
     def __init__(self, settings_file, defaults):
         self.settings_file = settings_file
         self.defaults = defaults
+        self._write_lock = threading.RLock()
+        self._startup_backup_done = False
 
     def backup_existing(self):
         if not os.path.exists(self.settings_file):
             return ""
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         backup_path = os.path.join(os.path.dirname(self.settings_file), f"smarti_settings.backup.{stamp}.json")
         shutil.copy2(self.settings_file, backup_path)
         return backup_path
+
+    def save(self, settings):
+        """Preserve the startup settings and replace the JSON only after a full write."""
+        if not isinstance(settings, dict):
+            raise ValueError("Settings must be a JSON object")
+        serialized = json.dumps(settings, ensure_ascii=False, indent=4)
+        directory = os.path.dirname(os.path.abspath(self.settings_file))
+        with self._write_lock:
+            os.makedirs(directory, exist_ok=True)
+            if os.path.exists(self.settings_file):
+                # Never hide a damaged file by overwriting it with runtime defaults.
+                with open(self.settings_file, "r", encoding="utf-8") as existing:
+                    if not isinstance(json.load(existing), dict):
+                        raise ValueError("Existing settings must be a JSON object")
+                if not self._startup_backup_done:
+                    self.backup_existing()
+            temporary_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=directory,
+                    prefix=".smarti-settings-", suffix=".tmp", delete=False,
+                ) as temporary:
+                    temporary_path = temporary.name
+                    temporary.write(serialized)
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+                os.replace(temporary_path, self.settings_file)
+                self._startup_backup_done = True
+            finally:
+                if temporary_path and os.path.exists(temporary_path):
+                    os.remove(temporary_path)
 
     def decrypt_loaded_secrets(self, loaded):
         for key in SENSITIVE_SETTING_KEYS:

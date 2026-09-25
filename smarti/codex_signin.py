@@ -7,6 +7,8 @@ OAuth browser flow and its existing credential store.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import base64
+import copy
 import json
 import logging
 import os
@@ -588,7 +590,7 @@ class CodexSignInProvider:
             elif item.get("type") == "text":
                 parts.append(str(item.get("text") or ""))
             elif item.get("type") == "image_url":
-                parts.append("[צורפה תמונה; ספק Codex sign-in אינו שולח אותה בנתיב זה.]")
+                parts.append("[Image supplied with this request.]")
         return "\n".join(part for part in parts if part).strip()
 
     @staticmethod
@@ -656,6 +658,34 @@ class CodexSignInProvider:
             "Continue the SmartiAI conversation using the loaded SmartiAI system instructions.\n\n"
             + "\n\n".join(conversation)
         )
+
+    @staticmethod
+    def _prepare_image_inputs(messages, directory):
+        """Turn in-context images into ephemeral CLI inputs, preserving their order."""
+        prepared, paths = copy.deepcopy(messages), []
+        suffixes = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
+                    "image/webp": ".webp", "image/gif": ".gif"}
+        for message in prepared or []:
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for index, block in enumerate(content):
+                if not isinstance(block, dict) or block.get("type") != "image_url":
+                    continue
+                image = block.get("image_url") or {}
+                url = image.get("url", "") if isinstance(image, dict) else str(image)
+                match = re.fullmatch(r"data:([^;,]+);base64,(.*)", url, re.DOTALL)
+                if not match or match[1] not in suffixes:
+                    raise CodexSignInError("Codex image input requires a supported inline image.")
+                try:
+                    data = base64.b64decode(match[2], validate=True)
+                except ValueError as error:
+                    raise CodexSignInError("Invalid inline image data.") from error
+                path = Path(directory) / f"image-{len(paths) + 1}{suffixes[match[1]]}"
+                path.write_bytes(data)
+                paths.append(path)
+                content[index] = {"type": "text", "text": f"[Image {len(paths)} is attached to this request and belongs at this point in the conversation.]"}
+        return prepared, paths
 
     @staticmethod
     def _write_temporary_model_instructions(instructions: str) -> Path:
@@ -816,7 +846,9 @@ class CodexSignInProvider:
             self._build_model_instructions(messages, purpose=purpose)
         )
         output_schema_path = None
+        image_directory = tempfile.TemporaryDirectory(prefix="smarti-codex-images-")
         try:
+            prompt_messages, image_paths = self._prepare_image_inputs(messages, image_directory.name)
             args = [
                 # Keep ChatGPT sign-in from CODEX_HOME, but never inherit the
                 # user's Desktop/CLI tools, MCP servers, hooks, or instructions.
@@ -835,16 +867,19 @@ class CodexSignInProvider:
                 args.extend(("--output-schema", str(output_schema_path)))
             if selected_model and selected_model.lower() not in {"codex default", "default"}:
                 args.extend(("--model", selected_model))
+            for image_path in image_paths:
+                args.extend(("--image", str(image_path)))
             # ``-`` makes stdin the full Codex prompt.  The system instructions
             # are loaded at base-instruction priority from the temporary file.
             args.append("-")
             code, stdout, stderr = self._run(
                 args,
                 timeout=timeout,
-                input_text=self._build_prompt(messages, purpose=purpose),
+                input_text=self._build_prompt(prompt_messages, purpose=purpose),
                 cancel_event=cancel_event,
             )
         finally:
+            image_directory.cleanup()
             for path, label in ((instructions_path, "instruction"), (output_schema_path, "output-schema")):
                 if path is None:
                     continue

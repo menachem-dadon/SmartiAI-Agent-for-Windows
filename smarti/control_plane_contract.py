@@ -134,7 +134,10 @@ REQUEST_SCHEMAS = {
         "action": {"type": "string", "enum": ["scan", "repair", "cancel"]}, "include_network": {"type": "boolean"}, "repair_id": IDENTIFIER,
     }),
     "setWorkspaceRoot": _object({"path": {"type": "string", "minLength": 1, "maxLength": 32767}}, ("path",)),
-    "openWorkspaceFile": _object({"path": {"type": "string", "minLength": 1, "maxLength": 32767}}, ("path",)),
+    "openWorkspaceFile": _object({
+        "path": {"type": "string", "minLength": 1, "maxLength": 32767},
+        "action": {"type": "string", "enum": ["open", "open_with", "prepare_open_with"]},
+    }, ("path",)),
     "terminalAction": _object({
         "action": {"type": "string", "enum": ["write", "restart"]}, "text": {"type": "string", "maxLength": 100000},
     }, ("action",)),

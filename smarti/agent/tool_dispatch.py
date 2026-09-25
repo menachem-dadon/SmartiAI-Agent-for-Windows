@@ -97,6 +97,12 @@ class ToolDispatchMixin:
     def execute_tool(self, action, args_dict):
         if not isinstance(args_dict, dict):
             args_dict = {}
+        if action == "extract_image_text" or (
+            action == "file_manager" and args_dict.get("action") == "extract_image_text"
+        ):
+            # Reject calls retained in old conversations as well as direct calls.
+            return ("ERROR: This tool was removed. Analyze images directly in this agent loop. "
+                    "For files not yet attached, use file_manager action=attach with path or paths.", None)
         args_dict = self._normalize_tool_call_args(action, args_dict)
         unified_tools = {"system_manager", "software_manager", "file_manager", "web_manager", "screen_manager", "background_task_manager", "memory_manager", "extension_manager"}
         routed_from_unified = False
@@ -116,7 +122,7 @@ class ToolDispatchMixin:
         if action == "filesystem_operation":
             return (self.file_manager_operation(args_dict), None)
         if action == "attach_local_file":
-            return (self.attach_local_file_tool(args_dict.get("path", "")), None)
+            return (self.attach_local_file_tool(args_dict.get("path", ""), paths=args_dict.get("paths")), None)
         if action in {"search_mcp", "install_mcp", "run_mcp"} and not self.settings.get("enable_mcp_clawhub", False):
             return ("ERROR: MCP is disabled by user settings. Do not use MCP unless the user enables it.", None)
         if action in {"list_skills", "search_skills", "install_skill", "install_skill_requirements", "load_skill", "run_skill"} and not self.settings.get("enable_skills_beta", True):
@@ -390,10 +396,6 @@ class ToolDispatchMixin:
                 allowed, err = self._ensure_capability_allowed("computer_control", "אישור העתקה ללוח", str(args_dict.get("text", ""))[:500], risk="medium")
                 if not allowed: return (err, None)
                 return (self.set_clipboard_tool(args_dict.get("text", "")), None)
-            elif action == "extract_image_text":
-                allowed, err = self._ensure_cloud_upload_allowed(str(args_dict.get("path", "")))
-                if not allowed: return (err, None)
-                return (self.extract_image_text_tool(args_dict.get("path", "")), None)
             elif action == "search_memory":
                 return (self.search_memory_tool(args_dict.get("query", ""), args_dict.get("memory_type", "any"), args_dict.get("max_results", 6)), None)
             elif action == "memory_operation":

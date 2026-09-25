@@ -11,6 +11,7 @@ is used.
 | Tabs and navigation | New, close, duplicate, drag-reorder, pin, recently-closed restore, persistent-session restore, titles, loading/crash/audio states, back/forward/reload/stop/home and LTR omnibox | Inactive WebViews are hidden and asked to enter the frozen lifecycle state. Restore is capped at 12 tabs. |
 | Keyboard and focus | `Ctrl+L/T/W/Shift+T/F/D/R`, Alt+Left/Right, governed popup tabs and predictable active-target focus | Site-reserved shortcuts can still vary with WebView2 and IME configuration. |
 | Page commands | Find, 25-500% zoom, full screenshot, print-to-PDF, copy address and open externally | Native print preview, device emulation and DevTools remain developer-oriented WebView2/CDP facilities rather than Edge UI. |
+| Responsive viewport | Live window/splitter resizing; automatic mobile viewport at content widths up to 600 CSS px; per-tab Auto/Mobile/Desktop override; compact toolbar and full-width panels on phones | Mobile metrics follow actual available width/height and native DPI. This does not rewrite a site's fixed desktop layout or automatically change its user agent/reload a form; the separate mobile User Agent command is available for server-selected mobile sites. |
 | Library | Smarti-owned searchable-ready history data, bookmarks, recently closed tabs and persistent session | Guest navigation/downloads never enter the persistent library. The current UI lists and opens records; richer folder/tag organization is not vendor-synced. |
 | Downloads | Smarti-selected Windows Downloads destination, collision-safe names, dangerous executable/script extension blocking and requested/finished/failed history | Tauri's stable WebView download hook does not expose pause/resume/progress or a portable cancel handle; Smarti does not claim those controls. Browser/OS safe-browsing remains the second protection layer. |
 | Profiles and privacy | Smarti persistent WebView2 data plus per-tab incognito Guest directories; clear-profile action and complete Guest cleanup | No vendor account sync. Smarti never reads or displays password values. |
@@ -26,3 +27,17 @@ and the Core import response is accepted only over the authenticated Tauri
 proxy. Compatible cookie values are passed directly to `Network.setCookies`
 for the persistent visible tab and are never rendered in the import report.
 
+Responsive implementation (2026-09-13): `WorkbenchSurface` mounts one browser
+controller for the shared Rust broker. `useNativeBrowserSurface` coalesces
+native bounds in animation frames and keeps CDP metrics in a separate serial
+queue that discards intermediate sizes. Only opening/closing uses the cached
+preview handoff; ordinary resizing does not hide the live page. Width is no
+longer a Workbench transition. Hidden native tabs receive the latest bounds
+when activated. The Workspace can be resized down to 360 by 320 logical pixels;
+at phone window widths the Workbench fills the window's workspace area.
+
+Focused automated coverage includes rapid and height-only resizing, pending
+native/CDP requests, tab changes, mobile/desktop overrides, narrow side panels,
+short/collapsed viewports, and the single controller across Workbench entries.
+These checks establish scheduling/state behavior, not perceived native-window
+smoothness; no live visual acceptance or installer validation is claimed.

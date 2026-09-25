@@ -6,6 +6,8 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -37,7 +39,7 @@ interface ComposerProps {
   onManageModels?: () => void;
   onAutonomyMode?: (mode: string) => void | Promise<void>;
   onLocalFastMode?: (enabled: boolean) => void | Promise<void>;
-  onAttachments: (items: PendingAttachment[]) => void;
+  onAttachments: Dispatch<SetStateAction<PendingAttachment[]>>;
   onSend: (text: string, isVoice?: boolean) => Promise<void>;
   onCancel: () => void;
 }
@@ -141,6 +143,10 @@ export function Composer({
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
   const [status, setStatus] = useState("");
+  const [staging, setStaging] = useState(0);
+  const stagingCount = useRef(0);
+  const sending = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
   const [quota, setQuota] = useState<CodexQuota | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [quotaError, setQuotaError] = useState("");
@@ -196,38 +202,39 @@ export function Composer({
       clearInterval(timer);
     };
   }, [provider]);
-  const picked = async (files: FileList | null) => {
-    if (!files?.length) return;
+  const stageFiles = async (files: File[]) => {
+    if (!files.length) return;
+    stagingCount.current += 1;
+    setStaging(stagingCount.current);
     try {
-      onAttachments([
-        ...attachments,
-        ...(await Promise.all(Array.from(files).map(pastedFile))),
-      ]);
-      setStatus("");
-    } catch (reason) {
-      setStatus(String(reason));
+      const results = await Promise.allSettled(files.map(pastedFile));
+      const added = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+      onAttachments((current) => [...current, ...added]);
+      setStatus(results.flatMap((result) => result.status === "rejected" ? [String(result.reason)] : []).join("\n"));
+    } finally {
+      stagingCount.current -= 1;
+      setStaging(stagingCount.current);
     }
+  };
+  const picked = async (files: FileList | null) => {
+    await stageFiles(Array.from(files || []));
     if (picker.current) picker.current.value = "";
   };
   const paste = async (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (!files.length) return;
     event.preventDefault();
-    onAttachments([
-      ...attachments,
-      ...(await Promise.all(files.map(pastedFile))),
-    ]);
+    await stageFiles(files);
   };
   const drop = (event: DragEvent) => {
     event.preventDefault();
     const files = Array.from(event.dataTransfer.files);
-    if (files.length)
-      void Promise.all(files.map(pastedFile))
-        .then((items) => onAttachments([...attachments, ...items]))
-        .catch((reason) => setStatus(String(reason)));
+    void stageFiles(files);
   };
   const send = async () => {
-    if ((!text.trim() && !attachments.length) || disabled) return;
+    if ((!text.trim() && !attachments.length) || disabled || running || sending.current || stagingCount.current) return;
+    sending.current = true;
+    setSubmitting(true);
     const value = text;
     setText("");
     try {
@@ -235,6 +242,9 @@ export function Composer({
     } catch (reason) {
       setText(value);
       setStatus(`ההודעה לא נשלחה: ${String(reason)}`);
+    } finally {
+      sending.current = false;
+      setSubmitting(false);
     }
   };
   const key = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -464,9 +474,7 @@ export function Composer({
                   type="button"
                   aria-label={`הסרת ${item.name}`}
                   onClick={() =>
-                    onAttachments(
-                      attachments.filter((_, position) => position !== index),
-                    )
+                    onAttachments((current) => current.filter((attachment) => attachment !== item))
                   }
                 >
                   ×
@@ -488,9 +496,7 @@ export function Composer({
                   type="button"
                   aria-label={`הסרת ${item.name}`}
                   onClick={() =>
-                    onAttachments(
-                      attachments.filter((_, position) => position !== index),
-                    )
+                    onAttachments((current) => current.filter((attachment) => attachment !== item))
                   }
                 >
                   ×
@@ -504,7 +510,7 @@ export function Composer({
         ref={area}
         rows={1}
         value={text}
-        disabled={disabled || running || listening}
+        disabled={disabled || running || listening || submitting}
         placeholder="בקש כל דבר"
         onChange={(event) => setText(event.target.value)}
         onKeyDown={key}
@@ -534,7 +540,7 @@ export function Composer({
                     ? "הפסקת הכתבה"
                     : "הכתבה קולית"
             }
-            disabled={disabled && !running}
+            disabled={!running && (disabled || submitting || staging > 0)}
             onClick={
               running
                 ? onCancel
@@ -636,9 +642,9 @@ export function Composer({
           </label>
         )}
         <span className="composer-spacer" />
-        {status && (
+        {(status || staging > 0 || submitting) && (
           <span className="voice-status" role="status" dir="rtl">
-            {status}
+            {staging > 0 ? "מכין קבצים לצירוף…" : submitting ? "שולח…" : status}
           </span>
         )}
         <button

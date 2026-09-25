@@ -74,7 +74,7 @@ focused domain mixins under `smarti/agent/`.
   automation helpers.
 - `smarti/agent/tool_dispatch.py`: audited built-in tool dispatch.
 - `smarti/agent/system_tools.py`: weather, shell, git, project-check, process,
-  clipboard, OCR, custom Python tool, and MCP execution tools.
+  clipboard, custom Python tool, and MCP execution tools.
 - `smarti/agent/web_content.py`: website scraping and local document/image
   reading tools.
 - `smarti/agent/email_tools.py`: email configuration, IMAP/SMTP helpers, search,

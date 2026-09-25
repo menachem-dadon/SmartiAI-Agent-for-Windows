@@ -686,6 +686,51 @@ async fn core_api(
         .map_err(|error| format!("Core API worker failed: {error}"))?
 }
 
+#[tauri::command]
+async fn desktop_open_with(
+    window: tauri::Window,
+    path: String,
+    supervisor: tauri::State<'_, CoreSupervisor>,
+) -> Result<bool, String> {
+    let supervisor = supervisor.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let response = supervisor_core_api(
+            &supervisor,
+            CoreApiRequest {
+                method: "POST".into(),
+                path: "/v2/workbench/open".into(),
+                body: Some(json!({ "path": path, "action": "prepare_open_with" })),
+                idempotency_key: None,
+            },
+        )?;
+        if response.status != 200 {
+            return Err(response
+                .body
+                .get("detail")
+                .or_else(|| response.body.get("error"))
+                .and_then(Value::as_str)
+                .unwrap_or("Core rejected the workspace file")
+                .to_string());
+        }
+        let absolute_path = response
+            .body
+            .pointer("/data/absolute_path")
+            .and_then(Value::as_str)
+            .ok_or("Core omitted the validated workspace file path")?;
+        #[cfg(windows)]
+        {
+            windows_integration::open_with_dialog(&window, absolute_path)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (window, absolute_path);
+            Err("Windows Open With is unavailable on this platform".into())
+        }
+    })
+    .await
+    .map_err(|error| format!("Windows Open With worker failed: {error}"))?
+}
+
 fn supervisor_core_api(
     supervisor: &CoreSupervisor,
     request: CoreApiRequest,
@@ -1373,6 +1418,7 @@ pub fn run() {
             core_health,
             core_restart,
             core_api,
+            desktop_open_with,
             stage_attachment,
             read_attachment_preview,
             save_text_file,
@@ -1394,6 +1440,7 @@ pub fn run() {
             browser::browser_status,
             browser::browser_open,
             browser::browser_close,
+            browser::browser_close_workspace,
             browser::browser_duplicate,
             browser::browser_restore_closed,
             browser::browser_reorder,

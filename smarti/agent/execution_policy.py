@@ -302,7 +302,6 @@ class ExecutionPolicyMixin:
             "run_project_check": "shell",
             "list_processes": "file_search",
             "set_clipboard": "computer_control",
-            "extract_image_text": "file_read",
             "system_manager": "shell",
             "software_manager": "software_open",
             "file_manager": "file_search",
@@ -919,7 +918,7 @@ class ExecutionPolicyMixin:
             return "אני בודק מידע עדכני ברשת כדי לא להסתמך על זיכרון ישן."
         if key in {
             "smart_file_search", "deep_content_search", "read_local_document",
-            "analyze_local_image", "extract_image_text", "filesystem_operation",
+            "analyze_local_image", "attach_local_file", "filesystem_operation",
         }:
             return "אני בודק את הקבצים הרלוונטיים כדי להתבסס על מה שקיים בפועל."
         if key in {"save_text_file", "trash_file_or_folder", "save_screenshot_to_disk"}:

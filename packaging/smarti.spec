@@ -39,7 +39,6 @@ for package in (
     "PyPDF2",
     "pyautogui",
     "pygame",
-    "pytesseract",
     "send2trash",
     "speech_recognition",
     "truststore",

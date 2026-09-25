@@ -22,7 +22,7 @@ for package in (
     "aiohttp", "bs4", "cryptography", "docx", "edge_tts", "gtts",
     "keyring", "litellm", "markdown", "openai", "PIL", "fitz",
     "pymupdf", "pyaudio", "playwright", "PyPDF2", "pyautogui",
-    "pygame", "pytesseract", "send2trash", "speech_recognition",
+    "pygame", "send2trash", "speech_recognition",
     "truststore", "uiautomation", "windows_toasts", "win32com", "winrt",
 ):
     try:

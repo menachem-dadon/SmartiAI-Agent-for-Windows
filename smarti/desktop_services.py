@@ -5,6 +5,7 @@ import copy
 import base64
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import queue
@@ -24,6 +25,7 @@ from .config import (
     BUILTIN_DYNAMIC_TOOLS, BUILTIN_TOOL_SCHEMAS, DEFAULT_SETTINGS,
     PUBLIC_BUILTIN_TOOLS, TOOL_CATEGORIES,
 )
+from .open_with import open_with_dialog
 
 
 SETTING_GROUPS = (
@@ -565,12 +567,37 @@ class WorkspaceScope:
             except Exception: pass
             pythoncom.CoUninitialize()
 
-    def open_external(self, relative):
+    def open_external(self, relative, action="open"):
         _root, path = self.resolve(relative)
         if not os.path.isfile(path) or os.path.islink(path):
             raise ValueError("workspace_file_not_found")
-        os.startfile(path)
-        return {"opened": True, "path": os.path.relpath(path, self.root()).replace("\\", "/")}
+        if action not in {"open", "open_with", "prepare_open_with"}:
+            raise ValueError("invalid_workspace_open_action")
+        if action == "prepare_open_with":
+            return {"path": os.path.relpath(path, self.root()).replace("\\", "/"), "absolute_path": path}
+        if action == "open_with":
+            outcome = queue.Queue(maxsize=1)
+
+            def show_dialog():
+                try:
+                    outcome.put((True, open_with_dialog(path)))
+                except Exception as exc:
+                    logging.exception("Windows Open With dialog failed")
+                    outcome.put((False, exc))
+
+            threading.Thread(target=show_dialog, name="smarti-open-with", daemon=True).start()
+            try:
+                success, value = outcome.get(timeout=0.5)
+            except queue.Empty:
+                opened = True  # The Windows chooser is still open.
+            else:
+                if not success:
+                    raise value
+                opened = value
+        else:
+            os.startfile(path)
+            opened = True
+        return {"opened": opened, "path": os.path.relpath(path, self.root()).replace("\\", "/")}
 
     def artifacts(self):
         root = self.root()

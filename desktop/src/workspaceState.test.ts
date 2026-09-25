@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { closeWorkbenchTab, initialWorkspaceState, openWorkbenchTab, parseWorkbenchSnapshot, reorderWorkbenchTabs, workspaceColumns, workspaceOpenSizes, workspaceReducer, workspaceWorkbenchWidth } from "./workspaceState";
+import { closeWorkbenchTab, initialWorkspaceState, nextWorkbenchTabTitle, openWorkbenchTab, parseWorkbenchSnapshot, reorderWorkbenchTabs, workspaceColumns, workspaceOpenSizes, workspaceReducer, workspaceWorkbenchWidth } from "./workspaceState";
 
 describe("Workspace shell state", () => {
   test("starts with a central chat, right drawer, and truly empty left Workbench", () => {
@@ -38,6 +38,40 @@ describe("Workspace shell state", () => {
     const open = { conversationDrawerOpen: true, workbenchOpen: true, activeWorkbenchTab: "browser" as const };
     expect(workspaceColumns(open, 1205)).toBe("var(--rail-width) minmax(0, 1fr) 0px");
     expect(workspaceColumns(open, 1206)).toBe("var(--drawer-width) minmax(0, 1fr) 400px");
+  });
+
+  test("numbers repeatable tabs by the lowest available title of their own kind", () => {
+    const tabs = [
+      { id: "browser-11", kind: "browser" as const, title: "דפדפן" },
+      { id: "files-12", kind: "files" as const, title: "קבצים" },
+      { id: "browser-13", kind: "browser" as const, title: "דפדפן 3" },
+      { id: "terminal-14", kind: "terminal" as const, title: "מסוף" },
+    ];
+    expect(nextWorkbenchTabTitle(tabs, "browser", "דפדפן")).toBe("דפדפן 2");
+    expect(nextWorkbenchTabTitle(tabs, "files", "קבצים")).toBe("קבצים 2");
+    expect(nextWorkbenchTabTitle(tabs, "terminal", "מסוף")).toBe("מסוף 2");
+    expect(nextWorkbenchTabTitle(tabs.slice(1), "browser", "דפדפן")).toBe("דפדפן");
+    expect(nextWorkbenchTabTitle(tabs, "artifacts", "תוצרים")).toBe("תוצרים");
+    expect(nextWorkbenchTabTitle(tabs, "canvas", "קנבס")).toBe("קנבס");
+  });
+
+  test("repairs persisted automatic titles while retaining tab IDs and custom titles", () => {
+    expect(parseWorkbenchSnapshot({ tabs: [
+      { id: "browser-4", kind: "browser", title: "דפדפן" },
+      { id: "files-7", kind: "files", title: "קבצים" },
+      { id: "browser-9", kind: "browser", title: "דפדפן 9" },
+      { id: "terminal-12", kind: "terminal", title: "מסוף 12" },
+      { id: "browser-15", kind: "browser", title: "דפדפן אישי" },
+    ], active: "browser-9" })).toEqual({
+      tabs: [
+        { id: "browser-4", kind: "browser", title: "דפדפן" },
+        { id: "files-7", kind: "files", title: "קבצים" },
+        { id: "browser-9", kind: "browser", title: "דפדפן 2" },
+        { id: "terminal-12", kind: "terminal", title: "מסוף" },
+        { id: "browser-15", kind: "browser", title: "דפדפן אישי" },
+      ],
+      active: "browser-9",
+    });
   });
 
   test("keeps the native surface width stable while only its reserved space closes", () => {

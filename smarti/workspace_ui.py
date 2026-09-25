@@ -10,6 +10,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from .open_with import open_with_dialog
+
 from PyQt6.QtCore import (
     QDateTime,
     QDir,
@@ -419,6 +421,10 @@ class WorkspaceFilePanel(QWidget):
         self.open_external_btn.setEnabled(False)
         self.open_external_btn.clicked.connect(self.open_current_external)
         top.addWidget(self.open_external_btn)
+        self.open_with_btn = QPushButton("פתח באמצעות")
+        self.open_with_btn.setEnabled(False)
+        self.open_with_btn.clicked.connect(self.open_current_with)
+        top.addWidget(self.open_with_btn)
         layout.addLayout(top)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -549,6 +555,7 @@ class WorkspaceFilePanel(QWidget):
             return
         self.current_path = path
         self.open_external_btn.setEnabled(True)
+        self.open_with_btn.setEnabled(True)
         kind = classify_workspace_file(path)
         try:
             if kind == "markdown":
@@ -639,10 +646,17 @@ class WorkspaceFilePanel(QWidget):
         if self.current_path:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.current_path))
 
+    def open_current_with(self):
+        if self.current_path:
+            try:
+                open_with_dialog(self.current_path, int(self.window().winId()))
+            except OSError as exc:
+                QMessageBox.warning(self, "פתח באמצעות", str(exc))
+
     def apply_theme(self):
         self.setStyleSheet(f"background: {BG_ELEVATED_COLOR}; color: {TEXT_COLOR};")
         self.root_label.setStyleSheet(f"color: {MUTED_TEXT_COLOR}; font-size: 12px;")
-        for button in (self.choose_root_btn, self.open_external_btn):
+        for button in (self.choose_root_btn, self.open_external_btn, self.open_with_btn):
             button.setStyleSheet(SECONDARY_BUTTON_CSS)
         self.tree.setStyleSheet(
             f"QTreeView {{ background: {GLASS_COLOR}; color: {TEXT_COLOR}; border: 1px solid {SOFT_LINE_COLOR}; "
@@ -1548,7 +1562,7 @@ class WorkspaceArtifactsPanel(QWidget):
         header.addWidget(self.refresh_btn)
         layout.addLayout(header)
         self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(lambda item: self.open_requested.emit(str(item.data(Qt.ItemDataRole.UserRole) or "")))
+        self.list.itemClicked.connect(lambda item: self.open_requested.emit(str(item.data(Qt.ItemDataRole.UserRole) or "")))
         layout.addWidget(self.list, 1)
         self.apply_theme()
 

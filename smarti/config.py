@@ -92,7 +92,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "analyze_local_image": {
-        "description": "מפעיל ראייה ממוחשבת (Vision) לקריאת תוכן וניתוח של תמונה מקומית במחשב.",
+        "description": "מצרף תמונה מקומית להקשר של לולאת הסוכן הנוכחית. הסוכן מנתח אותה בעצמו בהמשך; אין קריאת AI נפרדת.",
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string", "description": "נתיב מלא לקובץ התמונה"}},
@@ -522,14 +522,7 @@ BUILTIN_TOOL_SCHEMAS = {
             "required": ["text"]
         }
     },
-    "extract_image_text": {
-        "description": "OCR אופציונלי לתמונה מקומית באמצעות pytesseract אם מותקן.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"path": {"type": "string", "description": "נתיב לתמונה"}},
-            "required": ["path"]
-        }
-    }
+
 }
 
 BUILTIN_DYNAMIC_TOOLS = {
@@ -563,7 +556,6 @@ BUILTIN_DYNAMIC_TOOLS = {
     "run_project_check": "הרצת בדיקות או build בפרויקט תחת מדיניות.",
     "list_processes": "הצגת תהליכים פעילים.",
     "set_clipboard": "העתקת טקסט ללוח הגזירים.",
-    "extract_image_text": "OCR אופציונלי מתמונה מקומית."
   }
 
 BUILTIN_TOOL_SCHEMAS["computer_automation_manager"] = {
@@ -649,7 +641,7 @@ BUILTIN_TOOL_SCHEMAS["software_manager"] = {
 
 FILE_MANAGER_ACTIONS = [
     "open", "save_text", "read_document", "search_files", "search_content",
-    "extract_image_text", "attach", "list_directory", "tree", "stat", "exists",
+    "attach", "list_directory", "tree", "stat", "exists",
     "hash", "compare", "diff_text", "read_chunk", "disk_usage", "mkdir", "copy",
     "move", "rename", "atomic_write_text", "append_text", "touch", "batch",
     "trash", "restore_from_trash", "zip", "unzip",
@@ -679,7 +671,7 @@ FILE_MANAGER_OPERATION_PROPERTIES = {
     "source": {"type": "string", "description": "Source path for copy, move, rename, compare, diff_text, zip, or unzip."},
     "destination": {"type": "string", "description": "Destination path for copy, move, rename, restore, zip, or unzip."},
     "other_path": {"type": "string", "description": "Second path alias for compare or diff_text."},
-    "paths": {"type": "array", "items": {"type": "string"}, "description": "Multiple paths for multi-read or zip operations."},
+    "paths": {"type": "array", "items": {"type": "string"}, "description": "Multiple paths for attach, multi-read or zip operations. attach accepts mixed file types in one call."},
     "content": {"type": "string", "description": "Text content for save_text, atomic_write_text, or append_text."},
     "query": {
         "type": "string",
@@ -939,8 +931,10 @@ FILE_MANAGER_OPERATION_PROPERTIES = {
 BUILTIN_TOOL_SCHEMAS["file_manager"] = {
     "description": (
         "Complete safe filesystem manager: inspect/list/tree/stat/exists/hash/compare/diff/read chunks/disk usage; "
-        "mkdir/copy/move/rename/atomic text write/append/touch/batch; safe zip/unzip; attach/open/read/search/OCR; "
-        "and reversible trash/restore. Mutations resolve exact paths, default to conflict=fail, are cancelable, "
+        "mkdir/copy/move/rename/atomic text write/append/touch/batch; safe zip/unzip; attach/open/read/search; "
+        "attach accepts path or paths and supplies file contents to the current agent loop for continued analysis; "
+        "it does not call another model or return an AI description. Analyze already attached images directly, "
+        "including Hebrew text extraction. Supports reversible trash/restore. Mutations resolve exact paths, default to conflict=fail, are cancelable, "
         "and return observed per-item metadata. Permanent delete is not available."
     ),
     "inputSchema": {
@@ -995,7 +989,7 @@ BUILTIN_TOOL_SCHEMAS["web_manager"] = {
 }
 
 BUILTIN_TOOL_SCHEMAS["screen_manager"] = {
-    "description": "Unified screen and image-context tool for screenshot capture, saving screenshots, and local image analysis.",
+    "description": "Unified screen and image-context tool for screenshot capture and saving screenshots. analyze_image supplies the image to the current agent loop; it does not run a separate analysis task. For multiple local files use file_manager action=attach with paths.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -1620,8 +1614,7 @@ TOOL_ACTION_FIELDS = {
         "read_document": ("path",),
         "search_files": _FILE_QUERY_FIELDS,
         "search_content": ("directory", "text"),
-        "extract_image_text": ("path",),
-        "attach": ("path",),
+        "attach": ("path", "paths"),
         "list_directory": (
             "path", "offset", "limit", "sort_by", "sort_order",
             "directories_first", "detail", "fields", "output_format",
@@ -1832,7 +1825,7 @@ TOOL_ACTION_FIELDS = {
 BUILTIN_DYNAMIC_TOOLS.update({
     "system_manager": "Unified system: run_command, git_status, run_project_check, list_processes, set_clipboard, set_volume.",
     "software_manager": "Unified software launcher: list/find/open/refresh installed apps with cached discovery.",
-    "file_manager": "Complete safe filesystem manager: inspect/list/tree/stat/hash/compare/diff/chunks/disk usage; mkdir/copy/move/rename/atomic write/append/touch/batch; zip/unzip; open/read/search/OCR/attach; reversible trash/restore. No permanent delete.",
+    "file_manager": "Complete safe filesystem manager: inspect/list/tree/stat/hash/compare/diff/chunks/disk usage; mkdir/copy/move/rename/atomic write/append/touch/batch; zip/unzip; open/read/search; reversible trash/restore. attach accepts path or paths (mixed types) and supplies contents to this agent loop for your analysis, without calling another model. Analyze already supplied images directly. No permanent delete.",
     "web_manager": "Unified web: search, page/site read/crawl, open, weather.",
     "screen_manager": "Unified screen/image context: capture, save_screenshot, analyze_image.",
     "background_task_manager": "Unified background tasks: schedule, list, cancel, retry.",
@@ -1849,7 +1842,7 @@ BUILTIN_DYNAMIC_TOOLS.update({
 LEGACY_BUILTIN_TOOLS = {
     "system_command", "git_status", "run_project_check", "list_processes", "set_clipboard", "set_volume",
     "open_software", "list_software",
-    "open_file_or_folder", "save_text_file", "read_local_document", "smart_file_search", "deep_content_search", "extract_image_text",
+    "open_file_or_folder", "save_text_file", "read_local_document", "smart_file_search", "deep_content_search",
     "internet_search", "read_website", "open_in_browser", "get_weather",
     "capture_screen", "save_screenshot_to_disk", "analyze_local_image",
     "schedule_background_task", "list_background_tasks", "cancel_background_task", "retry_background_task",
@@ -2036,7 +2029,7 @@ DEFAULT_SETTINGS = {
     "active_task_checkpoint_enabled": True,
     "network_auto_resume_enabled": True,
     "network_reconnect_wait_minutes": 180,
-    "attachment_inline_max_mb": 20,
+    "attachment_inline_max_mb": 25,
     "attachment_text_excerpt_chars": 10000,
     "conversation_attachments_limit": 80,
     "max_parallel_tool_calls": 4,

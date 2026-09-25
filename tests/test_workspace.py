@@ -1,10 +1,13 @@
+import ctypes
 import json
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -21,8 +24,10 @@ from smarti.browser_profile import (
     read_history,
 )
 from smarti.config import DEFAULT_SETTINGS
+from smarti.desktop_services import WorkspaceScope
+from smarti.open_with import _OpenAsInfo, open_with_dialog
 from smarti.chat import ChatWindow
-from smarti.workspace_ui import WorkspaceSidebar, WorkspaceWorkbench, classify_workspace_file
+from smarti.workspace_ui import WorkspaceArtifactsPanel, WorkspaceSidebar, WorkspaceWorkbench, classify_workspace_file
 from smarti.tauri_migration import (
     legacy_browser_migration_payload,
     mark_legacy_browser_migration_applied,
@@ -45,6 +50,76 @@ class WorkspaceClassificationTests(unittest.TestCase):
         self.assertTrue(preferences["workspace_workbench_collapsed"])
         self.assertFalse(preferences["workspace_sidebar_collapsed"])
         self.assertTrue(DEFAULT_SETTINGS["browser_embedded_primary"])
+
+
+class WorkspaceOpenWithTests(unittest.TestCase):
+    def test_prepare_open_with_returns_only_a_validated_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "example.png"
+            file.write_bytes(b"png")
+            scope = WorkspaceScope(SimpleNamespace(settings={}, _sandbox_enabled=lambda: False))
+            scope._root = directory
+            with patch("smarti.desktop_services.open_with_dialog") as chooser:
+                prepared = scope.open_external("example.png", "prepare_open_with")
+                self.assertEqual(prepared["path"], "example.png")
+                self.assertTrue(Path(prepared["absolute_path"]).samefile(file))
+                with self.assertRaisesRegex(ValueError, "workspace_path_outside_root"):
+                    scope.open_external("../outside.png", "prepare_open_with")
+                chooser.assert_not_called()
+
+    def test_open_with_uses_windows_dialog_only_for_a_scoped_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "example.txt"
+            file.write_text("hello", encoding="utf-8")
+            scope = WorkspaceScope(SimpleNamespace(settings={}, _sandbox_enabled=lambda: False))
+            scope._root = directory
+            called = threading.Event()
+            with patch("smarti.desktop_services.open_with_dialog", side_effect=lambda _path: called.set()) as chooser:
+                scope.open_external("example.txt", "open_with")
+                self.assertTrue(called.wait(2))
+                chooser.assert_called_once()
+                self.assertTrue(Path(chooser.call_args.args[0]).samefile(file))
+                with self.assertRaisesRegex(ValueError, "workspace_path_outside_root"):
+                    scope.open_external("../outside.txt", "open_with")
+                chooser.assert_called_once()
+
+    def test_open_with_reports_immediate_windows_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "example.png").write_bytes(b"png")
+            scope = WorkspaceScope(SimpleNamespace(settings={}, _sandbox_enabled=lambda: False))
+            scope._root = directory
+            with patch("smarti.desktop_services.open_with_dialog", side_effect=OSError(1155, "no association")):
+                with self.assertRaises(OSError):
+                    scope.open_external("example.png", "open_with")
+
+
+@unittest.skipUnless(os.name == "nt", "Windows shell API")
+class WindowsOpenWithDialogTests(unittest.TestCase):
+    def test_uses_shell_dialog_with_execute_flag_and_unicode_path(self):
+        ole32 = Mock()
+        ole32.CoInitializeEx.return_value = 0
+        shell32 = Mock()
+        shell32.SHOpenWithDialog.return_value = 0
+        dlls = {"ole32": ole32, "shell32": shell32}
+        path = "C:\\תוצרים\\תמונה.png"
+
+        with patch("smarti.open_with.ctypes.WinDLL", side_effect=dlls.__getitem__):
+            self.assertTrue(open_with_dialog(path, parent_hwnd=123))
+
+        hwnd, info_ptr = shell32.SHOpenWithDialog.call_args.args
+        info = ctypes.cast(info_ptr, ctypes.POINTER(_OpenAsInfo)).contents
+        self.assertEqual(hwnd, 123)
+        self.assertEqual(info.pcszFile, path)
+        self.assertEqual(info.oaifInFlags, 0x4)
+        ole32.CoUninitialize.assert_called_once()
+
+    def test_cancel_is_not_reported_as_an_error(self):
+        ole32 = Mock()
+        ole32.CoInitializeEx.return_value = 0
+        shell32 = Mock()
+        shell32.SHOpenWithDialog.return_value = -2147023673
+        with patch("smarti.open_with.ctypes.WinDLL", side_effect={"ole32": ole32, "shell32": shell32}.__getitem__):
+            self.assertFalse(open_with_dialog("C:\\example.png", parent_hwnd=123))
 
 
 class WorkspaceShellUiTests(unittest.TestCase):
@@ -75,6 +150,20 @@ class WorkspaceShellUiTests(unittest.TestCase):
         self.assertEqual(work_area.tabs.count(), 2)
         work_area.shutdown()
         work_area.deleteLater()
+
+    def test_artifact_opens_on_single_click(self):
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QListWidgetItem
+
+        panel = WorkspaceArtifactsPanel(object())
+        opened = []
+        panel.open_requested.connect(opened.append)
+        item = QListWidgetItem("example.txt")
+        item.setData(Qt.ItemDataRole.UserRole, "C:/workspace/example.txt")
+        panel.list.addItem(item)
+        panel.list.itemClicked.emit(item)
+        self.assertEqual(opened, ["C:/workspace/example.txt"])
+        panel.deleteLater()
 
     def test_browser_tab_numbers_reuse_the_lowest_available_number(self):
         class BrowserStub(QWidget):

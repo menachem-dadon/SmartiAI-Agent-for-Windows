@@ -109,6 +109,89 @@ afterEach(() => {
 });
 
 describe("native browser overlay visibility", () => {
+  it("creates a separate native page for a newly opened Workbench browser tab", async () => {
+    let state: BrowserSnapshot = {
+      ...snapshot,
+      tabs: [{ ...snapshot.tabs[0], workspaceId: "browser-1", url: "https://one.test/" }],
+    };
+    mocks.invoke.mockImplementation(async (command: string, args?: { workspaceId?: string; tabId?: string }) => {
+      if (command === "browser_status" || command === "browser_metadata") return state;
+      if (command === "browser_open" && args?.workspaceId === "browser-2") {
+        state = {
+          ...state, activeTabId: "tab-00000002",
+          tabs: [...state.tabs.map((tab) => ({ ...tab, active: false })), { ...snapshot.tabs[0], tabId: "tab-00000002", workspaceId: "browser-2", url: "https://www.google.com/?hl=he" }],
+        };
+        return state;
+      }
+      if (command === "browser_activate" && args?.tabId) {
+        state = { ...state, activeTabId: args.tabId };
+        return state;
+      }
+      return undefined;
+    });
+    const { rerender } = render(<BrowserPanel visible workspaceTabId="browser-1" />);
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "כתובת או חיפוש" }) as HTMLInputElement).value).toBe("https://one.test/"));
+    rerender(<BrowserPanel visible workspaceTabId="browser-2" />);
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("browser_open", expect.objectContaining({ workspaceId: "browser-2" })));
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "כתובת או חיפוש" }) as HTMLInputElement).value).toBe("https://www.google.com/?hl=he"));
+    expect(state.tabs.map((tab) => tab.workspaceId)).toEqual(["browser-1", "browser-2"]);
+  });
+  it("keeps addresses and navigation independent across Workbench browser tabs", async () => {
+    let state: BrowserSnapshot = {
+      ...snapshot,
+      tabs: [
+        { ...snapshot.tabs[0], workspaceId: "browser-1", url: "https://one.test/", title: "One" },
+        { ...snapshot.tabs[0], tabId: "tab-00000002", targetId: "wv2-target-00000002", webviewLabel: "browser-00000002", workspaceId: "browser-2", url: "https://two.test/", title: "Two", active: false },
+      ],
+    };
+    mocks.invoke.mockImplementation(async (command: string, args?: { tabId?: string; url?: string }) => {
+      if (command === "browser_status" || command === "browser_metadata") return state;
+      if (command === "browser_activate" && args?.tabId) {
+        state = { ...state, activeTabId: args.tabId, tabs: state.tabs.map((tab) => ({ ...tab, active: tab.tabId === args.tabId })) };
+        return state;
+      }
+      if (command === "browser_navigate" && args?.tabId && args.url) {
+        state = { ...state, tabs: state.tabs.map((tab) => tab.tabId === args.tabId ? { ...tab, url: args.url! } : tab) };
+        return state;
+      }
+      return undefined;
+    });
+    const { rerender } = render(<BrowserPanel visible workspaceTabId="browser-1" />);
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "כתובת או חיפוש" }) as HTMLInputElement).value).toBe("https://one.test/"));
+    expect(screen.getAllByRole("tab")).toHaveLength(1);
+    rerender(<BrowserPanel visible workspaceTabId="browser-2" />);
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("browser_activate", { tabId: "tab-00000002" }));
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "כתובת או חיפוש" }) as HTMLInputElement).value).toBe("https://two.test/"));
+    fireEvent.change(screen.getByRole("textbox", { name: "כתובת או חיפוש" }), { target: { value: "https://changed.test/" } });
+    fireEvent.submit(screen.getByRole("textbox", { name: "כתובת או חיפוש" }).closest("form")!);
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("browser_navigate", { tabId: "tab-00000002", url: "https://changed.test/" }));
+    rerender(<BrowserPanel visible workspaceTabId="browser-1" />);
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "כתובת או חיפוש" }) as HTMLInputElement).value).toBe("https://one.test/"));
+    expect(state.tabs[0].url).toBe("https://one.test/");
+  });
+  it("offers automatic mobile layout and lets the user override it for the current tab", async () => {
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
+      x: 10, y: 100, width: 390, height: 620, top: 100, right: 400, bottom: 720, left: 10,
+      toJSON: () => ({}),
+    });
+    render(<BrowserPanel visible />);
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("browser_action", {
+      action: expect.objectContaining({ method: "Emulation.setDeviceMetricsOverride", params: { width: 390, height: 620, mobile: true, deviceScaleFactor: 0 } }),
+    }));
+    selectedMenuId = "browser-viewport-desktop";
+    fireEvent.click(screen.getByRole("button", { name: "תפריט דפדפן" }));
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("browser_action", {
+      action: expect.objectContaining({ tabId: snapshot.activeTabId, method: "Emulation.clearDeviceMetricsOverride" }),
+    }));
+    const menu = mocks.invoke.mock.calls.find(([name]) => name === "desktop_popup_rtl_menu")![1].items;
+    expect(menu).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "browser-viewport-auto", text: "✓ תצוגה אוטומטית לפי הרוחב" }),
+      expect.objectContaining({ id: "browser-viewport-mobile" }),
+      expect.objectContaining({ id: "browser-viewport-desktop" }),
+    ]));
+    expect(mocks.invoke.mock.calls.some(([name]) => name === "browser_reload")).toBe(false);
+  });
+
   it("updates developer tools after settings change without recreating the browser", async () => {
     render(<BrowserPanel visible />);
     await waitFor(() => expect(lastNativeVisibility()).toEqual({ visible: true }));

@@ -10,7 +10,8 @@ use std::time::Duration;
 use std::time::Instant;
 use tauri::{
     webview::{DownloadEvent, PageLoadEvent},
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Webview, WebviewBuilder, WebviewUrl,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Webview, WebviewBuilder,
+    WebviewUrl,
 };
 
 const CDP_TIMEOUT: Duration = Duration::from_secs(12);
@@ -44,8 +45,8 @@ impl BrowserBounds {
             || self.x.abs() > 32_768.0
             || self.y < 0.0
             || self.y > 32_768.0
-            || self.width < 160.0
-            || self.height < 120.0
+            || self.width < 1.0
+            || self.height < 1.0
             || self.width > 16_384.0
             || self.height > 16_384.0
         {
@@ -59,6 +60,7 @@ impl BrowserBounds {
 #[serde(rename_all = "camelCase")]
 pub struct BrowserTab {
     pub tab_id: String,
+    pub workspace_id: String,
     pub target_id: String,
     pub webview_label: String,
     pub profile: BrowserProfile,
@@ -105,7 +107,7 @@ struct BrowserInner {
     next_tab: u64,
     tabs: HashMap<String, BrowserTab>,
     tab_order: Vec<String>,
-    recently_closed: Vec<(BrowserProfile, String)>,
+    recently_closed: Vec<(BrowserProfile, String, String)>,
     active_tab_id: Option<String>,
     bounds: BrowserBounds,
     persistent_dir: PathBuf,
@@ -124,6 +126,13 @@ pub struct BrowserBridgeEndpoint {
 }
 
 impl BrowserBroker {
+    fn bounds(&self) -> Result<BrowserBounds, String> {
+        self.inner
+            .lock()
+            .map(|inner| inner.bounds.clone())
+            .map_err(|_| "browser broker mutex poisoned".to_string())
+    }
+
     pub fn new(app_data_dir: PathBuf, cache_dir: PathBuf) -> Self {
         Self {
             inner: Arc::new(Mutex::new(BrowserInner {
@@ -214,6 +223,7 @@ impl BrowserBroker {
         &self,
         profile: BrowserProfile,
         url: String,
+        workspace_id: Option<String>,
     ) -> Result<(BrowserTab, BrowserBounds, PathBuf), String> {
         let mut inner = self
             .inner
@@ -221,12 +231,19 @@ impl BrowserBroker {
             .map_err(|_| "browser broker mutex poisoned".to_string())?;
         let ordinal = inner.next_tab;
         inner.next_tab += 1;
+        let workspace_id = workspace_id.unwrap_or_else(|| {
+            inner.active_tab_id.as_ref()
+                .and_then(|id| inner.tabs.get(id))
+                .map(|tab| tab.workspace_id.clone())
+                .unwrap_or_default()
+        });
         for tab in inner.tabs.values_mut() {
             tab.active = false;
         }
         let tab_id = format!("tab-{ordinal:08}");
         let tab = BrowserTab {
             tab_id: tab_id.clone(),
+            workspace_id,
             target_id: format!("wv2-target-{ordinal:08}"),
             webview_label: format!("browser-{ordinal:08}"),
             profile,
@@ -350,7 +367,7 @@ fn structured_action(
             .or_else(|| payload.get("targetUrl"))
             .and_then(Value::as_str)
             .unwrap_or(DEFAULT_URL);
-        return create_webview(app, broker, BrowserProfile::Persistent, url)
+        return create_webview(app, broker, BrowserProfile::Persistent, url, None)
             .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()));
     }
     let tab = active_tab_for_request(
@@ -681,7 +698,7 @@ pub fn run_foundation_smoke(app: AppHandle, broker: BrowserBroker, result_path: 
             let (site_port, site_stop) = start_smoke_site()?;
             let url = format!("http://127.0.0.1:{site_port}/");
             let started = Instant::now();
-            let persistent = create_webview(&app, &broker, BrowserProfile::Persistent, &url)?;
+            let persistent = create_webview(&app, &broker, BrowserProfile::Persistent, &url, None)?;
             let first_tab = persistent.tabs.into_iter().find(|tab| tab.active).ok_or("persistent smoke tab missing")?;
             std::thread::sleep(Duration::from_secs(2));
             let first_tab_ms = started.elapsed().as_millis();
@@ -699,7 +716,7 @@ pub fn run_foundation_smoke(app: AppHandle, broker: BrowserBroker, result_path: 
             std::thread::sleep(Duration::from_secs(1));
             let persistent_storage = cdp_for_tab(&app, &first_tab, "Runtime.evaluate", json!({"expression":"localStorage.getItem('smarti-point6')","returnByValue":true}))?;
 
-            let guest_snapshot = create_webview(&app, &broker, BrowserProfile::Guest, &url)?;
+            let guest_snapshot = create_webview(&app, &broker, BrowserProfile::Guest, &url, None)?;
             let guest = guest_snapshot.tabs.into_iter().find(|tab| tab.active).ok_or("guest smoke tab missing")?;
             std::thread::sleep(Duration::from_secs(1));
             let guest_initial = cdp_for_tab(&app, &guest, "Runtime.evaluate", json!({"expression":"localStorage.getItem('smarti-point6')","returnByValue":true}))?;
@@ -710,7 +727,7 @@ pub fn run_foundation_smoke(app: AppHandle, broker: BrowserBroker, result_path: 
             broker.rollback_tab(&guest.tab_id);
             let _ = std::fs::remove_dir_all(broker.inner.lock().map_err(|_| "browser broker mutex poisoned".to_string())?.guest_root.join(&guest.tab_id));
 
-            let guest_two_snapshot = create_webview(&app, &broker, BrowserProfile::Guest, &url)?;
+            let guest_two_snapshot = create_webview(&app, &broker, BrowserProfile::Guest, &url, None)?;
             let guest_two = guest_two_snapshot.tabs.into_iter().find(|tab| tab.active).ok_or("second guest smoke tab missing")?;
             std::thread::sleep(Duration::from_secs(1));
             let guest_after_close = cdp_for_tab(&app, &guest_two, "Runtime.evaluate", json!({"expression":"localStorage.getItem('smarti-point6')","returnByValue":true}))?;
@@ -936,12 +953,13 @@ fn create_webview(
     broker: &BrowserBroker,
     profile: BrowserProfile,
     input: &str,
+    workspace_id: Option<String>,
 ) -> Result<BrowserSnapshot, String> {
     let url = normalize_url(input)?;
     let parsed = url
         .parse::<tauri::Url>()
         .map_err(|error| error.to_string())?;
-    let (tab, bounds, data_dir) = broker.allocate_tab(profile, url)?;
+    let (tab, bounds, data_dir) = broker.allocate_tab(profile, url, workspace_id)?;
     std::fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
     let parent = app
         .get_window("main")
@@ -961,6 +979,7 @@ fn create_webview(
     let popup_app = app.clone();
     let popup_broker = broker.clone();
     let popup_profile = profile;
+    let popup_workspace = tab.workspace_id.clone();
     let download_app = app.clone();
     let download_profile = profile;
     let builder = WebviewBuilder::new(&tab.webview_label, WebviewUrl::External(parsed))
@@ -994,8 +1013,9 @@ fn create_webview(
             let event_app = popup_app.clone();
             let create_app = popup_app.clone();
             let create_broker = popup_broker.clone();
+            let create_workspace = popup_workspace.clone();
             std::thread::spawn(move || {
-                let result = create_webview(&create_app, &create_broker, popup_profile, &popup_url);
+                let result = create_webview(&create_app, &create_broker, popup_profile, &popup_url, Some(create_workspace));
                 let _ = event_app.emit("browser://popup-opened", json!({"ok":result.is_ok()}));
             });
             tauri::webview::NewWindowResponse::Deny
@@ -1052,8 +1072,9 @@ pub async fn browser_open(
     broker: tauri::State<'_, BrowserBroker>,
     profile: BrowserProfile,
     url: String,
+    workspace_id: Option<String>,
 ) -> Result<BrowserSnapshot, String> {
-    create_webview(&app, &broker, profile, &url)
+    create_webview(&app, &broker, profile, &url, workspace_id)
 }
 
 #[tauri::command]
@@ -1073,7 +1094,7 @@ pub async fn browser_close(
             .map_err(|_| "browser broker mutex poisoned".to_string())?;
         inner.tabs.remove(&tab_id);
         inner.tab_order.retain(|id| id != &tab_id);
-        inner.recently_closed.push((tab.profile, tab.url.clone()));
+        inner.recently_closed.push((tab.profile, tab.url.clone(), tab.workspace_id.clone()));
         if inner.recently_closed.len() > 32 {
             inner.recently_closed.remove(0);
         }
@@ -1091,6 +1112,7 @@ pub async fn browser_close(
     if let Some(next) = next {
         let next_tab = broker.tab(&next)?;
         if let Some(webview) = app.get_webview(&next_tab.webview_label) {
+            set_webview_bounds(&webview, &broker.bounds()?)?;
             let _ = webview.show();
             let _ = webview.set_focus();
         }
@@ -1106,22 +1128,46 @@ pub async fn browser_duplicate(
     tab_id: String,
 ) -> Result<BrowserSnapshot, String> {
     let tab = broker.tab(&tab_id)?;
-    create_webview(&app, &broker, tab.profile, &tab.url)
+    create_webview(&app, &broker, tab.profile, &tab.url, Some(tab.workspace_id))
 }
 
 #[tauri::command]
 pub async fn browser_restore_closed(
     app: AppHandle,
     broker: tauri::State<'_, BrowserBroker>,
+    workspace_id: Option<String>,
 ) -> Result<BrowserSnapshot, String> {
-    let closed = broker
-        .inner
-        .lock()
-        .map_err(|_| "browser broker mutex poisoned".to_string())?
-        .recently_closed
-        .pop();
-    let (profile, url) = closed.ok_or("no recently closed browser tab")?;
-    create_webview(&app, &broker, profile, &url)
+    let closed = {
+        let mut inner = broker.inner.lock()
+            .map_err(|_| "browser broker mutex poisoned".to_string())?;
+        if let Some(workspace_id) = workspace_id {
+            inner.recently_closed.iter().rposition(|item| item.2 == workspace_id)
+                .map(|index| inner.recently_closed.remove(index))
+        } else {
+            inner.recently_closed.pop()
+        }
+    };
+    let (profile, url, workspace_id) = closed.ok_or("no recently closed browser tab")?;
+    create_webview(&app, &broker, profile, &url, Some(workspace_id))
+}
+
+#[tauri::command]
+pub async fn browser_close_workspace(
+    app: AppHandle,
+    broker: tauri::State<'_, BrowserBroker>,
+    workspace_id: String,
+) -> Result<BrowserSnapshot, String> {
+    if workspace_id.is_empty() {
+        return Err("workspace browser id is required".into());
+    }
+    let ids = broker.snapshot().tabs.into_iter()
+        .filter(|tab| tab.workspace_id == workspace_id)
+        .map(|tab| tab.tab_id)
+        .collect::<Vec<_>>();
+    for tab_id in ids {
+        browser_close(app.clone(), broker.clone(), tab_id).await?;
+    }
+    Ok(broker.snapshot())
 }
 
 #[tauri::command]
@@ -1211,9 +1257,11 @@ pub async fn browser_activate(
 ) -> Result<BrowserSnapshot, String> {
     let selected = broker.tab(&tab_id)?;
     let tabs = broker.snapshot().tabs;
+    let bounds = broker.bounds()?;
     for tab in tabs {
         if let Some(webview) = app.get_webview(&tab.webview_label) {
             if tab.tab_id == tab_id {
+                set_webview_bounds(&webview, &bounds)?;
                 let _ = cdp_call(
                     &webview,
                     "Page.setWebLifecycleState".into(),
@@ -1245,6 +1293,15 @@ pub async fn browser_activate(
     Ok(broker.snapshot())
 }
 
+fn set_webview_bounds(webview: &Webview, bounds: &BrowserBounds) -> Result<(), String> {
+    webview
+        .set_bounds(Rect {
+            position: LogicalPosition::new(bounds.x, bounds.y).into(),
+            size: LogicalSize::new(bounds.width, bounds.height).into(),
+        })
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn browser_set_bounds(
     app: AppHandle,
@@ -1259,14 +1316,11 @@ pub async fn browser_set_bounds(
             .map_err(|_| "browser broker mutex poisoned".to_string())?
             .bounds = bounds.clone();
     }
-    for tab in broker.snapshot().tabs {
+    // Hidden tabs adopt the latest shared bounds just before they are shown.
+    // Resizing them all here makes drag latency grow with the tab count.
+    for tab in broker.snapshot().tabs.into_iter().filter(|tab| tab.active) {
         if let Some(webview) = app.get_webview(&tab.webview_label) {
-            webview
-                .set_bounds(Rect {
-                    position: LogicalPosition::new(bounds.x, bounds.y).into(),
-                    size: LogicalSize::new(bounds.width, bounds.height).into(),
-                })
-                .map_err(|error| error.to_string())?;
+            set_webview_bounds(&webview, &bounds)?;
         }
     }
     Ok(())
@@ -1282,6 +1336,7 @@ pub async fn browser_set_visible(
     for tab in snapshot.tabs {
         if let Some(webview) = app.get_webview(&tab.webview_label) {
             if visible && tab.active {
+                set_webview_bounds(&webview, &broker.bounds()?)?;
                 // Visibility/geometry must not wait for a frozen page's CDP
                 // response (which can take seconds). Queue the native show first.
                 webview.show().map_err(|error| error.to_string())?;
@@ -1474,7 +1529,7 @@ mod tests {
             height: 10.0
         }
         .validate()
-        .is_err());
+        .is_ok());
         assert!(BrowserBounds {
             x: 0.0,
             y: 100.0,
@@ -1491,13 +1546,36 @@ mod tests {
         };
         assert!(sliding.validate().is_ok());
         for x in [f64::NAN, f64::INFINITY, -32_769.0, 32_769.0] {
-            assert!(BrowserBounds { x, ..sliding.clone() }.validate().is_err());
+            assert!(BrowserBounds {
+                x,
+                ..sliding.clone()
+            }
+            .validate()
+            .is_err());
         }
         for y in [-1.0, 32_769.0] {
-            assert!(BrowserBounds { y, ..sliding.clone() }.validate().is_err());
+            assert!(BrowserBounds {
+                y,
+                ..sliding.clone()
+            }
+            .validate()
+            .is_err());
         }
-        for width in [0.0, 159.0, 16_385.0, f64::INFINITY] {
-            assert!(BrowserBounds { width, ..sliding.clone() }.validate().is_err());
+        for width in [0.0, -1.0, 16_385.0, f64::INFINITY] {
+            assert!(BrowserBounds {
+                width,
+                ..sliding.clone()
+            }
+            .validate()
+            .is_err());
+        }
+        for height in [0.0, -1.0, 16_385.0, f64::NAN] {
+            assert!(BrowserBounds {
+                height,
+                ..sliding.clone()
+            }
+            .validate()
+            .is_err());
         }
     }
 
@@ -1506,10 +1584,10 @@ mod tests {
         let temp = std::env::temp_dir().join("smarti-browser-broker-test");
         let broker = BrowserBroker::new(temp.join("data"), temp.join("cache"));
         let (first, _, _) = broker
-            .allocate_tab(BrowserProfile::Persistent, DEFAULT_URL.into())
+            .allocate_tab(BrowserProfile::Persistent, DEFAULT_URL.into(), None)
             .unwrap();
         let (second, _, _) = broker
-            .allocate_tab(BrowserProfile::Guest, DEFAULT_URL.into())
+            .allocate_tab(BrowserProfile::Guest, DEFAULT_URL.into(), None)
             .unwrap();
         assert_eq!(first.tab_id, "tab-00000001");
         assert_eq!(first.target_id, "wv2-target-00000001");
@@ -1518,14 +1596,32 @@ mod tests {
     }
 
     #[test]
+    fn workspace_tabs_keep_their_owner_when_opening_more_pages() {
+        let temp = std::env::temp_dir().join("smarti-browser-workspace-test");
+        let broker = BrowserBroker::new(temp.join("data"), temp.join("cache"));
+        let (first, _, _) = broker.allocate_tab(
+            BrowserProfile::Persistent, "https://one.test".into(), Some("browser-1".into()),
+        ).unwrap();
+        let (second, _, _) = broker.allocate_tab(
+            BrowserProfile::Persistent, "https://two.test".into(), Some("browser-2".into()),
+        ).unwrap();
+        let (same_workspace, _, _) = broker.allocate_tab(
+            BrowserProfile::Persistent, "https://three.test".into(), None,
+        ).unwrap();
+        assert_eq!(first.workspace_id, "browser-1");
+        assert_eq!(second.workspace_id, "browser-2");
+        assert_eq!(same_workspace.workspace_id, "browser-2");
+    }
+
+    #[test]
     fn product_tab_order_and_recently_closed_are_bounded() {
         let temp = std::env::temp_dir().join("smarti-browser-product-test");
         let broker = BrowserBroker::new(temp.join("data"), temp.join("cache"));
         let (first, _, _) = broker
-            .allocate_tab(BrowserProfile::Persistent, "https://one.test".into())
+            .allocate_tab(BrowserProfile::Persistent, "https://one.test".into(), None)
             .unwrap();
         let (second, _, _) = broker
-            .allocate_tab(BrowserProfile::Persistent, "https://two.test".into())
+            .allocate_tab(BrowserProfile::Persistent, "https://two.test".into(), None)
             .unwrap();
         assert_eq!(
             broker

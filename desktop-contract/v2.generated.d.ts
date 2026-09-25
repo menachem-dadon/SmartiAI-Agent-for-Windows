@@ -134,6 +134,7 @@ export interface SetWorkspaceRootRequest {
 }
 export interface OpenWorkspaceFileRequest {
   path: string;
+  action?: "open" | "open_with" | "prepare_open_with";
 }
 export interface TerminalActionRequest {
   action: "write" | "restart";
