@@ -265,6 +265,8 @@ describe("Point 16C source-derived settings behavior", () => {
         } else if (request.path === "/v2/settings/schema")
           data = { providers: [], secret_help: {} };
         else if (request.path === "/v2/audio/tts/voices") data = { items: [] };
+        else if (request.path.startsWith("/v2/management/logs?"))
+          data = { lines: [], path: "" };
         else if (request.path.endsWith("/models"))
           data = { models: ["gemini-test"] };
         else if (request.path.includes("/reasoning"))

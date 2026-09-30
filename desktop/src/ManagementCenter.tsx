@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ResolvedTheme, ThemePreference } from "./designSystem";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
 import {
@@ -34,6 +34,26 @@ export function ManagementCenter({
   theme: ResolvedTheme;
 }) {
   const [section, setSection] = useState<ManagementSection>(initial);
+  const [policyOpen, setPolicyOpen] = useState(false);
+  const navigate = (target: ManagementSection) => {
+    setPolicyOpen(false);
+    setSection(target);
+  };
+  const goBack = useCallback(() => {
+    if (policyOpen) setPolicyOpen(false);
+    else onClose();
+  }, [policyOpen, onClose]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      goBack();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [goBack]);
+  const backLabel = policyOpen ? "חזרה לאבטחה ופרטיות" : "חזרה לצ׳אט";
   const icons = legacyAssets(theme);
   return (
     <div
@@ -43,7 +63,7 @@ export function ManagementCenter({
       aria-label="הגדרות וניהול"
     >
       <header>
-        <button onClick={onClose} aria-label="חזרה לצ׳אט">
+        <button onClick={goBack} aria-label={backLabel} title={backLabel}>
           <LegacyIcon src={icons.back} size={21} />
         </button>
         <h1>הגדרות וניהול</h1>
@@ -57,7 +77,7 @@ export function ManagementCenter({
                 <button
                   key={item.id}
                   className={section === item.id ? "active" : ""}
-                  onClick={() => setSection(item.id)}
+                  onClick={() => navigate(item.id)}
                 >
                   {item.icon && <LegacyIcon src={icons[item.icon]} size={19} />}
                   <span>{item.label}</span>
@@ -82,7 +102,9 @@ export function ManagementCenter({
                 section={section as SettingsSection}
                 setTheme={setTheme}
                 theme={theme}
-                onNavigate={setSection}
+                onNavigate={navigate}
+                policyOpen={policyOpen}
+                setPolicyOpen={setPolicyOpen}
                 updateControls={<UpdateControls compact theme={theme} />}
               />
             )}

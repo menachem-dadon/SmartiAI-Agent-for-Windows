@@ -80,7 +80,7 @@ test("an immediate start failure is shown next to the answer", async () => {
 });
 
 test("settings preview uses the same playback controls and displays errors", async () => {
-  render(<SettingsView section="settings_appearance" theme="dark" setTheme={() => {}} />);
+  render(<SettingsView section="settings_appearance" theme="dark" setTheme={() => {}} policyOpen={false} setPolicyOpen={() => {}} />);
   const preview = await waitFor(() => {
     const field = document.querySelector<HTMLElement>('[data-setting-path="tts_preview"]');
     expect(field).toBeTruthy(); return field!;

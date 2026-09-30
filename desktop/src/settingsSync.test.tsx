@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import App from "./App";
@@ -104,6 +104,41 @@ async function patch(next: Record<string, unknown>) {
 }
 
 describe("settings synchronization through the real API client", () => {
+  test.each(["button", "Escape"])("returns from custom permissions to security settings using %s and retains saved permissions", async (backAction) => {
+    values.custom_permission_profile_enabled = true;
+    values.autonomy_mode = "custom";
+    values.policy_matrix = { file_write: "ask" };
+    await start();
+    fireEvent.click(screen.getByText("manage-models"));
+    fireEvent.click(screen.getByRole("button", { name: "אבטחה ופרטיות" }));
+    fireEvent.click(await screen.findByRole("button", { name: "הגדרת התאמה אישית" }));
+    expect(screen.getByRole("heading", { name: "שליטה מתקדמת ביכולות" })).toBeTruthy();
+    const writeCapability = screen.getByText("כתיבת קבצים").closest("section")!;
+    fireEvent.click(within(writeCapability).getByRole("button", { name: "חסום" }));
+    await waitFor(() => expect(values.policy_matrix.file_write).toBe("deny"));
+
+    const goBack = () => {
+      if (backAction === "button") fireEvent.click(screen.getByRole("button", { name: "חזרה לאבטחה ופרטיות" }));
+      else fireEvent.keyDown(document, { key: "Escape" });
+    };
+    goBack();
+    expect(screen.getByRole("dialog", { name: "הגדרות וניהול" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "אבטחה ופרטיות" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "שליטה מתקדמת ביכולות" })).toBeNull();
+    expect(screen.getByRole("button", { name: "אבטחה ופרטיות" }).className).toContain("active");
+
+    fireEvent.click(screen.getByRole("button", { name: "הגדרת התאמה אישית" }));
+    const savedCapability = screen.getByText("כתיבת קבצים").closest("section")!;
+    expect(within(savedCapability).getByRole("button", { name: "חסום" }).className).toContain("active");
+    fireEvent.click(screen.getByRole("button", { name: "קול, מראה ומערכת" }));
+    fireEvent.click(screen.getByRole("button", { name: "אבטחה ופרטיות" }));
+    expect(screen.getByRole("heading", { name: "אבטחה ופרטיות" })).toBeTruthy();
+    if (backAction === "button") fireEvent.click(screen.getByRole("button", { name: "חזרה לצ׳אט" }));
+    else fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "הגדרות וניהול" })).toBeNull();
+    expect(values.policy_matrix.file_write).toBe("deny");
+  });
+
   test("updates provider while settings are open and model after a delayed save finishes after closing", async () => {
     await start();
     fireEvent.click(screen.getByText("manage-models"));

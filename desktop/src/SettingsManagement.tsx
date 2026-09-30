@@ -1859,12 +1859,16 @@ export function SettingsView({
   setTheme,
   theme,
   onNavigate,
+  policyOpen,
+  setPolicyOpen,
   updateControls,
 }: {
   section: SettingsSection;
   setTheme: (theme: ThemePreference) => void;
   theme: ResolvedTheme;
   onNavigate?: (section: SettingsSection) => void;
+  policyOpen: boolean;
+  setPolicyOpen: (open: boolean) => void;
   updateControls?: React.ReactNode;
 }) {
   const [data, setData] = useState<SafeSettings>({ values: {}, secrets: {} });
@@ -1878,7 +1882,6 @@ export function SettingsView({
   const [query, setQuery] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [saveStatus, setSaveStatus] = useState("מוכן");
-  const [policyOpen, setPolicyOpen] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [pendingFocus, setPendingFocus] = useState("");
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -1909,7 +1912,6 @@ export function SettingsView({
       ),
     );
   }, []);
-  useEffect(() => setPolicyOpen(false), [section]);
   useEffect(() => {
     const raw = data.values.settings_recent_searches;
     if (Array.isArray(raw))
