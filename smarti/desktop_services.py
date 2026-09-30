@@ -312,7 +312,9 @@ def tools_snapshot(core):
 
 def usage_snapshot(core, timeframe="all"):
     from .common import USAGE_FILE
-    from .usage_pricing import bundled_pricing, normalize_tokens, pricing_cache, usage_cost
+    from .usage_pricing import (
+        bundled_pricing, normalize_tokens, pricing_cache, request_pricing_refresh, usage_cost,
+    )
     try:
         with open(USAGE_FILE, "r", encoding="utf-8") as handle:
             raw = json.load(handle)
@@ -321,6 +323,10 @@ def usage_snapshot(core, timeframe="all"):
     # Other read failures must reach the UI's retry/error state, not look empty.
     if not isinstance(raw, dict):
         raise ValueError("Invalid usage data")
+    ssl_snapshot = getattr(core, "_ssl_settings_snapshot", None)
+    pricing_status = request_pricing_refresh(
+        ssl_snapshot() if callable(ssl_snapshot) else getattr(core, "settings", {}),
+    )
     normalized = str(timeframe or "all").lower()
     if normalized not in {"today", "week", "month", "all"}:
         normalized = "all"
@@ -375,6 +381,7 @@ def usage_snapshot(core, timeframe="all"):
         "timeframe": normalized, "total_tokens": totals.pop("tokens"), **totals,
         "cost_usd": known_cost if not unpriced_models else None,
         "known_cost_usd": known_cost, "unpriced_models": unpriced_models,
+        "pricing": pricing_status,
         "models": sorted(models.values(), key=lambda row: row["tokens"], reverse=True),
     }
 

@@ -47,6 +47,39 @@ describe("usage loading through the desktop API", () => {
     expect(invoke).toHaveBeenCalledTimes(3);
   });
 
+  test("updates missing costs promptly when the background price refresh completes", async () => {
+    vi.useFakeTimers();
+    const pending = snapshot();
+    pending.cost_usd = null; pending.known_cost_usd = 0; pending.unpriced_models = 1;
+    pending.models[0].cost_usd = null; pending.models[0].cost_status = "unavailable";
+    pending.pricing = { refreshing: true, refresh_failed: false, cached: false, updated_at: "" };
+    const priced = snapshot();
+    priced.pricing = { refreshing: false, refresh_failed: false, cached: true, updated_at: "2026-09-30" };
+    vi.mocked(invoke).mockResolvedValueOnce(response(pending)).mockResolvedValue(response(priced));
+    render(<UsageView />);
+    await act(async () => {});
+    expect(screen.getByText(/מעדכן את תעריפי המודלים/)).toBeTruthy();
+    expect(screen.getByText("חסר תעריף")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(screen.queryByText(/מעדכן את תעריפי המודלים/)).toBeNull();
+    expect(screen.queryByText("חסר תעריף")).toBeNull();
+    expect(screen.getAllByText("<$0.01")).toHaveLength(2);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps locally calculated costs visible when the price download is offline", async () => {
+    const offline = snapshot();
+    offline.pricing = { refreshing: false, refresh_failed: true, cached: true, updated_at: "2026-09-29" };
+    vi.mocked(invoke).mockResolvedValue(response(offline));
+    render(<UsageView />);
+    expect(await screen.findByText(/החישוב משתמש בתעריפים המקומיים/)).toBeTruthy();
+    expect(screen.getByText("gemini-test")).toBeTruthy();
+    expect(screen.getAllByText("<$0.01")).toHaveLength(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   test("shows a recoverable error instead of an empty zero result", async () => {
     vi.useFakeTimers();
     vi.mocked(invoke).mockRejectedValue(new Error("offline"));

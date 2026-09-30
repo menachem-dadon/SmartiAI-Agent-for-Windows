@@ -24,6 +24,7 @@ export type UsageSnapshot = {
   cost_usd: number | null;
   known_cost_usd: number;
   unpriced_models: number;
+  pricing?: { refreshing: boolean; refresh_failed: boolean; cached: boolean; updated_at: string };
   models: UsageModel[];
 };
 const periods: [Timeframe, string][] = [
@@ -83,7 +84,7 @@ export function UsageView() {
         setLoading(false);
         setError("");
         attempts = 0;
-        timer = setTimeout(() => void load(), 15_000);
+        timer = setTimeout(() => void load(), value.pricing?.refreshing ? 1_000 : 15_000);
       } catch (reason) {
         if (current !== generation.current) return;
         if (attempts < 2) {
@@ -145,7 +146,7 @@ export function UsageView() {
         <section className="usage-stat usage-stat--cost"><span>{partial ? "עלות זמינה · סיכום חלקי" : "עלות מוערכת"}</span><strong dir="ltr">{snapshot ? formatUsageCost(partial ? snapshot.known_cost_usd : snapshot.cost_usd) : "—"}</strong><small>דולר ארה״ב (USD)</small></section>
       </div>
       {snapshot && <>
-        <p className="usage-pricing-note">העלות מבוססת על העלות שנרשמה או על התעריפים הזמינים, ועשויה להיות שונה מהחיוב בפועל.{partial && ` חסר תעריף עבור ${count(snapshot.unpriced_models)} מהמודלים; הם אינם כלולים בסיכום העלות.`}</p>
+        <p className="usage-pricing-note" aria-live="polite">{snapshot.pricing?.refreshing && "מעדכן את תעריפי המודלים… העלויות יתעדכנו עם סיום הטעינה. "}{snapshot.pricing?.refresh_failed && "עדכון התעריפים אינו זמין כרגע. החישוב משתמש בתעריפים המקומיים הזמינים. "}העלות מבוססת על העלות שנרשמה או על התעריפים הזמינים, ועשויה להיות שונה מהחיוב בפועל.{partial && ` חסר תעריף עבור ${count(snapshot.unpriced_models)} מהמודלים; הם אינם כלולים בסיכום העלות.`}</p>
         {snapshot.models.length ? <section className="usage-details" aria-label="פירוט שימוש לפי מודל">
           <header><h3>פירוט לפי מודל</h3><span>{count(snapshot.models.length)} מודלים</span></header>
           <div className="usage-table-scroll"><table className="usage-table">
