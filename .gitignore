@@ -24,6 +24,8 @@ tests/*
 !tests/fixtures/
 !tests/fixtures/memory_quality_queries.jsonl
 !tests/test_ssl_trust.py
+!tests/test_api_errors.py
+!tests/test_api_provider_runtime.py
 !tests/test_model_defaults.py
 !tests/test_notification_policy.py
 !tests/test_document_manager.py

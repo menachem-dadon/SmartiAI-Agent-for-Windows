@@ -72,7 +72,7 @@ from .ssl_compat import (
     test_https_trust,
     validate_custom_ca,
 )
-from .api_errors import analyze_api_error, api_validation_message
+from .api_errors import ApiRequestError, analyze_api_error, api_error_for_reason, api_redacted_analysis, api_technical_details, api_validation_message
 
 LITELLM_INSTALLED = importlib.util.find_spec("litellm") is not None
 KEYRING_INSTALLED = importlib.util.find_spec("keyring") is not None
@@ -146,7 +146,10 @@ MODEL_PROVIDER_CONFIGS = {
         "default_model": "codex default",
         "fallback_models": [
             "codex default",
+            "gpt-6.1-sol",
             "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
@@ -217,6 +220,7 @@ MODEL_PROVIDER_CONFIGS = {
         "key_instructions": "התחבר ל-Hugging Face, פתח Settings > Access Tokens, צור User Access Token והעתק אותו.",
         "default_model": "openai/gpt-oss-120b",
         "base_url": URL_HUGGINGFACE,
+        "validation_url": "https://huggingface.co/api/whoami-v2",
         "fallback_models": [
             "openai/gpt-oss-120b",
             "deepseek-ai/DeepSeek-R1:fastest",
@@ -1223,10 +1227,12 @@ def is_openai_compatible_provider(provider):
 def provider_requires_api_key(provider):
     return bool(provider_secret_key(provider))
 
-def provider_base_url(provider, local_url=""):
+def provider_base_url(provider, local_url="", settings=None):
     provider = normalize_provider_name(provider)
     if provider == "local":
         return str(local_url or "http://localhost:1234/v1").strip().rstrip("/")
+    if provider == "qwen" and isinstance(settings, dict) and str(settings.get("qwen_base_url", "") or "").strip():
+        return str(settings["qwen_base_url"]).strip().rstrip("/")
     raw = provider_config(provider).get("base_url")
     if not raw:
         return None
@@ -1354,45 +1360,107 @@ def ssl_request_kwargs(ssl_settings=None, *, url="", allow_legacy=True, data_dir
 def _bearer_headers(api_key):
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
-def _models_url_for_provider(provider, local_url=""):
+def _models_url_for_provider(provider, local_url="", settings=None):
     provider = normalize_provider_name(provider)
     if provider == "gemini":
         return get_url(URL_GEMINI_MODELS).split("?key=", 1)[0]
     if provider == "anthropic":
         return get_url(URL_ANTHROPIC_MODELS)
-    base_url = provider_base_url(provider, local_url)
+    base_url = provider_base_url(provider, local_url, settings=settings)
     if not base_url:
         return get_url(URL_OPENAI_MODELS)
     path = provider_config(provider).get("models_path", "/models")
     query = provider_config(provider).get("models_query", "")
     return f"{base_url}{path}{query}"
 
-def _validation_url_for_provider(provider, local_url=""):
+
+def valid_provider_base_url(base_url):
+    try:
+        parsed = urllib.parse.urlsplit(base_url or "https://api.openai.com/v1")
+        parsed.port
+        return parsed.scheme in {"http", "https"} and bool(parsed.hostname) and not parsed.username and not parsed.password
+    except ValueError:
+        return False
+
+def _validation_url_for_provider(provider, local_url="", settings=None):
     provider = normalize_provider_name(provider)
     config = provider_config(provider)
+    if config.get("validation_url"):
+        return config["validation_url"]
     if config.get("validation_path"):
-        base_url = provider_base_url(provider, local_url)
+        base_url = provider_base_url(provider, local_url, settings=settings)
         return f"{base_url}{config['validation_path']}"
-    return _models_url_for_provider(provider, local_url)
+    return _models_url_for_provider(provider, local_url, settings=settings)
 
 def fetch_text_models_for_provider(provider, api_key="", local_url="", ssl_settings=None, validate_key=False):
     provider = normalize_provider_name(provider)
     api_key = sanitize_secret_value(api_key)
     headers = {}
+    operation = "validate" if validate_key else "models"
+
+    def diagnose(analysis, *, fallback=True):
+        # A key being validated is not stored yet, so redact it explicitly.
+        def safe(value):
+            text = str(value or "").replace(api_key, "[REDACTED]") if api_key else str(value or "")
+            return redact_sensitive_text(text, ssl_settings if isinstance(ssl_settings, dict) else {})
+        analysis = api_redacted_analysis(analysis, safe)
+        message = safe(analysis.user_message if provider == "openai_codex_signin" else api_validation_message(analysis))
+        logging.warning("API DISCOVERY FAILURE | provider=%s | operation=%s | category=%s | reason=%s | technical=%s | user_message=%s",
+                        provider, operation, analysis.category, analysis.reason,
+                        safe(api_technical_details(analysis, limit=1200)), message)
+        return provider_fallback_models(provider) if fallback else [], False, message
+
+    def read_payload(response):
+        if response.status_code >= 400:
+            raise ApiRequestError(analyze_api_error(provider, response=response, operation="models"))
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as error:
+            raise ApiRequestError(api_error_for_reason(provider, "", "invalid_response", raw_message="Model discovery did not return JSON")) from error
+        if not isinstance(payload, dict):
+            raise ApiRequestError(api_error_for_reason(provider, "", "invalid_response", raw_message="Model discovery did not return a JSON object"))
+        if payload.get("error"):
+            raise ApiRequestError(analyze_api_error(provider, response=response, operation="models"))
+        return payload
+
+    def read_models(response, url):
+        models, seen_tokens = [], set()
+        for _page in range(20):
+            payload = read_payload(response)
+            models.extend(_models_from_response(provider, payload))
+            token = payload.get("nextPageToken") if provider == "gemini" else payload.get("last_id") if provider == "anthropic" and payload.get("has_more") else None
+            if not token:
+                if provider == "anthropic" and payload.get("has_more"):
+                    raise ApiRequestError(api_error_for_reason(provider, "", "invalid_response", raw_message="Missing model catalog pagination cursor"))
+                break
+            if not isinstance(token, str) or token in seen_tokens:
+                raise ApiRequestError(api_error_for_reason(provider, "", "invalid_response", raw_message="Repeated or invalid model catalog pagination cursor"))
+            seen_tokens.add(token)
+            response = requests.get(url, headers=headers, params={"pageToken" if provider == "gemini" else "after_id": token}, timeout=(5, 12), **ssl_request_kwargs(ssl_settings, url=url))
+        else:
+            raise ApiRequestError(api_error_for_reason(provider, "", "invalid_response", raw_message="Model catalog exceeded pagination limit"))
+        if not models:
+            raise ApiRequestError(api_error_for_reason(provider, "", "local_model_unloaded" if provider == "local" else "invalid_response", raw_message="No compatible text-generation models in catalog"))
+        return _dedupe_sorted_models(models)
     try:
         if provider == "openai_codex_signin":
-            return provider_fallback_models(provider), False, "נדרשת התחברות עם ChatGPT / Codex."
+            from .codex_signin import CodexSignInError, CodexSignInProvider
+
+            try:
+                models = CodexSignInProvider(USER_DATA_DIR).read_models()
+                return models, True, ""
+            except CodexSignInError as exc:
+                return diagnose(analyze_api_error(provider, error=exc, user_message_override=str(exc)))
+        if (provider == "local" or is_openai_compatible_provider(provider)) and not valid_provider_base_url(provider_base_url(provider, local_url, settings=ssl_settings)):
+            return diagnose(api_error_for_reason(provider, "", "invalid_server_url"))
         if provider == "local":
-            url = _models_url_for_provider(provider, local_url)
+            url = _models_url_for_provider(provider, local_url, settings=ssl_settings)
             kwargs = ssl_request_kwargs(ssl_settings, url=url)
             response = requests.get(url, timeout=5, **kwargs)
-            if response.status_code == 200:
-                return _models_from_response(provider, response.json()), True, ""
-            return [], False, f"שרת מקומי החזיר {response.status_code}"
+            return read_models(response, url), True, ""
 
         if provider_requires_api_key(provider) and not api_key:
-            models = provider_fallback_models(provider)
-            return models, False, "לא הוזן מפתח API"
+            return diagnose(api_error_for_reason(provider, "", "missing_key"))
 
         if provider == "gemini":
             headers = {"x-goog-api-key": api_key}
@@ -1402,48 +1470,41 @@ def fetch_text_models_for_provider(provider, api_key="", local_url="", ssl_setti
             headers = _bearer_headers(api_key)
 
         if validate_key:
-            validation_url = _validation_url_for_provider(provider, local_url)
+            validation_url = _validation_url_for_provider(provider, local_url, settings=ssl_settings)
             kwargs = ssl_request_kwargs(ssl_settings, url=validation_url)
             validation_response = requests.get(
                 validation_url,
                 headers=headers,
-                timeout=12,
+                timeout=(5, 12),
                 **kwargs,
             )
-            if validation_response.status_code in {401, 403}:
-                analysis = analyze_api_error(provider, response=validation_response)
-                return [], False, api_validation_message(analysis)
-            if validation_response.status_code >= 400:
-                analysis = analyze_api_error(provider, response=validation_response)
-                return [], False, api_validation_message(analysis)
-            if provider_config(provider).get("validation_path"):
-                models_url = _models_url_for_provider(provider, local_url)
-                kwargs = ssl_request_kwargs(ssl_settings, url=models_url)
-                model_response = requests.get(
-                    models_url,
-                    headers=headers,
-                    timeout=12,
-                    **kwargs,
-                )
-                models = _models_from_response(provider, model_response.json()) if model_response.status_code == 200 else provider_fallback_models(provider)
+            read_payload(validation_response)
+            if provider_config(provider).get("validation_path") or provider_config(provider).get("validation_url"):
+                models_url = _models_url_for_provider(provider, local_url, settings=ssl_settings)
+                try:
+                    kwargs = ssl_request_kwargs(ssl_settings, url=models_url)
+                    model_response = requests.get(
+                        models_url,
+                        headers=headers,
+                        timeout=(5, 12),
+                        **kwargs,
+                    )
+                    models = read_models(model_response, models_url)
+                except Exception as error:
+                    _fallback, _ok, warning = diagnose(analyze_api_error(provider, error=error, operation="models"))
+                    # Authentication was verified independently. Keep that
+                    # evidence but show the catalog failure instead of hiding it.
+                    return provider_fallback_models(provider), True, warning
                 return models, True, ""
-            models = _models_from_response(provider, validation_response.json())
-            return models or provider_fallback_models(provider), True, ""
+            return read_models(validation_response, validation_url), True, ""
 
-        models_url = _models_url_for_provider(provider, local_url)
+        models_url = _models_url_for_provider(provider, local_url, settings=ssl_settings)
         kwargs = ssl_request_kwargs(ssl_settings, url=models_url)
-        response = requests.get(models_url, headers=headers, timeout=10, **kwargs)
-        if response.status_code == 200:
-            models = _models_from_response(provider, response.json())
-            return models or provider_fallback_models(provider), True, ""
-        if response.status_code in {401, 403}:
-            analysis = analyze_api_error(provider, response=response)
-            return provider_fallback_models(provider), False, api_validation_message(analysis)
-        analysis = analyze_api_error(provider, response=response)
-        return provider_fallback_models(provider), False, api_validation_message(analysis)
+        response = requests.get(models_url, headers=headers, timeout=(5, 12), **kwargs)
+        return read_models(response, models_url), True, ""
     except Exception as e:
-        analysis = analyze_api_error(provider, error=e)
-        return provider_fallback_models(provider), False, api_validation_message(analysis)
+        analysis = analyze_api_error(provider, error=e, operation="models")
+        return diagnose(analysis)
 
 def redact_sensitive_text(text, settings=None):
     if text is None: return ""

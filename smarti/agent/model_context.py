@@ -1,5 +1,8 @@
 """Model setup, chat/session state, settings, secrets, usage budgets, system prompt, and API retry."""
 from .shared import *
+from types import SimpleNamespace
+from random import uniform
+from ..provider_protocols import openai_responses_arguments, openai_responses_result
 
 
 class ModelContextMixin:
@@ -12,6 +15,15 @@ class ModelContextMixin:
             if normalize_provider_name(provider_mode) == "local"
             else self.DEFAULT_PROVIDER_REQUEST_TIMEOUT_SECONDS
         )
+
+    def _provider_transport_timeout(self, provider_mode):
+        # Preserve long model generation, but do not wait thirty minutes for
+        # DNS/TCP establishment or a free connection from the client pool.
+        return (15, self._provider_request_timeout(provider_mode))
+
+    def _sdk_transport_timeout(self, provider_mode):
+        import httpx
+        return httpx.Timeout(self._provider_request_timeout(provider_mode), connect=15, write=60, pool=15)
 
     def _local_fast_mode_enabled(self, provider_mode=None):
         """Return True only when the opt-in profile is used with LOCAL."""
@@ -50,6 +62,8 @@ class ModelContextMixin:
             self.codex_signin_provider = CodexSignInProvider(USER_DATA_DIR)
             self.universal_history = [{"role": "system", "content": self.system_prompt}]
         elif self.mode == "local" or is_openai_compatible_provider(self.mode):
+            # Never retain a client for an old endpoint after setup fails.
+            self.universal_client = None
             try:
                 from openai import OpenAI
             except ImportError:
@@ -58,6 +72,13 @@ class ModelContextMixin:
                 logging.error("OpenAI Python package is missing; install openai to use OpenAI-compatible providers.")
                 return
             url = provider_base_url(self.mode, self.settings.get("local_server_url", "http://localhost:1234/v1"))
+            if self.mode == "qwen":
+                url = provider_base_url(self.mode, settings=self.settings)
+            if not self._valid_provider_base_url(url):
+                logging.error("API SETUP FAILURE | provider=%s | reason=invalid_server_url", self.mode)
+                self.universal_history = [{"role": "system", "content": self.system_prompt}]
+                return
+            self._universal_client_base_url = url
             ssl_url = url or get_url(URL_OPENAI_MODELS)
             key = "lm-studio" if self.mode == "local" else self.settings.get(provider_secret_key(self.mode), "")
             self._universal_client_key = key if key else "dummy"
@@ -66,6 +87,7 @@ class ModelContextMixin:
                 "base_url": url,
                 "api_key": key if key else "dummy",
                 "timeout": request_timeout,
+                "max_retries": 0,
             }
             if str(ssl_url or "").lower().startswith("https://"):
                 try:
@@ -2245,6 +2267,10 @@ CWD: {current_dir}
             + json.dumps(schemas, ensure_ascii=False, separators=(",", ":"))
         )
 
+    @staticmethod
+    def _valid_provider_base_url(base_url):
+        return valid_provider_base_url(base_url)
+
     def _openai_compatible_client_for_request(self, request_mode):
         """Return the correctly configured client even if a background microtask
         outlives a provider switch in the UI.
@@ -2256,26 +2282,29 @@ CWD: {current_dir}
             if request_mode == "local"
             else self._ensure_secret_loaded(provider_secret_key(request_mode))
         )
+        base_url = provider_base_url(request_mode, self.settings.get("local_server_url", "http://localhost:1234/v1"))
+        if request_mode == "qwen":
+            base_url = provider_base_url(request_mode, settings=self.settings)
+        if not self._valid_provider_base_url(base_url):
+            raise ApiRequestError(api_error_for_reason(request_mode, "", "invalid_server_url"))
         client = getattr(self, "universal_client", None)
         if (
             request_mode == current_mode
             and client is not None
             and (not required_key or required_key == getattr(self, "_universal_client_key", ""))
+            and base_url == getattr(self, "_universal_client_base_url", base_url)
         ):
             return client
         try:
             from openai import OpenAI
         except ImportError:
             return None
-        base_url = provider_base_url(
-            request_mode,
-            self.settings.get("local_server_url", "http://localhost:1234/v1"),
-        )
         ssl_url = base_url or get_url(URL_OPENAI_MODELS)
         client_kwargs = {
             "base_url": base_url,
             "api_key": required_key or "dummy",
             "timeout": self._provider_request_timeout(request_mode),
+            "max_retries": 0,
         }
         if str(ssl_url or "").lower().startswith("https://"):
             try:
@@ -2285,12 +2314,18 @@ CWD: {current_dir}
                     timeout=self._provider_request_timeout(request_mode),
                 )
             except SSLTrustConfigurationError as exc:
-                logging.error("OpenAI-compatible TLS trust configuration is invalid: %s", exc)
-                return None
-        return OpenAI(**client_kwargs)
+                raise ApiRequestError(api_error_for_reason(
+                    request_mode, "", "tls_configuration", raw_message=str(exc),
+                )) from exc
+        request_client = OpenAI(**client_kwargs)
+        request_client._smarti_request_owned = True
+        return request_client
 
     @staticmethod
     def _native_tools_unsupported(error):
+        status = getattr(error, "status_code", None) or getattr(getattr(error, "response", None), "status_code", None)
+        if status is not None and status not in {400, 422}:
+            return False
         text = str(error or "").lower()
         feature_words = ("tool", "function", "tools", "function_call", "tool_choice")
         rejection_words = (
@@ -2303,6 +2338,9 @@ CWD: {current_dir}
 
     @staticmethod
     def _prompt_cache_controls_unsupported(error):
+        status = getattr(error, "status_code", None) or getattr(getattr(error, "response", None), "status_code", None)
+        if status is not None and status not in {400, 422}:
+            return False
         text = str(error or "").lower()
         return (
             any(term in text for term in (
@@ -2366,27 +2404,150 @@ CWD: {current_dir}
             limit = min(limit, remaining)
         return max(1, int(limit))
 
-    def _raise_for_model_api_error(self, response, current_model, provider_mode=None):
+    def _raise_for_model_api_error(self, response, current_model, provider_mode=None, payload=None):
         status_code = getattr(response, "status_code", None)
         try:
             is_error = int(status_code) >= 400
         except Exception:
             is_error = False
-        if is_error:
+        if is_error or (isinstance(payload, dict) and payload.get("error")):
+            if isinstance(payload, dict):
+                class BodyError(Exception):
+                    pass
+                error = BodyError("Provider returned an error in the response body")
+                error.body = payload
+                error.response = response
+                analysis = analyze_api_error(provider_mode or self.mode, current_model, error=error)
+            else:
+                analysis = analyze_api_error(provider_mode or self.mode, current_model, response=response)
             raise ApiRequestError(
-                analyze_api_error(provider_mode or self.mode, current_model, response=response)
+                analysis
             )
 
+    def _model_response_json(self, response, model, provider):
+        self._raise_for_model_api_error(response, model, provider)
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as error:
+            raise ApiRequestError(api_error_for_reason(
+                provider, model, "invalid_response", raw_message="The response body is not valid JSON",
+            )) from error
+        if not isinstance(payload, dict):
+            raise ApiRequestError(api_error_for_reason(provider, model, "invalid_response", raw_message="Expected a JSON object"))
+        self._raise_for_model_api_error(response, model, provider, payload=payload)
+        valid = isinstance(payload.get("usageMetadata" if provider == "gemini" else "usage", {}), dict)
+        if provider == "gemini":
+            candidates = payload.get("candidates") or []
+            valid = valid and isinstance(candidates, list) and isinstance(payload.get("promptFeedback") or {}, dict)
+            if valid and candidates:
+                candidate = candidates[0]
+                valid = isinstance(candidate, dict) and isinstance(candidate.get("content") or {}, dict)
+                if valid:
+                    parts = (candidate.get("content") or {}).get("parts") or []
+                    valid = isinstance(parts, list) and all(
+                        isinstance(part, dict)
+                        and isinstance(part.get("text", ""), str)
+                        and isinstance(part.get("functionCall", {}), dict)
+                        for part in parts
+                    )
+        elif provider == "anthropic":
+            blocks = payload.get("content") or []
+            valid = valid and isinstance(blocks, list) and all(isinstance(block, dict) for block in blocks)
+        if not valid:
+            raise ApiRequestError(api_error_for_reason(provider, model, "invalid_response", raw_message="Malformed generation response fields"))
+        return payload
+
+    def _check_generated_response(self, provider, model, text, calls, finish_reason="", blocked_reason=""):
+        reason_code = str(blocked_reason or finish_reason or "").upper()
+        stop_reasons = {
+            "SAFETY": "safety_blocked", "BLOCKLIST": "blocklisted_terms",
+            "PROHIBITED_CONTENT": "prohibited_content", "SPII": "sensitive_personal_data",
+            "IMAGE_SAFETY": "image_safety", "IMAGE_PROHIBITED_CONTENT": "image_prohibited",
+            "IMAGE_RECITATION": "image_recitation", "RECITATION": "recitation",
+            "CONTENT_FILTER": "content_policy", "REFUSAL": "content_policy",
+            "ESCALATION": "policy_escalation", "PUP_LIMITED_DISABLED": "account_disabled",
+            "MALFORMED_FUNCTION_CALL": "malformed_tool_call", "UNEXPECTED_TOOL_CALL": "unexpected_tool_call",
+            "TOO_MANY_TOOL_CALLS": "too_many_tool_calls", "MISSING_THOUGHT_SIGNATURE": "missing_thought_signature",
+            "MALFORMED_RESPONSE": "invalid_response", "LANGUAGE": "unsupported_language",
+            "NO_IMAGE": "image_missing", "IMAGE_OTHER": "image_generation_error", "OTHER": "generation_interrupted",
+        }
+        if reason_code in stop_reasons:
+            reason = stop_reasons[reason_code]
+        elif blocked_reason:
+            reason = "content_policy"
+        elif reason_code == "TOOL_CALLS" and not calls:
+            reason = "malformed_tool_call"
+        elif reason_code in {"MAX_TOKENS", "LENGTH", "MODEL_CONTEXT_WINDOW_EXCEEDED"}:
+            # Never execute a truncated tool call or pass partial JSON to the agent.
+            reason = "response_token_limit"
+        elif not str(text or "").strip() and not calls:
+            reason = "empty_response"
+        else:
+            for call in calls:
+                arguments = call.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except (ValueError, TypeError):
+                        arguments = None
+                if not call.get("name") or not isinstance(arguments, dict):
+                    reason = "malformed_tool_call"
+                    break
+            else:
+                return
+        analysis = api_error_for_reason(provider, model, reason, raw_message=f"finish_reason={finish_reason or 'missing'} block_reason={blocked_reason or 'none'}")
+        if reason == "response_token_limit" and not calls:
+            analysis.partial_response = str(text or "")
+        raise ApiRequestError(analysis)
+
+    def _collect_openai_stream(self, stream, provider, model):
+        """Collect models requiring streaming into the existing agent contract."""
+        text, refusal, calls, usage, finish = [], [], {}, None, ""
+        try:
+            for chunk in stream:
+                self._raise_if_cancelled()
+                data = chunk.model_dump() if callable(getattr(chunk, "model_dump", None)) else getattr(chunk, "model_extra", None)
+                self._raise_for_model_api_error(chunk, model, provider, payload=data)
+                usage = getattr(chunk, "usage", None) or usage
+                for choice in getattr(chunk, "choices", None) or []:
+                    if getattr(choice, "index", 0) != 0:
+                        continue
+                    finish = getattr(choice, "finish_reason", None) or finish
+                    delta = getattr(choice, "delta", None)
+                    text.append(str(getattr(delta, "content", "") or ""))
+                    refusal.append(str(getattr(delta, "refusal", "") or ""))
+                    for call in getattr(delta, "tool_calls", None) or []:
+                        item = calls.setdefault(getattr(call, "index", 0), {"id": "", "name": "", "arguments": ""})
+                        item["id"] += str(getattr(call, "id", "") or "")
+                        function = getattr(call, "function", None)
+                        item["name"] += str(getattr(function, "name", "") or "")
+                        item["arguments"] += str(getattr(function, "arguments", "") or "")
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
+        return SimpleNamespace(usage=usage, choices=[SimpleNamespace(
+            finish_reason=finish, message=SimpleNamespace(
+                content="".join(text), refusal="".join(refusal),
+                tool_calls=[SimpleNamespace(id=item["id"], function=SimpleNamespace(name=item["name"], arguments=item["arguments"])) for _, item in sorted(calls.items())],
+            ),
+        )])
+
     def _api_error_user_response(self, analysis):
-        message = str(getattr(analysis, "user_message", "") or "התקבלה שגיאת API.").strip()
+        analysis = api_redacted_analysis(analysis, lambda text: redact_sensitive_text(text, self.settings))
+        message = redact_sensitive_text(str(getattr(analysis, "user_message", "") or "התקבלה שגיאת API.").strip(), self.settings)
         detail_rows = [
             redact_sensitive_text(row, self.settings)
             for row in api_user_technical_details(analysis)
             if str(row or "").strip()
         ]
         if detail_rows:
-            return f"ERROR_USER: {message}\nפרטים טכניים:\n" + "\n".join(f"• {row}" for row in detail_rows)
-        return f"ERROR_USER: {message}"
+            result = f"ERROR_USER: {message}\nפרטים טכניים:\n" + "\n".join(f"• {row}" for row in detail_rows)
+        else:
+            result = f"ERROR_USER: {message}"
+        if getattr(analysis, "partial_response", ""):
+            result += "\n\nתשובה חלקית מהמודל (היצירה נעצרה):\n" + redact_sensitive_text(analysis.partial_response, self.settings)
+        return result
 
     def _log_api_request_success(self, request_id, provider, model, purpose, attempt, started_at, result):
         response_text = ""
@@ -2414,10 +2575,11 @@ CWD: {current_dir}
         return result
 
     def _log_api_request_failure(self, request_id, provider, model, purpose, attempt, started_at, analysis, error):
+        analysis = api_redacted_analysis(analysis, lambda text: redact_sensitive_text(text, self.settings))
         duration_ms = int(max(0.0, time.monotonic() - started_at) * 1000)
         logging.error(
             "API FAILURE | request_id=%s | provider=%s | model=%s | purpose=%s | "
-            "attempt=%s | duration_ms=%s | category=%s | retry=%s | technical=%s | raw=%s",
+            "attempt=%s | duration_ms=%s | category=%s | reason=%s | retry=%s | technical=%s | user_message=%s | raw=%s",
             request_id,
             provider,
             model,
@@ -2425,11 +2587,18 @@ CWD: {current_dir}
             attempt,
             duration_ms,
             getattr(analysis, "category", "unknown"),
+            getattr(analysis, "reason", "unknown"),
             getattr(analysis, "retry_action", "none"),
-            api_technical_details(analysis, limit=1200),
-            str(getattr(analysis, "raw_message", "") or "")[:1200],
-            exc_info=(type(error), error, error.__traceback__),
+            redact_sensitive_text(api_technical_details(analysis, limit=1200), self.settings),
+            redact_sensitive_text(analysis.user_message, self.settings),
+            redact_sensitive_text(str(getattr(analysis, "raw_message", "") or ""), self.settings)[:1200],
         )
+
+    def _terminal_api_error(self, request_id, analysis):
+        logging.error("API STOP | request_id=%s | category=%s | reason=%s | user_message=%s",
+                      request_id, analysis.category, analysis.reason,
+                      redact_sensitive_text(analysis.user_message, self.settings))
+        return ApiRequestError(analysis)
 
     def _handle_api_request_with_retry(
         self,
@@ -2440,6 +2609,9 @@ CWD: {current_dir}
     ):
         request_options = dict(request_options or {})
         request_mode = normalize_provider_name(request_options.get("provider_mode") or self.mode)
+        current_model = str(current_model or "").strip()
+        if request_mode == "gemini":
+            current_model = current_model.removeprefix("models/")
         cache_controls_allowed = self._prompt_cache_controls_allowed(request_mode)
         request_system_prompt = str(
             request_options.get("system_prompt", getattr(self, "system_prompt", "")) or ""
@@ -2469,10 +2641,11 @@ CWD: {current_dir}
         )
         retries = 0
         immediate_retries = 0
-        wait_times = [15, 30, 30] if retry_wait_times is None else list(retry_wait_times)
+        wait_times = [15, 30, 60] if retry_wait_times is None else list(retry_wait_times)
         max_retries = len(wait_times)
         network_reconnect_allowed = retry_wait_times is None
         request_log_id = uuid.uuid4().hex[:12]
+        attempt_number = 0
         logging.info(
             "API REQUEST | request_id=%s | provider=%s | model=%s | purpose=%s | "
             "native_tools=%s | configured_retries=%s | timeout_seconds=%s",
@@ -2485,10 +2658,17 @@ CWD: {current_dir}
             self._provider_request_timeout(request_mode),
         )
         while retries <= max_retries:
-            attempt_number = retries + immediate_retries + 1
+            attempt_number += 1
             attempt_started = time.monotonic()
+            request_client = None
             try:
                 self._raise_if_cancelled()
+                if request_mode not in MODEL_PROVIDER_ORDER:
+                    raise ApiRequestError(api_error_for_reason(request_mode, current_model, "provider_setup"))
+                if not str(current_model or "").strip():
+                    raise ApiRequestError(api_error_for_reason(request_mode, current_model, "local_model_unloaded" if request_mode == "local" else "model_not_found"))
+                if provider_requires_api_key(request_mode) and not self._ensure_secret_loaded(provider_secret_key(request_mode)):
+                    raise ApiRequestError(api_error_for_reason(request_mode, current_model, "missing_key"))
                 usage_dict = {}
                 request_messages = self._prepare_messages_for_budget(
                     current_model,
@@ -2547,6 +2727,8 @@ CWD: {current_dir}
                     payload["generationConfig"].update(
                         reasoning_parameters.get("generationConfig", {})
                     )
+                    if request_options.get("max_output_tokens") or (self.settings.get("budgets") or {}).get("daily_token_budget"):
+                        payload["generationConfig"]["maxOutputTokens"] = self._model_output_token_limit(request_mode, current_model, request_messages, request_options)
                     if native_specs:
                         payload["tools"] = [{
                             "functionDeclarations": [
@@ -2563,12 +2745,13 @@ CWD: {current_dir}
                             url,
                             json=payload,
                             headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                            timeout=self._provider_request_timeout(request_mode)
+                            timeout=self._provider_transport_timeout(request_mode)
                         )
                     )
-                    if getattr(response, "status_code", 200) >= 400 and native_specs:
+                    if getattr(response, "status_code", 200) in {400, 422} and native_specs:
                         response_text = str(getattr(response, "text", "") or "")
                         if self._native_tools_unsupported(response_text):
+                            self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, analyze_api_error(request_mode, current_model, response=response), Exception("Unsupported native tools; using text tool contract"))
                             fallback_payload = copy.deepcopy(payload)
                             fallback_payload.pop("tools", None)
                             fallback_payload["systemInstruction"] = {"parts": [{"text": (
@@ -2581,11 +2764,10 @@ CWD: {current_dir}
                                     url,
                                     json=fallback_payload,
                                     headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                                    timeout=self._provider_request_timeout(request_mode),
+                                    timeout=self._provider_transport_timeout(request_mode),
                                 )
                             )
-                    self._raise_for_model_api_error(response, current_model, request_mode)
-                    data = response.json()
+                    data = self._model_response_json(response, current_model, request_mode)
                     usage = data.get('usageMetadata', {})
                     usage_dict = {
                         'prompt': usage.get('promptTokenCount', 0),
@@ -2597,19 +2779,24 @@ CWD: {current_dir}
                     }
                     ai_response_text = ""
                     native_calls = []
-                    candidates = data.get('candidates', [])
-                    if not candidates: raise Exception("לא התקבלו נתונים מהמודל.")
-                    parts = candidates[0].get('content', {}).get('parts', [])
+                    candidates = data.get('candidates') or []
+                    feedback = data.get("promptFeedback") or {}
+                    if not candidates:
+                        self._check_generated_response(request_mode, current_model, "", [], blocked_reason=feedback.get("blockReason", ""))
+                    candidate = candidates[0]
+                    parts = (candidate.get('content') or {}).get('parts') or []
                     for part in parts:
                         if part.get("functionCall"):
                             function_call = part.get("functionCall") or {}
                             native_calls.append({
                                 "name": function_call.get("name", ""),
-                                "arguments": function_call.get("args", {}) or {},
+                                "arguments": function_call.get("args", {}),
                                 "provider_call_id": function_call.get("id", ""),
                             })
                         elif not part.get('thought', False):
                             ai_response_text += part.get('text', '')
+                    self._check_generated_response(request_mode, current_model, ai_response_text, native_calls,
+                                                   candidate.get("finishReason", ""), feedback.get("blockReason", ""))
                     if native_calls:
                         result = self._canonical_native_tool_response(native_calls, ai_response_text), usage_dict
                     else:
@@ -2621,10 +2808,32 @@ CWD: {current_dir}
                 elif request_mode == "local" or is_openai_compatible_provider(request_mode):
                     request_client = self._openai_compatible_client_for_request(request_mode)
                     if request_client is None:
-                        raise Exception("OpenAI-compatible client is not available. Install the openai Python package.")
+                        raise ApiRequestError(api_error_for_reason(request_mode, current_model, "client_dependency"))
+                    if request_mode == "openai" and re.match(r"^(?:gpt-\d+(?:\.\d+)?-pro|o\d+-pro|gpt-\d+(?:\.\d+)?-codex|codex-mini)(?:-|$)", str(current_model).lower()):
+                        response_options = openai_responses_arguments(
+                            current_model, request_messages, request_reasoning,
+                            tools=native_specs,
+                            max_output_tokens=self._model_output_token_limit(request_mode, current_model, request_messages, request_options)
+                            if request_options.get("max_output_tokens") or (self.settings.get("budgets") or {}).get("daily_token_budget") else None,
+                        )
+                        response_options["timeout"] = self._sdk_transport_timeout(request_mode)
+                        try:
+                            response = self._run_cancelable_callable(lambda: request_client.responses.create(**response_options))
+                        except Exception as response_error:
+                            if not native_specs or not self._native_tools_unsupported(response_error):
+                                raise
+                            self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, analyze_api_error(request_mode, current_model, error=response_error), response_error)
+                            response_options.pop("tools", None)
+                            response_options["input"].insert(0, {"role": "system", "content": self._native_tool_text_fallback_contract(native_specs)})
+                            response = self._run_cancelable_callable(lambda: request_client.responses.create(**response_options))
+                        response_text, native_calls, usage_dict, finish, blocked = openai_responses_result(response, current_model)
+                        self._check_generated_response(request_mode, current_model, response_text, native_calls, finish, blocked)
+                        result = (self._canonical_native_tool_response(native_calls, response_text) if native_calls else response_text), usage_dict
+                        return self._log_api_request_success(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, result)
                     completion_kwargs = {
                         "model": current_model,
                         "messages": request_messages,
+                        "timeout": self._sdk_transport_timeout(request_mode),
                     }
                     openai_reasoning_model = (
                         request_mode == "openai"
@@ -2636,6 +2845,10 @@ CWD: {current_dir}
                             current_model,
                             request_reasoning,
                         ))
+                    if request_options.get("max_output_tokens") or (self.settings.get("budgets") or {}).get("daily_token_budget"):
+                        completion_kwargs["max_completion_tokens" if openai_reasoning_model else "max_tokens"] = self._model_output_token_limit(
+                            request_mode, current_model, request_messages, request_options,
+                        )
                     openai_paid_cache_writes = str(current_model or "").lower().startswith(
                         "gpt-5.6"
                     )
@@ -2643,7 +2856,9 @@ CWD: {current_dir}
                         # Newer OpenAI models bill cache writes. Disable the
                         # implicit latest-message breakpoint, then opt in only
                         # after the turn has clearly become multi-step.
-                        completion_kwargs["prompt_cache_options"] = {"mode": "explicit"}
+                        # The wire API supports this before all installed SDK
+                        # versions expose it as a named argument.
+                        completion_kwargs["extra_body"] = {"prompt_cache_options": {"mode": "explicit"}}
                         feedback_rounds = sum(
                             1
                             for message in request_messages
@@ -2693,19 +2908,27 @@ CWD: {current_dir}
                     while True:
                         try:
                             response = self._run_cancelable_callable(
-                                lambda: request_client.chat.completions.create(**completion_kwargs)
+                                lambda: self._collect_openai_stream(request_client.chat.completions.create(**completion_kwargs), request_mode, current_model)
+                                if completion_kwargs.get("stream") else request_client.chat.completions.create(**completion_kwargs)
                             )
                             break
                         except Exception as request_error:
+                            compatibility_analysis = analyze_api_error(request_mode, current_model, error=request_error)
+                            if compatibility_analysis.reason == "stream_required" and not completion_kwargs.get("stream"):
+                                self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, compatibility_analysis, request_error)
+                                completion_kwargs["stream"] = True
+                                continue
                             if (
-                                "prompt_cache_options" in completion_kwargs
+                                "prompt_cache_options" in (completion_kwargs.get("extra_body") or {})
                                 and self._prompt_cache_controls_unsupported(request_error)
                             ):
-                                completion_kwargs.pop("prompt_cache_options", None)
+                                self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, compatibility_analysis, request_error)
+                                completion_kwargs.pop("extra_body", None)
                                 completion_kwargs.pop("prompt_cache_key", None)
                                 completion_kwargs["messages"] = request_messages
                                 continue
                             if "tools" in completion_kwargs and self._native_tools_unsupported(request_error):
+                                self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, compatibility_analysis, request_error)
                                 completion_kwargs.pop("tools", None)
                                 completion_kwargs["messages"] = [
                                     {
@@ -2729,7 +2952,12 @@ CWD: {current_dir}
                             ),
                             'reasoning': int(getattr(completion_details, "reasoning_tokens", 0) or 0),
                         }
-                    response_message = response.choices[0].message
+                    body = response.model_dump() if callable(getattr(response, "model_dump", None)) else getattr(response, "model_extra", None)
+                    self._raise_for_model_api_error(response, current_model, request_mode, payload=body)
+                    choices = getattr(response, "choices", None) or []
+                    if not choices:
+                        self._check_generated_response(request_mode, current_model, "", [])
+                    response_message = choices[0].message
                     native_calls = []
                     for tool_call in list(getattr(response_message, "tool_calls", None) or []):
                         function = getattr(tool_call, "function", None)
@@ -2740,6 +2968,9 @@ CWD: {current_dir}
                                 "provider_call_id": getattr(tool_call, "id", ""),
                             })
                     response_text = str(getattr(response_message, "content", "") or "").strip()
+                    self._check_generated_response(request_mode, current_model, response_text, native_calls,
+                                                   getattr(choices[0], "finish_reason", ""),
+                                                   "refusal" if getattr(response_message, "refusal", None) else "")
                     if native_calls:
                         result = self._canonical_native_tool_response(native_calls, response_text), usage_dict
                     else:
@@ -2775,6 +3006,12 @@ CWD: {current_dir}
                         current_model,
                         request_reasoning,
                     ))
+                    thinking = payload.get("thinking") or {}
+                    if thinking.get("type") == "enabled" and int(thinking.get("budget_tokens", 0)) >= payload["max_tokens"]:
+                        if payload["max_tokens"] <= 1024:
+                            raise ApiRequestError(api_error_for_reason(request_mode, current_model, "output_limit", param="max_tokens", raw_message="Manual thinking requires budget_tokens >= 1024 and max_tokens > budget_tokens"))
+                        thinking["budget_tokens"] = payload["max_tokens"] - 1
+                        logging.info("API COMPATIBILITY | request_id=%s | provider=%s | action=cap_thinking_budget | budget_tokens=%s", request_log_id, request_mode, thinking["budget_tokens"])
                     if native_specs:
                         payload["tools"] = [
                             {
@@ -2819,12 +3056,13 @@ CWD: {current_dir}
                             url,
                             json=payload,
                             headers=headers,
-                            timeout=self._provider_request_timeout(request_mode),
+                            timeout=self._provider_transport_timeout(request_mode),
                         )
                     )
-                    if getattr(response, "status_code", 200) >= 400 and native_specs:
+                    if getattr(response, "status_code", 200) in {400, 422} and native_specs:
                         response_text = str(getattr(response, "text", "") or "")
                         if self._native_tools_unsupported(response_text):
+                            self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, analyze_api_error(request_mode, current_model, response=response), Exception("Unsupported native tools; using text tool contract"))
                             fallback_payload = copy.deepcopy(payload)
                             fallback_payload.pop("tools", None)
                             fallback_payload["system"] = (
@@ -2837,11 +3075,10 @@ CWD: {current_dir}
                                     url,
                                     json=fallback_payload,
                                     headers=headers,
-                                    timeout=self._provider_request_timeout(request_mode),
+                                    timeout=self._provider_transport_timeout(request_mode),
                                 )
                             )
-                    self._raise_for_model_api_error(response, current_model, request_mode)
-                    resp_data = response.json()
+                    resp_data = self._model_response_json(response, current_model, request_mode)
                     usage = resp_data.get('usage', {})
                     cache_read = int(usage.get('cache_read_input_tokens', 0) or 0)
                     cache_write = int(usage.get('cache_creation_input_tokens', 0) or 0)
@@ -2864,12 +3101,13 @@ CWD: {current_dir}
                         if block.get("type") == "tool_use":
                             native_calls.append({
                                 "name": block.get("name", ""),
-                                "arguments": block.get("input", {}) or {},
+                                "arguments": block.get("input", {}),
                                 "provider_call_id": block.get("id", ""),
                             })
                         elif block.get("type") == "text":
                             text_parts.append(str(block.get("text", "") or ""))
                     response_text = "\n".join(part for part in text_parts if part).strip()
+                    self._check_generated_response(request_mode, current_model, response_text, native_calls, resp_data.get("stop_reason", ""))
                     if native_calls:
                         result = self._canonical_native_tool_response(native_calls, response_text), usage_dict
                     else:
@@ -2898,6 +3136,9 @@ CWD: {current_dir}
                     )
                 else:
                     analysis = analyze_api_error(request_mode, current_model, error=e)
+                if analysis.reason == "certificate_untrusted":
+                    analysis.user_message += " " + self._friendly_ssl_error(e)
+                analysis = api_redacted_analysis(analysis, lambda text: redact_sensitive_text(text, self.settings))
                 self._log_api_request_failure(
                     request_log_id,
                     request_mode,
@@ -2908,9 +3149,6 @@ CWD: {current_dir}
                     analysis,
                     e,
                 )
-                if analysis.category == "ssl" or isinstance(e, requests.exceptions.SSLError):
-                    analysis.user_message = self._friendly_ssl_error(e)
-                    analysis.retry_action = "none"
                 if (
                     network_reconnect_allowed
                     and self._network_auto_resume_enabled()
@@ -2923,10 +3161,9 @@ CWD: {current_dir}
                         network_down = False
                     if network_down:
                         if self._wait_for_network_reconnect(analysis):
-                            retries = 0
-                            immediate_retries = 0
+                            network_reconnect_allowed = False
                             continue
-                        raise ApiRequestError(api_retry_exhausted_analysis(analysis))
+                        raise self._terminal_api_error(request_log_id, api_retry_exhausted_analysis(analysis))
                 if analysis.retry_action == "immediate" and immediate_retries < 1:
                     immediate_retries += 1
                     logging.warning(
@@ -2934,7 +3171,7 @@ CWD: {current_dir}
                         request_log_id, attempt_number + 1, analysis.category,
                     )
                     if report_status:
-                        report_status(api_retry_status_message(analysis, 0, retries + immediate_retries + 1))
+                        report_status(api_retry_status_message(analysis, 0, attempt_number + 1))
                     continue
                 if analysis.retryable and retries < max_retries:
                     wait_seconds = analysis.retry_after if analysis.retry_after is not None else wait_times[retries]
@@ -2942,16 +3179,19 @@ CWD: {current_dir}
                         wait_seconds = float(wait_seconds)
                     except Exception:
                         wait_seconds = float(wait_times[retries])
+                    if analysis.retry_after is None and retry_wait_times is None:
+                        wait_seconds += uniform(0, wait_seconds * 0.1)
                     if wait_seconds > 180:
-                        raise ApiRequestError(api_retry_exhausted_analysis(analysis, wait_too_long=True))
+                        raise self._terminal_api_error(request_log_id, api_retry_exhausted_analysis(analysis, wait_too_long=True))
+                    wait_seconds = max(1.0, wait_seconds)
                     logging.warning(
                         "API RETRY | request_id=%s | action=delayed | wait_seconds=%s | "
                         "next_attempt=%s | category=%s",
                         request_log_id, wait_seconds, attempt_number + 1, analysis.category,
                     )
                     if report_status:
-                        report_status(api_retry_status_message(analysis, wait_seconds, retries + immediate_retries + 1))
-                    def tick_retry_status(remaining, analysis=analysis, attempt=retries + immediate_retries + 1):
+                        report_status(api_retry_status_message(analysis, wait_seconds, attempt_number + 1))
+                    def tick_retry_status(remaining, analysis=analysis, attempt=attempt_number + 1):
                         if report_status:
                             report_status(api_retry_status_message(analysis, remaining, attempt))
                     if wait_seconds > 0 and not self._sleep_with_cancel(wait_seconds, tick_retry_status):
@@ -2959,7 +3199,13 @@ CWD: {current_dir}
                     retries += 1
                     continue
                 if analysis.retryable:
-                    raise ApiRequestError(api_retry_exhausted_analysis(analysis))
+                    raise self._terminal_api_error(request_log_id, api_retry_exhausted_analysis(analysis))
                 else:
-                    raise ApiRequestError(analysis)
+                    raise self._terminal_api_error(request_log_id, analysis)
+            finally:
+                if request_client is not None and getattr(request_client, "_smarti_request_owned", False) is True:
+                    try:
+                        request_client.close()
+                    except Exception as close_error:
+                        logging.warning("API CLIENT CLEANUP | provider=%s | exception=%s", request_mode, type(close_error).__name__)
         raise ApiRequestError(api_retry_exhausted_analysis(analyze_api_error(request_mode, current_model, error=Exception("retry attempts exhausted"))))

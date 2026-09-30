@@ -532,7 +532,7 @@ class ExactProviderPayloadTests(unittest.TestCase):
         for field in ("temperature", "top_p", "top_k", "seed"):
             self.assertNotIn(field, payload)
         self.assertEqual(payload["reasoning_effort"], "high")
-        self.assertEqual(payload["prompt_cache_options"], {"mode": "explicit"})
+        self.assertEqual(payload["extra_body"]["prompt_cache_options"], {"mode": "explicit"})
         self.assertEqual(payload["prompt_cache_key"], "smarti:task-5-6")
         self.assertIn("tools", payload)
         self.assertIn("call_openai_1", text)

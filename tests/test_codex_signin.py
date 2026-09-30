@@ -10,7 +10,7 @@ from unittest import mock
 from pathlib import Path
 
 from smarti.codex_signin import CodexConnectionStatus, CodexProtocolError, CodexSignInError, CodexSignInProvider
-from smarti.common import provider_fallback_models, model_reasoning_options, model_reasoning_setting, set_model_reasoning_setting
+from smarti.common import fetch_text_models_for_provider, provider_fallback_models, model_reasoning_options, model_reasoning_setting, set_model_reasoning_setting
 from smarti.common import SmartiCancelled
 from smarti.config import DEFAULT_SETTINGS
 from smarti.core import SmartiCore
@@ -157,12 +157,15 @@ class CodexSignInProviderTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"SMARTI_CODEX_CLI": path}):
             self.assertEqual(self.provider._find_executable(), path)
 
-    def test_codex_model_choices_are_the_supported_curated_list(self):
+    def test_codex_fallback_includes_the_requested_models(self):
         self.assertEqual(
             provider_fallback_models("openai_codex_signin"),
             [
                 "codex default",
+                "gpt-6.1-sol",
                 "gpt-6-astra",
+                "gpt-6-sol",
+                "gpt-6-luna",
                 "gpt-5.6-sol",
                 "gpt-5.6-terra",
                 "gpt-5.6-luna",
@@ -171,6 +174,102 @@ class CodexSignInProviderTests(unittest.TestCase):
                 "gpt-5.4-mini",
             ],
         )
+
+    def test_model_discovery_uses_paginated_visible_text_models_and_preserves_order(self):
+        self.provider._run = mock.Mock(return_value=(0, "codex-cli 0.159.0", ""))
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "ok", "chatgpt")
+        )
+        self.provider._app_server_request = mock.Mock(side_effect=[
+            {"data": [
+                {"id": "picker-id", "model": "gpt-6.1-sol", "inputModalities": ["text", "image"]},
+                {"model": "hidden-model", "hidden": True},
+                {"model": "image-only", "inputModalities": ["image"]},
+                {"model": "gpt-6-sol"},
+                None,
+                {"model": ""},
+            ], "nextCursor": "page-2"},
+            {"data": [
+                {"model": "gpt-6-sol"},
+                {"id": "gpt-6-luna"},
+                {"model": "future-model"},
+            ], "nextCursor": None},
+        ])
+
+        self.assertEqual(self.provider.read_models(), [
+            "codex default", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "future-model",
+        ])
+        calls = self.provider._app_server_request.call_args_list
+        self.assertEqual(calls[0].args, ("model/list", {"limit": 100, "includeHidden": False}))
+        self.assertEqual(calls[1].args, ("model/list", {
+            "limit": 100, "includeHidden": False, "cursor": "page-2",
+        }))
+        self.assertLessEqual(calls[1].kwargs["timeout"], calls[0].kwargs["timeout"])
+
+    def test_model_discovery_rejects_missing_signin_without_starting_app_server(self):
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("not_connected", "sign in required")
+        )
+        self.provider._app_server_request = mock.Mock()
+        with self.assertRaisesRegex(CodexSignInError, "sign in required"):
+            self.provider.read_models()
+        self.provider._app_server_request.assert_not_called()
+
+    def test_model_discovery_rejects_empty_malformed_or_repeating_pages(self):
+        self.provider._run = mock.Mock(return_value=(0, "codex-cli 0.159.0", ""))
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "ok", "chatgpt")
+        )
+        for pages in ([{}], [{"data": []}], [
+            {"data": [{"model": "gpt-6-sol"}], "nextCursor": "same"},
+            {"data": [], "nextCursor": "same"},
+        ]):
+            with self.subTest(pages=pages):
+                self.provider._app_server_request = mock.Mock(side_effect=pages)
+                with self.assertRaises(CodexSignInError):
+                    self.provider.read_models()
+
+    def test_old_cli_catalog_returns_new_model_fallback_with_an_update_message(self):
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "ok", "chatgpt")
+        )
+        self.provider._run = mock.Mock(return_value=(0, "codex-cli 0.144.0", ""))
+        self.provider._app_server_request = mock.Mock()
+        with mock.patch("smarti.codex_signin.CodexSignInProvider", return_value=self.provider):
+            models, ok, message = fetch_text_models_for_provider("openai_codex_signin")
+        self.assertFalse(ok)
+        self.assertIn("0.159.0", message)
+        for model in ("gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"):
+            self.assertIn(model, models)
+        self.provider._app_server_request.assert_not_called()
+
+    def test_shared_model_fetch_prefers_the_server_catalog(self):
+        models = ["codex default", "gpt-6.1-sol", "future-server-model"]
+        with mock.patch.object(CodexSignInProvider, "read_models", return_value=models):
+            self.assertEqual(fetch_text_models_for_provider("openai_codex_signin"), (models, True, ""))
+
+    def test_shared_model_fetch_keeps_requested_models_when_discovery_fails(self):
+        with mock.patch.object(CodexSignInProvider, "read_models", side_effect=CodexSignInError("offline")):
+            models, ok, message = fetch_text_models_for_provider("openai_codex_signin")
+        self.assertFalse(ok)
+        self.assertEqual(message, "offline")
+        for model in ("gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"):
+            self.assertIn(model, models)
+
+    def test_requested_models_and_reasoning_reach_the_official_cli(self):
+        self.provider.connection_status = mock.Mock(
+            return_value=CodexConnectionStatus("connected", "ok", "chatgpt")
+        )
+        self.provider._run = mock.Mock(return_value=(0, self._codex_jsonl_response(), ""))
+        for model in ("gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"):
+            with self.subTest(model=model):
+                self.provider.complete(
+                    [{"role": "user", "content": "שלום"}], model=model, reasoning_effort="high",
+                )
+                args = self.provider._run.call_args.args[0]
+                self.assertEqual(args[args.index("--model") + 1], model)
+                self.assertIn('model_reasoning_effort="high"', args)
+                self.assertIn("--output-schema", args)
 
     def test_windows_apps_desktop_path_is_not_treated_as_the_cli(self):
         desktop_path = r"C:\Program Files\WindowsApps\OpenAI.Codex\app\resources\codex.exe"
@@ -260,6 +359,30 @@ class CodexSignInProviderTests(unittest.TestCase):
 
         args = self.provider._run.call_args.args[0]
         self.assertNotIn("--model", args)
+
+    def test_structured_quota_failure_is_not_confused_with_authentication(self):
+        self.provider.connection_status = mock.Mock(return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt"))
+        failure = json.dumps({"type": "turn.failed", "error": {"code": "usage_limit_reached", "message": "Token usage limit reached"}})
+        self.provider._run = mock.Mock(return_value=(1, failure, ""))
+        with self.assertRaises(CodexSignInError) as failed:
+            self.provider.complete([{"role": "user", "content": "hello"}], model="codex default")
+        self.assertEqual(failed.exception.reason, "signin_usage_limit")
+        self.assertIn("מכסת", str(failed.exception))
+
+    def test_failed_turn_is_reported_even_when_cli_exit_is_zero(self):
+        self.provider.connection_status = mock.Mock(return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt"))
+        failure = json.dumps({"type": "turn.failed", "error": {"code": "model_not_found", "message": "Unknown model"}})
+        self.provider._run = mock.Mock(return_value=(0, failure, ""))
+        with self.assertRaises(CodexSignInError) as failed:
+            self.provider.complete([{"role": "user", "content": "hello"}], model="codex default")
+        self.assertEqual(failed.exception.reason, "model_not_found")
+
+    def test_recovered_cli_error_does_not_override_a_completed_turn(self):
+        self.provider.connection_status = mock.Mock(return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt"))
+        intermediate = json.dumps({"type": "error", "message": "Retrying connection"})
+        self.provider._run = mock.Mock(return_value=(0, intermediate + "\n" + self._codex_jsonl_response("done"), ""))
+        result, _usage = self.provider.complete([{"role": "user", "content": "hello"}], model="codex default")
+        self.assertEqual(result, "done")
 
     def test_reasoning_effort_is_passed_as_an_official_cli_config_override(self):
         self.provider.connection_status = mock.Mock(

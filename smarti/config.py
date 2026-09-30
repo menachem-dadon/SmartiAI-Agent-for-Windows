@@ -1924,6 +1924,7 @@ DEFAULT_SETTINGS = {
     "huggingface_api_key": "",
     "deepseek_api_key": "",
     "qwen_api_key": "",
+    "qwen_base_url": "",
     "zhipu_api_key": "",
     "moonshot_api_key": "",
     "mistral_api_key": "",

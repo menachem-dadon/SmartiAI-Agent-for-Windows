@@ -56,6 +56,7 @@ Smarti supports multiple providers from the settings screen:
 
 - Google Gemini
 - OpenAI
+- OpenAI Codex Sign-in (ChatGPT account, through the official Codex CLI)
 - Anthropic
 - OpenRouter
 - Groq
@@ -73,6 +74,14 @@ Smarti supports multiple providers from the settings screen:
 - Local OpenAI-compatible servers, such as LM Studio
 
 API keys can be stored through Keyring or Windows DPAPI. Local OpenAI-compatible servers can be configured without a cloud API key.
+
+The Codex provider discovers available text models through the official
+`model/list` API, including future models exposed to the signed-in account.
+Install Codex CLI 0.159.0 or newer and sign in with ChatGPT to use the current
+catalog. If the CLI is missing, outdated, disconnected, or discovery fails,
+Smarti keeps a fallback list including `gpt-6.1-sol`, `gpt-6-sol`, and
+`gpt-6-luna`, and shows the connection or update message. Model access remains
+subject to the user's account and plan; no credentials are bundled with Smarti.
 
 ## Safety and Control
 

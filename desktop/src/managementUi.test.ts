@@ -167,6 +167,53 @@ describe("Point 16C source-derived settings behavior", () => {
     );
   });
 
+  it("reloads the Codex server catalog after sign-in and allows selecting a new model", async () => {
+    let connected = false;
+    let modelRequests = 0;
+    const saves: Array<{ path: string; value: unknown }> = [];
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      writable: true,
+      value: {
+        invoke: async (command: string, args: Record<string, unknown> = {}) => {
+          if (command !== "core_api") return null;
+          const request = args.request as { path: string; body?: { action?: string } };
+          let data: unknown = {};
+          if (request.path.endsWith("/models")) {
+            modelRequests += 1;
+            data = { models: connected
+              ? ["codex default", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "future-model"]
+              : ["codex default"] };
+          } else if (request.path.endsWith("/actions")) {
+            if (request.body?.action === "codex_login") connected = true;
+            data = { state: connected ? "connected" : "not_connected", message: "Codex status" };
+          } else if (request.path.includes("/reasoning")) {
+            data = { reasoning_options: [] };
+          }
+          return { status: 200, body: { data } };
+        },
+      },
+    });
+    render(React.createElement(ProviderWorkflow, {
+      values: { api_mode: "openai_codex_signin", selected_openai_codex_signin_model: "codex default", favorite_models: [] },
+      secrets: {},
+      save: async (path, value) => { saves.push({ path, value }); },
+      reload: async () => {},
+      schema: { providers: [], secret_help: {} },
+      theme: "dark",
+    }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "codex default" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /התחבר עם.*ChatGPT \/ Codex/ }));
+    await waitFor(() => expect(modelRequests).toBe(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "codex default" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "codex default" }));
+    for (const model of ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "future-model"]) {
+      expect(screen.getByRole("option", { name: model })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole("option", { name: "gpt-6.1-sol" }));
+    await waitFor(() => expect(saves).toContainEqual({ path: "selected_openai_codex_signin_model", value: "gpt-6.1-sol" }));
+  });
+
   it("renders PyQt-style search results, enables advanced and navigates to the real target control", async () => {
     const state = {
       values: {

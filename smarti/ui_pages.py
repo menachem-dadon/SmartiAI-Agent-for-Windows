@@ -5,6 +5,7 @@ from .ui_styles import *
 from .ui_controls import *
 from .visual_canvas import web_canvas_available
 from .doctor import CheckResult, RepairAction
+from .common import valid_provider_base_url
 from .workers import (
     FetchModelsWorker,
     ApiKeyValidationWorker,
@@ -4761,6 +4762,9 @@ class SettingsPage(QWidget):
         self._set_external_link(self.tavily_key_help_link, provider_help_url(secret_key="tavily_api_key"), "קבל מפתח")
         self._update_provider_key_help()
         self.local_url = QLineEdit(self.core.settings.get("local_server_url", "http://localhost:1234/v1"))
+        self.qwen_url = QLineEdit(self.core.settings.get("qwen_base_url", ""))
+        self.qwen_url.setPlaceholderText("https://dashscope.aliyuncs.com/compatible-mode/v1")
+        self.qwen_url.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.local_fast_mode_cb = SmartiCheckBox("הפעל FastMode למודלים מקומיים")
         self.local_fast_mode_cb.setChecked(
             bool(self.core.settings.get("local_fast_mode_enabled", False))
@@ -5401,6 +5405,7 @@ class SettingsPage(QWidget):
             setting_id="conversation_title_generation_mode",
         )
         self._add_field("כתובת שרת מקומי למודל מקומי", self.local_url, ai, "רלוונטי כשמשתמשים במודל מקומי, למשל דרך LM Studio או שרת תואם OpenAI.", keywords="local server url lm studio ollama localhost endpoint base url")
+        self._add_field("כתובת API של Qwen", self.qwen_url, ai, "העתק Base URL ממסוף Alibaba Model Studio בהתאם לאזור, למרחב העבודה ולמסלול של המפתח. שדה ריק משתמש בברירת המחדל של סין.", keywords="qwen dashscope alibaba region workspace base url endpoint", setting_id="qwen_base_url")
         self.local_fast_mode_field_container = self._add_checkbox(
             self.local_fast_mode_cb,
             ai,
@@ -5845,12 +5850,14 @@ class SettingsPage(QWidget):
 
     def _ssl_settings_from_ui(self):
         if hasattr(self, "ssl_trust_card"):
-            return self.ssl_trust_card.ssl_snapshot()
-        snapshot = copy.deepcopy(self.core.settings or {})
-        snapshot["_ssl_data_dir"] = USER_DATA_DIR
-        snapshot["_ssl_legacy_insecure_session_enabled"] = bool(
-            getattr(self.core, "_ssl_legacy_insecure_session_enabled", False)
-        )
+            snapshot = self.ssl_trust_card.ssl_snapshot()
+        else:
+            snapshot = copy.deepcopy(self.core.settings or {})
+            snapshot["_ssl_data_dir"] = USER_DATA_DIR
+            snapshot["_ssl_legacy_insecure_session_enabled"] = bool(
+                getattr(self.core, "_ssl_legacy_insecure_session_enabled", False)
+            )
+        snapshot["qwen_base_url"] = self.qwen_url.text().strip().rstrip("/") if hasattr(self, "qwen_url") else self.core.settings.get("qwen_base_url", "")
         return snapshot
 
     def test_email_connection(self):
@@ -5939,7 +5946,7 @@ class SettingsPage(QWidget):
         self.tavily_key.secretEdited.connect(lambda _=None: self._schedule_autosave())
 
         for edit in [
-            self.tavily_key, self.local_url, self.email, self.pwd,
+            self.tavily_key, self.local_url, self.qwen_url, self.email, self.pwd,
             self.email_from_name, self.email_imap_host, self.email_imap_port,
             self.email_smtp_host, self.email_smtp_port, self.email_max_attachment_mb,
             self.cmd_timeout, self.tool_timeout, self.mcp_timeout, self.max_chars_edit,
@@ -6044,9 +6051,11 @@ class SettingsPage(QWidget):
         self._validated_api_keys.add((provider, sanitize_secret_value(key)))
         self.core.settings["api_mode"] = provider
         self.core.settings[secret_key] = sanitize_secret_value(key)
+        if provider == "qwen":
+            self.core.settings["qwen_base_url"] = self.qwen_url.text().strip().rstrip("/")
         self.core._save_settings()
         self.api_key_edit.set_secret(key)
-        self.api_key_status.setText(f"מפתח תקין ושמור: {mask_secret_value(key)}")
+        self.api_key_status.setText(f"מפתח תקין ושמור: {mask_secret_value(key)}" + (f"\n{message}" if message else ""))
         if models:
             self.populate_models(models, provider)
         self.core.system_prompt = self.core._load_system_prompt()
@@ -6299,6 +6308,11 @@ class SettingsPage(QWidget):
         else:
             self.core.mark_secret_for_deletion("tavily_api_key")
         self.core.settings["local_server_url"] = self.local_url.text().strip() or "http://localhost:1234/v1"
+        qwen_url = self.qwen_url.text().strip().rstrip("/")
+        if not qwen_url or valid_provider_base_url(qwen_url):
+            self.core.settings["qwen_base_url"] = qwen_url
+        else:
+            self.api_key_status.setText("כתובת API של Qwen אינה תקינה. יש להזין כתובת HTTP או HTTPS מלאה ממסוף הספק.")
         title_mode = str(self.conversation_title_mode_combo.currentData() or "ai").strip().lower()
         self.core.settings["conversation_title_generation_mode"] = (
             title_mode if title_mode in {"ai", "local"} else "ai"
@@ -6417,7 +6431,7 @@ class SettingsPage(QWidget):
             "ssl_trust_migration_version",
             "allow_insecure_ssl_compat",
         }
-        model_reload_keys = {"api_mode", "local_server_url"} | model_provider_secret_keys() | ssl_reload_keys
+        model_reload_keys = {"api_mode", "local_server_url", "qwen_base_url"} | model_provider_secret_keys() | ssl_reload_keys
         needs_model_reload = any(key in model_reload_keys or key.startswith("selected_") for key in changed)
         needs_canvas_prompt_refresh = any(
             key in {"enable_visual_surfaces", "enable_web_canvas", "enable_canvas_remote_images"}

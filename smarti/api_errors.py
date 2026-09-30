@@ -4,12 +4,15 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import ast
 import json
+import math
 import re
+from .api_error_catalog import CODE_REASONS, ERROR_REASONS, PROVIDER_CODE_REASONS
 
 
 PROVIDER_LABELS = {
     "gemini": "Google Gemini",
     "openai": "OpenAI",
+    "openai_codex_signin": "OpenAI Codex / ChatGPT",
     "anthropic": "Anthropic",
     "openrouter": "OpenRouter",
     "groq": "Groq",
@@ -68,6 +71,11 @@ class ApiErrorAnalysis:
     retry_after: float = None
     request_id: str = ""
     technical_summary: str = ""
+    reason: str = "unknown"
+    quota_metric: str = ""
+    quota_id: str = ""
+    quota_limit: str = ""
+    partial_response: str = ""
 
     @property
     def retryable(self):
@@ -90,7 +98,8 @@ def _safe_status(value):
     try:
         if value is None or value == "":
             return None
-        return int(value)
+        number = int(value)
+        return number if 100 <= number <= 599 else None
     except Exception:
         return None
 
@@ -133,7 +142,10 @@ def _response_payload(response):
     if response is None:
         return None, ""
     try:
-        return response.json(), _response_text(response)
+        payload = response.json()
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        return payload, _response_text(response)
     except Exception:
         text = _response_text(response)
         try:
@@ -146,6 +158,11 @@ def _payload_from_exception(error):
     body = getattr(error, "body", None)
     if isinstance(body, (dict, list)):
         return body, ""
+    if isinstance(body, (str, bytes)):
+        try:
+            return json.loads(body), ""
+        except (ValueError, TypeError):
+            pass
     response = getattr(error, "response", None)
     payload, text = _response_payload(response)
     if payload is not None:
@@ -184,12 +201,18 @@ def _find_first(obj, keys):
 
 def _extract_error_fields(payload, fallback_text=""):
     error_obj = payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), dict) else payload
-    message = _find_first(error_obj, ("message", "detail", "error_message", "msg")) or fallback_text
-    error_type = _find_first(error_obj, ("type", "error_type"))
-    error_code = _find_first(error_obj, ("code", "error_code"))
+    # Do not search arbitrary request/response content for diagnostic fields.
+    # OpenRouter's stable upstream type is in metadata.error_type; Google uses
+    # ErrorInfo.reason in details, separately from its numeric HTTP code.
+    error_obj = error_obj if isinstance(error_obj, dict) else {}
+    metadata = error_obj.get("metadata") or {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    message = str(error_obj.get("message") or error_obj.get("detail") or error_obj.get("error_message") or error_obj.get("msg") or (payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), str) else "") or fallback_text)
+    error_type = metadata.get("error_type") or error_obj.get("type") or error_obj.get("error_type") or ""
+    error_code = error_obj.get("code") or error_obj.get("error_code") or ""
     error_status = _find_first(error_obj, ("status",))
     param = _find_first(error_obj, ("param", "parameter", "field"))
-    request_id = _find_first(payload, ("request_id", "requestId", "id")) if isinstance(payload, dict) else ""
+    request_id = (payload.get("request_id") or payload.get("requestId") or "") if isinstance(payload, dict) else ""
     return {
         "message": str(message or "").strip(),
         "type": str(error_type or "").strip(),
@@ -250,10 +273,10 @@ def _parse_retry_delay(value):
 
 def _retry_after_seconds(headers, payload, message):
     headers = headers or {}
-    for key in ("retry-after", "x-retry-after"):
+    for key in ("retry-after", "x-retry-after", "retry-after-ms"):
         seconds = _parse_retry_delay(headers.get(key))
-        if seconds is not None:
-            return seconds
+        if seconds is not None and math.isfinite(seconds):
+            return seconds / 1000.0 if key == "retry-after-ms" else seconds
     if payload is not None:
         values = list(_walk_values(payload))
         for index, value in enumerate(values):
@@ -274,8 +297,185 @@ def _retry_after_seconds(headers, payload, message):
     return None
 
 
-def _contains_any(text, words):
-    return any(word in text for word in words)
+def _exception_chain(error):
+    seen, pending = set(), [error]
+    while pending and len(seen) < 20:
+        item = pending.pop(0)
+        if item is None or id(item) in seen:
+            continue
+        seen.add(id(item))
+        yield item
+        pending.extend([getattr(item, "__cause__", None), getattr(item, "__context__", None), getattr(item, "reason", None)])
+        pending.extend(arg for arg in getattr(item, "args", ()) if isinstance(arg, BaseException))
+
+
+def _diagnose_reason(provider, status, fields, payload, error, operation=""):
+    explicit = getattr(error, "reason", "")
+    if isinstance(explicit, str) and explicit in ERROR_REASONS:
+        return explicit
+    message = fields.get("message", "").casefold()
+    codes = [str(fields.get(key, "")).casefold().replace("-", "_") for key in ("code", "status", "type")]
+    details = payload.get("error", payload) if isinstance(payload, dict) else {}
+    details = details if isinstance(details, dict) else {}
+    # Only documented diagnostic objects; never search generated content.
+    extra = details.get("details") or []
+    for item in extra if isinstance(extra, list) else []:
+        if isinstance(item, dict) and str(item.get("@type", "")).endswith("ErrorInfo"):
+            codes.insert(0, str(item.get("reason", "")).casefold())
+    metadata = details.get("metadata") or {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    limit_source = metadata.get("limit_source")
+    if provider == "openrouter" and limit_source:
+        mapped = {"openrouter_in_flight_budget": "in_flight_budget", "openrouter_key_limit": "key_spend_limit", "openrouter_credits": "credits_exhausted"}.get(limit_source)
+        if mapped:
+            return mapped
+    provider_rules = PROVIDER_CODE_REASONS.get(provider, {})
+    mapped = next((provider_rules[code] for code in codes if code in provider_rules), None)
+    if mapped and mapped not in {"rate_limit", "invalid_parameter", "permission_denied"}:
+        return mapped
+    mapped = mapped or next((CODE_REASONS[code] for code in codes if code in CODE_REASONS), None)
+    if mapped and mapped not in {"invalid_request", "permission_denied", "rate_limit", "quota_exhausted", "invalid_parameter"}:
+        return mapped
+
+    if provider == "gemini" and (status == 429 or "resource_exhausted" in codes):
+        violations = []
+        for item in extra if isinstance(extra, list) else []:
+            if isinstance(item, dict) and str(item.get("@type", "")).endswith("QuotaFailure"):
+                violations.extend(v for v in item.get("violations", []) if isinstance(v, dict))
+        if any(str(v.get("quotaValue", "")) in {"0", "0.0"} for v in violations) or re.search(r"\blimit\s*:\s*0(?:\D|$)", message):
+            return "quota_unavailable"
+        quota_text = " ".join(str(v.get(k, "")) for v in violations for k in ("quotaId", "quotaMetric", "description")).casefold()
+        if any(word in quota_text + " " + message for word in ("perday", "per_day", "per day", "daily quota", "requests per day", "tokens per day")):
+            return "daily_quota"
+        if "perminute" in quota_text or "per_minute" in quota_text:
+            return "token_rate" if any(term in quota_text for term in ("token", "tokens")) else "request_rate"
+        # Google's generic 429 text mentions billing even for minute limits.
+        # Neither that boilerplate nor free_tier alone proves depleted credit.
+        return "rate_limit"
+
+    # Network exceptions usually wrap the actual DNS/TLS/socket exception.
+    if status is None:
+        chain = list(_exception_chain(error))
+        network = " ".join(type(item).__name__ + " " + str(item) for item in chain).casefold()
+        if "ssltrustconfigurationerror" in network:
+            return "tls_configuration"
+        if any(term in network for term in ("certificate has expired", "certificate expired")):
+            return "certificate_expired"
+        if any(term in network for term in ("hostname mismatch", "ip address mismatch", "not valid for")):
+            return "certificate_hostname"
+        if any(term in network for term in ("certificate verify failed", "certificateverifyfailed", "self signed certificate", "unable to get local issuer")):
+            return "certificate_untrusted"
+        if any(term in network for term in ("sslerror", "tls", "ssl:")):
+            return "tls_failure"
+        for kind in ("connect", "read", "write", "pool"):
+            if kind + "timeout" in network or kind + " timed out" in network:
+                return kind + "_timeout"
+        if any(term in network for term in ("timeout", "timed out")):
+            return "timeout"
+        if "proxy authentication" in network or "407" in network and "proxy" in network:
+            return "proxy_auth_required"
+        if any(term in network for term in ("proxyerror", "proxy authentication", "tunnel connection failed")):
+            return "proxy_failure"
+        if any(term in network for term in ("gaierror", "nameresolutionerror", "name resolution", "getaddrinfo failed", "name or service not known", "nodename nor servname")):
+            return "dns_failure"
+        if any(term in network for term in ("connectionrefusederror", "connection refused", "actively refused", "winerror 10061")):
+            return "connection_refused"
+        if any(term in network for term in ("connectionreseterror", "connection reset", "remotedisconnected", "remoteprotocolerror", "connection aborted")):
+            return "connection_reset"
+        if any(term in network for term in ("apiconnectionerror", "connecterror", "connectionerror", "network is unreachable", "max retries exceeded")):
+            return "network_failure"
+        if any(term in network for term in ("invalidurl", "missingschema", "invalidschema", "unsupportedprotocol", "invalid url")):
+            return "invalid_server_url"
+        if any(term in network for term in ("jsondecodeerror", "apivalidationerror")):
+            return "invalid_response"
+        if any(term in network for term in ("importerror", "modulenotfounderror", "install the openai")):
+            return "client_dependency"
+
+    # Refine broad wire types by specific facts in the provider error message.
+    # HTTP status wins over generic prose such as a model named "safety".
+    patterns = (
+        ("ip_restricted", ("ip not authorized", "ip address is not allowed", "ip allowlist")),
+        ("region_restricted", ("unsupported country", "country, region", "unsupported location", "not available in your country")),
+        ("expired_key", ("api key expired", "api key has expired", "key is expired")),
+        ("revoked_key", ("key was revoked", "api key has been revoked", "api key was reported as leaked")),
+        ("signin_usage_limit", ("usage limit", "usage_limit_reached")) if provider == "openai_codex_signin" else ("account_usage_limit", ("usage_limit_reached",)),
+        ("credits_exhausted", ("insufficient balance", "insufficient credit", "credit balance exhausted", "out of credits", "余额不足")),
+        ("organization_spend_limit", ("organization spend limit", "organization spending limit")),
+        ("project_spend_limit", ("project spend limit", "workspace spend limit")),
+        ("billing_required", ("enable billing", "free tier is not available", "set up billing", "setup a paid plan")),
+        ("daily_quota", ("daily quota", "per day", "perday", "requests per day", "tokens per day")),
+        ("context_length", ("context_length", "context length", "context window", "maximum context", "too many input tokens", "prompt is too long", "input is too long")),
+        ("payload_too_large", ("request too large", "payload too large", "request size exceeds")),
+        ("service_tier", ("invalid service_tier", "service tier is not allowed")),
+        ("model_retired", ("decommissioned", "model has been deprecated", "model was retired")),
+        ("model_permission", ("access to this model", "access to the model", "model is gated", "model access denied")),
+        ("unsupported_modality", ("does not support image", "does not support audio", "does not support video", "unsupported content type")),
+        ("invalid_attachment", ("invalid image", "image download failed", "unsupported image format", "could not process image", "invalid base64")),
+        ("invalid_tool_schema", ("invalid schema for function", "invalid tool schema", "function_declarations", "input_schema", "tool schema")),
+        ("invalid_history", ("tool_call_id", "messages must", "roles must", "messages: roles", "thought signature", "thought_signature", "function response", "tool_use_id")),
+        ("unsupported_parameter", ("unsupported parameter", "unknown parameter", "unrecognized request argument", "not supported with this model", "unexpected keyword argument")),
+        ("responses_required", ("only supported in the responses", "only supports the responses", "responses api only", "not supported in the v1/chat/completions endpoint")),
+        ("stream_required", ("only support stream", "only supports stream", "only support with stream=true", "only support streaming", "enable_thinking only support stream", "enable_thinking must be set to false for non-streaming")),
+        ("output_limit", ("max_tokens must", "max_completion_tokens must", "maxoutputtokens", "budget_tokens must", "thinking budget")),
+        ("content_policy", ("content policy", "content_policy", "safety filter", "blocked by safety", "guardrail", "moderation")),
+        ("concurrency_limit", ("concurrent request", "concurrency limit")),
+        ("token_rate", ("tokens per minute", "tokens per second", "tokens per min", "limit on tokens", "tpm")),
+        ("request_rate", ("requests per minute", "requests per second", "rpm", "slow down")),
+        ("local_model_unloaded", ("no model loaded", "no models loaded", "model is not loaded")),
+        ("model_not_found", ("model not found", "unknown model", "invalid model", "model does not exist")),
+    )
+    if status not in {500, 502, 503, 504, 529}:
+        for reason, terms in patterns:
+            if any(term in message for term in terms):
+                return reason
+    if mapped:
+        return mapped
+    if status == 401:
+        return "invalid_key"
+    if status == 402:
+        return "credits_exhausted"
+    if status == 403:
+        return "permission_denied"
+    if status == 404:
+        return "endpoint_not_found" if operation == "models" or "endpoint" in message or "route" in message else "model_not_found"
+    if status == 410:
+        return "model_retired"
+    if status == 407:
+        return "proxy_auth_required"
+    if status == 424:
+        return "tool_dependency_failure"
+    if status == 413:
+        return "payload_too_large"
+    if status in {408, 499}:
+        return "timeout"
+    if status in {504, 524}:
+        return "gateway_timeout"
+    if status == 429:
+        return "rate_limit"
+    if status in {498, 529}:
+        return "server_overloaded"
+    if status == 502:
+        return "upstream_error"
+    if status == 503:
+        return "service_unavailable"
+    if status is not None and status >= 500:
+        return "server_error"
+    if status in {400, 422}:
+        return "invalid_request"
+    return "unknown"
+
+
+def api_error_for_reason(provider, model, reason, *, raw_message="", param=""):
+    """Diagnose local preflight or an HTTP-200 generation failure."""
+    category, retry_action, template = ERROR_REASONS[reason]
+    label = _provider_label(provider)
+    return ApiErrorAnalysis(
+        provider=provider, provider_label=label, model=str(model or ""),
+        reason=reason, category=category, retry_action=retry_action,
+        user_message=template.format(label=label, model=model or "שנבחר"),
+        raw_message=str(raw_message or ""), param=param,
+        technical_summary=f"reason={reason} param={param} message={str(raw_message or '')}",
+    )
 
 
 def _status_note(status_code):
@@ -293,38 +493,6 @@ def _provider_code_note(fields):
     return ""
 
 
-def _message_for(category, label, status_code=None, fields=None):
-    note = _status_note(status_code)
-    code_note = _provider_code_note(fields)
-    if category == "auth":
-        return f"מפתח ה-API של {label} נדחה. בדרך כלל זה אומר שהמפתח שגוי, נמחק, פג תוקף או שייך לחשבון אחר. פתח את ההגדרות והדבק מפתח תקין{note}.{code_note}"
-    if category == "permission":
-        return f"לחשבון או למפתח של {label} אין הרשאה להשתמש במודל, באזור או במשאב שנבחר. בדוק הרשאות אצל הספק או בחר מודל אחר{note}.{code_note}"
-    if category == "billing_quota":
-        return f"לחשבון של {label} אין כרגע יתרת שימוש זמינה, או שמכסת החיוב/הקרדיט נוצלה. צריך להוסיף קרדיט, להפעיל חיוב או להמתין לאיפוס המכסה{note}.{code_note}"
-    if category == "rate_limit":
-        return f"{label} מגביל כרגע את קצב הבקשות. סמארטי ימתין וינסה שוב אוטומטית{note}.{code_note}"
-    if category == "server_overload":
-        return f"יש עומס או תקלה זמנית בצד {label}. סמארטי ימתין וינסה שוב אוטומטית{note}.{code_note}"
-    if category == "timeout":
-        return f"השרת של {label} לא החזיר תשובה בזמן. זה יכול לקרות בגלל עומס זמני או חיבור איטי/מסונן{note}."
-    if category == "network":
-        return f"החיבור אל {label} נכשל. לרוב זה קשור לרשת, VPN/Proxy, סינון, חומת אש או אנטי-וירוס{note}."
-    if category == "ssl":
-        return f"שגיאת SSL מול {label}. בדרך כלל זה מצביע על סינון רשת, Proxy או אנטי-וירוס שמחליף תעודות."
-    if category == "request_too_large":
-        return f"הבקשה גדולה מדי עבור {label}. נסה לפתוח שיחה חדשה, לקצר את ההודעה או לבחור מודל עם חלון הקשר גדול יותר{note}.{code_note}"
-    if category == "model_unavailable":
-        return f"המודל שנבחר לא זמין בחשבון של {label}, לא קיים, או לא נתמך כרגע. בחר מודל אחר בהגדרות{note}.{code_note}"
-    if category == "invalid_request":
-        return f"הבקשה שנשלחה אל {label} לא התקבלה. לרוב זה קורה כשמודל לא תומך בפרמטר מסוים או כשהיסטוריית השיחה בפורמט לא מתאים. נסה לבחור מודל אחר או לפתוח שיחה חדשה{note}.{code_note}"
-    if category == "content_blocked":
-        return f"{label} חסם את הבקשה בגלל מדיניות בטיחות או תוכן. נסה לנסח את הבקשה אחרת{note}."
-    if category == "provider_setup":
-        return f"החשבון של {label} צריך הגדרת ספק נוספת, כמו הפעלת חיוב, אזור נתמך או הרשאה למודל שנבחר{note}."
-    return f"התקבלה שגיאת API מ-{label}. נסה שוב, ואם זה חוזר בדוק את המפתח, המודל והחיבור לרשת{note}."
-
-
 def _technical_summary(status_code, fields, class_name):
     parts = []
     if status_code:
@@ -335,102 +503,21 @@ def _technical_summary(status_code, fields, class_name):
     if class_name:
         parts.append(f"exception={class_name}")
     if fields.get("message"):
-        parts.append(f"message={fields['message'][:300]}")
+        parts.append(f"message={fields['message']}")
     return " ".join(parts)
 
 
-def _classify(status_code, blob, retry_after):
-    account_billing = _contains_any(blob, (
-        "insufficient_quota", "insufficient quota", "insufficient credits", "insufficient credit",
-        "insufficient balance", "out of balance", "balance too low", "run out of credits",
-        "no credits", "billing", "payment", "monthly spend", "spending limit", "top up",
-        "credit balance", "free_tier", "余额", "充值", "余额已用完",
-    ))
-    quota_exhausted = _contains_any(blob, (
-        "quota has been exceeded", "current quota", "per day", "daily quota", "rpd",
-    ))
-    auth_terms = (
-        "authentication", "unauthorized", "incorrect api key", "invalid api key", "invalid_api_key",
-        "invalid api-key", "invalidapikey", "api key invalid", "wrong api key", "no api key",
-        "missing api key", "no authorization header",
-        "authorization token", "invalid authorization", "invalid token", "token非法", "鉴权失败",
-    )
-    permission_terms = (
-        "permission", "permissiondeniederror", "forbidden", "not allowed", "not authorized", "ip not authorized",
-        "country", "region", "territory", "unsupported location", "blocked", "guardrail",
-        "moderation", "权限", "账户异常", "违规", "暂无 api 权限",
-    )
-    too_large_terms = (
-        "request too large", "requesttoolargeerror", "context length", "context_length", "maximum context", "max context",
-        "too many tokens", "token limit", "input is too long", "prompt is too long",
-        "exceeds the max", "exceed context", "413", "文件大小超过",
-    )
-    model_terms = (
-        "model not found", "notfounderror", "unknown_model", "unknown model", "invalid model", "model_not_found",
-        "model is unavailable", "model unavailable", "not support this model", "does not support",
-        "requested resource was not found", "not_found_error",
-    )
-    setup_terms = (
-        "failed_precondition", "free tier is not available", "enable billing", "setup a paid plan",
-        "billing account", "project", "api key doesn't have the required permissions",
-    )
-    rate_terms = (
-        "rate limit", "rate_limit", "ratelimiterror", "too many requests", "resource_exhausted",
-        "requests too quickly", "throttle", "concurrency", "rpm", "tpm", "rpd",
-        "接口请求并发超额", "频率过快",
-    )
-    server_terms = (
-        "overload", "overloaded", "server error", "internal server error", "internalservererror", "service unavailable",
-        "temporarily unavailable", "bad gateway", "gateway timeout", "capacity", "server_error",
-        "api_error", "backend", "upstream", "try again later",
-    )
-    timeout_terms = ("timeout", "apitimeouterror", "timed out", "read timed out", "request timed out", "response timeout")
-    network_terms = (
-        "connection error", "apiconnectionerror", "connection aborted", "connection reset",
-        "remote disconnected", "dns", "name resolution", "proxy", "firewall", "network",
-        "failed to establish a new connection", "max retries exceeded",
-    )
-
-    if _contains_any(blob, ("ssl", "certificate verify failed", "certificateverifyfailed")):
-        return "ssl", "none"
-    if _contains_any(blob, timeout_terms):
-        return "timeout", "delayed"
-    if status_code in {408, 499, 504}:
-        return "timeout", "delayed"
-    if status_code == 401 or _contains_any(blob, auth_terms):
-        return "auth", "none"
-    if _contains_any(blob, ("content policy", "safety", "moderation", "guardrail", "safety filter")):
-        return "content_blocked", "none"
-    if status_code == 403 or _contains_any(blob, permission_terms):
-        return "permission", "none"
-    if status_code == 402:
-        return "billing_quota", "none"
-    if account_billing or quota_exhausted:
-        return "billing_quota", "none"
-    if status_code == 429 or _contains_any(blob, rate_terms):
-        return "rate_limit", "delayed"
-    if status_code == 413 or _contains_any(blob, too_large_terms):
-        return "request_too_large", "none"
-    if _contains_any(blob, setup_terms):
-        return "provider_setup", "none"
-    if status_code == 404 or _contains_any(blob, model_terms):
-        return "model_unavailable", "none"
-    if status_code in {498, 500, 502, 503, 529} or _contains_any(blob, server_terms):
-        return "server_overload", "delayed"
-    if status_code in {400, 422} or _contains_any(blob, ("badrequesterror", "invalid_request", "invalid argument", "invalid_argument", "validation error", "unprocessable")):
-        return "invalid_request", "none"
-    if _contains_any(blob, network_terms):
-        return "network", "immediate"
-    return "unknown", "none"
-
-
-def analyze_api_error(provider, model="", response=None, error=None, user_message_override=None):
+def analyze_api_error(provider, model="", response=None, error=None, user_message_override=None, operation=""):
     provider = str(provider or "").strip().lower()
     label = _provider_label(provider)
-    response = response or getattr(error, "response", None)
-    headers = _headers_dict(getattr(response, "headers", None))
+    if isinstance(error, ApiRequestError):
+        return error.analysis
+    # requests.Response is false for 4xx/5xx. Preserve it and its diagnostics.
+    if response is None:
+        response = getattr(error, "response", None)
+    headers = _headers_dict(getattr(response, "headers", None) or getattr(error, "headers", None))
     payload, text = _response_payload(response)
-    if payload is None and error is not None:
+    if not isinstance(payload, (dict, list)) and error is not None:
         payload, text = _payload_from_exception(error)
 
     fields = _extract_error_fields(payload if isinstance(payload, dict) else {}, text or str(error or ""))
@@ -442,27 +529,32 @@ def analyze_api_error(provider, model="", response=None, error=None, user_messag
 
     retry_after = _retry_after_seconds(headers, payload, fields.get("message", ""))
     class_name = error.__class__.__name__ if error is not None else ""
-    blob = " ".join(
-        str(value or "")
-        for value in (
-            fields.get("message"),
-            fields.get("type"),
-            fields.get("code"),
-            fields.get("status"),
-            fields.get("param"),
-            class_name,
-            text,
-            str(error or ""),
-        )
-    ).lower()
-    category, retry_action = _classify(status_code, blob, retry_after)
-    user_message = user_message_override or _message_for(category, label, status_code, fields)
-    request_id = fields.get("request_id") or headers.get("request-id") or headers.get("x-request-id") or ""
+    diagnostic_status = status_code
+    if status_code is not None and status_code < 400:
+        diagnostic_status = _payload_status(payload)
+    reason = _diagnose_reason(provider, diagnostic_status, fields, payload, error, operation)
+    category, retry_action, template = ERROR_REASONS[reason]
+    user_message = user_message_override or template.format(label=label, model=model or "שנבחר")
+    user_message += _status_note(status_code) + "." if status_code else ""
+    # Legacy broad code hints must not contradict the provider-specific reason
+    # (e.g. Qwen's insufficient_quota denotes transient token throughput).
+    if reason in {"invalid_request", "invalid_key", "permission_denied", "quota_exhausted", "rate_limit", "server_error", "context_length", "model_not_found"}:
+        user_message += _provider_code_note(fields)
+    if retry_after is not None and not math.isfinite(retry_after):
+        retry_after = None
+    request_id = headers.get("request-id") or headers.get("x-request-id") or getattr(error, "request_id", "") or fields.get("request_id") or headers.get("x-generation-id") or ""
+    quota_metric = _find_first(payload, ("quotaMetric",))
+    quota_id = _find_first(payload, ("quotaId",))
+    quota_limit = _find_first(payload, ("quotaValue",))
     return ApiErrorAnalysis(
         provider=provider,
         provider_label=label,
         model=str(model or ""),
         category=category,
+        reason=reason,
+        quota_metric=quota_metric,
+        quota_id=quota_id,
+        quota_limit=quota_limit,
         retry_action=retry_action,
         user_message=user_message,
         status_code=status_code,
@@ -482,22 +574,16 @@ def api_retry_status_message(analysis, wait_seconds=0, next_attempt=1):
     wait_seconds = int(round(wait_seconds or 0))
     suffix = f" | ניסיון {next_attempt}" if next_attempt else ""
     if wait_seconds <= 0:
-        return f"{label}: מנסה שוב מיד{suffix}..."
-    return f"{label}: ממתין {wait_seconds} שנ׳{suffix}"
+        return f"{analysis.user_message} {label}: מנסה שוב{suffix}..."
+    return f"{analysis.user_message} ממתין {wait_seconds} שנ׳{suffix}"
 
 
 def api_retry_exhausted_analysis(analysis, wait_too_long=False):
-    label = analysis.provider_label
-    note = _status_note(analysis.status_code)
     if wait_too_long and analysis.retry_after:
         minutes = max(1, int(round(float(analysis.retry_after) / 60.0)))
-        message = f"{label} ביקש להמתין בערך {minutes} דקות לפני ניסיון נוסף. כדי לא להשאיר את סמארטי תקוע, עצרתי כאן. נסה שוב מאוחר יותר או בחר מודל/ספק אחר{note}."
-    elif analysis.category == "rate_limit":
-        message = f"{label} עדיין מגביל את קצב הבקשות גם אחרי כמה ניסיונות. נסה שוב בעוד כמה דקות, או בחר מודל/ספק אחר{note}."
-    elif analysis.category == "server_overload":
-        message = f"השרת של {label} עדיין עמוס או מחזיר תקלה זמנית גם אחרי כמה ניסיונות. נסה שוב מאוחר יותר או בחר ספק אחר{note}."
-    elif analysis.category in {"timeout", "network"}:
-        message = f"החיבור אל {label} עדיין נכשל אחרי כמה ניסיונות. בדוק VPN/Proxy, סינון רשת, חומת אש או אנטי-וירוס ונסה שוב{note}."
+        message = f"{analysis.user_message} הספק ביקש להמתין בערך {minutes} דקות. הניסיון האוטומטי נעצר; יש לנסות שוב לאחר ההמתנה."
+    elif analysis.retryable:
+        message = f"{analysis.user_message} הניסיונות האוטומטיים הסתיימו ללא הצלחה."
     else:
         message = analysis.user_message
     return replace(analysis, retry_action="none", user_message=message)
@@ -509,6 +595,7 @@ def api_technical_details(analysis, limit=420):
     parts = [
         analysis.provider_label,
         f"category={analysis.category}",
+        f"reason={analysis.reason}",
         f"retry={analysis.retry_action}",
     ]
     if analysis.model:
@@ -518,14 +605,29 @@ def api_technical_details(analysis, limit=420):
             parts.append(f"retry_after={int(round(float(analysis.retry_after)))}s")
         except Exception:
             parts.append(f"retry_after={analysis.retry_after}")
-    if analysis.technical_summary:
-        parts.append(analysis.technical_summary)
     if analysis.request_id:
         parts.append(f"request_id={analysis.request_id}")
+    if analysis.quota_metric:
+        parts.append(f"quota_metric={analysis.quota_metric}")
+    if analysis.quota_id:
+        parts.append(f"quota_id={analysis.quota_id}")
+    if analysis.quota_limit:
+        parts.append(f"quota_limit={analysis.quota_limit}")
+    if analysis.technical_summary:
+        parts.append(analysis.technical_summary)
     compact = re.sub(r"\s+", " ", " | ".join(str(part or "").strip() for part in parts if str(part or "").strip())).strip()
     if len(compact) > limit:
         compact = compact[:limit].rstrip() + "..."
     return compact
+
+
+def api_redacted_analysis(analysis, redact):
+    """Redact before truncation, which might otherwise cut a key in half."""
+    return replace(analysis, **{
+        name: redact(value)
+        for name, value in vars(analysis).items()
+        if isinstance(value, str)
+    })
 
 
 def api_user_technical_details(analysis):
@@ -536,6 +638,7 @@ def api_user_technical_details(analysis):
     if analysis.model:
         provider_line += f" | מודל: {analysis.model}"
     provider_line += f" | קטגוריה: {analysis.category}"
+    provider_line += f" | אבחון: {analysis.reason}"
     codes = []
     if analysis.status_code:
         codes.append(f"HTTP {analysis.status_code}")
@@ -552,6 +655,10 @@ def api_user_technical_details(analysis):
         rows.append(" | ".join(codes))
     if analysis.request_id:
         rows.append(f"מזהה בקשה אצל הספק: {analysis.request_id}")
+    if analysis.quota_metric or analysis.quota_id:
+        rows.append(f"מכסה: {analysis.quota_id or analysis.quota_metric}" + (f" | מגבלה: {analysis.quota_limit}" if analysis.quota_limit else ""))
+    if analysis.raw_message:
+        rows.append("הסבר הספק: " + re.sub(r"\s+", " ", analysis.raw_message)[:350])
     if analysis.retry_after is not None:
         try:
             rows.append(f"המתנה שהתבקשה: {int(round(float(analysis.retry_after)))} שניות")
@@ -561,19 +668,4 @@ def api_user_technical_details(analysis):
 
 
 def api_validation_message(analysis):
-    label = analysis.provider_label
-    if analysis.category == "auth":
-        return "המפתח נדחה: הוא שגוי, נמחק או פג תוקף."
-    if analysis.category == "permission":
-        return f"המפתח לא מורשה להשתמש ב-{label} או במודל שנבחר."
-    if analysis.category == "billing_quota":
-        return "המפתח תקין אולי, אבל אין לחשבון קרדיט/חיוב פעיל או שהמכסה נוצלה."
-    if analysis.category == "rate_limit":
-        return f"{label} הגביל זמנית את הבדיקה. נסה שוב בעוד רגע."
-    if analysis.category == "server_overload":
-        return f"{label} לא זמין כרגע לבדיקה. נסה שוב מאוחר יותר."
-    if analysis.category == "network":
-        return "בדיקת המפתח נכשלה בגלל בעיית רשת, Proxy, סינון או חומת אש."
-    if analysis.category == "ssl":
-        return "בדיקת המפתח נכשלה בגלל שגיאת SSL או סינון HTTPS."
-    return analysis.user_message
+    return analysis.user_message + "\n" + "\n".join(api_user_technical_details(analysis))

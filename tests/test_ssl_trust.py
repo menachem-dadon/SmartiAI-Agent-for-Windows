@@ -215,9 +215,16 @@ class SSLTrustCertificateTests(unittest.TestCase):
             )
         )
         self.server = _QuietHTTPServer(("127.0.0.1", 0), _QuietHandler)
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(str(self.cert_path), str(self.key_path))
-        self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
+        # truststore is a client trust adapter. Other integration tests may have
+        # injected it globally; use the stdlib server context for this listener,
+        # then restore both client globals exactly as they were.
+        import truststore
+        import urllib3.util.ssl_ as urllib3_ssl
+        with mock.patch.object(ssl, "SSLContext", ssl.SSLContext), mock.patch.object(urllib3_ssl, "SSLContext", urllib3_ssl.SSLContext):
+            truststore.extract_from_ssl()
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(str(self.cert_path), str(self.key_path))
+            self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.url = f"https://127.0.0.1:{self.server.server_port}/trust-test"

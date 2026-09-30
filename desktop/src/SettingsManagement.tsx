@@ -801,7 +801,7 @@ function SearchableModelPicker({
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        {selected || "לא נמצאו מודלים"}
+        {selected || (models.length ? "בחר מודל" : "לא נמצאו מודלים")}
         <i aria-hidden="true" />
       </button>
       {open && (
@@ -887,7 +887,9 @@ export function ProviderWorkflow({
   const selectedModel = String(values[modelKey] || "");
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
+  const modelLoadGeneration = useRef(0);
   const [keyDraft, setKeyDraft] = useState("");
+  const [qwenUrlDraft, setQwenUrlDraft] = useState(String(values.qwen_base_url || ""));
   const [status, setStatus] = useState("");
   const validationTimer = useRef<number | null>(null);
   const validationGeneration = useRef(0);
@@ -903,12 +905,14 @@ export function ProviderWorkflow({
   );
   const icons = legacyAssets(theme);
   const refreshModels = useCallback(async () => {
+    const generation = ++modelLoadGeneration.current;
     setModelsLoading(true);
     try {
       const data = await coreApi<{
         models: Array<string | { id?: string; name?: string }>;
         message?: string;
       }>("GET", `/v2/providers/${encodePath(provider)}/models`);
+      if (generation !== modelLoadGeneration.current) return;
       setModels(
         data.models
           .map((item) =>
@@ -918,15 +922,41 @@ export function ProviderWorkflow({
       );
       if (data.message) setStatus(data.message);
     } catch (reason) {
+      if (generation !== modelLoadGeneration.current) return;
       setModels(selectedModel ? [selectedModel] : []);
       setStatus(String(reason));
     } finally {
-      setModelsLoading(false);
+      if (generation === modelLoadGeneration.current) setModelsLoading(false);
     }
   }, [provider, selectedModel]);
   useEffect(() => {
     void refreshModels();
+    return () => { modelLoadGeneration.current += 1; };
   }, [refreshModels]);
+  useEffect(() => {
+    setQwenUrlDraft(String(values.qwen_base_url || ""));
+  }, [values.qwen_base_url]);
+  const saveQwenUrl = async () => {
+    const url = qwenUrlDraft.trim().replace(/\/+$/, "");
+    if (url === String(values.qwen_base_url || "")) return;
+    if (url) {
+      try {
+        const parsed = new URL(url);
+        if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password)
+          throw new Error("invalid URL");
+      } catch {
+        setStatus("כתובת API של Qwen אינה תקינה. הזן כתובת HTTP או HTTPS מלאה ממסוף הספק.");
+        return;
+      }
+    }
+    try {
+      await save("qwen_base_url", url);
+      setQwenUrlDraft(url);
+      await refreshModels();
+    } catch (reason) {
+      setStatus(String(reason));
+    }
+  };
   useEffect(() => {
     if (modelsLoading || favoriteOnLoadProvider.current !== provider) return;
     favoriteOnLoadProvider.current = "";
@@ -977,7 +1007,7 @@ export function ProviderWorkflow({
       if (generation !== validationGeneration.current) return;
       setKeyDraft("");
       setModels(result.models || []);
-      setStatus(`מפתח תקין ושמור: ${secrets[secretKey]?.masked || "••••"}`);
+      setStatus(`המפתח נבדק ונשמר: ${secrets[secretKey]?.masked || "••••"}${result.message ? ` — ${result.message}` : ""}`);
       await reload();
     } catch (reason) {
       if (generation === validationGeneration.current)
@@ -1067,6 +1097,7 @@ export function ProviderWorkflow({
       );
       setStatus(data.message);
       await reload();
+      if (action !== "codex_status") await refreshModels();
     } catch (reason) {
       setStatus(String(reason));
     }
@@ -1176,6 +1207,22 @@ export function ProviderWorkflow({
             </button>
           </div>
         </>
+      )}
+      {provider === "qwen" && (
+        <SourceSettingField
+          label="כתובת API של Qwen"
+          help="המפתח וכתובת השרת חייבים להשתייך לאותו אזור, מרחב עבודה ומסלול ב-Alibaba Model Studio. העתק את Base URL ממסוף הספק. שדה ריק משתמש בברירת המחדל של סין."
+          dataPath="qwen_base_url"
+        >
+          <input
+            type="url"
+            dir="ltr"
+            value={qwenUrlDraft}
+            placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+            onChange={(event) => setQwenUrlDraft(event.target.value)}
+            onBlur={() => void saveQwenUrl()}
+          />
+        </SourceSettingField>
       )}
       {provider === "local" && (
         <SourceSettingField

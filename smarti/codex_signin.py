@@ -23,11 +23,13 @@ import time
 from typing import Iterable
 
 from .common import SmartiCancelled
+from .api_errors import analyze_api_error
 
 
 CODEX_SIGNIN_PROVIDER = "openai_codex_signin"
 CODEX_SIGNIN_DEFAULT_MODEL = "codex default"
 CODEX_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+CODEX_MODEL_CATALOG_MIN_VERSION = (0, 159, 0)
 SMARTI_TURN_OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -66,6 +68,11 @@ class CodexConnectionStatus:
 class CodexSignInError(RuntimeError):
     """A safe, user-facing error from the official Codex CLI integration."""
 
+    def __init__(self, message, *, reason="", body=None):
+        super().__init__(message)
+        self.reason = reason
+        self.body = body
+
 
 class CodexProtocolError(CodexSignInError):
     """A repairable schema/protocol response from an otherwise successful turn."""
@@ -90,10 +97,10 @@ class CodexProtocolError(CodexSignInError):
 
 
 class CodexSignInProvider:
-    """Runs only documented ``codex login`` and ``codex exec`` commands."""
+    """Uses the official CLI for sign-in, inference and read-only discovery."""
 
     _AUTH_ERROR_TERMS = (
-        "expired", "token", "unauthorized", "authentication", "not logged",
+        "access token expired", "refresh token expired", "token has expired", "invalid token", "unauthorized", "authentication", "not logged",
         "login required", "sign in", "401", "reauth",
     )
     _EXPIRED_AUTH_TERMS = ("expired", "unauthorized", "invalid token", "401", "reauth")
@@ -135,7 +142,7 @@ class CodexSignInProvider:
         if found and not self._is_windows_apps_path(found):
             return found
         raise CodexSignInError(
-            "לא נמצא Codex CLI פעיל. יש להתקין או לעדכן את OpenAI Codex CLI, ואז לנסות שוב."
+            "לא נמצא Codex CLI פעיל. יש להתקין או לעדכן את OpenAI Codex CLI, ואז לנסות שוב.", reason="client_dependency",
         )
 
     @staticmethod
@@ -219,7 +226,7 @@ class CodexSignInProvider:
                 except Exception:
                     pass
                 self._log_cli_execution(command, None, "", "Interactive login timed out")
-                raise CodexSignInError("פעולת Codex לא הסתיימה בזמן. יש לנסות שוב.")
+                raise CodexSignInError("פעולת Codex לא הסתיימה בזמן. יש לנסות שוב.", reason="timeout")
             except PermissionError:
                 self._log_cli_execution(command, None, "", "Permission denied")
                 raise CodexSignInError(
@@ -285,7 +292,7 @@ class CodexSignInProvider:
                         continue
         except subprocess.TimeoutExpired:
             self._log_cli_execution(command, None, "", "Timed out")
-            raise CodexSignInError("פעולת Codex לא הסתיימה בזמן. יש לנסות שוב.")
+            raise CodexSignInError("פעולת Codex לא הסתיימה בזמן. יש לנסות שוב.", reason="timeout")
         except PermissionError:
             self._log_cli_execution(command, None, "", "Permission denied")
             raise CodexSignInError(
@@ -366,7 +373,7 @@ class CodexSignInProvider:
                 detail = self._redact_cli_output("".join(stderr_lines), max_chars=600)
                 suffix = f" ({detail})" if detail else ""
                 raise CodexSignInError(f"Codex App Server stopped unexpectedly{suffix}")
-            raise CodexSignInError("קריאת מכסת Codex לא הסתיימה בזמן.")
+            raise CodexSignInError("קריאת הנתונים מ-Codex לא הסתיימה בזמן.")
 
         try:
             process = subprocess.Popen(
@@ -392,7 +399,7 @@ class CodexSignInProvider:
                 "params": {
                     "clientInfo": {
                         "name": "SmartiAI",
-                        "title": "SmartiAI Codex quota",
+                        "title": "SmartiAI Codex",
                         "version": "1.0",
                     },
                     "capabilities": {},
@@ -412,6 +419,64 @@ class CodexSignInProvider:
                 except Exception:
                     pass
                 self._terminate_process(process)
+
+    def read_models(self, timeout: int = 12) -> list[str]:
+        """Read picker-visible text models through the official ``model/list`` API."""
+        deadline = time.monotonic() + max(2, float(timeout))
+        status = self.connection_status(timeout=min(5, max(2, float(timeout))))
+        if status.state != "connected":
+            raise CodexSignInError(status.message, reason="signin_expired" if status.state == "reauth_required" else "signin_required" if status.state == "not_connected" else "")
+        # Older CLI releases can successfully return a catalog filtered to
+        # models known at build time. Do not mistake that for a current list.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CodexSignInError("טעינת רשימת המודלים מ-Codex לא הסתיימה בזמן.")
+        code, version_output, _ = self._run(("--version",), timeout=min(5, remaining))
+        version_match = re.search(r"codex-cli\s+(\d+)\.(\d+)\.(\d+)", version_output)
+        if code == 0 and version_match:
+            version = tuple(int(part) for part in version_match.groups())
+            if version < CODEX_MODEL_CATALOG_MIN_VERSION:
+                raise CodexSignInError(
+                    "גרסת Codex CLI ישנה; מוצגת רשימת מודלים לגיבוי. "
+                    "לקבלת הרשימה העדכנית יש לעדכן את Codex CLI הרשמי לגרסה 0.159.0 ומעלה."
+                )
+        models = []
+        seen_models = set()
+        seen_cursors = set()
+        cursor = None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CodexSignInError("טעינת רשימת המודלים מ-Codex לא הסתיימה בזמן.")
+            params = {"limit": 100, "includeHidden": False}
+            if cursor:
+                params["cursor"] = cursor
+            response = self._app_server_request("model/list", params, timeout=remaining)
+            if not isinstance(response, dict) or not isinstance(response.get("data"), list):
+                raise CodexSignInError("Codex החזיר רשימת מודלים לא תקינה.")
+            for entry in response["data"]:
+                if not isinstance(entry, dict) or entry.get("hidden"):
+                    continue
+                # Older Codex catalogs omit modalities; those models support text.
+                modalities = entry.get("inputModalities", ["text", "image"])
+                if not isinstance(modalities, list) or "text" not in modalities:
+                    continue
+                model = entry.get("model") or entry.get("id")
+                if not isinstance(model, str) or not model.strip():
+                    continue
+                model = model.strip()
+                if model not in seen_models:
+                    seen_models.add(model)
+                    models.append(model)
+            cursor = response.get("nextCursor")
+            if cursor is None:
+                break
+            if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                raise CodexSignInError("Codex החזיר סמן המשך לא תקין לרשימת המודלים.")
+            seen_cursors.add(cursor)
+        if not models:
+            raise CodexSignInError("לא התקבלה רשימת מודלים מ-Codex. מוצגת רשימת גיבוי.")
+        return [CODEX_SIGNIN_DEFAULT_MODEL, *models]
 
     @staticmethod
     def _normalize_rate_limit_window(window):
@@ -486,9 +551,9 @@ class CodexSignInProvider:
             return "not_connected"
         return "not_connected"
 
-    def connection_status(self) -> CodexConnectionStatus:
+    def connection_status(self, timeout: float = 20) -> CodexConnectionStatus:
         try:
-            code, stdout, stderr = self._run(("login", "status"), timeout=20)
+            code, stdout, stderr = self._run(("login", "status"), timeout=timeout)
         except CodexSignInError as exc:
             message = str(exc)
             state = self._auth_failure_state(message) if self._looks_like_auth_error(message) else "unavailable"
@@ -887,11 +952,32 @@ class CodexSignInProvider:
                     path.unlink(missing_ok=True)
                 except OSError:
                     logging.warning(f"Could not remove temporary Codex {label} file.")
-        if code != 0:
-            detail = "\n".join(part for part in (stdout, stderr) if part)
+        # Only collect explicit JSONL failure events. A later completed turn
+        # means Codex recovered from its own intermediate retry errors.
+        failures = []
+        for line in str(stdout or "").splitlines():
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "turn.completed":
+                failures.clear()
+            elif event.get("type") in {"error", "turn.failed"}:
+                failure = event.get("error") or {"message": event.get("message", "")}
+                if isinstance(failure, str):
+                    failure = {"message": failure}
+                if isinstance(failure, dict):
+                    failures.append(failure)
+        if code != 0 or failures:
+            failure = failures[-1] if failures else {"message": self._redact_cli_output(stderr)}
+            detail = str(failure.get("message") or "")
             if self._looks_like_auth_error(detail):
-                raise CodexSignInError("האסימון פג או שהחשבון דורש התחברות מחדש עם ChatGPT / Codex.")
-            raise CodexSignInError("Codex לא השלים את הבקשה. יש לבדוק את החיבור, המודל ומגבלות החשבון.")
+                raise CodexSignInError("האסימון פג או שהחשבון דורש התחברות מחדש עם ChatGPT / Codex.", reason="signin_expired")
+            error = CodexSignInError("Codex failed", body={"error": failure})
+            analysis = analyze_api_error(CODEX_SIGNIN_PROVIDER, selected_model, error=error)
+            raise CodexSignInError(analysis.user_message, reason=analysis.reason, body={"error": failure})
         response, usage = self._parse_jsonl_execution(
             stdout,
             prefer_tool_calls=purpose == "agent",

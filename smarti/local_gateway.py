@@ -1093,7 +1093,7 @@ class SmartiLocalGateway:
                 sync_ssl = getattr(self.core, "_sync_ssl_compat_env", None)
                 if callable(sync_ssl):
                     sync_ssl()
-            if any(key in {"api_mode", "local_server_url", "local_llm_url"} or key.startswith("selected_") for key in values):
+            if any(key in {"api_mode", "local_server_url", "local_llm_url", "qwen_base_url"} or key.startswith("selected_") for key in values):
                 setup_model = getattr(self.core, "setup_model", None)
                 if callable(setup_model):
                     setup_model()
@@ -1134,19 +1134,20 @@ class SmartiLocalGateway:
             raise RequestValidationError("unknown_provider", ["provider"])
         supplied = sanitize_secret_value(payload.get("secret"))
         secret = supplied or (self.core.ensure_provider_secret(provider) if provider_secret_key(provider) else "")
-        local_url = str(payload.get("local_url") or self.core.settings.get("local_llm_url") or "")
+        local_url = str(payload.get("local_url") or self.core.settings.get("local_server_url") or self.core.settings.get("local_llm_url") or "")
         models, ok, message = fetch_text_models_for_provider(
             provider, api_key=secret, local_url=local_url, ssl_settings=self.core.settings, validate_key=validate,
         )
         return {"provider": provider, "ok": bool(ok), "message": str(message or ""), "models": models}
 
     async def _validate_provider(self, request):
-        return self._ok(request, self._provider_models(
-            request.match_info["provider"], await self._body(request, "validateProvider"), validate=True,
-        ))
+        payload = await self._body(request, "validateProvider")
+        result = await asyncio.to_thread(self._provider_models, request.match_info["provider"], payload, validate=True)
+        return self._ok(request, result)
 
     async def _discover_models(self, request):
-        return self._ok(request, self._provider_models(request.match_info["provider"]))
+        result = await asyncio.to_thread(self._provider_models, request.match_info["provider"])
+        return self._ok(request, result)
 
     async def _set_model_reasoning(self, request):
         provider = normalize_provider_name(request.match_info["provider"])

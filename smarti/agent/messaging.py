@@ -619,6 +619,7 @@ class MessagingMixin:
                     elif (
                         isinstance(e, ApiRequestError)
                         and e.analysis.category == "request_too_large"
+                        and e.analysis.reason == "context_length"
                         and context_overflow_compaction_attempts < 2
                     ):
                         compacted_after_overflow = self._compact_current_messages_if_needed(
