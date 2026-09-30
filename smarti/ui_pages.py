@@ -6,6 +6,7 @@ from .ui_controls import *
 from .visual_canvas import web_canvas_available
 from .doctor import CheckResult, RepairAction
 from .common import valid_provider_base_url
+from .usage_pricing import USAGE_PRICING_FALLBACKS
 from .workers import (
     FetchModelsWorker,
     ApiKeyValidationWorker,
@@ -1500,26 +1501,6 @@ def _is_memory_usage_model_name(model_name):
 USAGE_COST_CACHE_FILE = os.path.join(USER_DATA_DIR, "smarti_usage_cost_cache.json")
 USAGE_COST_CACHE_VERSION = 1
 USAGE_COST_CACHE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
-# Small built-in first-paint safety net for Smarti's default models that can be
-# newer than the LiteLLM wheel bundled with a release.  A successful background
-# catalog refresh replaces these rates; they are never allowed to replace a
-# newer persisted rate.
-USAGE_PRICING_FALLBACKS = {
-    "gpt-5.6-sol": {
-        "input": 0.000005,
-        "output": 0.000030,
-        "cache_read": 0.0000005,
-        "cache_write": 0.00000625,
-        "_source": "fallback",
-    },
-    "gemini/gemini-3.5-flash-lite": {
-        "input": 0.0000003,
-        "output": 0.0000025,
-        "cache_read": 0.00000003,
-        "cache_write": 0.0000003,
-        "_source": "fallback",
-    },
-}
 
 
 class UsageStatsLoadWorker(QThread):

@@ -140,6 +140,26 @@ function installFixtureBackend() {
         };
       else if (request.path === "/v2/management/settings/actions")
         data = { ok: true, message: "פעולת fixture הושלמה." };
+      else if (request.path.startsWith("/v2/management/usage")) {
+        const models = [
+          { model: "gemini-3.5-flash", input_tokens: 420_000, output_tokens: 80_000,
+            cached_input_tokens: 100_000, cache_write_tokens: 0, tokens: 500_000,
+            cost_usd: 1.23, cost_status: "estimated" },
+          { model: "gpt-5.6-sol", input_tokens: 200_000, output_tokens: 12_000,
+            cached_input_tokens: 50_000, cache_write_tokens: 10_000, tokens: 212_000,
+            cost_usd: null, cost_status: "unavailable" },
+          { model: "models/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf", input_tokens: 1000, output_tokens: 500,
+            cached_input_tokens: 0, cache_write_tokens: 0, tokens: 1500,
+            cost_usd: 0, cost_status: "local" },
+        ];
+        const timeframe = new URL(request.path, location.origin).searchParams.get("timeframe") || "all";
+        const empty = request.method === "DELETE" || timeframe === "today";
+        data = { schema_version: 2, timeframe, total_tokens: empty ? 0 : 713_500, input_tokens: empty ? 0 : 621_000,
+          output_tokens: empty ? 0 : 92_500, cached_input_tokens: empty ? 0 : 150_000,
+          cache_write_tokens: empty ? 0 : 10_000, cost_usd: empty ? 0 : null,
+          known_cost_usd: empty ? 0 : 1.23, unpriced_models: empty ? 0 : 1,
+          models: empty ? [] : models };
+      }
       return { status: 200, body: { data } };
     },
   };

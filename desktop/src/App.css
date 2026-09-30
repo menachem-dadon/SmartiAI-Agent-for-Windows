@@ -798,8 +798,50 @@ html, body, #root { width: 100%; height: 100%; } body { margin: 0; min-width: 32
 .diagnostic-filters span { margin-inline-start: auto; color: var(--muted); font-size: 11px; }
 .diagnostic-hero progress { width: 100%; height: 6px; margin-top: 7px; accent-color: var(--accent); }
 .segmented { width: fit-content; margin-bottom: 12px; padding: 4px; border-radius: 12px; background: var(--surface-2); }
-.usage-total { margin-top: 8px; color: var(--muted); }
-.usage-total strong { color: var(--accent); font-size: 20px; }
+.usage-page { display: flex; flex-direction: column; gap: 18px; }
+.usage-page .management-hero { margin-bottom: 0; }
+.usage-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.usage-toolbar .segmented { margin: 0; border: 1px solid var(--border); gap: 4px; }
+.usage-toolbar .segmented button { min-width: 64px; border-color: transparent; background: transparent; }
+.usage-toolbar .segmented button.active { border-color: var(--accent); background: var(--accent-soft); }
+.usage-refresh { display: flex; align-items: center; gap: 12px; }
+.usage-refresh [role="status"] { color: var(--muted); font-size: 12px; }
+.usage-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
+.usage-stat { min-width: 0; padding: 20px 18px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow-soft); }
+.usage-stat > span { font-size: 12px; color: var(--muted); }
+.usage-stat strong { align-self: flex-start; font-size: clamp(22px,2.5vw,30px); font-variant-numeric: tabular-nums; line-height: 1.25; overflow-wrap: anywhere; }
+.usage-stat small { font-size: 11px; color: var(--muted); }
+.usage-stat--primary { border-color: color-mix(in srgb,var(--accent) 35%,var(--border)); background: linear-gradient(135deg,var(--accent-soft),var(--surface)); }
+.usage-stat--primary strong, .usage-stat--cost strong { color: var(--accent); }
+.usage-pricing-note { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.7; }
+.usage-details { min-width: 0; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); overflow: hidden; }
+.usage-details > header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; gap: 12px; }
+.usage-details h3 { margin: 0; font-size: 15px; }
+.usage-details > header > span { font-size: 12px; color: var(--muted); }
+.usage-table-scroll { overflow-x: auto; }
+.usage-table { width: 100%; border-collapse: collapse; text-align: start; font-size: 13px; }
+.usage-table th, .usage-table td { padding: 16px 18px; border-top: 1px solid var(--border); text-align: start; font-variant-numeric: tabular-nums; }
+.usage-table thead { background: var(--surface-2); color: var(--muted); }
+.usage-table thead th { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.usage-table tbody th { width: 38%; min-width: 200px; font-weight: 600; overflow-wrap: anywhere; }
+.usage-table td { white-space: nowrap; }
+.usage-table small { display: block; margin-top: 6px; font-size: 10px; color: var(--muted); font-weight: 400; line-height: 1.6; }
+.usage-table tbody tr:hover { background: var(--surface-2); }
+.usage-tokens-total { font-weight: 650; }
+.usage-model-cost { color: var(--accent); font-weight: 650; }
+.usage-unpriced { color: var(--muted); }
+.usage-empty { padding: 42px 20px; border: 1px dashed var(--border-strong); border-radius: 16px; text-align: center; }
+.usage-empty h3 { margin: 0; font-size: 16px; }
+.usage-empty p { color: var(--muted); font-size: 13px; margin: 10px 0 18px; }
+@media (max-width: 1100px) { .usage-summary { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 600px) {
+  .usage-toolbar, .usage-toolbar .segmented { width: 100%; }
+  .usage-toolbar .segmented button { flex: 1; min-width: 0; padding-inline: 8px; }
+  .usage-refresh { width: 100%; justify-content: space-between; }
+  .usage-stat { padding: 16px 12px; }
+  .usage-stat strong { font-size: 22px; }
+  .usage-page .management-hero { align-items: flex-start; flex-wrap: wrap; }
+}
 .update-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 7px; margin: 14px 0; }
 .update-controls.compact { display: contents; }
 .update-controls span { color: var(--muted); font-size: 11px; }

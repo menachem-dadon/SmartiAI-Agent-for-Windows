@@ -834,8 +834,9 @@ class SmartiLocalGateway:
     async def _usage(self, request):
         if request.method == "DELETE":
             from .desktop_services import clear_usage
-            return self._ok(request, clear_usage(self.core))
-        return self._ok(request, usage_snapshot(self.core, request.query.get("timeframe", "all")))
+            return self._ok(request, await asyncio.to_thread(clear_usage, self.core))
+        data = await asyncio.to_thread(usage_snapshot, self.core, request.query.get("timeframe", "all"))
+        return self._ok(request, data)
 
     async def _logs(self, request):
         return self._ok(request, log_snapshot(request.query.get("limit", 500), request.query.get("personal", "hidden") != "shown"))

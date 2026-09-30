@@ -8,12 +8,6 @@ import { ConfirmDialog, InputDialog, PageHero } from "./SettingsManagement";
 
 type Json = Record<string, unknown>;
 type SafeSettings = { values: Json };
-const asRows = (value: unknown): Json[] =>
-  Array.isArray(value)
-    ? value.filter((item): item is Json =>
-        Boolean(item && typeof item === "object"),
-      )
-    : [];
 const relaunch = () => invoke("restart_after_update");
 
 export function WorkspaceView({
@@ -794,117 +788,7 @@ export function DiagnosticsView() {
   );
 }
 
-export function UsageView() {
-  const cacheKey = "smarti.management.usage-cache";
-  const [data, setData] = useState<Json>(() => {
-    try {
-      return JSON.parse(sessionStorage.getItem(cacheKey) || "{}");
-    } catch {
-      return {};
-    }
-  });
-  const [timeframe, setTimeframe] = useState("today");
-  const [confirmClear, setConfirmClear] = useState(false);
-  useEffect(() => {
-    void coreApi<Json>(
-      "GET",
-      `/v2/management/usage?timeframe=${timeframe}`,
-    ).then((value) => {
-      setData(value);
-      sessionStorage.setItem(cacheKey, JSON.stringify(value));
-    });
-  }, [timeframe]);
-  const clear = async () => {
-    const value = await coreApi<Json>(
-      "DELETE",
-      "/v2/management/usage",
-      {},
-      true,
-    );
-    setData(value);
-    setConfirmClear(false);
-    sessionStorage.removeItem(cacheKey);
-  };
-  const memory =
-    data.memory && typeof data.memory === "object" ? (data.memory as Json) : {};
-  return (
-    <div className="management-page">
-      <PageHero
-        title="נתוני שימוש (טוקנים)"
-        description="טעינה ראשונית מהמטמון המקומי ורענון אסינכרוני, ללא בקשת מודל."
-        actions={
-          <button className="danger" onClick={() => setConfirmClear(true)}>
-            ניקוי נתונים
-          </button>
-        }
-      >
-        <div className="usage-total">
-          <strong>
-            {Number(data.total_tokens || 0).toLocaleString("he-IL")}
-          </strong>{" "}
-          טוקנים · עלות מתועדת ${Number(data.cost_usd || 0).toFixed(4)}
-        </div>
-      </PageHero>
-      <div className="segmented">
-        {[
-          ["today", "היום"],
-          ["week", "שבוע"],
-          ["month", "חודש"],
-          ["all", "הכול"],
-        ].map(([id, label]) => (
-          <button
-            key={id}
-            className={timeframe === id ? "active" : ""}
-            onClick={() => setTimeframe(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="management-cards compact">
-        {asRows(data.models).map((item) => (
-          <article key={String(item.model)}>
-            <header>
-              <b>{String(item.model)}</b>
-              <span>{Number(item.tokens || 0).toLocaleString("he-IL")}</span>
-            </header>
-            <p>
-              קלט {Number(item.input_tokens || 0).toLocaleString("he-IL")} · פלט{" "}
-              {Number(item.output_tokens || 0).toLocaleString("he-IL")}
-              <br />
-              מטמון נקרא{" "}
-              {Number(item.cached_input_tokens || 0).toLocaleString("he-IL")} ·
-              מטמון נכתב{" "}
-              {Number(item.cache_write_tokens || 0).toLocaleString("he-IL")}
-            </p>
-            <small>עלות מתועדת ${Number(item.cost_usd || 0).toFixed(4)}</small>
-          </article>
-        ))}
-        {!asRows(data.models).length && (
-          <p className="management-empty">אין נתוני שימוש לתקופה הזו.</p>
-        )}
-      </div>
-      <section className="special-settings-card">
-        <h3>זיכרון מקומי ו־RAG</h3>
-        <p>
-          פעילים {Number(memory.active || 0)} · בארכיון{" "}
-          {Number(memory.archive || 0)} · רגישים {Number(memory.sensitive || 0)}{" "}
-          · אחסון {Number(memory.storage_bytes || 0).toLocaleString("he-IL")}{" "}
-          בתים
-        </p>
-      </section>
-      {confirmClear && (
-        <ConfirmDialog
-          title="ניקוי נתוני שימוש"
-          description="הנתונים המקומיים יאופסו לאחר יצירת גיבוי. פעולה זו אינה מוחקת היסטוריית שיחות."
-          danger
-          onCancel={() => setConfirmClear(false)}
-          onConfirm={() => void clear()}
-        />
-      )}
-    </div>
-  );
-}
+export { UsageView } from "./UsageView";
 
 export function LogsView() {
   const [lines, setLines] = useState<string[]>([]);

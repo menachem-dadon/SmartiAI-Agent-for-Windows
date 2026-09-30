@@ -312,55 +312,86 @@ def tools_snapshot(core):
 
 def usage_snapshot(core, timeframe="all"):
     from .common import USAGE_FILE
+    from .usage_pricing import bundled_pricing, normalize_tokens, pricing_cache, usage_cost
     try:
         with open(USAGE_FILE, "r", encoding="utf-8") as handle:
             raw = json.load(handle)
-    except (OSError, ValueError):
+    except FileNotFoundError:
         raw = {}
+    # Other read failures must reach the UI's retry/error state, not look empty.
+    if not isinstance(raw, dict):
+        raise ValueError("Invalid usage data")
     normalized = str(timeframe or "all").lower()
+    if normalized not in {"today", "week", "month", "all"}:
+        normalized = "all"
+    today = datetime.now().date()
     cutoff = {
-        "today": datetime.now().date(), "week": (datetime.now() - timedelta(days=6)).date(),
-        "month": (datetime.now() - timedelta(days=29)).date(),
+        "today": today, "week": today - timedelta(days=6),
+        "month": today - timedelta(days=29),
     }.get(normalized)
-    totals = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0, "cache_write_tokens": 0, "cost_usd": 0.0}
+    token_keys = ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_tokens", "tokens")
+    totals = {key: 0 for key in token_keys}
+    known_cost = 0.0
+    cached, catalog = pricing_cache(), bundled_pricing()
     models = {}
-    for date, rows in raw.items() if isinstance(raw, dict) else []:
+    for date, rows in raw.items():
         if not isinstance(rows, dict):
             continue
-        if cutoff:
-            try:
-                if datetime.fromisoformat(str(date)).date() < cutoff:
-                    continue
-            except ValueError:
+        try:
+            day = datetime.fromisoformat(str(date)).date()
+            if day > today or (cutoff and day < cutoff):
                 continue
+        except ValueError:
+            continue
         for model, item in rows.items():
             if not isinstance(item, dict):
                 continue
-            target = models.setdefault(model, {"model": model, **{key: 0 for key in totals}})
-            for key in totals:
-                value = float(item.get(key, item.get("estimated_cost_usd", 0) if key == "cost_usd" else 0) or 0)
+            name = str(model).strip().lower()
+            if name.startswith(("memory-rag/", "smarti-memory-rag/")):
+                continue
+            tokens = normalize_tokens(item)
+            target = models.setdefault(model, {
+                "model": model, **{key: 0 for key in token_keys},
+                "cost_usd": 0.0, "cost_status": "recorded", "unpriced_tokens": 0,
+            })
+            for key, value in tokens.items():
                 totals[key] += value
                 target[key] += value
-    total_tokens = sum(totals[key] for key in ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_tokens"))
+            amount, status = usage_cost(model, item, tokens, cached, catalog)
+            if amount is None and tokens["tokens"]:
+                target["cost_status"] = "unavailable"
+                target["unpriced_tokens"] += tokens["tokens"]
+            elif amount is not None:
+                known_cost += amount
+                target["cost_usd"] += amount
+                if target["cost_status"] != "unavailable" and status != "recorded":
+                    target["cost_status"] = status
     for item in models.values():
-        item["tokens"] = sum(item[key] for key in ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_tokens"))
+        if item["cost_status"] == "unavailable":
+            item["cost_usd"] = None
+    unpriced_models = sum(item["cost_status"] == "unavailable" for item in models.values())
     return {
-        "timeframe": normalized, "total_tokens": int(total_tokens), **totals,
+        "schema_version": 2,
+        "timeframe": normalized, "total_tokens": totals.pop("tokens"), **totals,
+        "cost_usd": known_cost if not unpriced_models else None,
+        "known_cost_usd": known_cost, "unpriced_models": unpriced_models,
         "models": sorted(models.values(), key=lambda row: row["tokens"], reverse=True),
-        "memory": getattr(getattr(core, "memory_manager", None), "memory_stats", lambda: {})(),
     }
 
 
 def clear_usage(core):
     from .common import USAGE_FILE
-    backup = ""
-    if os.path.exists(USAGE_FILE):
-        backup = f"{USAGE_FILE}.backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        import shutil
-        shutil.copy2(USAGE_FILE, backup)
-    os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
-    with open(USAGE_FILE, "w", encoding="utf-8") as handle:
-        json.dump({}, handle)
+    with getattr(core, "_usage_lock", None) or threading.RLock():
+        backup = ""
+        if os.path.exists(USAGE_FILE):
+            backup = f"{USAGE_FILE}.backup-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
+            import shutil
+            shutil.copy2(USAGE_FILE, backup)
+        os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
+        temp_path = USAGE_FILE + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump({}, handle)
+        os.replace(temp_path, USAGE_FILE)
     return {"cleared": True, "backup_path": backup, **usage_snapshot(core, "all")}
 
 

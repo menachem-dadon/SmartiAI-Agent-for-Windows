@@ -34,6 +34,7 @@ tests/*
 !tests/test_conversation_approvals.py
 !tests/test_settings_sync.py
 !tests/test_workspace.py
+!tests/test_usage_stats.py
 
 
 # Virtual environments and build artifacts
