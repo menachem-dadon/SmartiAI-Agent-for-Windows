@@ -161,7 +161,7 @@ export function TasksView() {
   const [delay, setDelay] = useState(5);
   const [repeat, setRepeat] = useState("once");
   const [weeklyDays, setWeeklyDays] = useState("0");
-  const [conversationMode, setConversationMode] = useState("current");
+  const [conversationMode, setConversationMode] = useState("dedicated");
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<Json | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Json | null>(null);
@@ -199,7 +199,7 @@ export function TasksView() {
     <div className="management-page">
       <PageHero
         title="מרכז משימות"
-        description="משימות חד־פעמיות ומחזוריות נשארות בבעלות Python Core ומנותבות לשיחה שנבחרה."
+        description="משימות שנוצרות כאן ירוצו בשיחה ייעודית שתישמר בין הרצות, או בשיחה חדשה בכל הרצה."
         actions={<button onClick={() => void load()}>רענן</button>}
       />
       <form
@@ -255,12 +255,12 @@ export function TasksView() {
           </label>
         )}
         <select
+          aria-label="שיחת המשימה"
           value={conversationMode}
           onChange={(event) => setConversationMode(event.target.value)}
         >
-          <option value="current">שיחת המקור</option>
-          <option value="new">שיחה חדשה</option>
-          <option value="dedicated">שיחה ייעודית</option>
+          <option value="dedicated">שיחה ייעודית למשימה</option>
+          <option value="new">שיחה חדשה בכל הרצה</option>
         </select>
         <button>יצירת משימה</button>
       </form>

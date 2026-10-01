@@ -158,3 +158,13 @@ checks the persisted response, and performs a graceful shutdown.
 ## Compatibility
 
 The legacy synchronous `SmartiCore.send_message()` API remains available. It now locks only the target conversation. Existing chat history, title generation, memory capture, canvases, notifications, speech, and background-task APIs remain readable. The built-in background scheduler submits work through the same run manager instead of switching the globally active desktop conversation.
+
+Background conversation routing captures the source from the submitting run:
+`current` returns to that source, `new` creates a chat for every execution, and
+`dedicated` creates one chat and reuses it across cycles and retries. Task-center
+creation has no source chat, so it defaults to `dedicated` and offers `new` as an
+alternative. Core also treats `current` scheduling without a run's source as
+`dedicated`, including requests from older task-center clients. If a saved source
+is missing or deleted, execution creates and persists a dedicated replacement;
+it never falls back to the active desktop chat. Editing a task in `current` mode
+preserves its captured source.

@@ -275,19 +275,16 @@ class BackgroundRuntimeMixin:
                 mode = str(current.get("conversation_mode") or "current").strip().lower()
                 if mode not in {"current", "new", "dedicated"}:
                     mode = "current"
-                if mode == "current":
-                    target_session_id = current.get("target_conversation_id")
-                    if not target_session_id or not self.chat_store.has_session(target_session_id):
-                        active_sess = self.chat_store.active_session_metadata()
-                        target_session_id = active_sess.get("id") if active_sess else None
-                        current["target_conversation_id"] = target_session_id
-                elif mode == "new":
+                if mode == "new":
                     target_session_id = self.chat_store.create_session(set_active=False).get("id")
                 else:
                     target_session_id = current.get("target_conversation_id")
                     if not target_session_id or not self.chat_store.has_session(target_session_id):
+                        # A missing/deleted origin must never redirect a task
+                        # into an unrelated active chat. Reuse its replacement.
                         target_session_id = self.chat_store.create_session(set_active=False).get("id")
                         current["target_conversation_id"] = target_session_id
+                        current["conversation_mode"] = "dedicated"
                 self._save_settings()
 
                 prompt_text = str(current.get("prompt") or current.get("message") or "")

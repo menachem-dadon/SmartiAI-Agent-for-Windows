@@ -3,7 +3,7 @@ from .shared import *
 
 
 class ProductivityToolsMixin:
-    def _current_origin_session_id(self):
+    def _current_origin_session_id(self, *, allow_active=True):
         store = getattr(self, "chat_store", None)
         if store is None:
             return ""
@@ -13,6 +13,8 @@ class ProductivityToolsMixin:
         ).strip()
         if session_id and store.has_session(session_id):
             return session_id
+        if not allow_active:
+            return ""
         active = store.active_session_metadata()
         return str((active or {}).get("id") or "").strip()
 
@@ -234,7 +236,11 @@ class ProductivityToolsMixin:
                 conversation_mode = "current"
 
             run_at_dt = datetime.now() + timedelta(minutes=delay)
-            origin_session_id = self._current_origin_session_id()
+            origin_session_id = self._current_origin_session_id(allow_active=False)
+            if conversation_mode == "current" and not origin_session_id:
+                # Management/API requests have no source chat. Do not attach
+                # their tasks to whichever conversation the UI last selected.
+                conversation_mode = "dedicated"
             task = {
                 "id": str(uuid.uuid4())[:8],
                 "prompt": args_dict.get("prompt", ""),
@@ -726,7 +732,14 @@ class ProductivityToolsMixin:
                     previous_mode = str(task.get("conversation_mode") or "current").strip().lower()
                     task["conversation_mode"] = mode
                     if mode == "current":
-                        task["target_conversation_id"] = self._current_origin_session_id()
+                        if previous_mode != "current":
+                            origin_session_id = self._current_origin_session_id(allow_active=False)
+                            if origin_session_id:
+                                task["target_conversation_id"] = origin_session_id
+                            else:
+                                task["conversation_mode"] = "dedicated"
+                                if previous_mode != "dedicated":
+                                    task["target_conversation_id"] = None
                     elif mode == "new":
                         task["target_conversation_id"] = None
                     elif previous_mode != "dedicated":
