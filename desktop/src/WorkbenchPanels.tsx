@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -398,7 +398,10 @@ function TerminalPanel({ onSession }: { onSession?: (id: string) => void }) {
   );
 }
 
+export type WorkbenchHandle = { activateTab: (id: string) => void };
+
 export function WorkbenchSurface({
+  ref,
   initial,
   visible,
   motionRevision,
@@ -410,12 +413,13 @@ export function WorkbenchSurface({
   sessionId,
   onCanvasAction,
 }: {
+  ref?: Ref<WorkbenchHandle>;
   initial: WorkbenchTab | null;
   visible: boolean;
   motionRevision?: boolean | string;
   restored?: WorkbenchSnapshot | null;
   onStateChange?: (state: WorkbenchSnapshot) => void;
-  onBrowserActivity?: (activity: BrowserActivity) => void;
+  onBrowserActivity?: (activity: BrowserActivity | null) => void;
   onClose: () => void;
   closeIcon: string;
   sessionId: string;
@@ -436,7 +440,8 @@ export function WorkbenchSurface({
   }, [restored]);
   useEffect(() => {
     if (!initial) return;
-    const existing = tabs.find((tab) => tab.kind === initial);
+    const existing = tabs.find((tab) => tab.id === active && tab.kind === initial)
+      ?? tabs.find((tab) => tab.kind === initial);
     if (existing) setActive(existing.id);
     else add(initial);
   }, [initial]);
@@ -473,6 +478,16 @@ export function WorkbenchSurface({
   };
   const tabDrag = useWorkbenchTabDrag(visible, reorder);
   const current = tabs.find((tab) => tab.id === active);
+  useImperativeHandle(ref, () => ({
+    activateTab: (id) => { if (tabs.some((tab) => tab.id === id)) setActive(id); },
+  }), [tabs]);
+  const reportBrowserActivity = useCallback((activity: BrowserActivity | null) => {
+    onBrowserActivity?.(current?.kind === "browser" && activity?.workspaceId === current.id ? activity : null);
+  }, [current?.id, current?.kind, onBrowserActivity]);
+  useEffect(() => {
+    if (current?.kind !== "browser") onBrowserActivity?.(null);
+    return () => onBrowserActivity?.(null);
+  }, [current?.id, current?.kind, onBrowserActivity]);
   useDismissiblePopup({
     open: menu,
     roots: [addMenu],
@@ -574,7 +589,7 @@ export function WorkbenchSurface({
           <section className="workbench-panel" hidden={current?.kind !== "browser"} aria-label="דפדפן">
             {/* One controller manages the native surface; each Workbench browser
                 entry owns its own set of WebView2 tabs. */}
-            <BrowserPanel workspaceTabId={current?.kind === "browser" ? current.id : ""} visible={visible && current?.kind === "browser"} geometryRevision={motionRevision} onActivity={onBrowserActivity} />
+            <BrowserPanel workspaceTabId={current?.kind === "browser" ? current.id : ""} visible={visible && current?.kind === "browser"} geometryRevision={motionRevision} onActivity={reportBrowserActivity} />
           </section>
         )}
         {tabs.filter(tab => tab.kind !== "browser").map((tab) => <section className="workbench-panel" hidden={tab.id !== active} key={tab.id} aria-label={tab.title}>

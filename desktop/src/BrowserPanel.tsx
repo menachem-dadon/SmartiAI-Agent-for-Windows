@@ -25,6 +25,7 @@ import { coreApi } from "./coreApi";
 import { subscribeSettingsChanges } from "./settingsChanges";
 import { IconButton } from "./ui";
 import { useNativeBrowserSurface } from "./useNativeBrowserSurface";
+import { useBrowserPreview } from "./useBrowserPreview";
 import type { BrowserViewportMode } from "./browserViewport";
 
 type HistoryEntry = {
@@ -104,7 +105,7 @@ export const browserProductCapabilities = {
   maxRestoredTabs: 12,
 } as const;
 
-export type BrowserActivity = { title: string; url: string; loading: boolean; previewDataUrl?: string };
+export type BrowserActivity = { workspaceId: string; tabId: string; title: string; url: string; loading: boolean; previewDataUrl?: string; previewError?: string };
 export function BrowserPanel({
   visible,
   geometryRevision,
@@ -113,7 +114,7 @@ export function BrowserPanel({
 }: {
   visible: boolean;
   geometryRevision?: boolean | string;
-  onActivity?: (activity: BrowserActivity) => void;
+  onActivity?: (activity: BrowserActivity | null) => void;
   workspaceTabId?: string;
 }) {
   const [browser, setBrowser] = useState<BrowserSnapshot>(initialBrowser);
@@ -144,8 +145,6 @@ export function BrowserPanel({
   const [sourceId, setSourceId] = useState("");
   const [importing, setImporting] = useState(false);
   const { viewportRef, boundsReady: nativeBoundsReady, viewportError } = useNativeBrowserSurface(surfaceVisible, geometryRevision, Boolean(panel), showFind, current?.tabId ?? null, viewportMode);
-  const [surfacePreview, setSurfacePreview] = useState<{ tabId: string; url: string; dataUrl: string } | null>(null);
-  const previewInFlight = useRef(false);
   const addressRef = useRef<HTMLInputElement>(null);
   const initialTabRequested = useRef(false);
   const legacyMigrationAttempted = useRef(false);
@@ -213,6 +212,7 @@ export function BrowserPanel({
       }),
     [],
   );
+  const { preview: surfacePreview, error: previewError } = useBrowserPreview(current, runCdp);
   useEffect(() => {
     if (!visible || !hydrated || legacyMigrationAttempted.current) return;
     const tab = workspaceActiveTab(browserRef.current, workspaceTabId, lastActiveByWorkspace.current[workspaceTabId]);
@@ -389,34 +389,12 @@ export function BrowserPanel({
       .catch((error) => setNotice(String(error)));
   }, [visible, hydrated, restoreComplete, current?.tabId, browser.activeTabId]);
   useEffect(() => {
-    if (!current) return;
-    onActivity?.({ title: pageTitle(current), url: current.url, loading: current.loading });
-  }, [current?.tabId, current?.title, current?.url, current?.loading, onActivity]);
-  useEffect(() => {
-    if (!current || !/^https?:/i.test(current.url)) return;
-    let stopped = false;
-    const preview = async () => {
-      if (previewInFlight.current) return;
-      previewInFlight.current = true;
-      try {
-        const result = await runCdp(current, "Page.captureScreenshot", { format: "jpeg", quality: 80, captureBeyondViewport: false });
-        const data = String(result.result.data || "");
-        if (!stopped && data) {
-          const dataUrl = `data:image/jpeg;base64,${data}`;
-          setSurfacePreview({ tabId: current.tabId, url: current.url, dataUrl });
-          if (!visible) onActivity?.({ title: pageTitle(current), url: current.url, loading: current.loading, previewDataUrl: dataUrl });
-        }
-      } catch {
-        // A hidden/crashed page keeps its last activity text without affecting chat.
-      } finally {
-        previewInFlight.current = false;
-      }
-    };
-    // One bounded cache serves both the transition and the closed preview.
-    const first = window.setTimeout(() => void preview(), visible ? 500 : 0);
-    const timer = window.setInterval(() => void preview(), 2500);
-    return () => { stopped = true; clearTimeout(first); clearInterval(timer); };
-  }, [visible, current?.tabId, current?.url, current?.loading, onActivity, runCdp]);
+    onActivity?.(current ? {
+      workspaceId: current.workspaceId || workspaceTabId, tabId: current.tabId,
+      title: pageTitle(current), url: current.url, loading: current.loading,
+      previewDataUrl: surfacePreview?.dataUrl, previewError,
+    } : null);
+  }, [workspaceTabId, current?.tabId, current?.title, current?.url, current?.loading, current?.crashed, surfacePreview, previewError, onActivity]);
   useEffect(() => {
     if (current) setAddress(current.url);
   }, [current?.tabId, current?.url]);

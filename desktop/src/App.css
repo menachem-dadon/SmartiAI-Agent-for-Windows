@@ -566,12 +566,19 @@ html, body, #root { width: 100%; height: 100%; } body { margin: 0; min-width: 32
 .voice-listening-overlay > img { width: 42px; height: 42px; flex: 0 0 42px; object-fit: cover; border-radius: 50%; }
 .voice-overlay-root { width: 100vw; height: 100vh; overflow: hidden; color: var(--text); background: var(--glass-strong); }
 .voice-overlay-root .voice-listening-overlay { position: static; width: 100vw; height: 70px; border-radius: 0; }
-.browser-preview-card { position: absolute; z-index: 35; left: 14px; bottom: 150px; width: 236px; height: 142px; display: grid; grid-template-rows: 28px minmax(0,1fr) 16px; gap: 5px; padding: 8px 10px 9px; border: 1px solid var(--soft-line); border-radius: 16px; color: var(--text); background: var(--glass-strong); box-shadow: var(--shadow-raised); }
+.browser-preview-card { position: absolute; z-index: 35; left: 14px; bottom: 150px; width: min(252px,calc(100% - 28px)); max-height: calc(100% - 166px); display: grid; grid-template-rows: 28px minmax(0,1fr) 16px; gap: 6px; padding: 8px; border: 1px solid var(--soft-line); border-radius: 12px; color: var(--text); background: var(--glass-strong); box-shadow: var(--shadow-raised); overflow: hidden; }
 .browser-preview-card header { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .browser-preview-card header strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.browser-preview-card header button { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 14px; color: var(--accent); background: var(--accent-soft); font-weight: 800; cursor: pointer; }
-.browser-preview-card > img,.browser-preview-placeholder { width: 214px; min-height: 66px; object-fit: cover; overflow: hidden; border: 1px solid var(--soft-line); border-radius: 8px; background: var(--surface-2); }
-.browser-preview-placeholder { display: grid; place-items: center; color: var(--subtle); font-size: 11px; }
+.browser-preview-card header button { flex: 0 0 26px; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 17px; cursor: pointer; }
+.browser-preview-card header button:hover { color: var(--text); background: var(--surface-3); }
+.browser-preview-card button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.browser-preview-status { flex: 0 0 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.browser-preview-status.is-loading { opacity: .5; }
+.browser-preview-image { position: relative; display: block; width: 100%; aspect-ratio: 16 / 10; min-height: 0; padding: 0; border: 1px solid var(--soft-line); border-radius: 6px; overflow: hidden; background: var(--surface-2); cursor: pointer; }
+.browser-preview-image img { width: 100%; height: 100%; display: block; object-fit: contain; object-position: center top; }
+.browser-preview-placeholder { display: grid; place-items: center; width: 100%; height: 100%; padding: 12px; color: var(--subtle); font-size: 11px; }
+.browser-preview-open { position: absolute; inset: 0; display: grid; place-items: center; color: white; background: rgb(0 0 0 / 45%); font-size: 12px; opacity: 0; transition: opacity .15s ease; }
+.browser-preview-image:hover .browser-preview-open,.browser-preview-image:focus-visible .browser-preview-open { opacity: 1; }
 .browser-preview-card > small { overflow: hidden; color: var(--subtle); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
 
 @keyframes legacy-spin { to { transform: rotate(360deg); } }

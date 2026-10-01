@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import App from "./App";
 import { coreApi } from "./coreApi";
@@ -62,6 +62,44 @@ async function start() {
 }
 
 describe("Workbench launcher through the app shell", () => {
+  test("dismisses the browser thumbnail until the next collapse and reopens the exact Workbench browser", async () => {
+    preferences = { workspace_workbench_open: true, workspace_workbench: {
+      tabs: [
+        { id: "browser-1", kind: "browser", title: "דפדפן" },
+        { id: "browser-2", kind: "browser", title: "דפדפן 2" },
+      ], active: "browser-2",
+    } };
+    render(<App />);
+    await waitFor(() => expect(vi.mocked(BrowserPanel).mock.lastCall?.[0].workspaceTabId).toBe("browser-2"));
+    const activity = { workspaceId: "browser-2", tabId: "tab-2", title: "Second browser", url: "https://two.test/", loading: false, previewDataUrl: "data:image/jpeg;base64,page" };
+    const publish = async () => { await act(async () => { vi.mocked(BrowserPanel).mock.lastCall?.[0].onActivity?.(activity); }); };
+    await publish();
+    fireEvent.click(screen.getByRole("button", { name: "סגירת סביבת העבודה" }));
+    expect(screen.getByRole("img", { name: "תצוגה מקדימה של Second browser" }).getAttribute("src")).toBe(activity.previewDataUrl);
+    fireEvent.click(screen.getByRole("button", { name: "סגירת התצוגה המקדימה" }));
+    await publish();
+    expect(screen.queryByLabelText("תצוגה מקדימה של הדפדפן")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
+    fireEvent.click(screen.getByRole("button", { name: "סגירת סביבת העבודה" }));
+    fireEvent.click(screen.getByRole("button", { name: "פתיחת Second browser" }));
+    expect(screen.getAllByRole("tab").find((tab) => tab.getAttribute("aria-selected") === "true")?.dataset.tabId).toBe("browser-2");
+    expect(screen.queryByLabelText("תצוגה מקדימה של הדפדפן")).toBeNull();
+  });
+
+  test("removes the thumbnail when its browser closes and rejects late activity from the closed browser", async () => {
+    await start();
+    fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
+    fireEvent.click(within(launcher()).getByRole("button", { name: "דפדפן" }));
+    const callback = vi.mocked(BrowserPanel).mock.lastCall?.[0].onActivity;
+    const activity = { workspaceId: "browser-1", tabId: "tab-1", title: "Closed", url: "https://closed.test/", loading: false };
+    await act(async () => callback?.(activity));
+    fireEvent.click(screen.getByRole("button", { name: "סגירת דפדפן" }));
+    fireEvent.click(screen.getByRole("button", { name: "סגירת סביבת העבודה" }));
+    await act(async () => callback?.(activity));
+    expect(screen.queryByLabelText("תצוגה מקדימה של הדפדפן")).toBeNull();
+    expect(preferences.workspace_workbench).toEqual({ tabs: [], active: "" });
+  });
+
   test.each([
     [1800, "button"], [1800, "shortcut"], [900, "button"], [900, "shortcut"],
   ] as const)("opens an empty chooser at %i px using %s without starting a tool", async (width, trigger) => {

@@ -110,6 +110,7 @@ struct BrowserInner {
     recently_closed: Vec<(BrowserProfile, String, String)>,
     active_tab_id: Option<String>,
     bounds: BrowserBounds,
+    surface_visible: bool,
     persistent_dir: PathBuf,
     guest_root: PathBuf,
 }
@@ -126,11 +127,9 @@ pub struct BrowserBridgeEndpoint {
 }
 
 impl BrowserBroker {
-    fn bounds(&self) -> Result<BrowserBounds, String> {
-        self.inner
-            .lock()
-            .map(|inner| inner.bounds.clone())
-            .map_err(|_| "browser broker mutex poisoned".to_string())
+    fn surface_bounds(&self) -> Result<(BrowserBounds, bool), String> {
+        let inner = self.inner.lock().map_err(|_| "browser broker mutex poisoned".to_string())?;
+        Ok((presentation_bounds(&inner.bounds, inner.surface_visible), inner.surface_visible))
     }
 
     pub fn new(app_data_dir: PathBuf, cache_dir: PathBuf) -> Self {
@@ -141,6 +140,7 @@ impl BrowserBroker {
                 tab_order: Vec::new(),
                 recently_closed: Vec::new(),
                 active_tab_id: None,
+                surface_visible: false,
                 bounds: BrowserBounds {
                     x: 0.0,
                     y: 132.0,
@@ -959,7 +959,8 @@ fn create_webview(
     let parsed = url
         .parse::<tauri::Url>()
         .map_err(|error| error.to_string())?;
-    let (tab, bounds, data_dir) = broker.allocate_tab(profile, url, workspace_id)?;
+    let (tab, _, data_dir) = broker.allocate_tab(profile, url, workspace_id)?;
+    let (bounds, _) = broker.surface_bounds()?;
     std::fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
     let parent = app
         .get_window("main")
@@ -967,6 +968,7 @@ fn create_webview(
     for existing in parent.webviews() {
         if existing.label().starts_with("browser-") {
             let _ = existing.hide();
+            let _ = cdp_call(&existing, "Page.setWebLifecycleState".into(), json!({"state":"frozen"}).to_string());
         }
     }
 
@@ -1112,9 +1114,11 @@ pub async fn browser_close(
     if let Some(next) = next {
         let next_tab = broker.tab(&next)?;
         if let Some(webview) = app.get_webview(&next_tab.webview_label) {
-            set_webview_bounds(&webview, &broker.bounds()?)?;
+            let (bounds, visible) = broker.surface_bounds()?;
+            set_webview_bounds(&webview, &bounds)?;
             let _ = webview.show();
-            let _ = webview.set_focus();
+            let _ = cdp_call(&webview, "Page.setWebLifecycleState".into(), json!({"state":"active"}).to_string());
+            if visible { let _ = webview.set_focus(); }
         }
     }
     emit_snapshot(&app, &broker);
@@ -1257,7 +1261,7 @@ pub async fn browser_activate(
 ) -> Result<BrowserSnapshot, String> {
     let selected = broker.tab(&tab_id)?;
     let tabs = broker.snapshot().tabs;
-    let bounds = broker.bounds()?;
+    let (bounds, visible) = broker.surface_bounds()?;
     for tab in tabs {
         if let Some(webview) = app.get_webview(&tab.webview_label) {
             if tab.tab_id == tab_id {
@@ -1268,7 +1272,7 @@ pub async fn browser_activate(
                     json!({"state":"active"}).to_string(),
                 );
                 webview.show().map_err(|error| error.to_string())?;
-                webview.set_focus().map_err(|error| error.to_string())?;
+                if visible { webview.set_focus().map_err(|error| error.to_string())?; }
             } else {
                 let _ = webview.hide();
                 let _ = cdp_call(
@@ -1291,6 +1295,14 @@ pub async fn browser_activate(
     }
     emit_snapshot(&app, &broker);
     Ok(broker.snapshot())
+}
+
+// WebView2 stops rendering when hidden. Keep only the active page rendering
+// outside the client area so its thumbnail stays real without covering chat
+// or stealing focus. Preserve viewport size across collapse/expansion.
+fn presentation_bounds(bounds: &BrowserBounds, visible: bool) -> BrowserBounds {
+    if visible { return bounds.clone(); }
+    BrowserBounds { x: -bounds.width - 32.0, y: 0.0, ..bounds.clone() }
 }
 
 fn set_webview_bounds(webview: &Webview, bounds: &BrowserBounds) -> Result<(), String> {
@@ -1320,7 +1332,7 @@ pub async fn browser_set_bounds(
     // Resizing them all here makes drag latency grow with the tab count.
     for tab in broker.snapshot().tabs.into_iter().filter(|tab| tab.active) {
         if let Some(webview) = app.get_webview(&tab.webview_label) {
-            set_webview_bounds(&webview, &bounds)?;
+            set_webview_bounds(&webview, &broker.surface_bounds()?.0)?;
         }
     }
     Ok(())
@@ -1332,11 +1344,12 @@ pub async fn browser_set_visible(
     broker: tauri::State<'_, BrowserBroker>,
     visible: bool,
 ) -> Result<(), String> {
+    broker.inner.lock().map_err(|_| "browser broker mutex poisoned".to_string())?.surface_visible = visible;
     let snapshot = broker.snapshot();
     for tab in snapshot.tabs {
         if let Some(webview) = app.get_webview(&tab.webview_label) {
-            if visible && tab.active {
-                set_webview_bounds(&webview, &broker.bounds()?)?;
+            if tab.active {
+                set_webview_bounds(&webview, &broker.surface_bounds()?.0)?;
                 // Visibility/geometry must not wait for a frozen page's CDP
                 // response (which can take seconds). Queue the native show first.
                 webview.show().map_err(|error| error.to_string())?;
@@ -1493,6 +1506,82 @@ pub async fn browser_clear_guest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(windows, feature = "native-preview-test"))]
+    #[test]
+    #[ignore = "requires installed WebView2; runs an isolated hidden native window"]
+    fn native_collapsed_preview_updates_and_closes() {
+        let root = std::env::temp_dir().join(format!("smarti-preview-test-{:016x}", rand::random::<u64>()));
+        let broker = BrowserBroker::new(root.join("data"), root.join("cache"));
+        let (sender, receiver) = mpsc::channel();
+        let mut context = tauri::generate_context!();
+        context.config_mut().identifier = "ai.smarti.preview-regression".into();
+        context.config_mut().app.windows.clear();
+        let app = tauri::Builder::default().any_thread().manage(broker.clone())
+            .setup(move |app| {
+                tauri::WindowBuilder::new(app, "main").visible(false).skip_taskbar(true)
+                    .inner_size(980.0, 700.0).build()?;
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<(usize, usize), String> {
+                        let (port, stop) = start_smoke_site()?;
+                        let outcome = (|| -> Result<(usize, usize), String> {
+                            let state = create_webview(&handle, &broker, BrowserProfile::Guest,
+                                &format!("http://127.0.0.1:{port}/"), Some("preview-owner".into()))?;
+                            let tab = state.tabs.into_iter().find(|tab| tab.active).ok_or("missing preview target")?;
+                            let deadline = Instant::now() + Duration::from_secs(20);
+                            loop {
+                                let ready = cdp_for_tab(&handle, &tab, "Runtime.evaluate", json!({
+                                    "expression":"Boolean(document.querySelector('#hebrew'))", "returnByValue":true
+                                }))?;
+                                if ready.pointer("/result/value").and_then(Value::as_bool) == Some(true) { break; }
+                                if Instant::now() > deadline { return Err("preview page did not load".into()); }
+                                std::thread::sleep(Duration::from_millis(100));
+                            }
+                            // Exercise the production collapse path, with the parent hidden too.
+                            tauri::async_runtime::block_on(browser_set_visible(handle.clone(), handle.state::<BrowserBroker>(), false))?;
+                            let bounds = broker.surface_bounds()?.0;
+                            if bounds.x + bounds.width >= 0.0 { return Err("preview overlaps chat".into()); }
+                            let mut images = Vec::new();
+                            for color in ["#b32121", "#163caa"] {
+                                cdp_for_tab(&handle, &tab, "Runtime.evaluate", json!({
+                                    "expression":format!("document.documentElement.style.background='{color}'; document.body.style.background='{color}'; document.body.style.color='white';"),
+                                    "returnByValue":true
+                                }))?;
+                                std::thread::sleep(Duration::from_millis(150));
+                                let image = cdp_for_tab(&handle, &tab, "Page.captureScreenshot", json!({
+                                    "format":"jpeg", "quality":80, "fromSurface":true, "captureBeyondViewport":false
+                                }))?;
+                                images.push(image.get("data").and_then(Value::as_str).unwrap_or("").to_string());
+                            }
+                            if images[0].len() < 1000 || images[0] == images[1] { return Err("collapsed screenshots are empty or do not update".into()); }
+                            tauri::async_runtime::block_on(browser_close(handle.clone(), handle.state::<BrowserBroker>(), tab.tab_id.clone()))?;
+                            if !broker.snapshot().tabs.is_empty() || broker.tab(&tab.tab_id).is_ok() { return Err("closed preview target survived".into()); }
+                            Ok((images[0].len(), images[1].len()))
+                        })();
+                        stop.store(true, Ordering::Release);
+                        outcome
+                    })();
+                    let _ = sender.send(result);
+                    handle.exit(0);
+                });
+                Ok(())
+            }).build(context).expect("build hidden WebView2 test app");
+        app.run_return(|_, _| {});
+        let result = receiver.recv_timeout(Duration::from_secs(1)).expect("native preview result");
+        let sizes = result.expect("native preview must render changed page content and close its target");
+        println!("collapsed screenshot base64 sizes: {} -> {}", sizes.0, sizes.1);
+    }
+
+    #[test]
+    fn collapsed_preview_preserves_viewport_and_stays_outside_chat() {
+        let bounds = BrowserBounds { x: 14.0, y: 200.0, width: 800.0, height: 600.0 };
+        let collapsed = presentation_bounds(&bounds, false);
+        assert!(collapsed.x + collapsed.width < 0.0);
+        assert_eq!((collapsed.width, collapsed.height), (bounds.width, bounds.height));
+        assert!(collapsed.validate().is_ok());
+        assert_eq!(presentation_bounds(&bounds, true), bounds);
+    }
 
     #[test]
     fn url_policy_accepts_web_and_searches_plain_text() {

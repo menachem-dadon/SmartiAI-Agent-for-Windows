@@ -256,6 +256,33 @@ describe("native browser overlay visibility", () => {
     expect(lastNativeVisibility()).toEqual({ visible: false });
   });
 
+  it("publishes the cached page with metadata and clears activity when the native target closes", async () => {
+    const onActivity = vi.fn();
+    let update: ((event: { payload: BrowserSnapshot }) => void) | undefined;
+    let state: BrowserSnapshot = { ...snapshot, tabs: [{ ...snapshot.tabs[0], workspaceId: "browser-1" }] };
+    mocks.listen.mockImplementation(async (event, callback) => {
+      if (event === "browser://state") update = callback;
+      return () => {};
+    });
+    mocks.invoke.mockImplementation(async (command: string, args?: { action?: { method?: string } }) => {
+      if (command === "browser_status" || command === "browser_metadata") return state;
+      if (command === "browser_action" && args?.action?.method === "Page.captureScreenshot")
+        return { result: { data: "real-page" } };
+      return undefined;
+    });
+    const { rerender } = render(<BrowserPanel visible workspaceTabId="browser-1" onActivity={onActivity} />);
+    await waitFor(() => expect(onActivity).toHaveBeenLastCalledWith(expect.objectContaining({
+      workspaceId: "browser-1", tabId: snapshot.activeTabId, previewDataUrl: "data:image/jpeg;base64,real-page",
+    })));
+    rerender(<BrowserPanel visible={false} workspaceTabId="browser-1" onActivity={onActivity} />);
+    state = { ...state, tabs: [{ ...state.tabs[0], title: "Updated page title" }] };
+    await act(async () => update?.({ payload: state }));
+    expect(onActivity).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Updated page title", previewDataUrl: "data:image/jpeg;base64,real-page" }));
+    state = { ...state, tabs: [], activeTabId: null };
+    await act(async () => update?.({ payload: state }));
+    expect(onActivity).toHaveBeenLastCalledWith(null);
+  });
+
   it("skips the transition delay when reduced motion is requested", async () => {
     vi.stubGlobal("matchMedia", () => ({ matches: true }));
     render(<aside className="workbench"><BrowserPanel visible geometryRevision="open" /></aside>);

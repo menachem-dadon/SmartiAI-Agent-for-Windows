@@ -8,8 +8,9 @@ import { ManagementCenter } from "./ManagementCenter";
 import { validateProviderKey } from "./SettingsManagement";
 import type { ManagementSection } from "./managementCatalog";
 import { LegalAgreement, type LegalStatus } from "./LegalAgreement";
-import { WorkbenchSurface } from "./WorkbenchPanels";
+import { WorkbenchSurface, type WorkbenchHandle } from "./WorkbenchPanels";
 import type { BrowserActivity } from "./BrowserPanel";
+import { BrowserPreviewCard } from "./BrowserPreviewCard";
 import {
   ACTIVE_RUN_STATES,
   mergeMessages,
@@ -294,6 +295,11 @@ export default function App() {
     useState<WorkbenchSnapshot | null>(null);
   const [browserActivity, setBrowserActivity] =
     useState<BrowserActivity | null>(null);
+  const workbenchRef = useRef<WorkbenchHandle>(null);
+  const [dismissedBrowserPreview, setDismissedBrowserPreview] = useState("");
+  useEffect(() => {
+    if (workspace.workbenchOpen) setDismissedBrowserPreview("");
+  }, [workspace.workbenchOpen]);
   const [bootstrapReady, setBootstrapReady] = useState(false);
   const [workspaceWindowReady, setWorkspaceWindowReady] = useState(false);
   const [legalStatus, setLegalStatus] = useState<LegalStatus | null>(null);
@@ -1742,30 +1748,16 @@ export default function App() {
           />
           {!workspace.workbenchOpen &&
             browserActivity &&
+            dismissedBrowserPreview !== browserActivity.workspaceId &&
+            workbenchRestore?.tabs.some((tab) => tab.kind === "browser" && tab.id === browserActivity.workspaceId) &&
             !["", "about:blank"].includes(browserActivity.url) && (
-              <aside
-                className="browser-preview-card"
-                aria-label="תצוגה מקדימה של הדפדפן"
-              >
-                <header>
-                  <strong>{browserActivity.title || "דפדפן"}</strong>
-                  <button
-                    type="button"
-                    title="הרחבת תצוגת הדפדפן"
-                    onClick={() => openWorkbench("browser")}
-                  >
-                    ↗
-                  </button>
-                </header>
-                {browserActivity.previewDataUrl ? (
-                  <img src={browserActivity.previewDataUrl} alt="" />
-                ) : (
-                  <div className="browser-preview-placeholder">
-                    {browserActivity.loading ? "טוען…" : "Smarti Browser"}
-                  </div>
-                )}
-                <small dir="ltr">{browserActivity.url}</small>
-              </aside>
+              <BrowserPreviewCard activity={browserActivity}
+                onOpen={() => {
+                  workbenchRef.current?.activateTab(browserActivity.workspaceId);
+                  setWorkbenchOpen(true);
+                }}
+                onDismiss={() => setDismissedBrowserPreview(browserActivity.workspaceId)}
+              />
             )}
         </section>
         <aside
@@ -1785,6 +1777,7 @@ export default function App() {
           )}
           {bootstrapReady && (
             <WorkbenchSurface
+              ref={workbenchRef}
               initial={workspace.activeWorkbenchTab}
               visible={workspace.workbenchOpen}
               motionRevision={`${workspace.workbenchOpen}:${narrowWorkspace}:${workspace.conversationDrawerOpen}`}
