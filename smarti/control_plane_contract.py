@@ -226,6 +226,7 @@ OPERATIONS = [
     ("DELETE", "/v2/management/usage", "clearUsage", "ניקוי נתוני שימוש מקומיים עם גיבוי", None),
     ("GET", "/v2/management/logs", "logs", "לוג מאוחד עם סינון פרטיות", None),
     ("GET", "/v2/management/about", "about", "גרסה ומידע על היישום", None),
+    ("GET", "/v2/management/updates", "checkUpdates", "גילוי גרסאות GitHub ללא התקנה", None),
     ("GET", "/v2/management/diagnostics", "diagnosticProgress", "התקדמות בדיקה פעילה", None),
     ("POST", "/v2/management/diagnostics", "diagnostics", "בדיקה או תיקון מאושר", "diagnosticAction"),
     ("GET", "/v2/workbench/root", "workspaceRoot", "שורש Workbench התחום", None),

@@ -610,6 +610,8 @@ fn core_http_request(
         .map_err(|error| error.to_string())?;
     let read_timeout = if request.path.starts_with("/v2/management/diagnostics") {
         Duration::from_secs(300)
+    } else if request.path == "/v2/management/updates" {
+        Duration::from_secs(60)
     } else {
         Duration::from_secs(20)
     };
@@ -1005,7 +1007,7 @@ fn desktop_diagnostic_snapshot(
     let browser_snapshot = broker.snapshot();
     let csp = include_str!("../tauri.conf.json");
     let capability = include_str!("../capabilities/default.json");
-    let updater_signed = !csp.contains("UNSIGNED_LOCAL_BUILD_NO_UPDATES");
+    let updater_signed = has_signed_update_configuration(app.config().plugins.0.get("updater"));
     let source_entry = supervisor.project_root.join("smarti_core_service.py");
     let core_ready = snapshot.state == CoreState::Ready && snapshot.port.is_some();
     let items = vec![
@@ -1054,7 +1056,7 @@ fn desktop_diagnostic_snapshot(
         desktop_check(
             "tauri.updater_signature", if updater_signed { "pass" } else { "warning" },
             "Updater וחתימת עדכון",
-            if updater_signed { "מפתח אימות עדכונים מוגדר." } else { "זהו build מקומי לא חתום; עדכונים מושבתים עד להגדרת מפתח שחרור." },
+            if updater_signed { "מפתח אימות עדכונים מוגדר." } else { "בדיקת גרסאות GitHub זמינה; התקנה אוטומטית דורשת ערוץ עדכונים חתום." },
             format!("signed_release_key_configured={updater_signed}"),
         ),
         desktop_check(
@@ -1393,6 +1395,31 @@ fn restart_after_update(app: AppHandle) {
     app.restart();
 }
 
+fn has_signed_update_configuration(config: Option<&Value>) -> bool {
+    let Some(config) = config else {
+        return false;
+    };
+    let key = config
+        .get("pubkey")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let endpoints = config.get("endpoints").and_then(Value::as_array);
+    !key.is_empty()
+        && key != "UNSIGNED_LOCAL_BUILD_NO_UPDATES"
+        && endpoints.is_some_and(|items| {
+            !items.is_empty()
+                && items.iter().all(|item| {
+                    item.as_str().is_some_and(|url| url.starts_with("https://"))
+                })
+        })
+}
+
+#[tauri::command]
+fn signed_updates_configured(app: AppHandle) -> bool {
+    has_signed_update_configuration(app.config().plugins.0.get("updater"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let supervisor = CoreSupervisor::new();
@@ -1437,6 +1464,7 @@ pub fn run() {
             windows_integration::desktop_popup_rtl_menu,
             windows_integration::desktop_quit,
             restart_after_update,
+            signed_updates_configured,
             browser::browser_status,
             browser::browser_open,
             browser::browser_close,
@@ -1524,6 +1552,22 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn update_discovery_does_not_require_a_signed_feed() {
+        assert!(!has_signed_update_configuration(None));
+        for config in [
+            json!({"pubkey":"UNSIGNED_LOCAL_BUILD_NO_UPDATES"}),
+            json!({"pubkey":"UNSIGNED_LOCAL_BUILD_NO_UPDATES", "endpoints":["https://example.test/latest.json"]}),
+            json!({"pubkey":"", "endpoints":["https://example.test/latest.json"]}),
+            json!({"pubkey":"key", "endpoints":[]}),
+            json!({"pubkey":"key", "endpoints":["http://example.test/latest.json"]}),
+        ] {
+            assert!(!has_signed_update_configuration(Some(&config)));
+        }
+        assert!(has_signed_update_configuration(Some(&json!({
+            "pubkey":"key", "endpoints":["https://example.test/latest.json"]
+        }))));
+    }
     fn valid(pid: u32) -> String {
         json!({"type":"smarti_core_ready","schema_version":1,"state":"ready","pid":pid,"host":"127.0.0.1","port":42123,"health":{"ready":true,"qt_loaded":false,"started_at":"now"}}).to_string()
     }

@@ -17,18 +17,16 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from .common import (
     APP_VERSION,
-    SMARTI_APP_DISPLAY_NAME,
     SMARTI_RUNTIME,
     USER_DATA_DIR,
     WIN_CREATE_NO_WINDOW,
-    ssl_request_kwargs,
+)
+from .update_discovery import (
+    GITHUB_API_RELEASE_LATEST, GITHUB_OWNER, GITHUB_REPO, GITHUB_RELEASES_URL,
+    _headers, _request_kwargs, _version_parts, fetch_latest_release, is_newer_version,
 )
 
 
-GITHUB_OWNER = "menachem-dadon"
-GITHUB_REPO = "SmartiAI-Agent-for-Windows"
-GITHUB_API_RELEASE_LATEST = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
-GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
 SETUP_ASSET_RE = re.compile(r"(?i)\bsetup\b.*\.exe$")
 PORTABLE_ASSET_RE = re.compile(r"(?i)(portable|win[-_ ]?x64).*\.zip$")
 INNO_UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{2F7748B6-3D46-4E9C-B187-0F5C2E9F38E1}_is1"
@@ -71,51 +69,6 @@ class UpdateInfo:
             installation_kind=str(data.get("installation_kind") or "installer"),
             prerelease=bool(data.get("prerelease")),
         )
-
-
-def _version_parts(value):
-    raw = str(value or "").strip()
-    if not raw or raw.lower() == "dev":
-        return ()
-    raw = re.sub(r"^[vV]", "", raw)
-    parts = [int(part.lstrip("0") or "0") for part in re.findall(r"\d+", raw)[:4]]
-    while len(parts) < 3:
-        parts.append(0)
-    return tuple(parts)
-
-
-def is_newer_version(candidate, current=APP_VERSION):
-    candidate_parts = _version_parts(candidate)
-    current_parts = _version_parts(current)
-    if not candidate_parts:
-        return False
-    if not current_parts:
-        return True
-    length = max(len(candidate_parts), len(current_parts))
-    return candidate_parts + (0,) * (length - len(candidate_parts)) > current_parts + (0,) * (length - len(current_parts))
-
-
-def _headers():
-    return {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": f"{SMARTI_APP_DISPLAY_NAME}/{APP_VERSION}",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-
-def _request_kwargs(settings=None, url=GITHUB_API_RELEASE_LATEST):
-    settings = settings or {}
-    # The explicit compatibility mode restores Smarti's historical global
-    # verification bypass, including update transport. Artifact hash/signature
-    # checks remain independent defence-in-depth after download.
-    kwargs = ssl_request_kwargs(
-        settings,
-        url=url,
-        allow_legacy=True,
-        data_dir=USER_DATA_DIR,
-    )
-    kwargs["timeout"] = 25
-    return kwargs
 
 
 def _norm_dir(path):
@@ -203,11 +156,7 @@ def _select_update_asset(release, preferred_kind="installer"):
 
 
 def check_for_updates(settings=None):
-    response = requests.get(GITHUB_API_RELEASE_LATEST, headers=_headers(), **_request_kwargs(settings))
-    response.raise_for_status()
-    release = response.json()
-    if not isinstance(release, dict):
-        raise RuntimeError("GitHub returned an unexpected release payload.")
+    release = fetch_latest_release(settings)
 
     tag_name = str(release.get("tag_name") or release.get("name") or "").strip()
     version = re.sub(r"^[vV]", "", tag_name).strip() or tag_name

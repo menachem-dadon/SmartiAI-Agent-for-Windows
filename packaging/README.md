@@ -67,8 +67,11 @@ profile in place and the source is never deleted.
 
 ## Release boundary
 
-The About page uses Tauri's updater plugin and restarts only after a verified
-download/install. Publishing, code-signing, updater hosting and clean Windows
+Manual and automatic checks discover GitHub releases through the Qt-free Core
+when no signed updater feed is configured, including unsigned local builds.
+A configured signed feed uses Tauri's updater plugin; download/install and
+restart remain available only for that feed after signature verification.
+Publishing, code-signing, updater hosting and clean Windows
 10/11 VM matrices are separate release operations; this command does not imply
 that they were performed.
 

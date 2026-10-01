@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { checkForUpdates, type AvailableUpdate } from "./updates";
 import { coreApi } from "./coreApi";
 import type { ResolvedTheme } from "./designSystem";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
@@ -862,7 +862,7 @@ export function UpdateControls({
   compact?: boolean;
   theme?: ResolvedTheme;
 }) {
-  const [update, setUpdate] = useState<Update | null>(null);
+  const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [status, setStatus] = useState("עדיין לא בוצעה בדיקת עדכונים.");
   const [checking, setChecking] = useState(false);
   const icons = legacyAssets(theme);
@@ -875,13 +875,8 @@ export function UpdateControls({
     setChecking(true);
     setStatus("בודק עדכונים...");
     try {
-      const found = await check();
+      const found = await checkForUpdates();
       setUpdate(found);
-      const values = {
-        updates_last_checked_at: new Date().toISOString(),
-        updates_last_available_version: found?.version || "",
-      };
-      await coreApi("PATCH", "/v2/settings", { values }, true);
       setStatus(
         found ? `עדכון זמין: גרסה ${found.version}` : "בדיקה אחרונה: עכשיו",
       );
@@ -892,10 +887,10 @@ export function UpdateControls({
     }
   };
   const install = async () => {
-    if (!update) return;
+    if (!update?.installer) return;
     setStatus("מוריד ומאמת חתימה…");
     try {
-      await update.downloadAndInstall((event) => {
+      await update.installer.downloadAndInstall((event) => {
         if (event.event === "Finished")
           setStatus("העדכון אומת והותקן. מפעיל מחדש…");
       });
@@ -915,7 +910,16 @@ export function UpdateControls({
       </button>
       {update && (
         <>
-          <button onClick={() => void install()}>הורד והתקן</button>
+          {update.installer && (
+            <button onClick={() => void install()}>הורד והתקן</button>
+          )}
+          {update.releaseUrl && (
+            <button onClick={() => void invoke("open_chat_link", {
+              target: update.releaseUrl, local: false,
+            }).catch((reason) => setStatus(`פתיחת עמוד הגרסה נכשלה: ${String(reason)}`))}>
+              עמוד הגרסה
+            </button>
+          )}
           <button
             onClick={() => {
               setUpdate(null);

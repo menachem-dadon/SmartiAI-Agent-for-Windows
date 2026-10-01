@@ -33,6 +33,7 @@ let values: Record<string, any>;
 let patchGate: ReturnType<typeof deferred> | null;
 let bootstrapGate: ReturnType<typeof deferred> | null;
 let failPatch: boolean;
+let failUpdateCheck: boolean;
 const defaults = () => ({
   api_mode: "gemini", selected_gemini_model: "gemini-a", selected_openai_model: "openai-a",
   favorite_models: [], autonomy_mode: "balanced", local_fast_mode_enabled: false,
@@ -47,7 +48,7 @@ const composer = () => JSON.parse(screen.getByTestId("composer").textContent!);
 const setting = (path: string) => document.querySelector<HTMLSelectElement>(`[data-setting-path="${path}"] select`)!;
 
 beforeEach(() => {
-  values = defaults(); patchGate = null; bootstrapGate = null; failPatch = false;
+  values = defaults(); patchGate = null; bootstrapGate = null; failPatch = false; failUpdateCheck = false;
   localStorage.clear(); sessionStorage.clear();
   vi.stubGlobal("innerWidth", 1800);
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
@@ -60,6 +61,11 @@ beforeEach(() => {
     const { method, path, body } = args.request;
     let data: any = { items: [] };
     if (path === "/v2/management/legal") data = { accepted: true };
+    if (path.startsWith("/v2/conversations?")) data = { items: [], attention_items: [] };
+    if (path === "/v2/management/updates") {
+      if (failUpdateCheck) return { status: 502, body: { error: "update_check_failed", detail: "offline" } } as any;
+      data = { update: { version: "0.88.0", body: "new release" } };
+    }
     if (path === "/v2/bootstrap") {
       data = structuredClone({
         conversations: [], pending_approvals: [], settings: { values },
@@ -104,6 +110,37 @@ async function patch(next: Record<string, unknown>) {
 }
 
 describe("settings synchronization through the real API client", () => {
+  test("automatic update discovery records success and displays the available version", async () => {
+    values.updates_auto_check = true;
+    await start();
+    await waitFor(() => expect(values.updates_last_available_version).toBe("0.88.0"), { timeout: 4000 });
+    expect(values.updates_last_checked_at).toEqual(expect.any(String));
+    expect(screen.getByText("עדכון 0.88.0")).toBeTruthy();
+  });
+
+  test("a failed automatic check preserves the last successful result", async () => {
+    values.updates_auto_check = true;
+    values.updates_last_checked_at = "2020-01-01T00:00:00Z";
+    values.updates_last_available_version = "0.87.1";
+    failUpdateCheck = true;
+    await start();
+    await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) =>
+      command === "core_api" && args.request.path === "/v2/management/updates")).toBe(true), { timeout: 4000 });
+    expect(values.updates_last_checked_at).toBe("2020-01-01T00:00:00Z");
+    expect(values.updates_last_available_version).toBe("0.87.1");
+  });
+
+  test("a recent automatic check uses the saved version without another network check", async () => {
+    values.updates_auto_check = true;
+    values.updates_last_checked_at = new Date().toISOString();
+    values.updates_last_available_version = "0.88.0";
+    await start();
+    await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 2800)); });
+    expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) =>
+      command === "core_api" && args.request.path === "/v2/management/updates")).toBe(false);
+    expect(screen.getByText("עדכון 0.88.0")).toBeTruthy();
+  });
+
   test.each(["button", "Escape"])("returns from custom permissions to security settings using %s and retains saved permissions", async (backAction) => {
     values.custom_permission_profile_enabled = true;
     values.autonomy_mode = "custom";

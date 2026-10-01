@@ -3,7 +3,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { check } from "@tauri-apps/plugin-updater";
+import { checkForUpdates } from "./updates";
 import { ManagementCenter } from "./ManagementCenter";
 import { validateProviderKey } from "./SettingsManagement";
 import type { ManagementSection } from "./managementCatalog";
@@ -614,21 +614,10 @@ export default function App() {
           if (!stopped) setAvailableUpdateVersion(known);
           return;
         }
-        const found = await check();
+        const found = await checkForUpdates();
         if (stopped) return;
         const version = found?.version || "";
         setAvailableUpdateVersion(version);
-        await coreApi(
-          "PATCH",
-          "/v2/settings",
-          {
-            values: {
-              updates_last_checked_at: new Date().toISOString(),
-              updates_last_available_version: version,
-            },
-          },
-          true,
-        );
       } catch {
         // A failed background check must not interrupt chat startup. Manual check shows the error.
       }

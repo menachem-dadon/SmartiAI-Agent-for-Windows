@@ -1186,6 +1186,13 @@
     },
     {
       "method": "GET",
+      "path": "/v2/management/updates",
+      "operation_id": "checkUpdates",
+      "summary_he": "גילוי גרסאות GitHub ללא התקנה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
       "path": "/v2/management/diagnostics",
       "operation_id": "diagnosticProgress",
       "summary_he": "התקדמות בדיקה פעילה",

@@ -41,6 +41,7 @@ from .desktop_services import (
     usage_snapshot,
 )
 from .voice_service import VoiceSessionController
+from .update_discovery import discover_update
 
 
 class RequestValidationError(ValueError):
@@ -849,6 +850,15 @@ class SmartiLocalGateway:
             "description": "סוכן עבודה אישי ל-Windows שמחבר צ'אט, כלים מקומיים, קבצים, דפדפן, זיכרון ומשימות רקע תחת בקרות בטיחות.",
         })
 
+    async def _updates(self, request):
+        # Release discovery works even when this build has no signed installer
+        # feed. Never download or execute GitHub assets through this endpoint.
+        try:
+            update = await asyncio.to_thread(discover_update, copy.deepcopy(self.core.settings))
+        except Exception as exc:
+            return self._error(request, 502, "update_check_failed", str(exc))
+        return self._ok(request, {"update": update})
+
     async def _diagnostics(self, request):
         from .doctor import SmartiDiagnostic
         if request.method == "GET":
@@ -1302,6 +1312,7 @@ class SmartiLocalGateway:
         app.router.add_delete("/v2/management/usage", self._usage)
         app.router.add_get("/v2/management/logs", self._logs)
         app.router.add_get("/v2/management/about", self._about)
+        app.router.add_get("/v2/management/updates", self._updates)
         app.router.add_get("/v2/management/diagnostics", self._diagnostics)
         app.router.add_post("/v2/management/diagnostics", self._diagnostics)
         app.router.add_get("/v2/workbench/root", self._workspace_root)
