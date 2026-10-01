@@ -1871,7 +1871,9 @@ export function SettingsView({
   setPolicyOpen: (open: boolean) => void;
   updateControls?: React.ReactNode;
 }) {
-  const [data, setData] = useState<SafeSettings>({ values: {}, secrets: {} });
+  const [loadedData, setData] = useState<SafeSettings | null>(null);
+  const data = loadedData ?? { values: {}, secrets: {} };
+  const [loadError, setLoadError] = useState("");
   const [schema, setSchema] = useState<SettingsSchema>({
     providers: [],
     secret_help: {},
@@ -1880,7 +1882,9 @@ export function SettingsView({
     Array<{ value: string; label: string }>
   >([]);
   const [query, setQuery] = useState("");
-  const [advanced, setAdvanced] = useState(false);
+  const advanced = Boolean(
+    (data.values.ui_preferences as Json | undefined)?.settings_show_advanced,
+  );
   const [saveStatus, setSaveStatus] = useState("מוכן");
   const [resetConfirm, setResetConfirm] = useState(false);
   const [pendingFocus, setPendingFocus] = useState("");
@@ -1893,11 +1897,14 @@ export function SettingsView({
     "הבדיקה תרוץ רק בלחיצה.",
   );
   const load = useCallback(
-    async () => setData(await coreApi<SafeSettings>("GET", "/v2/settings")),
+    async () => {
+      setLoadError("");
+      setData(await coreApi<SafeSettings>("GET", "/v2/settings"));
+    },
     [],
   );
   useEffect(() => {
-    void load();
+    void load().catch((reason) => setLoadError(String(reason)));
   }, [load]);
   useEffect(() => {
     void coreApi<SettingsSchema>("GET", "/v2/settings/schema").then(setSchema);
@@ -1916,13 +1923,7 @@ export function SettingsView({
     const raw = data.values.settings_recent_searches;
     if (Array.isArray(raw))
       setRecentSearches(raw.map(String).filter(Boolean).slice(0, 8));
-    setAdvanced(
-      Boolean(
-        (data.values.ui_preferences as Json | undefined)
-          ?.settings_show_advanced,
-      ),
-    );
-  }, [data.values.settings_recent_searches, data.values.ui_preferences]);
+  }, [data.values.settings_recent_searches]);
   useEffect(() => {
     if (!pendingFocus) return;
     const frame = window.requestAnimationFrame(() => {
@@ -2051,16 +2052,20 @@ export function SettingsView({
     await save("settings_recent_searches", next);
   };
   const setAdvancedPersisted = async (checked: boolean) => {
-    setAdvanced(checked);
     const preferences =
       data.values.ui_preferences &&
       typeof data.values.ui_preferences === "object"
         ? (data.values.ui_preferences as Json)
         : {};
-    await save("ui_preferences", {
+    const nextPreferences = {
       ...preferences,
       settings_show_advanced: checked,
+    };
+    setData({
+      ...data,
+      values: { ...data.values, ui_preferences: nextPreferences },
     });
+    await save("ui_preferences", nextPreferences);
   };
   const activateSearchResult = async (definition: SettingDefinition) => {
     await rememberSearch();
@@ -2072,6 +2077,22 @@ export function SettingsView({
   };
   const title = settingsSectionTitles[section];
   const icons = legacyAssets(theme);
+  // Mount the controls only after their values and visibility arrive together.
+  if (!loadedData)
+    return (
+      <div className="management-page settings-page source-settings-page">
+        {loadError ? (
+          <>
+            <p role="alert">טעינת ההגדרות נכשלה: {loadError}</p>
+            <button onClick={() => void load().catch((reason) => setLoadError(String(reason)))}>
+              נסה שוב
+            </button>
+          </>
+        ) : (
+          <p role="status">טוען הגדרות…</p>
+        )}
+      </div>
+    );
   return (
     <div className="management-page settings-page source-settings-page">
       <div className="source-settings-head">
