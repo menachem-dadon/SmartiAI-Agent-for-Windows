@@ -4,6 +4,19 @@ The recovered Tauri 2 + React + TypeScript Smarti client. The Rust host owns the
 Python Core lifecycle and its per-launch credential; frontend code receives
 only narrow authenticated operations and never the bearer token.
 
+## Active UI/UX work
+
+The user authorized a premium/minimal redesign on 2026-10-02. Before UI work,
+read [the complete plan](../docs/ui_ux_redesign_plan.md) and
+[execution ledger / stage prompts](../docs/ui_ux_redesign_execution.md).
+Start with UX-0, then UX-1's interactive prototype. Exact PyQt geometry,
+palette and asset locks are historical; functionality, policy and persistence
+remain required. Preparation is not implementation or cutover.
+
+The shared plan/ledger are repository files. Local AGENTS.md and
+.codex-local/PROJECT_CONTEXT.md may be absent in another checkout; these links
+provide design authority without relying on local chat history.
+
 ## Development
 
 From the repository root:
@@ -42,8 +55,12 @@ cargo check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
 ..\scripts\smoke_tauri_supervisor.ps1
 ..\scripts\smoke_tauri_browser.ps1
-python ..\scripts\verify_tauri_point16c.py
 ```
+
+The historical `python ..\scripts\verify_tauri_point16c.py` checks old parity
+ledgers and is not the new redesign acceptance checker. Do not alter historical
+statuses just to make it pass. UX-6 owns adapting acceptance while retaining
+functional/native/package gates; the UX ledger reports current gaps.
 
 The supervisor smoke opens the Tauri WebView hidden, verifies the real Python
 Core readiness handshake and Rust health proxy, creates a deterministic
@@ -67,5 +84,9 @@ the user's desktop or data:
 - `?visual-fixture=point16b-legal&theme=dark`
 
 Use headless Edge/Chromium or the existing offscreen QA workflow at narrow and
-wide viewport sizes. The PyQt code and `docs/tauri_ui_source_parity.md` remain
-the specification; fixture screenshots are regression evidence only.
+wide viewport sizes. The active visual specification is
+`docs/ui_ux_redesign_plan.md`. PyQt and the old source-parity map provide
+functional inventory; fixture screenshots are regression evidence only.
+UX-1 may add an isolated interactive prototype with candidate reusable
+components and synthetic data. Label simulated actions; do not write personal
+state or claim production integration from a self-authored mock.

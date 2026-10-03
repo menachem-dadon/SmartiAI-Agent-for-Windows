@@ -3,14 +3,20 @@
 - Evidence date: 2026-08-24 (Asia/Jerusalem)
 - Product version: `0.87.0`
 - Host scope: the user's current Windows 11 x64 computer
-- Status: **BLOCKED — PARITY GATE REOPENED** after the user's 2026-08-24 visual check.
-  Current-machine packaging passed separately, but Point 16C is not accepted
-  and Point 17 remains forbidden.
+- Status: **NOT ACCEPTED — functional/redesigned-product/package evidence open.**
+  The 2026-08-24 reopened parity result is historical. On 2026-10-02 the user
+  replaced the PyQt visual target with SMARTI-UI-UX-2026. Point 17 still requires
+  current acceptance and separately authorized cutover.
 
-This document is the final integration ledger for the recovered Tauri product.
-The legacy PyQt code remains the one-to-one UI authority and remains runnable.
-Screenshots are only regression evidence. The Python Core remains the sole
-authority for the agent loop, tools, settings, history, memory and tasks.
+This document retains migration integration/package evidence and dated feature
+resolutions. [The new UI plan](ui_ux_redesign_plan.md) owns design, and
+[its ledger](ui_ux_redesign_execution.md) owns UX progress and current evidence.
+PyQt remains a runnable functional reference, not a one-to-one visual authority.
+Python Core remains authoritative for agent/tools/settings/history/memory/tasks.
+
+Exact old layout/assets/wording requirements are superseded. Required actions,
+policy, data and persistence are not. Historical counts and artifacts below
+have not been revalidated for the redesign. Preparation closes no product gate.
 
 ## Stable feature-ID resolution
 
@@ -37,7 +43,14 @@ Automated ledger validation is owned by
 `python scripts/verify_tauri_point16c.py`. It must fail while any current parity
 row is `REOPENED`; a green package manifest cannot override that failure.
 
-## Source-parity closure
+## Functional coverage and redesigned-product closure
+
+Current closure requires all 97 stable IDs, later additions and new UX states
+to have production action/contract/persistence/reload evidence, with required
+visual/native/package evidence in the UX ledger. Old pixel matching is not a
+criterion.
+
+### Historical source-parity closure note — not the new visual criterion
 
 Source-parity closure has **not** been reached. The prior 66-row `CURRENT
 MATCHED` claim was reopened because it relied in part on self-authored fixtures,
@@ -89,15 +102,14 @@ Run either source Tauri with `scripts/run_tauri_dev.ps1` or extract the final
 portable ZIP to a new test folder. Do not install over the current Smarti and do
 not use its live data for this check.
 
-Use the 17-step, state-specific checklist in
-`tauri_point16c_source_audit.md#manual-pyqttauri-side-by-side-checklist`. The old
-four-line sample was too broad to detect missing controls, icons or reverse
-Core-to-UI flows and is no longer acceptance evidence.
+Use the state/quality/coverage matrix in the new UI plan and UX-6 handoff.
+The old 17-step PyQt checklist remains functional inventory only; exact visual
+comparison no longer gates acceptance.
 
-Success means the window looks and behaves like the PyQt source in the same
-state, no original control is absent or decorative, and no external Chrome/Edge
-window appears. Report any difference in this same task. Point 17 remains
-forbidden until this user-visible result is accepted.
+Success means the redesigned product meets the new plan, every required action
+is reachable and connected, data/policy/persistence survive, and native Browser
+ownership is correct. Point 17 remains separate after current functional/
+package evidence and user-visible redesigned-product acceptance.
 
 ## Honest limitations
 

@@ -1,6 +1,16 @@
 # Point 16C source-derived parity audit and manual checklist
 
-- Authority: the current PyQt source, not screenshots and not a React fixture.
+> **2026-10-02: visual target superseded.** Read
+> [ui_ux_redesign_plan.md](ui_ux_redesign_plan.md) and
+> [ui_ux_redesign_execution.md](ui_ux_redesign_execution.md) first for UI work.
+> Geometry/assets/wording and the PyQt side-by-side comparison below are
+> historical. Reuse controls/states/actions as functional inventory;
+> unresolved wiring, policy, persistence and reload gaps remain required work.
+> The new state/quality matrix replaces pixel-identity acceptance. This does
+> not close Point 16C or authorize Point 17.
+
+- Authority: current runtime contracts for functionality and SMARTI-UI-UX-2026
+  for design. PyQt provides historical behavior inventory.
 - Current status: **AUDIT GAPS REMAIN**. No row in this document is a
   Point 16C acceptance claim.
 - Evidence vocabulary: `WIRED` means an implementation path exists and was
@@ -84,7 +94,12 @@ tracked asset in a source-owned control. Missing source icons stay absent.
 | Tasks | empty/list/loading/error/create/edit/schedule/routing/cancel/retry/resume/delete/result | `AUDIT OPEN` |
 | Usage, Diagnostic, Trace, About/legal/update | every source state/action, privacy defaults, progress/cancel/repair, legal first-run gate and persistence | `AUDIT OPEN` |
 
-## Manual PyQt/Tauri side-by-side checklist
+## Historical manual PyQt/Tauri side-by-side checklist
+
+The checklist below records the old visual comparison. Its actions/states
+remain inventory; geometry/assets/order no longer gate the new design.
+Current acceptance uses the UX plan/ledger and functional/native/package
+evidence, without assuming a fixture proves wiring.
 
 Use a test data directory for Tauri and do not install over the active PyQt
 installation. Put both windows on the same monitor, size and Windows scale.

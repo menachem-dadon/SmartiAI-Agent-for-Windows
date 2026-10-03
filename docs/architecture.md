@@ -2,16 +2,20 @@
 
 SmartiAI is in the final transition from a Python/PyQt6 desktop client to a
 Tauri 2 + React Windows client around the same Python agent runtime. The Tauri
-client is the packaged migration target; the PyQt client remains runnable and
-is the authoritative one-to-one UI specification until Point 17 is explicitly
-approved. The agent/runtime API remains `smarti.core.SmartiCore`, implemented by
+client is the packaged target. Since 2026-10-02,
+[SMARTI-UI-UX-2026](ui_ux_redesign_plan.md) is the active UI/UX specification;
+[the execution ledger](ui_ux_redesign_execution.md) tracks its implementation.
+PyQt remains runnable as a functional reference until separately authorized
+cutover, not as a one-to-one visual target. The agent/runtime API remains
+`smarti.core.SmartiCore`, implemented by
 focused domain mixins under `smarti/agent/`.
 
 ## Desktop product boundary
 
 - `desktop/src/` owns the React Workspace: RTL chat, right conversation drawer,
-  left on-demand Workbench, composer, management center and source-derived
-  light/dark presentation.
+  left on-demand Workbench, composer and management. The existing migrated
+  presentation will be replaced in stages by the shared design system;
+  writing the plan is not evidence that replacement has been implemented.
 - `desktop/src-tauri/` is the trusted Windows host. It owns the application
   window, single instance, tray, notifications/taskbar attention, file dialogs,
   updater, Core supervision and Tauri-owned child WebViews.
@@ -28,8 +32,9 @@ focused domain mixins under `smarti/agent/`.
 ## Workspace, Browser and Canvas
 
 - `desktop/src/App.tsx`, `Composer.tsx`, `RichMessage.tsx` and
-  `WorkbenchPanels.tsx` reproduce the PyQt composition and state behavior. The
-  granular code-derived map is `docs/tauri_ui_source_parity.md`.
+  `WorkbenchPanels.tsx` implement the current Workspace and state behavior.
+  Active design is `docs/ui_ux_redesign_plan.md`; the old granular map
+  `docs/tauri_ui_source_parity.md` supplies historical functional inventory.
 - `desktop/src-tauri/src/browser.rs` owns Smarti Browser tabs and WebView2 child
   WebViews. User controls and Python automation address the same stable visible
   target through the in-process CDP broker; no installed Chrome/Edge HWND and

@@ -1,5 +1,12 @@
 # SmartiAI legacy baseline and feature-parity inventory
 
+> **Current design authority, 2026-10-02:**
+> [SMARTI-UI-UX-2026](ui_ux_redesign_plan.md) replaces exact PyQt visual matching.
+> This baseline retains historical measurements and 97 stable capability IDs.
+> They are functional inventory, not proof that the new design is complete.
+> Current stages, decisions and gaps are in the
+> [UX execution ledger](ui_ux_redesign_execution.md).
+
 Baseline date: 2026-08-21  
 Migration plan: [tauri_migration_execution_plan.md](tauri_migration_execution_plan.md)  
 Product target: `V0.87.0`
@@ -280,9 +287,10 @@ requested. No clipping was observed in these four states.
 
 ## 9. Stable feature-parity matrix
 
-Point 16C is re-auditing the same 97 stable IDs against the current PyQt authority,
-the Tauri/React/Rust/Python implementation and the final current-machine
-evidence. `IMPLEMENTED` means the capability is present; an approved
+The redesign reuses these 97 stable IDs as capability inventory and adds later
+features/new UX states. Verify current action paths and current-machine
+evidence; appearance follows SMARTI-UI-UX-2026. The dated `IMPLEMENTED` status
+means capability implementation was recorded; an approved
 architecture status names an intentional Tauri substitution. `PKG-005` records
 the user's explicit current-machine validation scope rather than pretending a
 clean-machine matrix was performed. Point 17 must preserve every resolution.

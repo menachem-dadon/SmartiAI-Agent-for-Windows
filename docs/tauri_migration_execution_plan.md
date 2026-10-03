@@ -1,14 +1,30 @@
 # SmartiAI Tauri Migration Master Execution Plan
 
-- Status: Point 16C is BLOCKED by reopened whole-product source parity; Point 17 remains forbidden
-- Plan version: 1.3
+- Status: Migration acceptance remains open; UI follows SMARTI-UI-UX-2026. Point 17 requires functional, redesigned-product and package acceptance.
+- Plan version: 1.4
 - Plan date: 2026-08-20; browser architecture amended 2026-08-21; exact UI parity amended 2026-08-23; recovery and local-validation policy amended 2026-08-24
 - Repository: `C:\Users\יהודית סיידון\Downloads\GitHub\SmartiAI-Agent-for-Windows`
 - Current product target at plan creation: `V0.87.0`
 
-This is the authoritative, standalone handoff for migrating SmartiAI's desktop
-interface from PyQt6 to Tauri 2 + React + TypeScript while preserving the Python
-agent runtime and the one-click Windows application experience.
+This is the migration architecture, capability and historical evidence handoff
+for Tauri 2 + React + TypeScript around the Python agent runtime. It is no
+longer the standalone visual specification.
+
+**Binding redesign amendment (2026-10-02):** the user requested a substantial
+premium/minimal redesign and explicitly instructed updating the old plans and
+project context. [SMARTI-UI-UX-2026](ui_ux_redesign_plan.md) owns visual language,
+composition, navigation, density, component geometry, motion and intentional
+UX changes. [The UX ledger](ui_ux_redesign_execution.md) owns stage status and
+handoffs. This amendment supersedes every requirement here or in older parity
+documents to reproduce PyQt appearance, assets, wording, placement or dimensions
+one-to-one. Approval is already present; do not ask again for routine departures.
+
+Preserve feature coverage, runtime contracts, data, policy and real action/
+persistence paths. Earlier UI evidence is historical, not redesign acceptance.
+Point 16C remains unaccepted. This plan is not permission to mark gaps resolved,
+bypass verification, remove PyQt, install over live data or publish. Implement
+UX-0 through UX-6 before redesign acceptance; cutover remains a separate
+Point 17 task. Read the new plan first for UI work.
 
 Point numbers in this document are stable. Do not renumber existing points. If
 the plan later needs an inserted task, add a suffix such as `Point 6A`.
@@ -24,21 +40,12 @@ hosting language in historical handoffs. The supplied visual reference was the
 clean Codex-style browser layout: compact tabs, omnibox/navigation, overflow
 menu, downloads/history/settings, and a quiet content-first surface.
 
-**Binding exact-UI amendment (2026-08-23):** the user requires the migrated
-interface to reproduce the original PyQt interface one-to-one. The authoritative
-specification is the legacy source code, not screenshots, subjective visual
-similarity, a new component library, or a redesign proposal. For every existing
-surface, read and map the actual widget/layout/style/state code and reproduce
-its structure, geometry, spacing, typography, colors, assets, text, menus,
-shortcuts, visibility rules, states, RTL/LTR behavior, persistence, and
-interaction semantics. Screenshots are regression evidence only. This amendment
-supersedes every older instruction to "refine", "modernize", "improve the
-presentation", or reinterpret an existing UI. Internal React/Rust/Python
-implementation may differ, but there may be no undocumented user-visible or
-behavioral difference. Truly new surfaces with no PyQt equivalent, including
-the explicitly approved built-in Smarti Browser architecture, must reuse the
-exact established Smarti visual language unless the user separately approves a
-different design.
+**Historical exact-UI amendment (2026-08-23; visually superseded 2026-10-02):**
+the earlier migration required one-to-one PyQt appearance. That explains dated
+geometry/assets and source-parity tests below; it no longer sets the target.
+Source remains useful for discovering controls, states, actions, keyboard and
+persistence. SMARTI-UI-UX-2026 defines the redesigned target and deliberate
+changes.
 
 **Binding recovery amendment (2026-08-24):** after Points 1-16, direct user
 inspection and a fresh code audit found substantial gaps between the legacy
@@ -50,14 +57,11 @@ earlier `MATCHED` UI statuses are therefore historical claims, not current
 acceptance evidence. Points 16A-16C reopen every visible surface and stable
 feature ID for code-derived verification and repair before any PyQt deletion.
 
-The recovery target is the complete original Smarti product with the same
-visual language, composition, labels, explanations, controls, usability,
-states, and deep runtime synchronization, implemented in Tauri. The approved
-exceptions are the first-class Tauri-owned Smarti Browser and additions that
-are genuinely required by the new architecture, such as Tauri/Core/WebView2
-health checks, connection settings, and the new build/package controls. These
-additions must look native to the original Smarti design and must not replace
-or simplify an existing feature.
+The recovery obligation is complete Smarti capability/state coverage and deep
+runtime synchronization. Its same-appearance requirement is superseded.
+Functions remain reachable in the new composition; restyling and reorganization
+are authorized. Tauri-owned Browser, Core/WebView2 health checks and build/
+package controls retain their architectural and functional requirements.
 
 The user also changed the validation policy: clean Windows 10/11 machines and
 VM matrices are not migration gates. Final functional and package acceptance
@@ -82,20 +86,21 @@ or:
 
 the executing Codex task must:
 
-1. Read this entire document, not only the requested point.
+1. Resolve the namespace: UX-N uses the redesign plan and ledger; migration
+   Point N uses this document. Read this entire document for a migration point
+   and the redesign plan for any UI-bearing work.
 2. Read the applicable `AGENTS.md` and `.codex-local/PROJECT_CONTEXT.md`.
 3. Run `git status --short` and preserve all pre-existing user work.
 4. Inspect the current checkout before trusting file names or historical line
    numbers in this plan.
-5. For every UI-bearing point, read the complete relevant legacy PyQt classes,
-   their parent composition, shared style/theme helpers, assets, signal/action
-   wiring, responsive code, and persisted settings before changing React. Do
-   not implement from screenshots or class names alone.
-   During Points 16A-16C, do not trust an earlier `MATCHED` row without
-   re-reading the source and proving the current implementation.
+5. Inspect current production components/contracts and relevant legacy
+   controls/states/actions/persistence to avoid capability loss. Use the
+   redesign plan for visual/layout choices. Earlier `MATCHED` rows do not prove
+   current implementation or redesign acceptance.
 6. Execute only the requested point and its explicitly listed prerequisites or
    repairs. Do not begin the next point.
-7. Do not execute two migration points in parallel.
+7. Do not execute two migration points in parallel. UX coordination follows
+   the new plan; there must be no concurrent writers to shared files.
 8. Make reasonable implementation decisions within the point's architecture.
    Ask the user only if a missing choice would materially change product scope.
 9. Run all acceptance checks required by the point.
@@ -122,9 +127,9 @@ work remains. Evidence types must remain separate:
 - **Live evidence:** the behavior was exercised against a running application.
 - **Visual evidence:** screenshots or direct layout inspection in required RTL,
   light/dark, sizing, and DPI states.
-- **Source-parity evidence:** a code-derived map from each legacy PyQt class,
-  layout, style rule, asset, signal, and conditional state to its Tauri
-  implementation, with every intentional deviation listed and user-approved.
+- **Capability/action evidence:** a map of required controls, states, handlers,
+  contracts, authority, persistence and reload. Old source-parity maps supply
+  inventory; SMARTI-UI-UX-2026 supplies visual acceptance.
 - **Package evidence:** the installed or portable artifact was actually built
   and exercised on the explicitly named machine. A clean machine or VM is
   required only when a point explicitly asks for cross-machine release proof;
@@ -137,7 +142,9 @@ package evidence is not complete because its source tests pass.
 
 ## 3. Execution ledger
 
-The executing task for each point must update only its row after verification.
+Each migration task updates only its row after verification. Rows below record
+dated migration evidence, including the old visual target. Their COMPLETE
+labels do not complete UX stages; UX progress belongs in the new ledger.
 Allowed states are `PENDING`, `IN_PROGRESS`, `BLOCKED`, and `COMPLETE`.
 
 | Point | Short name | Status | Evidence / completion note |
@@ -185,25 +192,13 @@ The product must still feel like one installed application:
 - Smarti Browser is part of the application. It does not launch or visually
   embed the user's installed Chrome, Edge, Brave, or another top-level browser.
 
-The Tauri migration is a framework/architecture migration, not a UI redesign.
-The existing PyQt code is the authoritative visual, structural, behavioral, and
-interaction specification. The final user must encounter the same interface:
-component hierarchy, placement, dimensions, minimum/maximum sizes, stretch and
-alignment behavior, margins, spacing, typography, palette, borders, radii,
-gradients, shadows, icons, labels, tooltips, menus, indicators, animations,
-focus/hover/pressed/disabled states, responsive transitions, shortcuts,
-selection rules, and persisted UI choices. React may implement these details
-differently internally, but must not reinterpret them. A screenshot can show
-one state at one size; it cannot replace reading the code that produces all
-states and sizes.
+The framework migration is now accompanied by the authorized premium UI/UX
+redesign. ui_ux_redesign_plan.md owns visual and interaction intent; PyQt
+supplies capability/state/action inventory, not mandatory geometry or style.
 
-Where Qt and Web rendering differ, match the declared source values and the
-resulting layout as closely as the platform permits, measure the remaining
-difference, and record it. Any user-visible exception—however reasonable it may
-seem—requires explicit user approval. Do not quietly substitute a “more modern”
-control, icon family, spacing system, animation, card layout, or responsive
-behavior. Security and accessibility fixes remain required, but should preserve
-the original presentation unless a visible change is unavoidable and approved.
+Document intentional UX changes and retain behavior/security tests. Evaluate
+readability, accessibility, responsiveness and native surfaces against the new
+plan. Do not restore old constants merely to satisfy historical visual locks.
 
 ## 5. Non-negotiable product invariants
 
@@ -213,7 +208,9 @@ the original presentation unless a visible change is unavoidable and approved.
 - The conversation drawer is on the right and can collapse.
 - The left Workbench starts empty and opens only when Browser, Canvas, Files,
   Terminal, or Artifacts are needed.
-- Opening a workbench surface must not replace or hide the chat by default.
+- Use a useful split when space permits; compact or explicit expanded-reading
+  modes may make the artifact primary while preserving chat draft/scroll and
+  an accessible return control.
 - In RTL file views, the file tree remains on the right and the preview remains
   on the left.
 - Settings, Tasks, Memory, Tools, Usage, Logs, Diagnostics, and About remain
@@ -474,73 +471,39 @@ network access. Remote images remain opt-in.
 
 ## 8. Design direction
 
-The target is an exact migration of the original interface, not a visual
-reinterpretation. “Design system” in this plan means a faithful encoding of the
-existing PyQt design constants and rules in web technology.
+The active design system and screen requirements are in
+[ui_ux_redesign_plan.md](ui_ux_redesign_plan.md), sections 5–13. UX-1 establishes
+the direction, UX-2 builds tokens/components, and UX-3–5 apply them. Old
+constants/assets are historical input, not mandatory design values.
 
-- Derive CSS custom properties from the actual values and conditional branches
-  in `smarti/ui_styles.py`, `smarti/ui_controls.py`, `smarti/chat.py`,
-  `smarti/workspace_ui.py`, `smarti/ui_pages.py`, `smarti/memory_ui.py`, and the
-  relevant feature modules. Do not invent a replacement scale for color,
-  typography, spacing, radii, shadows, blur, motion, or density.
-- Reuse the original tracked icons and visual assets when technically suitable.
-  If an asset must be converted to a web-compatible representation, preserve
-  its shape, stroke, fill, viewbox, visual size, theme variant, and state logic.
-- Reproduce the original widget/layout tree semantically: parent-child
-  ownership, insertion order, direction, alignment, stretch factors, fixed and
-  minimum dimensions, margins, spacing, clipping, scrolling, stacking, and
-  show/hide rules. A flattened React DOM is acceptable only if it behaves and
-  renders identically.
-- Reproduce the complete state machine from code: empty/loading/error/running,
-  hover/focus/pressed/disabled, active/inactive/unread/approval, expanded/
-  collapsed, send/cancel, menu-open, attachment, voice/TTS, and persistence.
-- Maintain the source light and dark themes exactly. A system-theme option may
-  select between them but must not create a third unapproved theme.
-- Component libraries may provide invisible accessibility/focus mechanics, but
-  their default visuals, spacing, animation, portals, direction assumptions,
-  and typography must not leak into the final interface.
-- Do not add Mica, Acrylic, glass, glow, new gradients, new cards, new motion,
-  changed corner radii, or different iconography unless that exact treatment is
-  present in the PyQt source or explicitly approved later.
-- Respect `prefers-reduced-motion` and accessibility requirements by suppressing
-  or adapting motion without altering the normal-motion source-parity target.
-- Chat Markdown must not enable arbitrary raw HTML. Code blocks need copy,
-  wrapping/scroll behavior, direction handling, and lazy syntax highlighting.
-- Hebrew user-facing text remains natural and polished. Paths, code, terminal,
-  URLs, model IDs, and technical values remain LTR inside the RTL shell.
-- Smarti Browser follows the supplied Codex-style visual intent: compact tabs,
-  one calm toolbar/omnibox row, restrained borders and elevation, a spacious
-  content surface, and a polished overflow menu. It must feel authored as part
-  of Smarti in both themes, not like browser chrome from another application.
-  This is an explicit new-surface exception because the rejected legacy HWND
-  browser is not the design target; all surrounding Workspace integration must
-  still match the original PyQt source exactly.
+- One effective token source drives both themes and contrast checks.
+- Required states/actions/persistence remain, with redesigned layout,
+  typography, icons, sizes and polished Hebrew microcopy.
+- Preserve reduced motion, keyboard focus and mixed RTL/LTR. Do not clip
+  essential actions or squeeze text throughout transitions.
+- Keep safe Markdown, scoped files and Canvas/remote-content isolation.
+- Browser shares the design and uses native-safe transitions and the same
+  visible/automation target.
+- Record decisions/evidence in the UX ledger; routine choices need no renewed
+  permission to depart from old PyQt visuals.
 
 ## 9. Cross-cutting acceptance matrix
 
 Every relevant point must validate the subset it changes.
 
-### 9.1 Source-code UI parity
+### 9.1 Functional coverage and redesigned UI acceptance
 
-- Before implementation, create or update a code-derived mapping that names the
-  legacy PyQt classes/functions/constants/assets/settings and the corresponding
-  React/CSS/Rust implementation. The mapping must cover conditional and dynamic
-  paths, not only the default constructor state.
-- Inspect the relevant source directly. Screenshots, memories, prior summaries,
-  and the Point 1 baseline are supporting evidence and regression fixtures, not
-  substitutes for the code.
-- Preserve exact user-visible values and behaviors. At each required window
-  size/theme/DPI, compare hierarchy, geometry, alignment, wrapping, clipping,
-  scroll behavior, visibility, state transitions, menus, tooltips, keyboard and
-  pointer behavior, and persisted state.
-- Automated source-parity tests should assert stable design values, conditional
-  state behavior, DOM/component roles, and representative geometry. Visual
-  comparisons must exercise equivalent source and Tauri states.
-- Toolkit font rasterization or native-control differences do not excuse layout
-  drift. Match source-declared values first; measure any unavoidable rendered
-  difference and list it for explicit user acceptance.
-- Completion means zero undocumented differences. “Similar”, “recognizable”,
-  “cleaner”, “more polished”, or “better for web” is not acceptance evidence.
+- Map each action/state to production component, handler, contract, authority,
+  persistence and reload. Verify current code, not historical MATCHED claims.
+- Preserve all 97 feature IDs and later additions. Missing functions remain
+  gaps even when old placement changes. Document intentional UX changes.
+- Replace geometry/palette locks when migrating a component. Retain policy,
+  replay, settings, ownership and data-preservation tests.
+- Check readability, wrapping, clipping, focus, keyboard, themes, sizing/DPI
+  and native surfaces against SMARTI-UI-UX-2026. Visual evidence does not
+  substitute for functional wiring.
+- Complete the UX ledger; no disconnected controls, false saved states,
+  unexplained capability loss or unverified package claims.
 
 ### 9.2 Layout and visual states
 
@@ -614,14 +577,13 @@ Do not make the user manually coordinate multiple terminals.
 
 ## 11. Execution points
 
-The binding exact-UI amendment and Section 9.1 are inherited acceptance
-criteria for every point that creates, migrates, or changes user-visible UI,
-even when the individual point does not repeat them. Points 10-13 and 15 must
-extend `docs/tauri_ui_source_parity.md` before implementation. Point 14 follows
-the separately approved Smarti Browser visual exception while matching its
-legacy Workspace placement, visibility, sizing, theme integration and commands.
-Point 17 cannot delete the PyQt reference until every later UI surface has been
-audited against the source.
+The 2026-10-02 amendment and current Section 9.1 apply to every UI-bearing
+point. UI execution follows UX-0–6 and its ledger. Detailed visual instructions
+in dated Points 7–16B below document the earlier migration and are superseded:
+do not restore old geometry, raster assets, palette, wording or composition.
+Their capability/action/state/persistence requirements remain inventory and
+must be mapped to the redesigned production interface. Point 17 still requires
+current functional coverage, package evidence and redesigned-product acceptance.
 
 ### Point 1 - Establish the migration baseline and parity inventory
 
@@ -982,9 +944,9 @@ password extraction/import, or claim of exact Edge/Chrome feature parity.
 
 **Objective**
 
-Encode and reproduce the exact existing PyQt visual language and responsive
-Workspace composition before moving feature-heavy screens. This point does not
-authorize a new Tauri-specific look.
+Build shared design foundations and a usable Workspace. The earlier
+exact-PyQt visual objective is superseded by UX-1/2/3; the dated work items below
+are functional inventory and historical implementation detail.
 
 **Required work**
 
@@ -1580,10 +1542,10 @@ documentation and the product must not imply that the artifact is signed.
 
 **Objective**
 
-Restore the complete daily Smarti experience from the authoritative PyQt code
-before touching the management surfaces or deleting any legacy UI. The result
-must look and behave like the original Smarti Workspace, with only the approved
-Tauri-owned Smarti Browser architecture added inside the same visual language.
+Preserve the complete daily Smarti capability and runtime synchronization.
+UX-3/4 now define its presentation and deliberate interactions; the old
+same-appearance objective is superseded. PyQt remains available through final
+acceptance and separate cutover.
 
 **Required work**
 
@@ -1699,10 +1661,9 @@ existing application, or perform broad computer-control QA.
 
 **Objective**
 
-Restore the complete original Settings and management experience, where the
-migration caused the most serious loss, while adding only the health and
-configuration surfaces genuinely required by Tauri, the supervised Core and
-the integrated WebView2 browser.
+Preserve all Settings and management capabilities, runtime feedback and
+persistence. UX-5 owns the redesigned navigation/forms/microcopy. The dated
+control mapping remains inventory, not an instruction to restore old layout.
 
 **Required work**
 
@@ -1829,11 +1790,10 @@ disconnected from Python, and a repeatable simple build/package workflow.
 
 **Required work**
 
-1. Resolve all 97 stable feature IDs from Point 1 as `IMPLEMENTED`, an explicit
-   user-approved architectural addition, or a real blocker. Re-audit every row
-   in `docs/tauri_ui_source_parity.md` against current PyQt source and current
-   React/CSS/Rust/Python code. Broad page-level `MATCHED` labels are forbidden;
-   no silent omission may remain.
+1. Resolve all 97 stable feature IDs and later additions with current action/
+   contract/persistence evidence. Old maps are inventory. Close the new
+   coverage and UX-6 evidence, not PyQt pixel identity. Page-level MATCHED
+   labels cannot substitute for this work.
 2. Run the full static/unit/integration boundary: Python suite and Qt-free Core
    import; frontend typecheck/build and interaction tests; Rust tests/check;
    generated contract equality; Core supervisor, lifecycle, settings, history,
@@ -1842,8 +1802,8 @@ disconnected from Python, and a repeatable simple build/package workflow.
 3. Run visual QA internally without taking over the desktop: deterministic
    light/dark, narrow/wide and important state renderings; screenshot or pixel/
    geometry comparison where useful; computed layout/style assertions; and
-   hidden/offscreen process smokes. Use the PyQt code as authority and baseline
-   captures only as regression aids.
+   hidden/offscreen process smokes. The new UI plan is visual authority;
+   historical baseline captures are regression/context aids.
 4. Run source Tauri and the portable/package supervisor on the current machine
    with isolated data. Exercise startup/recovery, chat, reload, browser target,
    background Core survival/restart and clean shutdown without using automated
@@ -1865,8 +1825,8 @@ disconnected from Python, and a repeatable simple build/package workflow.
 
 **Acceptance**
 
-- All 97 feature IDs and every source-parity row are resolved with no unapproved
-  omission or difference.
+- All 97 feature IDs, later additions and required new UX states have current
+  functional evidence with no lost capability or unresolved required gap.
 - Automated interaction tests prove that representative controls on every
   surface call the correct contract and change the correct Python/Rust state.
 - Internal visual QA passes for the declared themes/sizes/states without desktop
@@ -1875,7 +1835,8 @@ disconnected from Python, and a repeatable simple build/package workflow.
   artifacts and their honest signature/evidence boundaries are recorded.
 - The build remains one command and ordinary use remains one application with
   no console or manually opened localhost URL.
-- Point 17 may start only after the user-visible parity result is accepted.
+- Point 17 requires current functional/package acceptance and acceptance of
+  the redesigned product. UX-6 does not separately authorize PyQt deletion.
 
 **User check**
 
@@ -1883,7 +1844,7 @@ Run the final source or portable application on this computer and check: launch;
 history and chat; favorite model/autonomy/send/attachment; one setting in each
 of the five categories; quick Diagnostic; Memory/Tools/Tasks/Usage/About; one
 Workbench surface and Smarti Browser action; close-to-tray and reopen. Report
-any difference before authorizing Point 17.
+any failure against the new plan before authorizing Point 17.
 
 **Out of scope**
 
@@ -1892,7 +1853,8 @@ release, broad compatibility claim, or PyQt deletion.
 
 ### Point 17 - Final cutover and PyQt removal
 
-**Depends on:** Points 16A, 16B and 16C complete and user parity acceptance.
+**Depends on:** current Point 16C functional/package acceptance, UX-6 product
+acceptance and separately authorized cutover.
 
 **Objective**
 
@@ -1903,7 +1865,8 @@ transition debt, and prove that cleanup itself did not change the product.
 
 1. Confirm the Point 16C matrices contain no unresolved row and record the exact
    Git commit containing the final legacy PyQt reference before deleting files.
-   Do not reopen product design or begin cleanup if parity is not accepted.
+   Do not begin cleanup before redesigned-product and functional/package
+   acceptance; keep the legacy reference until this separate cutover.
 2. Make Tauri the default source and packaged launcher.
 3. Remove legacy PyQt UI modules, Qt adapters, WebEngine compatibility paths,
    PyQt requirements, PyInstaller UI entrypoint, Inno-only packaging, dead
@@ -1923,8 +1886,8 @@ transition debt, and prove that cleanup itself did not change the product.
 **Acceptance**
 
 - The parity matrix has no unresolved required feature.
-- The source-parity matrix has no unmatched or unapproved visible/behavioral
-  difference from the final legacy PyQt source.
+- Current functional coverage has no unresolved required gap and the new UI
+  meets SMARTI-UI-UX-2026; legacy visual identity is not required.
 - No production dependency or import of PyQt remains.
 - Source, portable/local package, browser and current-machine user checks pass
   with exact evidence; any unperformed installer/signing/cross-machine evidence
@@ -1973,11 +1936,10 @@ post-migration product features without a separate explicit request.
 9. Never use source/offscreen tests to claim installer, WebView2 child-WebView,
    profile import, cookie compatibility, DPI, notification, updater, or
    packaged browser success.
-10. Never treat screenshots as the authoritative UI specification. Do not
-    replace reading the relevant PyQt code with image matching, a remembered
-    description, or subjective design judgment. Do not accept an unapproved
-    visible deviation because it looks newer, cleaner, or easier to implement
-    in React.
+10. Use the new plan for UI intent and current code/contracts for real actions.
+    Screenshots support visual evidence but cannot prove wiring, persistence
+    or native behavior. Routine departures from old PyQt appearance are
+    already authorized; a material capability/policy change remains distinct.
 11. Under the 2026-08-24 validation amendment, use internal/offscreen visual
     checks and hidden process smokes by default. Do not automate the user's
     mouse, keyboard, foreground windows or desktop merely to satisfy a QA row.
@@ -2025,6 +1987,11 @@ Next:
 
 ## 14. Hebrew operator guide for the user
 
+לעיצוב החדש השתמש במזהי UX-0 עד UX-6 ובנוסחי הפתיחה שב־
+[יומן הביצוע](ui_ux_redesign_execution.md). השיחה הראשית מתאמת; כל שלב
+מקבל שיחת ביצוע כשקודמו מוכן. ההוראות הבאות מיועדות לנקודות הגירה
+מפורשות, ולא להעתקה מחדש של עיצוב PyQt.
+
 ### איך לפתוח כל משימה
 
 1. פתח משימה חדשה באותו פרויקט מקומי של SmartiAI ובאותה תיקיית repository.
@@ -2034,8 +2001,8 @@ Next:
 5. אל תפתח את נקודה N+1 לפני שהמשימה הקודמת דיווחה `COMPLETE` ועדכנה את טבלת
    ה־Execution Ledger במסמך.
 6. לאחר נקודה 16 יש לבצע לפי הסדר רק את נקודות 16A, 16B, 16C, ורק לאחר אישור
-   התוצאה להתחיל את נקודה 17. בנקודות ממשק ודא שהדיווח כולל השוואה לקוד PyQt
-   המקורי ברמת כל בקרה, מצב ופעולה — לא רק לצילומי מסך או לכותרת כללית של מסך.
+   התוצאה להתחיל את נקודה 17. בנקודות ממשק נדרש כיסוי כל בקרה, מצב ופעולה
+   וחיבור למערכת, עם קבלת העיצוב החדש — לא התאמה חזותית ל־PyQt או צילום בלבד.
 
 ### מה לבדוק בסיום
 

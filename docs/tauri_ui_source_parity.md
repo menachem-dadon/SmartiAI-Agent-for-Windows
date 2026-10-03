@@ -1,5 +1,14 @@
 # Tauri Points 7-12 legacy-source UI parity specification
 
+> **2026-10-02 authority change — historical visual specification.**
+> [SMARTI-UI-UX-2026](ui_ux_redesign_plan.md) now owns appearance, layout,
+> typography, icons, navigation and motion. [The UX ledger](ui_ux_redesign_execution.md)
+> owns current stage/evidence status. All exact-visual instructions, binding
+> dimensions and MATCHED statuses below are dated history, not requirements for
+> the new UI. Keep this document as an inventory of controls, states, actions,
+> contracts, persistence and reload. Functional gaps remain real; no capability
+> or PyQt cutover gate is closed by this amendment.
+
 > **Recovery status: Point 16C parity gate REOPENED on 2026-08-24.** Direct user
 > inspection of the current Tauri Settings surface showed that the React layout,
 > controls and icons still do not match the authoritative PyQt implementation.
@@ -19,8 +28,9 @@
 - Scope: Workspace shell, conversation drawer, daily chat, rich messages,
   composer, attachments, approval, activity, voice and TTS surfaces, plus
   Settings, management-center pages and Files/Artifacts/Terminal Workbench.
-- Rule: PyQt composition and shared helpers are authoritative. Screenshots are
-  validation evidence only; they are not a substitute specification.
+- Historical rule: PyQt composition/shared helpers governed the earlier visual
+  migration. Current design authority is SMARTI-UI-UX-2026; source still supplies
+  functional inventory. Screenshots do not prove functional wiring.
 
 ## Source inventory and reading boundary
 
@@ -47,7 +57,7 @@ The current daily implementation is in `desktop/src/App.tsx`, `Composer.tsx`,
 `workspaceState.ts`, `chatState.ts`, the Rust Tauri host and the shared Python
 history/run/voice/control-plane authorities, with colocated and gateway tests.
 
-## Binding source values
+## Historical source values — superseded as visual requirements
 
 `desktop/src/legacyUiParity.ts` is the executable value ledger. Important
 source-derived values are: 36 px title bar; 286/58 px expanded/collapsed

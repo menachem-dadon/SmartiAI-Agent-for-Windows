@@ -8,6 +8,12 @@ Smarti is designed to help operate the computer while keeping the user in contro
 
 Current release target: `V0.87.0`.
 
+UI/UX development now follows the [premium Tauri redesign plan](docs/ui_ux_redesign_plan.md)
+and [stage ledger / handoffs](docs/ui_ux_redesign_execution.md).
+The plan replaces exact PyQt visual replication while preserving capabilities,
+data and runtime contracts. Preparation is complete; the new interface is not
+yet implemented or released.
+
 ## Highlights
 
 - Agentic task execution with planning, step-by-step progress, tool feedback, retries, and final verification.
@@ -216,6 +222,11 @@ For the full license terms, see the `LICENSE` file.
 ---
 
 ## עברית
+
+לעבודת הממשק: [תוכנית העיצוב החדשה](docs/ui_ux_redesign_plan.md)
+ו־[יומן הביצוע והוראות לשיחות](docs/ui_ux_redesign_execution.md).
+התוכנית מחליפה העתקה חזותית של PyQt תוך שמירת היכולות והנתונים;
+התיעוד הוכן, והממשק החדש טרם מומש.
 
 SmartiAI Agent for Windows הוא סוכן AI שולחני לעבודה מעשית על מחשב Windows. הוא משלב ממשק צ'אט עברי מימין לשמאל, ספקי מודלים ניתנים להגדרה, זיכרון מקומי, כלי קבצים ורשת, אוטומציית דפדפן ושולחן עבודה, ניהול אימייל, משימות רקע, התראות, כלים מותאמים אישית, חבילות MCP ו-Skills.
 
