@@ -11,11 +11,13 @@ let speech: { protocol_version: number; request_id: string; owner_id: string; is
 let failStart: boolean;
 let legacyService: boolean;
 let activeRun: boolean;
+let voice: { session_id: string; active: boolean; status: string; transcript: string; error: string; cancelled: boolean };
 
 beforeEach(() => {
   speech = { protocol_version: 1, request_id: "", owner_id: "", is_playing: false, error: "" };
   failStart = false;
   legacyService = false; activeRun = false;
+  voice = { session_id: "voice", active: false, status: "", transcript: "בקשה קולית", error: "", cancelled: false };
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockImplementation(async (command, args: any) => {
@@ -38,7 +40,7 @@ beforeEach(() => {
     if (path === "/v2/settings") data = { values: { tts_volume: 100, tts_voice_id: "co.il" }, secrets: {} };
     if (path === "/v2/settings/schema") data = { providers: [], secret_help: {} };
     if (path === "/v2/audio/voice") data = { session_id: "voice", active: true, status: "מקשיב" };
-    if (path === "/v2/audio/voice/status") data = { session_id: "voice", active: false, transcript: "בקשה קולית", error: "", cancelled: false };
+    if (path === "/v2/audio/voice/status") data = voice;
     return { status: 200, body: { data: structuredClone(data) } } as any;
   });
 });
@@ -100,6 +102,30 @@ test("dictation marks the submitted request as voice input", async () => {
   render(<Composer attachments={[]} onAttachments={() => {}} onCancel={() => {}} onSend={onSend} />);
   fireEvent.click(screen.getByLabelText("הכתבה קולית"));
   await waitFor(() => expect(onSend).toHaveBeenCalledWith("בקשה קולית", true), { timeout: 2000 });
+});
+
+test("dictation keeps its controls without routine input status text", async () => {
+  voice = { ...voice, active: true, status: "מעבד…", transcript: "" };
+  const onSend = vi.fn(async () => {});
+  render(<Composer attachments={[]} onAttachments={() => {}} onCancel={() => {}} onSend={onSend} />);
+  fireEvent.click(screen.getByLabelText("הכתבה קולית"));
+  await screen.findByLabelText("הפסקת הכתבה");
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByText(/מקשיב|מעבד…|אפשר לדבר עכשיו/)).toBeNull();
+  fireEvent.click(screen.getByLabelText("הפסקת הכתבה"));
+  await screen.findByLabelText("הכתבה קולית");
+  expect(screen.queryByText("ההאזנה בוטלה")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+test("dictation errors remain visible without submitting a transcript", async () => {
+  voice = { ...voice, transcript: "", error: "לא ניתן לפתוח התקן שמע" };
+  const onSend = vi.fn(async () => {});
+  render(<Composer attachments={[]} onAttachments={() => {}} onCancel={() => {}} onSend={onSend} />);
+  fireEvent.click(screen.getByLabelText("הכתבה קולית"));
+  expect((await screen.findByRole("alert")).textContent).toContain("לא ניתן לפתוח התקן שמע");
+  expect(onSend).not.toHaveBeenCalled();
 });
 
 test("an old live Core is refreshed before sending the new schema, only when idle", async () => {

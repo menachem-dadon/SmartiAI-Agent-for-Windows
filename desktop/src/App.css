@@ -124,7 +124,7 @@ html, body, #root { width: 100%; height: 100%; } body { margin: 0; min-width: 32
 .composer { margin: 0 clamp(18px,5vw,64px) 18px; padding: 8px; border: 1px solid var(--border-strong); border-radius: 18px; background: var(--surface-2); box-shadow: 0 9px 28px rgba(25,25,40,.07); }.composer:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb,var(--focus) 12%,transparent); }
 .composer textarea { width: 100%; max-height: 150px; min-height: 38px; padding: 8px; resize: none; border: 0; outline: 0; color: var(--text); background: transparent; line-height: 1.5; }.composer textarea:disabled { opacity: .65; }
 .attachment-picker { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.composer-actions { display: flex; align-items: center; justify-content: space-between; }.composer-actions > div { display: flex; align-items: center; }.voice-status { margin-inline-start: 6px; color: var(--accent); font-size: 10px; }
+.composer-actions { display: flex; align-items: center; justify-content: space-between; }.composer-actions > div { display: flex; align-items: center; }
 @media (max-width: 780px) { .chat-toolbar-actions select:last-child { display: none; }.chat-stage.has-messages { padding-inline: 12px; }.composer, .approval-stack { margin-inline: 10px; padding-inline: 8px; }.chat-message { max-width: 94%; }.chat-message--assistant { max-width: 100%; }.approval-card { align-items: stretch; flex-direction: column; } }
 
 /* Legacy Smarti Workspace visual parity. Keep the Tauri behavior, mirror the PyQt chrome. */
@@ -209,7 +209,7 @@ html, body, #root { width: 100%; height: 100%; } body { margin: 0; min-width: 32
 .conversation-drawer.is-rail .profile-button { background: transparent; border-color: transparent; }
 .conversation-drawer.is-rail .profile-menu > div { right: 52px; bottom: 10px; }
 
-.chat-column { --chat-content-width: min(clamp(520px,35vw,760px),calc(100% - 56px)); position: relative; grid-template-rows: 58px minmax(0,1fr) auto auto; background: transparent; }
+.chat-column { --chat-content-width: min(clamp(520px,35vw,760px),calc(100% - 56px)); position: relative; grid-template-columns: minmax(0,1fr); grid-template-rows: 58px minmax(0,1fr) auto auto; background: transparent; }
 .chat-toolbar { position: relative; height: 58px; display: flex; align-items: center; gap: 4px; padding: 5px 15px 5px 12px; border: 0; border-bottom: 1px solid var(--soft-line); direction: ltr; background: linear-gradient(90deg,var(--top-a),var(--top-b) 62%,var(--top-c)); }
 .chat-toolbar-controls { display: flex; align-items: center; gap: 2px; }
 .chat-menu-trigger { display: contents; }
@@ -237,13 +237,21 @@ html, body, #root { width: 100%; height: 100%; } body { margin: 0; min-width: 32
 .message-actions .legacy-icon { opacity: .84; }
 .chat-error { top: 67px; }
 
-.composer { position: relative; width: var(--chat-content-width); min-height: 112px; margin: 0 auto 22px; padding: 8px 12px 8px 10px; border: 1px solid var(--soft-line); border-radius: 40.5px; background: linear-gradient(135deg, var(--glass-strong) 0%, var(--input-end) 64%, var(--top-c) 100%); box-shadow: 0 12px 42px rgba(0,0,0,.20); }
-.workspace.has-workbench .chat-column { --chat-content-width: calc(100% - 28px); }
+.composer { position: relative; width: var(--chat-content-width); min-width: 0; min-height: 112px; margin: 0 auto 22px; padding: 8px 12px 8px 10px; border: 1px solid var(--soft-line); border-radius: 40.5px; background: linear-gradient(135deg, var(--glass-strong) 0%, var(--input-end) 64%, var(--top-c) 100%); box-shadow: 0 12px 42px rgba(0,0,0,.20); }
+.workspace.has-workbench .chat-column { --chat-content-width: calc(100% - 56px); }
 .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb,var(--accent) 12%,transparent), 0 14px 44px rgba(0,0,0,.20); }
 .composer textarea { min-height: 48px; max-height: 150px; padding: 4px 10px; color: var(--text); font-size: 17px; font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif; text-align: start; }
 .composer textarea::placeholder { color: var(--subtle); }
-.composer-actions { min-height: 52px; gap: 10px; padding: 0; }
-.action-button-host { width: 52px; align-self: stretch; display: flex; align-items: flex-end; padding-bottom: 7px; }
+/* Keep microphone/send/stop on the physical left and attachment on the right.
+   The two selectors share one shrinking row; extra controls may wrap. */
+.composer-actions { display: grid; grid-template-columns: 52px minmax(0,1fr) 42px; align-items: end; min-height: 52px; gap: 10px; padding: 0; }
+.composer-controls { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.composer-selectors { min-width: 0; max-width: 424px; flex: 1 1 250px; display: flex; align-items: center; gap: 10px; }
+.composer-selectors > .quick-pill { min-width: 0; width: auto; flex: 1 1 0; }
+.composer-selectors .quick-pill summary { min-width: 0; padding-inline: 6px; gap: 4px; }
+.composer-selectors .legacy-icon { flex-shrink: 0; }
+.composer-error { margin: 4px 10px; color: var(--danger); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.action-button-host { width: 52px; flex: 0 0 52px; align-self: stretch; display: flex; align-items: flex-end; padding-bottom: 7px; }
 .composer-primary { width: 52px; height: 52px; flex: 0 0 52px; display: grid; place-items: center; padding: 0; border: 1px solid var(--soft-line); border-radius: 26px; background: var(--glass); box-shadow: none; cursor: pointer; }
 .composer-primary.can-send { border-color: var(--border-strong); background: linear-gradient(135deg, var(--accent), var(--pink) 58%, var(--secondary)); }
 .composer.is-running .composer-primary { border-color: rgba(136,255,184,.44); background: linear-gradient(135deg, var(--pink), var(--secondary)); }
@@ -317,12 +325,9 @@ html, body, #root { width: 100%; height: 100%; } body { margin: 0; min-width: 32
 .local-fast-mode i::after { content: ""; position: absolute; top: 5px; right: 5px; width: 26px; height: 26px; border-radius: 50%; background: var(--muted); transition: transform 180ms ease,background 180ms ease; }
 .local-fast-mode input:checked + i { background: var(--accent-soft); }
 .local-fast-mode input:checked + i::after { transform: translateX(-18px); background: var(--secondary); }
-.composer-actions:has(.local-fast-mode) .model-quick-pill { width: 104px; }
-.composer-actions:has(.local-fast-mode) .autonomy-quick-pill { width: 150px; }
-.composer-tool { width: 42px; height: 42px; align-self: center; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 21px; color: var(--text); background: transparent; cursor: pointer; }
+.composer-controls .local-fast-mode { flex: 0 0 122px; }
+.composer-tool { width: 42px; height: 42px; align-self: end; margin-bottom: 7px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 21px; color: var(--text); background: transparent; cursor: pointer; }
 .composer-tool:hover { background: var(--accent-soft); }
-.composer-spacer { flex: 1; }
-.voice-status { max-width: 150px; overflow: hidden; color: var(--accent); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
 .pending-attachments { padding: 0 14px 5px; }
 .approval-stack { width: min(clamp(520px,35vw,760px), calc(100% - 40px)); margin: 0 auto 8px; padding: 0; }
 .workbench { margin: 8px; border-radius: 18px; background: var(--glass-strong); }

@@ -142,7 +142,7 @@ export function Composer({
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
-  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
   const [staging, setStaging] = useState(0);
   const stagingCount = useRef(0);
   const sending = useRef(false);
@@ -210,7 +210,7 @@ export function Composer({
       const results = await Promise.allSettled(files.map(pastedFile));
       const added = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
       onAttachments((current) => [...current, ...added]);
-      setStatus(results.flatMap((result) => result.status === "rejected" ? [String(result.reason)] : []).join("\n"));
+      setError(results.flatMap((result) => result.status === "rejected" ? [String(result.reason)] : []).join("\n"));
     } finally {
       stagingCount.current -= 1;
       setStaging(stagingCount.current);
@@ -235,13 +235,14 @@ export function Composer({
     if ((!text.trim() && !attachments.length) || disabled || running || sending.current || stagingCount.current) return;
     sending.current = true;
     setSubmitting(true);
+    setError("");
     const value = text;
     setText("");
     try {
       await onSend(value);
     } catch (reason) {
       setText(value);
-      setStatus(`ההודעה לא נשלחה: ${String(reason)}`);
+      setError(`ההודעה לא נשלחה: ${String(reason)}`);
     } finally {
       sending.current = false;
       setSubmitting(false);
@@ -253,13 +254,13 @@ export function Composer({
       void send();
     }
   };
-  const stopListening = async (cancelled = true) => {
+  const stopListening = async () => {
     try {
       await coreApi("POST", "/v2/audio/voice/stop", {}, true);
     } finally {
       await invoke("desktop_hide_voice_overlay").catch(() => undefined);
       setListening(false);
-      setStatus(cancelled ? "ההאזנה בוטלה" : "");
+      setError("");
       area.current?.focus();
     }
   };
@@ -268,6 +269,7 @@ export function Composer({
       await stopListening();
       return;
     }
+    setError("");
     try {
       const state = await coreApi<VoiceState>(
         "POST",
@@ -279,14 +281,13 @@ export function Composer({
       voiceConsumed.current = "";
       await invoke("desktop_show_voice_overlay");
       setListening(true);
-      setStatus(state.status || "אפשר לדבר עכשיו");
     } catch (reason) {
       void coreApi("POST", "/v2/audio/voice/stop", {}, true).catch(
         () => undefined,
       );
       setListening(false);
       void invoke("desktop_hide_voice_overlay");
-      setStatus(`לא ניתן להפעיל זיהוי קולי: ${String(reason)}`);
+      setError(`לא ניתן להפעיל זיהוי קולי: ${String(reason)}`);
     }
   };
   useEffect(() => {
@@ -299,12 +300,12 @@ export function Composer({
           "/v2/audio/voice/status",
         );
         if (stopped || state.session_id !== voiceSession.current) return;
-        setStatus(state.status || (state.active ? "אפשר לדבר עכשיו" : ""));
+        setError("");
         if (state.active) return;
         setListening(false);
         void invoke("desktop_hide_voice_overlay");
         if (state.error) {
-          setStatus(state.error);
+          setError(state.error);
           return;
         }
         if (state.transcript && voiceConsumed.current !== state.session_id) {
@@ -314,14 +315,14 @@ export function Composer({
             await onSend(state.transcript, true);
           } catch (reason) {
             setText(state.transcript);
-            setStatus(`התמלול לא נשלח: ${String(reason)}`);
+            setError(`התמלול לא נשלח: ${String(reason)}`);
           }
-        } else if (state.cancelled) setStatus("ההאזנה בוטלה");
+        }
       } catch (reason) {
         if (!stopped) {
           setListening(false);
           void invoke("desktop_hide_voice_overlay");
-          setStatus(`האזנה נפסקה: ${String(reason)}`);
+          setError(`האזנה נפסקה: ${String(reason)}`);
         }
       }
     };
@@ -506,6 +507,7 @@ export function Composer({
           )}
         </div>
       )}
+      {error && <p className="composer-error" role="alert" dir="rtl">{error}</p>}
       <textarea
         ref={area}
         rows={1}
@@ -555,98 +557,96 @@ export function Composer({
             />
           </button>
         </span>
-        <DismissibleDetails
-          ref={modelMenu} popupRef={modelPopup}
-          className="quick-pill model-quick-pill"
-          onToggle={event => {
-            const open = event.currentTarget.open;
-            setModelMenuOpen(open);
-            if (open) { setBrowsedProvider(provider); void refreshQuota(15); }
-          }}
-          onKeyDown={event => menuKey(event, modelMenu.current)}
-        >
-          <summary title="בחירת מודל" aria-label="בחירת מודל" aria-haspopup="dialog">
-            <span>{modelLabel(model || provider || "מודל")}</span>
-            <LegacyIcon src={icons.dropdown} size={13} />
-          </summary>
-          {modelMenuOpen ? createPortal(modelPopupContent, document.body) : modelPopupContent}
-        </DismissibleDetails>
-        <DismissibleDetails
-          ref={autonomyMenu}
-          className="quick-pill autonomy-quick-pill"
-        >
-          <summary title="פרופיל בטיחות">
-            <LegacyIcon
-              src={
-                autonomyMode === "locked_down"
-                  ? icons.autonomySafe
-                  : autonomyMode === "max_autonomy"
-                    ? icons.autonomyFull
-                    : icons.autonomy
-              }
-              size={18}
-            />
-            <span>
-              {autonomyLabels[autonomyMode] || autonomyLabels.balanced}
-            </span>
-            <LegacyIcon src={icons.dropdown} size={13} />
-          </summary>
-          <div className="quick-pill-menu autonomy-menu" dir="rtl">
-            <button
-              type="button"
-              className={autonomyMode === "locked_down" ? "is-selected" : ""}
-              onClick={() => {
-                autonomyMenu.current?.removeAttribute("open");
-                void onAutonomyMode("locked_down");
+        <div className="composer-controls">
+          <div className="composer-selectors">
+            <DismissibleDetails
+              ref={modelMenu} popupRef={modelPopup}
+              className="quick-pill model-quick-pill"
+              onToggle={event => {
+                const open = event.currentTarget.open;
+                setModelMenuOpen(open);
+                if (open) { setBrowsedProvider(provider); void refreshQuota(15); }
               }}
+              onKeyDown={event => menuKey(event, modelMenu.current)}
             >
-              <LegacyIcon src={icons.autonomySafe} size={18} />
-              בטוח
-            </button>
-            <button
-              type="button"
-              className={autonomyMode === "balanced" ? "is-selected" : ""}
-              onClick={() => {
-                autonomyMenu.current?.removeAttribute("open");
-                void onAutonomyMode("balanced");
-              }}
+              <summary title="בחירת מודל" aria-label="בחירת מודל" aria-haspopup="dialog">
+                <span>{modelLabel(model || provider || "מודל")}</span>
+                <LegacyIcon src={icons.dropdown} size={13} />
+              </summary>
+              {modelMenuOpen ? createPortal(modelPopupContent, document.body) : modelPopupContent}
+            </DismissibleDetails>
+            <DismissibleDetails
+              ref={autonomyMenu}
+              className="quick-pill autonomy-quick-pill"
             >
-              <LegacyIcon src={icons.autonomy} size={18} />
-              מאוזן
-            </button>
-            <button
-              type="button"
-              className={autonomyMode === "max_autonomy" ? "is-selected" : ""}
-              onClick={() => {
-                autonomyMenu.current?.removeAttribute("open");
-                void onAutonomyMode("max_autonomy");
-              }}
-            >
-              <LegacyIcon src={icons.autonomyFull} size={18} />
-              אוטונומי
-            </button>
+              <summary title="פרופיל בטיחות">
+                <LegacyIcon
+                  src={
+                    autonomyMode === "locked_down"
+                      ? icons.autonomySafe
+                      : autonomyMode === "max_autonomy"
+                        ? icons.autonomyFull
+                        : icons.autonomy
+                  }
+                  size={18}
+                />
+                <span>
+                  {autonomyLabels[autonomyMode] || autonomyLabels.balanced}
+                </span>
+                <LegacyIcon src={icons.dropdown} size={13} />
+              </summary>
+              <div className="quick-pill-menu autonomy-menu" dir="rtl">
+                <button
+                  type="button"
+                  className={autonomyMode === "locked_down" ? "is-selected" : ""}
+                  onClick={() => {
+                    autonomyMenu.current?.removeAttribute("open");
+                    void onAutonomyMode("locked_down");
+                  }}
+                >
+                  <LegacyIcon src={icons.autonomySafe} size={18} />
+                  בטוח
+                </button>
+                <button
+                  type="button"
+                  className={autonomyMode === "balanced" ? "is-selected" : ""}
+                  onClick={() => {
+                    autonomyMenu.current?.removeAttribute("open");
+                    void onAutonomyMode("balanced");
+                  }}
+                >
+                  <LegacyIcon src={icons.autonomy} size={18} />
+                  מאוזן
+                </button>
+                <button
+                  type="button"
+                  className={autonomyMode === "max_autonomy" ? "is-selected" : ""}
+                  onClick={() => {
+                    autonomyMenu.current?.removeAttribute("open");
+                    void onAutonomyMode("max_autonomy");
+                  }}
+                >
+                  <LegacyIcon src={icons.autonomyFull} size={18} />
+                  אוטונומי
+                </button>
+              </div>
+            </DismissibleDetails>
           </div>
-        </DismissibleDetails>
-        {provider.toLowerCase() === "local" && (
-          <label
-            className={`local-fast-mode ${localFastMode ? "is-enabled" : ""}`}
-            title="מצב הקשר חסכוני למודלים מקומיים קטנים או לחומרה חלשה"
-          >
-            <span>FastMode</span>
-            <input
-              type="checkbox"
-              checked={localFastMode}
-              onChange={(event) => void onLocalFastMode(event.target.checked)}
-            />
-            <i />
-          </label>
-        )}
-        <span className="composer-spacer" />
-        {(status || staging > 0 || submitting) && (
-          <span className="voice-status" role="status" dir="rtl">
-            {staging > 0 ? "מכין קבצים לצירוף…" : submitting ? "שולח…" : status}
-          </span>
-        )}
+          {provider.toLowerCase() === "local" && (
+            <label
+              className={`local-fast-mode ${localFastMode ? "is-enabled" : ""}`}
+              title="מצב הקשר חסכוני למודלים מקומיים קטנים או לחומרה חלשה"
+            >
+              <span>FastMode</span>
+              <input
+                type="checkbox"
+                checked={localFastMode}
+                onChange={(event) => void onLocalFastMode(event.target.checked)}
+              />
+              <i />
+            </label>
+          )}
+        </div>
         <button
           className="composer-tool"
           type="button"

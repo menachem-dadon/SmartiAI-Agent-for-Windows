@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { Composer } from "./Composer";
 import { RichMessage } from "./RichMessage";
 import { WorkbenchSurface } from "./WorkbenchPanels";
@@ -10,6 +10,7 @@ import { workspaceIsNarrow } from "./legacyUiParity";
 import {
   workspaceColumns,
   workspaceWorkbenchWidth,
+  clampWorkbenchResize,
   workspaceReducer,
   type WorkspaceState,
 } from "./workspaceState";
@@ -96,8 +97,10 @@ export function Point16AVisualFixture() {
   const theme: ResolvedTheme = params.get("theme") === "light" ? "light" : "dark";
   const requestedWorkbench = params.get("workbench") === "1";
   const requestedDrawer = params.get("drawer") === "1";
+  const localProvider = params.get("provider") === "local";
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [viewportWidth, setViewportWidth] = useState(() => innerWidth);
+  const [workbenchWidth, setWorkbenchWidth] = useState<number | null>(null);
   const narrow = workspaceIsNarrow(viewportWidth);
   const previousNarrow = useRef(narrow);
   const [state, dispatch] = useReducer(workspaceReducer, undefined, () => ({
@@ -143,6 +146,26 @@ export function Point16AVisualFixture() {
         : { type: "open-workbench", tab: "browser" },
     );
   const closeWorkbench = () => dispatch({ type: "close-workbench" });
+  // Exercise the same width functions and pointer delta as App's splitter,
+  // with no persistence or native target behind this development-only fixture.
+  const beginWorkbenchResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (narrow) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = workspaceWorkbenchWidth(state, viewportWidth, workbenchWidth);
+    const sidebarWidth = state.conversationDrawerOpen ? 286 : 58;
+    const move = (next: PointerEvent) => setWorkbenchWidth(
+      clampWorkbenchResize(viewportWidth, sidebarWidth, startWidth + next.clientX - startX),
+    );
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+    window.addEventListener("pointercancel", stop, { once: true });
+  };
   const dismissOverlay = () =>
     state.workbenchOpen
       ? closeWorkbench()
@@ -160,7 +183,7 @@ export function Point16AVisualFixture() {
       <section
         className={`workspace ${state.workbenchOpen ? "has-workbench" : ""} ${narrow ? "is-overlay-layout" : ""}`}
         data-layout={narrow ? "overlay" : "split"}
-        style={{ gridTemplateColumns: workspaceColumns(state, viewportWidth), "--workbench-track-width": `${workspaceWorkbenchWidth(state, viewportWidth)}px` } as CSSProperties}
+        style={{ gridTemplateColumns: workspaceColumns(state, viewportWidth, workbenchWidth), "--workbench-track-width": `${workspaceWorkbenchWidth(state, viewportWidth, workbenchWidth)}px` } as CSSProperties}
       >
         <button
           type="button"
@@ -186,8 +209,9 @@ export function Point16AVisualFixture() {
           <Composer
             theme={theme}
             attachments={attachments}
-            provider="openai"
-            model="gpt-5.6-sol"
+            provider={localProvider ? "local" : "openai"}
+            running={params.get("running") === "1"}
+            model={params.get("model") || "gpt-5.6-sol"}
             favoriteModels={[{ provider: "openai", model: "gpt-5.6-sol" }]}
             reasoningEffort="high"
             reasoningOptions={[{ value: "high", label: "גבוהה" }]}
@@ -199,6 +223,7 @@ export function Point16AVisualFixture() {
           />
         </section>
         <aside className={`workbench ${state.workbenchOpen ? "is-open" : ""}`} aria-hidden={!state.workbenchOpen}>
+          {state.workbenchOpen && !narrow && <div className="workbench-resize-handle" role="separator" aria-label="שינוי רוחב אזור העבודה" aria-orientation="vertical" onPointerDown={beginWorkbenchResize} onDoubleClick={() => setWorkbenchWidth(null)} />}
           {workbenchMounted && <WorkbenchSurface initial={null} visible={state.workbenchOpen} motionRevision={state.workbenchOpen} restored={{ tabs: [], active: "" }} sessionId="fixture" onCanvasAction={() => undefined} onClose={closeWorkbench} closeIcon={icons.workbenchClose} />}
         </aside>
       </section>

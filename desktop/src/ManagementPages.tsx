@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { checkForUpdates, type AvailableUpdate } from "./updates";
 import { coreApi } from "./coreApi";
+import { browserTargetCount } from "./browserState";
 import type { ResolvedTheme } from "./designSystem";
 import { LegacyIcon, legacyAssets } from "./legacyAssets";
 import { ConfirmDialog, InputDialog, PageHero } from "./SettingsManagement";
@@ -27,7 +28,8 @@ export function WorkspaceView({
     setRoot(rootInfo);
     setSettings(safe.values);
     try {
-      setBrowser(await invoke<Json>("browser_status"));
+      const snapshot = await invoke<unknown>("browser_status");
+      setBrowser(snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot as Json : {});
     } catch {
       setBrowser({});
     }
@@ -53,6 +55,7 @@ export function WorkspaceView({
   const browserPath = String(
     browser.profile_dir || (root.root as Json)?.path || root.path || "",
   );
+  const targetCount = browserTargetCount(browser);
   return (
     <div className="management-page">
       <PageHero
@@ -119,7 +122,9 @@ export function WorkspaceView({
         <p>
           {browser.available === false
             ? "WebView2 אינו זמין כרגע."
-            : `יעדי דפדפן פעילים: ${Number(browser.target_count || browser.tabs || 0)}`}
+            : targetCount === null
+              ? "מספר יעדי הדפדפן אינו זמין כרגע. אפשר לנסות לרענן."
+              : `יעדי דפדפן פעילים: ${targetCount}`}
         </p>
         <div className="inline-actions">
           <button onClick={() => onOpenWorkbench?.("browser")}>

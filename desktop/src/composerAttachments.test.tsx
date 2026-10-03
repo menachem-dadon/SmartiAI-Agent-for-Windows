@@ -39,6 +39,8 @@ test("concurrent picker and paste retain both files and block early submission",
   fireEvent.change(input, { target: { value: "inspect" } });
   fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file("first.txt")] } });
   fireEvent.paste(input, { clipboardData: { files: [file("second.txt")] } });
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByText("מכין קבצים לצירוף…")).toBeNull();
   fireEvent.keyDown(input, { key: "Enter" });
   expect(send).not.toHaveBeenCalled();
   await act(async () => { second.resolve("C:/second.txt"); });
@@ -61,7 +63,7 @@ test("mixed drop preserves successful files when another file fails", async () =
   fireEvent.drop(container.querySelector(".composer")!, { dataTransfer: { files: [file("good.txt"), file("bad.txt")] } });
   await waitFor(() => expect(screen.getByLabelText("הסרת good.txt")).toBeTruthy());
   expect(screen.queryByLabelText("הסרת bad.txt")).toBeNull();
-  expect(screen.getByRole("status").textContent).toContain("bad.txt: unavailable");
+  expect(screen.getByRole("alert").textContent).toContain("bad.txt: unavailable");
 });
 
 test("repeated send events cannot submit one draft twice and failures retain it", async () => {
@@ -73,9 +75,18 @@ test("repeated send events cannot submit one draft twice and failures retain it"
   fireEvent.keyDown(input, { key: "Enter" });
   fireEvent.keyDown(input, { key: "Enter" });
   expect(send).toHaveBeenCalledTimes(1);
+  expect((input as HTMLTextAreaElement).disabled).toBe(true);
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByText("שולח…")).toBeNull();
   await act(async () => { pending.resolve(); });
   send.mockRejectedValueOnce(new Error("offline"));
   fireEvent.change(input, { target: { value: "retry draft" } });
   fireEvent.keyDown(input, { key: "Enter" });
   await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe("retry draft"));
+  expect(screen.getByRole("alert").textContent).toContain("ההודעה לא נשלחה: Error: offline");
+  const retry = deferred<void>();
+  send.mockImplementationOnce(() => retry.promise);
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(screen.queryByRole("alert")).toBeNull();
+  await act(async () => { retry.resolve(); });
 });
