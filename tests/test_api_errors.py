@@ -163,6 +163,20 @@ class ApiErrorDiagnosisTests(unittest.TestCase):
         analysis = analyze_api_error("gemini", response=response(503, {"error": {"message": "backend timeout for safety model"}}))
         self.assertEqual(analysis.reason, "service_unavailable")
 
+    def test_chatgpt_model_rejection_has_update_guidance_and_keeps_http_status(self):
+        error = RuntimeError("Codex failed")
+        error.body = {"type": "error", "status": 400, "error": {
+            "type": "invalid_request_error",
+            "message": "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.",
+        }}
+        analysis = analyze_api_error("openai_codex_signin", "gpt-6-luna", error=error)
+        self.assertEqual((analysis.reason, analysis.category, analysis.status_code),
+                         ("signin_model_unsupported", "model_unavailable", 400))
+        self.assertEqual(analysis.error_type, "invalid_request_error")
+        self.assertIn("gpt-6-luna", analysis.user_message)
+        self.assertIn("Codex CLI", analysis.user_message)
+        self.assertFalse(analysis.retryable)
+
 
 class DiscoveryDiagnosisTests(unittest.TestCase):
     @mock.patch("smarti.common.requests.get")

@@ -13,6 +13,7 @@ ERROR_REASONS = {
     "revoked_key": ("auth", "none", "מפתח ה-API של {label} בוטל או נחסם. יש ליצור מפתח חדש בחשבון הספק."),
     "signin_expired": ("auth", "none", "ההתחברות ל-ChatGPT / Codex פגה או בוטלה. יש להתחבר מחדש בהגדרות הספק."),
     "signin_required": ("auth", "none", "נדרשת התחברות ל-ChatGPT באמצעות Codex בהגדרות הספק."),
+    "signin_model_unsupported": ("model_unavailable", "none", "המודל {model} נדחה בחיבור ChatGPT / Codex. יש לעדכן את Codex CLI הרשמי ולרענן את רשימת המודלים בהגדרות סמארטי. אם הדחייה נמשכת, יש לבחור מודל זמין לחשבון או Codex default."),
     "ip_restricted": ("permission", "none", "{label} דחה את כתובת ה-IP הנוכחית. יש לבדוק את רשימת כתובות ה-IP המותרות בחשבון או את הגדרות ה-VPN."),
     "region_restricted": ("permission", "none", "{label} אינו מאפשר שימוש מהמדינה או מהאזור הנוכחיים. יש לבדוק אזורים נתמכים והתאמה בין אזור המפתח לשרת ה-API."),
     "model_permission": ("permission", "none", "לחשבון של {label} אין הרשאה למודל {model}. יש לקבל הרשאה למודל או לבחור מודל שהחשבון מורשה אליו."),

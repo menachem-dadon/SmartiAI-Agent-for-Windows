@@ -665,7 +665,11 @@ class SmartiLocalGateway:
                 "codex_login": provider.login,
                 "codex_logout": provider.logout,
             }[action]
-            status = await asyncio.to_thread(method)
+            if action == "codex_check":
+                model = str(self.core.settings.get("selected_openai_codex_signin_model") or "codex default")
+                status = await asyncio.to_thread(method, model=model)
+            else:
+                status = await asyncio.to_thread(method)
             if status.state == "connected":
                 self.core.settings["api_mode"] = "openai_codex_signin"
                 self.core._save_settings()

@@ -115,6 +115,41 @@ class SettingsPersistenceTests(unittest.TestCase):
 
 
 class SettingsSynchronizationTests(unittest.TestCase):
+    def test_codex_check_uses_selected_model_and_does_not_save_failed_connection(self):
+        from smarti.codex_signin import CodexConnectionStatus
+        with tempfile.TemporaryDirectory() as directory:
+            core = fixtures._FakeCore(Path(directory) / "history.json")
+            core.settings["selected_openai_codex_signin_model"] = "gpt-6-luna"
+            core._save_settings = mock.Mock()
+            core.setup_model = mock.Mock()
+            core.run_manager = ConversationRunManager(core)
+            gateway = SmartiLocalGateway(core, "test-token", port=0)
+            self.assertTrue(gateway.start())
+            request = fixtures.LocalGatewayTests._request
+            provider = mock.Mock()
+            provider.check_connection.side_effect = [
+                CodexConnectionStatus("unavailable", "Model rejected", "chatgpt"),
+                CodexConnectionStatus("connected", "OK", "chatgpt"),
+            ]
+            try:
+                with mock.patch("smarti.codex_signin.CodexSignInProvider", return_value=provider):
+                    _, _, failed = request(gateway, "/v2/management/settings/actions", method="POST",
+                                           payload={"action": "codex_check"})
+                    self.assertEqual(failed["data"]["state"], "unavailable")
+                    self.assertEqual(core.settings["api_mode"], "local")
+                    core._save_settings.assert_not_called()
+                    core.setup_model.assert_not_called()
+                    _, _, checked = request(gateway, "/v2/management/settings/actions", method="POST",
+                                            payload={"action": "codex_check"})
+                    self.assertEqual(checked["data"]["state"], "connected")
+                provider.check_connection.assert_has_calls([mock.call(model="gpt-6-luna")] * 2)
+                self.assertEqual(core.settings["api_mode"], "openai_codex_signin")
+                core._save_settings.assert_called_once()
+                core.setup_model.assert_called_once()
+            finally:
+                gateway.stop()
+                core.run_manager.shutdown(wait=True)
+
     def test_voice_numeric_settings_privacy_alias_and_nested_fields_persist(self):
         with tempfile.TemporaryDirectory() as directory:
             core = fixtures._FakeCore(Path(directory) / "history.json")

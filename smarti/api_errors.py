@@ -225,6 +225,9 @@ def _extract_error_fields(payload, fallback_text=""):
 
 def _payload_status(payload):
     if isinstance(payload, dict):
+        status = _safe_status(payload.get("status"))
+        if status is not None:
+            return status
         code = _find_first(payload, ("status_code", "statusCode"))
         if not code and isinstance(payload.get("error"), dict):
             code = payload["error"].get("code")
@@ -314,6 +317,8 @@ def _diagnose_reason(provider, status, fields, payload, error, operation=""):
     if isinstance(explicit, str) and explicit in ERROR_REASONS:
         return explicit
     message = fields.get("message", "").casefold()
+    if provider == "openai_codex_signin" and "model" in message and "not supported" in message and "chatgpt account" in message:
+        return "signin_model_unsupported"
     codes = [str(fields.get(key, "")).casefold().replace("-", "_") for key in ("code", "status", "type")]
     details = payload.get("error", payload) if isinstance(payload, dict) else {}
     details = details if isinstance(details, dict) else {}

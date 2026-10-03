@@ -577,34 +577,25 @@ class CodexSignInProvider:
             return CodexConnectionStatus(state, message)
         return CodexConnectionStatus("not_connected", "לא מחובר עם ChatGPT / Codex.")
 
-    def check_connection(self) -> CodexConnectionStatus:
+    def check_connection(self, model: str = CODEX_SIGNIN_DEFAULT_MODEL) -> CodexConnectionStatus:
         """Verify saved credentials with one small, read-only official CLI request."""
         status = self.connection_status()
         if status.state != "connected":
             return status
         try:
-            code, stdout, stderr = self._run(
-                (
-                    "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
-                    "Reply with exactly OK. Do not inspect files, run commands, or use tools.",
-                ),
+            self.complete(
+                [
+                    {"role": "system", "content": "Verify the model connection with a short text reply. Do not inspect files, run commands, or use tools."},
+                    {"role": "user", "content": "Reply with exactly OK."},
+                ],
+                model=model,
                 timeout=90,
+                purpose="connection_check",
             )
         except CodexSignInError as exc:
-            return CodexConnectionStatus("unavailable", str(exc))
-        detail = "\n".join(part for part in (stdout, stderr) if part)
-        if code == 0:
-            return CodexConnectionStatus("connected", "החיבור נבדק בהצלחה עם Codex.", "chatgpt")
-        if self._auth_failure_state(detail) == "reauth_required":
-            return CodexConnectionStatus(
-                "reauth_required",
-                "האסימון פג או שהחשבון דורש התחברות מחדש עם ChatGPT / Codex.",
-            )
-        return CodexConnectionStatus(
-            "connected",
-            "פרטי ההתחברות קיימים, אך בדיקת Codex לא הושלמה. ייתכן שיש מגבלת חשבון או רשת.",
-            "chatgpt",
-        )
+            state = "reauth_required" if exc.reason == "signin_expired" else "not_connected" if exc.reason == "signin_required" else "unavailable"
+            return CodexConnectionStatus(state, str(exc), "chatgpt")
+        return CodexConnectionStatus("connected", "החיבור נבדק בהצלחה עם Codex.", "chatgpt")
 
     def login(self) -> CodexConnectionStatus:
         """Start the browser OAuth flow exposed by the official Codex CLI."""
@@ -969,15 +960,28 @@ class CodexSignInProvider:
                 if isinstance(failure, str):
                     failure = {"message": failure}
                 if isinstance(failure, dict):
-                    failures.append(failure)
+                    payload = {"error": failure}
+                    if event.get("status") is not None:
+                        payload["status_code"] = event["status"]
+                    failures.append(payload)
         if code != 0 or failures:
-            failure = failures[-1] if failures else {"message": self._redact_cli_output(stderr)}
+            payload = failures[-1] if failures else {"error": {"message": self._redact_cli_output(stderr)}}
+            failure = payload["error"]
+            # Some CLI releases encode the provider's error envelope as JSON
+            # inside the failure message. Preserve its type and HTTP status.
+            try:
+                embedded = json.loads(str(failure.get("message") or ""))
+            except (TypeError, ValueError):
+                embedded = None
+            if isinstance(embedded, dict) and isinstance(embedded.get("error"), dict):
+                payload = embedded
+                failure = embedded["error"]
             detail = str(failure.get("message") or "")
             if self._looks_like_auth_error(detail):
                 raise CodexSignInError("האסימון פג או שהחשבון דורש התחברות מחדש עם ChatGPT / Codex.", reason="signin_expired")
-            error = CodexSignInError("Codex failed", body={"error": failure})
+            error = CodexSignInError("Codex failed", body=payload)
             analysis = analyze_api_error(CODEX_SIGNIN_PROVIDER, selected_model, error=error)
-            raise CodexSignInError(analysis.user_message, reason=analysis.reason, body={"error": failure})
+            raise CodexSignInError(analysis.user_message, reason=analysis.reason, body=payload)
         response, usage = self._parse_jsonl_execution(
             stdout,
             prefer_tool_calls=purpose == "agent",

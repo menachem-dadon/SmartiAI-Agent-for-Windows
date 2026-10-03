@@ -26,6 +26,8 @@ class AttachmentTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.core = SmartiCore.__new__(SmartiCore)
         self.core.settings = copy.deepcopy(DEFAULT_SETTINGS)
+        self.core._ensure_secret_loaded = mock.Mock(return_value="test-key")
+        self.core._save_settings = mock.Mock()
         self.core.mode = "gemini"
         self.core.conversation_attachments = []
         self.core._execution_context = threading.local()
@@ -215,7 +217,7 @@ class AttachmentTests(unittest.TestCase):
             registry.resolve_many(handles, session_id="chat-b")
 
     def test_real_provider_request_adapters_preserve_direct_and_tool_content(self):
-        from test_context_efficiency import _request_core, _JsonResponse
+        from tests.test_context_efficiency import _request_core, _JsonResponse
         for mode in ("gemini", "anthropic", "openai"):
             with self.subTest(mode=mode):
                 core = _request_core(mode)

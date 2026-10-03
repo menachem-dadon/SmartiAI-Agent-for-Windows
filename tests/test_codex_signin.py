@@ -377,6 +377,60 @@ class CodexSignInProviderTests(unittest.TestCase):
             self.provider.complete([{"role": "user", "content": "hello"}], model="codex default")
         self.assertEqual(failed.exception.reason, "model_not_found")
 
+    def test_embedded_chatgpt_model_error_preserves_provider_diagnostics(self):
+        from smarti.api_errors import analyze_api_error
+        self.provider.connection_status = mock.Mock(return_value=CodexConnectionStatus("connected", "ok", "chatgpt"))
+        payload = {"type": "error", "status": 400, "error": {
+            "type": "invalid_request_error",
+            "message": "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.",
+        }}
+        for code in (0, 1):
+            with self.subTest(code=code):
+                failure = json.dumps({"type": "turn.failed", "error": {"message": json.dumps(payload)}})
+                self.provider._run = mock.Mock(return_value=(code, failure, ""))
+                with self.assertRaises(CodexSignInError) as failed:
+                    self.provider.complete([{"role": "user", "content": "hello"}], model="gpt-6-luna")
+                analysis = analyze_api_error("openai_codex_signin", "gpt-6-luna", error=failed.exception)
+                self.assertEqual((analysis.reason, analysis.status_code, analysis.error_type),
+                                 ("signin_model_unsupported", 400, "invalid_request_error"))
+                self.assertIn("Codex CLI", analysis.user_message)
+                self.assertFalse(analysis.retryable)
+
+    def test_connection_check_uses_isolated_chat_execution_with_selected_model(self):
+        self.provider.connection_status = mock.Mock(return_value=CodexConnectionStatus("connected", "ok", "chatgpt"))
+        self.provider._run = mock.Mock(return_value=(0, "\n".join((
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "OK"}}),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        )), ""))
+        self.assertEqual(self.provider.check_connection(model="gpt-6-luna").state, "connected")
+        args = self.provider._run.call_args.args[0]
+        self.assertIn("--ignore-user-config", args)
+        self.assertIn("--json", args)
+        self.assertIn("shell_tool", args)
+        self.assertIn('web_search="disabled"', args)
+        self.assertEqual(args[args.index("--model") + 1], "gpt-6-luna")
+
+    def test_connection_check_does_not_report_failed_generation_as_connected(self):
+        self.provider.connection_status = mock.Mock(return_value=CodexConnectionStatus("connected", "ok", "chatgpt"))
+        cases = (
+            ({"code": "model_not_found", "message": "Unknown model"}, "unavailable", "המודל"),
+            ({"code": "usage_limit_reached", "message": "Usage limit reached"}, "unavailable", "מכסת"),
+            ({"message": "Access token expired"}, "reauth_required", "האסימון"),
+        )
+        for error, state, message in cases:
+            with self.subTest(error=error):
+                failure = json.dumps({"type": "turn.failed", "error": error})
+                self.provider._run = mock.Mock(return_value=(0, failure, ""))
+                status = self.provider.check_connection()
+                self.assertEqual(status.state, state)
+                self.assertIn(message, status.message)
+
+    def test_connection_check_without_credentials_does_not_send_a_request(self):
+        self.provider.connection_status = mock.Mock(return_value=CodexConnectionStatus("not_connected", "sign in required"))
+        self.provider._run = mock.Mock()
+        self.assertEqual(self.provider.check_connection().state, "not_connected")
+        self.provider._run.assert_not_called()
+
     def test_recovered_cli_error_does_not_override_a_completed_turn(self):
         self.provider.connection_status = mock.Mock(return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt"))
         intermediate = json.dumps({"type": "error", "message": "Retrying connection"})
