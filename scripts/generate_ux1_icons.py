@@ -6,7 +6,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 import math
 
-OUT = Path(__file__).resolve().parents[1] / 'desktop/src/ux1/icons'
+OUT = Path(__file__).resolve().parents[1] / 'desktop/src/design-system/icons'
 SCALE=12
 class Pen:
  def __init__(self, color):

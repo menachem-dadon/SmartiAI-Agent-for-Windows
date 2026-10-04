@@ -53,7 +53,9 @@ Workbench; explore every management page and enable advanced settings.
 - New, original outline artwork replaces legacy icons throughout the demo.
   63 drawings are rasterized to 126 transparent light/dark PNGs. Rebuild with
   `python scripts/generate_ux1_icons.py` (Pillow); no SVG/font icons or additional
-  UI dependency. The Smarti brand logo remains. Reused source controls receive
+  UI dependency. UX-2 moved the unchanged PNGs to `src/design-system/icons`;
+  this reference and future product components use that single asset source.
+  The Smarti brand logo remains. Reused source controls receive
   scoped artwork replacement without replacing their handlers or semantics.
 - General Workbench opening returns to its last active tab, or a launcher for
   Browser, Files, Terminal and Artifacts when no tabs remain. Canvas opens only
@@ -99,7 +101,8 @@ Windows DPI, screen-reader, real-model or packaged-release behavior.
 
 Candidate styles import the source stylesheet only in this separate entry,
 then scope the proposed appearance to `.ux-prototype`. Do not ship them as a
-second production stylesheet. UX-2 is ready to implement the shared foundations.
+second production stylesheet. UX-2 completed the shared foundations in
+`src/design-system`; current review and UX-3 handoff are in ledger section 24.
 
 ## Accepted screen language
 
@@ -181,12 +184,14 @@ history and reduced motion remain still. Table buttons use centered 18px PNGs in
 40px squares. Refresh/clear and memory toolbar actions retain source handlers,
 accessible labels and tooltips. Generic success notices are quiet; errors and
 meaningful explicit results remain visible. UX-1 is complete within the isolated
-prototype scope; UX-2 is ready. Use ledger section 21 for the current evidence,
-open product checks and the binding handoff. The closing focused run is in
+prototype scope; UX-2 is complete within its foundation scope and UX-3 is ready.
+Use ledger sections 21 and 24 for the acceptance evidence, open product checks
+and binding handoffs. The UX-1 closing focused run is in
 `.codex-local/ux-1/acceptance-2026-10-04/focused-ready`.
 
-UX-2 must turn this reference into shared semantic tokens and React controls,
-including explicit icon props and message content slots. DOM decoration,
+UX-2 turned this reference into shared semantic tokens and React controls,
+including explicit icon props and message content slots, in `src/design-system`.
+Product integration continues in UX-3–5. DOM decoration,
 temporary source derivatives and the mock bridge are prototype techniques;
 they must not become parallel production implementations. Real provider
 capabilities, policy persistence, chat state and native ownership remain owned

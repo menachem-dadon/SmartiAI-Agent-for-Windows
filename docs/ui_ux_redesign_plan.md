@@ -5,6 +5,7 @@
 - Effective date: 2026-10-02 (Asia/Jerusalem)
 - Design feedback incorporated: 2026-10-04, UX-1 refinements through v7 (16 further corrections); execution ledger §20.
 - Design direction accepted: 2026-10-04, UX-1 v7; closing review and binding UX-2 handoff in execution ledger §21. This accepts the prototype direction; production implementation and acceptance follow in UX-2–6.
+- Shared foundations accepted: 2026-10-05, UX-2 with Tabler SVG and reversible original PNG assets; independent closing review and UX-3 handoff in execution ledger §24.
 - מקור: הדו״ח המלא בשיחת התכנון, הסקירה החיה מ־2026-09-30 ובקשת המשתמש מ־2026-10-02 להכין את הפרויקט לביצוע.
 - סמכות: יעד העיצוב הפעיל של Smarti ב־Tauri. התוכנית מחליפה את הדרישה הישנה להעתקה חזותית מדויקת של PyQt.
 - מצב הביצוע והראיות נמצאים רק ב־[יומן הביצוע](ui_ux_redesign_execution.md). הכנת מסמכים אינה מימוש או קבלת מוצר.
@@ -86,6 +87,8 @@ Responsive (התאמה למרחב הזמין) מחושב לפי הרוחב שנ�
 ## 6. Visual language — השפה החזותית
 
 Design System (מערכת כללים ורכיבים משותפת) ו־Design Tokens (ערכים מרכזיים בעלי משמעות) יהיו מקור אחד לצבעים, גודל טקסט, ריווח, רדיוסים, צל ותנועה. בדיקות ניגודיות יבדקו את אותם ערכים שבהם הרכיבים משתמשים.
+
+תשתית UX-2 נמצאת ב־`desktop/src/design-system/`; `tokens.ts` הוא מקור הערכים ו־README שם הוא מפת הרכיבים והחלפת השכבות בשלבי UX-3–5. התאמת מסגרת שדה/מיקוד ניטרלית לניגודיות נרשמה ב־UX-D36, בלי לשנות את כיוון v7. בקשת המשתמש המאוחרת ב־UX-D40 מעבירה את המשפחה הפעילה ל־Tabler SVG ושומרת את PNG המקוריים לחזרה. בסיס חץ הקיפול בשתי המשפחות הוא מטה לפי D41, עם סיבוב 90deg לשמאלה במצב מקופל. מצב השלב והראיות נמצאים ביומן §22–24.
 
 מועמדים לאב־טיפוס, לא צבעים סופיים:
 

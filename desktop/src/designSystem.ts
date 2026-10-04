@@ -3,15 +3,12 @@ export type ResolvedTheme = "light" | "dark";
 
 export const THEME_STORAGE_KEY = "smarti.desktop.theme";
 
+export { palettes, foundations, designTokenStyle, textContrastRoles } from "./design-system/tokens";
+import { palettes, foundations, textContrastRoles } from "./design-system/tokens";
+
 export const semanticTokens = {
-  color: ["background", "surface", "surfaceRaised", "glass", "border", "text", "muted", "accent", "success", "warning", "danger", "focus", "code"],
-  radius: ["xs", "sm", "md", "lg", "xl", "pill"],
-  space: ["1", "2", "3", "4", "5", "6", "8", "10"],
-  shadow: ["soft", "raised", "dialog"],
-  blur: ["surface", "dialog"],
-  motion: ["fast", "normal", "slow"],
-  density: ["compact", "comfortable"],
-  type: ["family", "mono", "caption", "body", "title", "display"],
+  color: Object.keys(palettes.light),
+  ...Object.fromEntries(Object.entries(foundations).map(([family, roles]) => [family, Object.keys(roles)])),
 } as const;
 
 export function resolveTheme(preference: ThemePreference, systemDark: boolean): ResolvedTheme {
@@ -24,7 +21,7 @@ export function parseThemePreference(value: string | null): ThemePreference {
 
 function linearChannel(hex: string): number {
   const value = Number.parseInt(hex, 16) / 255;
-  return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
 }
 
 export function contrastRatio(foreground: string, background: string): number {
@@ -41,6 +38,6 @@ export function contrastRatio(foreground: string, background: string): number {
 }
 
 export const contrastPairs = {
-  light: [["#20212a", "#f8f8fb"], ["#5e6170", "#ffffff"], ["#ffffff", "#654fd4"]],
-  dark: [["#f3f3f7", "#17181d"], ["#a9abb6", "#202126"], ["#ffffff", "#725dde"]],
-} as const;
+  light: textContrastRoles.map(([fg, bg]) => [palettes.light[fg], palettes.light[bg]] as const),
+  dark: textContrastRoles.map(([fg, bg]) => [palettes.dark[fg], palettes.dark[bg]] as const),
+};

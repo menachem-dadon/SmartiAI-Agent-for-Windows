@@ -90,7 +90,7 @@ async function run() {
        layouts.push({theme:value,width,section:id,...sample});
        check(`management width ${value}/${width}/${id}`,sample.scroll<=sample.w+1&&sample.page<=sample.view+1);
        check(`one management page heading ${value}/${width}/${id}`,await page.locator('.ux-management-body .ux-page-heading h1:visible').count()===1&&await page.locator('.management-hero h2:visible').count()===0);
-       const sourceArtwork=await page.locator(".legacy-icon").evaluateAll(xs=>xs.every(x=>x.dataset.uxIcon&&x.src.includes("/src/ux1/icons/")));check(`new source artwork ${value}/${width}/${id}`,sourceArtwork);
+       const sourceArtwork=await page.locator(".legacy-icon").evaluateAll(xs=>xs.every(x=>x.dataset.uxIcon&&x.src.includes("/src/design-system/icons/")));check(`new source artwork ${value}/${width}/${id}`,sourceArtwork);
        const broken=await page.locator("img").evaluateAll(xs=>xs.filter(x=>x.getClientRects().length&&(!x.complete||x.naturalWidth===0)).map(x=>x.src));check(`raster assets ${value}/${width}/${id}`,broken.length===0);
        if(value==="light"&&width===1380){coverage.push({section:id,settingPaths:await page.locator("[data-setting-path]").evaluateAll(xs=>xs.map(x=>x.dataset.settingPath))});await page.screenshot({path:path.join(output,`${id}.png`)});}
      }
@@ -138,7 +138,7 @@ async function run() {
  await page.screenshot({path:path.join(output,"final-light-chat.png")});
  await page.waitForTimeout(500);
  const sourceIcons=await page.locator(".legacy-icon").evaluateAll(xs=>xs.map(x=>({src:x.src,name:x.dataset.uxIcon})));
- check("all source icons use new artwork",sourceIcons.every(x=>x.name&&x.src.includes('/src/ux1/icons/')));
+ check("all source icons use new artwork",sourceIcons.every(x=>x.name&&x.src.includes('/src/design-system/icons/')));
  check("no arbitrary PNG decoration on text options",await page.locator('[data-demo-icon]:not([data-raster-only]):not(.source-tool-name)').count()===0);
  check("no SVG icons",await page.locator(".ux-prototype svg").count()===0);
  check("no remote/API traffic",remote.length===0);
