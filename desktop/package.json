@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:ux1": "vite --port 1432 --host 127.0.0.1",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
