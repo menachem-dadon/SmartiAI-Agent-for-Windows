@@ -12,6 +12,17 @@ beforeAll(() => {
 });
 const wrap = (children: React.ReactNode) => <DesignSystemProvider theme="light">{children}</DesignSystemProvider>;
 describe("UX-2 shared interaction contracts", () => {
+  test("dialog Escape stays inside the dialog before native cancellation", () => {
+    const ancestor = vi.fn(), close = vi.fn();
+    window.addEventListener("keydown", ancestor);
+    try {
+      render(wrap(<Dialog open title="עריכה" onClose={close}><Field label="טיוטה" /></Dialog>));
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
+      expect(ancestor).not.toHaveBeenCalled();
+      fireEvent(screen.getByRole("dialog"), new Event("cancel", { bubbles: false, cancelable: true }));
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally { window.removeEventListener("keydown", ancestor); }
+  });
   test("loading actions suppress duplicate clicks and keep the accessible name", async () => {
     const onClick = vi.fn(); render(wrap(<Button loading onClick={onClick}>שמירה</Button>));
     const button = screen.getByRole("button", { name: "שמירה" }); await userEvent.click(button);

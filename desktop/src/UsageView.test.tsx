@@ -5,6 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { formatUsageCost, UsageView, type UsageSnapshot } from "./UsageView";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
 const response = (data: UsageSnapshot) => ({ status: 200, body: { data } });
 const snapshot = (timeframe: UsageSnapshot["timeframe"] = "today", model = "gemini-test"): UsageSnapshot => ({
   schema_version: 2, timeframe, total_tokens: 1500, input_tokens: 1000, output_tokens: 500,

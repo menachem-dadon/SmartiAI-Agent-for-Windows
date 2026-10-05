@@ -22,5 +22,16 @@ into frontendDist; Tauri includes frontendDist in its normal package.
 The repository's own license does not replace the MIT license on this artwork.
 No CDN, icon font or downloaded font is used.
 
+## Provider identification artwork
+
+The 18 SVG files in `src/provider-icons/` were copied unchanged from the user's
+`ai-provider-icons.zip` (core directory). Its supplied provenance identifies
+Lobe Icons by LobeHub, MIT licensed, except the pack's generic local-server icon.
+The supplied complete notice is preserved in
+`desktop/public/licenses/lobe-icons-MIT.txt` and copied by Vite into frontendDist.
+These marks identify existing integrations in settings. Monochrome rendering
+inherits the active theme; artwork geometry is unchanged. The action/tool icon
+family stays Tabler and the original Smarti PNG family stays preserved.
+
 Segoe UI, Arial, Consolas and Courier New are CSS system fallbacks only. Smarti
 does not redistribute their font files through this design system.

@@ -1,4 +1,4 @@
-import { cloneElement, createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactElement, type ReactNode, type Ref, type RefObject, type TextareaHTMLAttributes } from "react";
+import { cloneElement, createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type SelectHTMLAttributes, type ReactElement, type ReactNode, type Ref, type RefObject, type TextareaHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
 import { designTokenStyle, type DesignTheme } from "./tokens";
 import { Icon, IconTheme, IconFamilyContext, type IconFamily, type IconName } from "./icons";
@@ -76,18 +76,25 @@ export function IconButton({ label, icon, round = false, tooltip = true, ...prop
   return tooltip ? <Tooltip label={label}>{button}</Tooltip> : button;
 }
 
-type FieldProps = InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: string; error?: string; ref?: RefObject<HTMLInputElement | null> };
-export function Field({ label, hint, error, className = "", id: suppliedId, ...props }: FieldProps) {
+type FieldProps = InputHTMLAttributes<HTMLInputElement> & { label: string; hiddenLabel?: boolean; hint?: string; error?: string; ref?: RefObject<HTMLInputElement | null> };
+export function Field({ label, hiddenLabel = false, hint, error, className = "", id: suppliedId, ...props }: FieldProps) {
   const generatedId = useId();
   const id = suppliedId || generatedId;
   const description = [props["aria-describedby"], hint ? `${id}-hint` : undefined, error ? `${id}-error` : undefined].filter(Boolean).join(" ") || undefined;
-  return <div className={`sds-field-group ${className}`}><label htmlFor={id}>{label}</label><input {...props} id={id} className="sds-field" aria-invalid={error ? true : props["aria-invalid"]} aria-describedby={description} />{hint && <p className="sds-hint" id={`${id}-hint`}>{hint}</p>}{error && <p className="sds-field-error" id={`${id}-error`} role="alert">{error}</p>}</div>;
+  return <div className={`sds-field-group ${className}`}><label className={hiddenLabel ? "sds-visually-hidden" : undefined} htmlFor={id}>{label}</label><input {...props} id={id} className="sds-field" aria-invalid={error ? true : props["aria-invalid"]} aria-describedby={description} />{hint && <p className="sds-hint" id={`${id}-hint`}>{hint}</p>}{error && <p className="sds-field-error" id={`${id}-error`} role="alert">{error}</p>}</div>;
 }
 export function SearchField(props: Omit<FieldProps, "type">) { return <div className="sds-search"><Icon name="search" /><Field {...props} type="search" /></div>; }
 export function NumberField(props: Omit<FieldProps, "type">) { return <Field {...props} type="number" className={`sds-number ${props.className || ""}`} />; }
-export function Textarea({ label, hint, error, id: suppliedId, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string; hint?: string; error?: string }) {
+export function SelectField({ label, hiddenLabel = false, hint, error, id: suppliedId, className = "", children, ...props }: SelectHTMLAttributes<HTMLSelectElement> & { label: string; hiddenLabel?: boolean; hint?: string; error?: string }) {
   const generatedId = useId(); const id = suppliedId || generatedId;
-  return <div className="sds-field-group"><label htmlFor={id}>{label}</label><textarea dir="auto" {...props} id={id} className={`sds-field sds-textarea ${props.className || ""}`} aria-invalid={!!error || undefined} aria-describedby={[props["aria-describedby"], hint ? `${id}-hint` : undefined, error ? `${id}-error` : undefined].filter(Boolean).join(" ") || undefined} />{hint && <p className="sds-hint" id={`${id}-hint`}>{hint}</p>}{error && <p role="alert" className="sds-field-error" id={`${id}-error`}>{error}</p>}</div>;
+  return <div className={`sds-field-group ${className}`}><label className={hiddenLabel ? "sds-visually-hidden" : undefined} htmlFor={id}>{label}</label><select {...props} id={id} className="sds-field" aria-invalid={error ? true : props["aria-invalid"]} aria-describedby={[props["aria-describedby"], hint ? `${id}-hint` : undefined, error ? `${id}-error` : undefined].filter(Boolean).join(" ") || undefined}>{children}</select>{hint && <p className="sds-hint" id={`${id}-hint`}>{hint}</p>}{error && <p className="sds-field-error" role="alert" id={`${id}-error`}>{error}</p>}</div>;
+}
+export function Checkbox({ label, ...props }: InputHTMLAttributes<HTMLInputElement> & { label: string }) {
+  return <input {...props} type="checkbox" aria-label={label} className={`sds-checkbox ${props.className || ""}`} />;
+}
+export function Textarea({ label, hiddenLabel = false, hint, error, id: suppliedId, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string; hiddenLabel?: boolean; hint?: string; error?: string }) {
+  const generatedId = useId(); const id = suppliedId || generatedId;
+  return <div className="sds-field-group"><label className={hiddenLabel ? "sds-visually-hidden" : undefined} htmlFor={id}>{label}</label><textarea dir="auto" {...props} id={id} className={`sds-field sds-textarea ${props.className || ""}`} aria-invalid={!!error || undefined} aria-describedby={[props["aria-describedby"], hint ? `${id}-hint` : undefined, error ? `${id}-error` : undefined].filter(Boolean).join(" ") || undefined} />{hint && <p className="sds-hint" id={`${id}-hint`}>{hint}</p>}{error && <p role="alert" className="sds-field-error" id={`${id}-error`}>{error}</p>}</div>;
 }
 export function Switch({ label, checked, onCheckedChange, disabled, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "checked" | "onChange"> & { label: string; checked: boolean; onCheckedChange: (value: boolean) => void }) {
   return <span className="sds-switch"><input {...props} aria-label={label} role="switch" type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onCheckedChange(event.currentTarget.checked)} /><span className="sds-switch-track" aria-hidden="true"><span className="sds-switch-thumb" /></span></span>;
@@ -99,6 +106,29 @@ export function RangeField({ label, value, min, max, step = 1, onValueChange, fo
 }
 
 export type MenuItem = { id: string; label: string; icon?: IconName; disabled?: boolean; tone?: "danger"; onSelect: () => void };
+export function Popover({ label, triggerContent, children }: { label: string; triggerContent?: ReactNode; children: (close: () => void) => ReactNode }) {
+  const trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const position = useFloating(trigger, open, 380);
+  const close = () => { setOpen(false); trigger.current?.focus(); };
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => { if (!trigger.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node)) setOpen(false); };
+    const focusOutside = (event: FocusEvent) => { if (!trigger.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus(); } };
+    document.addEventListener("pointerdown", outside); document.addEventListener("focusin", focusOutside); document.addEventListener("keydown", escape, true);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("focusin", focusOutside); document.removeEventListener("keydown", escape, true); };
+  }, [open]);
+  return <><Button ref={trigger} aria-label={label} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)} onKeyDown={event => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen(true); }
+  }}>{triggerContent ?? label}<Icon name="chevron" /></Button>
+    {open && <Overlay><div ref={popup} id={id} className="sds-popover" role="dialog" aria-label={label} style={position} onKeyDown={event => {
+      if (event.key !== "Tab") return;
+      const controls = [...(popup.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]') || [])];
+      if (document.activeElement === controls[event.shiftKey ? 0 : controls.length - 1]) close();
+    }}>{children(close)}</div></Overlay>}</>;
+}
 export function Menu({ label, icon = "more", items, children, onOpenChange }: { label: string; icon?: IconName; items: MenuItem[]; children?: ReactNode; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false); const id = useId();
   useEffect(() => { onOpenChange?.(open); return () => onOpenChange?.(false); }, [open, onOpenChange]);
@@ -144,6 +174,7 @@ function DialogContent({ title, description, children, onClose, initialFocus, ro
     return () => { node?.close(); if (previous?.isConnected) previous.focus(); };
   }, [initialFocus]);
   return <DesignContext.Provider value={{ ...design, host }}><dialog ref={dialog} className="sds-dialog" role={role} tabIndex={-1} aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descId : undefined} onCancel={(event) => { event.preventDefault(); onClose(); }} onKeyDown={(event) => {
+    if (event.key === "Escape") { event.stopPropagation(); return; }
     if (event.key !== "Tab") return;
     const node = event.currentTarget;
     const focusable = Array.from(node.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex]:not([tabindex="-1"])')).filter((element) => !element.closest('[hidden],[inert]') && element.getClientRects().length && getComputedStyle(element).visibility !== "hidden");
@@ -178,6 +209,9 @@ export function Tabs({ label, tabs, active, onSelect }: { label: string; tabs: A
 
 export function PageHeader({ title, description, eyebrow, actions }: { title: string; description?: string; eyebrow?: string; actions?: ReactNode }) {
   return <header className="sds-page-header"><div>{eyebrow && <p className="sds-eyebrow">{eyebrow}</p>}<h1>{title}</h1>{description && <p className="sds-hint">{description}</p>}</div>{actions && <div className="sds-actions">{actions}</div>}</header>;
+}
+export function SegmentedControl({ label, children, className = "", ...props }: HTMLAttributes<HTMLDivElement> & { label: string }) {
+  return <div {...props} className={`sds-segmented ${className}`} role="group" aria-label={label}>{children}</div>;
 }
 export function SettingsGroup({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   const id = useId(); return <section className="sds-settings-group" aria-labelledby={id}><header><h2 id={id}>{title}</h2>{description && <p className="sds-hint">{description}</p>}</header>{children}</section>;

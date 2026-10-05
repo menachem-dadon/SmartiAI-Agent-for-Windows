@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { Dialog, EmptyState, IconButton, LoadingState, SearchField, Switch } from "./design-system";
+import { builtinToolDescription } from "./toolDescriptions";
+import { ManagementFeedback } from "./managementFeedback";
+import { Button, Textarea, NumberField, SelectField, Field, Icon } from "./design-system";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { checkForUpdates, type AvailableUpdate } from "./updates";
 import { coreApi } from "./coreApi";
 import type { ResolvedTheme } from "./designSystem";
-import { LegacyIcon, legacyAssets } from "./legacyAssets";
+import { legacyAssets } from "./legacyAssets";
 import { ConfirmDialog, InputDialog, PageHero } from "./SettingsManagement";
+import { LEGAL_AGREEMENT_TEXT, type LegalStatus } from "./LegalAgreement";
 
 type Json = Record<string, unknown>;
 type SafeSettings = { values: Json };
@@ -22,17 +27,18 @@ export function TasksView() {
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<Json | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Json | null>(null);
-  const load = useCallback(
-    async () =>
-      setItems(
-        (await coreApi<{ items: Json[] }>("GET", "/v2/management/tasks")).items,
-      ),
-    [],
-  );
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const [creating, setCreating] = useState(false), [loading, setLoading] = useState(true), [query, setQuery] = useState("");
+  const [pending, setPending] = useState(false), actionGuard = useRef(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setItems((await coreApi<{ items: Json[] }>("GET", "/v2/management/tasks")).items); setError(""); }
+    catch (reason) { setError(`טעינת המשימות נכשלה: ${String(reason)}`); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
   const action = async (payload: Json) => {
+    if (actionGuard.current) return false;
+    actionGuard.current = true; setPending(true);
     try {
       const result = await coreApi<{ items: Json[] }>(
         "POST",
@@ -44,8 +50,10 @@ export function TasksView() {
       setError("");
       return true;
     } catch (reason) {
-      setError(String(reason));
+      setError(`הפעולה נכשלה: ${String(reason)}`);
       return false;
+    } finally {
+      actionGuard.current = false; setPending(false);
     }
   };
   const days = weeklyDays
@@ -57,10 +65,10 @@ export function TasksView() {
       <PageHero
         title="מרכז משימות"
         description="משימות שנוצרות כאן ירוצו בשיחה ייעודית שתישמר בין הרצות, או בשיחה חדשה בכל הרצה."
-        actions={<button onClick={() => void load()}>רענן</button>}
+        actions={<><IconButton icon="refresh" label="רענן" disabled={loading} onClick={() => void load()} /><Button icon="plus" variant="primary" onClick={() => setCreating(value => !value)}>{creating ? "סגור יצירה" : "משימה חדשה"}</Button></>}
       />
       <form
-        className="task-create"
+        className="task-create" hidden={!creating}
         onSubmit={(event) => {
           event.preventDefault();
           void action({
@@ -73,57 +81,59 @@ export function TasksView() {
             days_of_week: repeat === "weekly" ? days : undefined,
             conversation_mode: conversationMode,
           }).then((saved) => {
-            if (saved) setPrompt("");
+            if (saved) { setPrompt(""); setCreating(false); }
           });
         }}
       >
-        <textarea
+        <Textarea label="מה Smarti יבצע?" hiddenLabel
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           placeholder="מה Smarti יבצע?"
           required
         />
-        <label>
+        <div>
           בעוד{" "}
-          <input
-            type="number"
+          <NumberField label="בעוד דקות" hiddenLabel
+
             min="0"
             value={delay}
             onChange={(event) => setDelay(Number(event.target.value))}
           />{" "}
           דקות
-        </label>
-        <select
+        </div>
+        <SelectField label="חזרה" hiddenLabel
           value={repeat}
           onChange={(event) => setRepeat(event.target.value)}
         >
           <option value="once">חד־פעמית</option>
           <option value="interval">מחזורית</option>
           <option value="weekly">שבועית</option>
-        </select>
+        </SelectField>
         {repeat === "weekly" && (
-          <label>
+          <div>
             ימי שבוע
-            <input
+            <Field label="ימי שבוע" hiddenLabel
               dir="ltr"
               value={weeklyDays}
               onChange={(event) => setWeeklyDays(event.target.value)}
             />
-          </label>
+          </div>
         )}
-        <select
+        <SelectField label="שיחת המשימה" hiddenLabel
           aria-label="שיחת המשימה"
           value={conversationMode}
           onChange={(event) => setConversationMode(event.target.value)}
         >
           <option value="dedicated">שיחה ייעודית למשימה</option>
           <option value="new">שיחה חדשה בכל הרצה</option>
-        </select>
-        <button>יצירת משימה</button>
+        </SelectField>
+        <Button type="submit" variant="primary" icon="plus" loading={pending}>יצירת משימה</Button>
       </form>
-      {error && <p className="management-notice">{error}</p>}
+      {error && <ManagementFeedback message={error} />}
+      <SearchField label="חיפוש במשימות" hiddenLabel placeholder="חיפוש במשימות" value={query} onChange={event => setQuery(event.target.value)} />
+      {loading && <LoadingState label="טוען משימות…" />}
       <div className="management-cards">
-        {items.map((item) => (
+        {items.filter(item => String(item.prompt || item.message || "").includes(query)).map((item) => (
           <article key={String(item.id)}>
             <header>
               <b>{String(item.prompt || item.message || "משימה")}</b>
@@ -132,48 +142,34 @@ export function TasksView() {
             <p>
               תזמון: {String(item.run_at || "")} · חזרה:{" "}
               {String(item.repeat || "once")} · ניתוב:{" "}
-              {String(item.conversation_mode || "current")}
+              {String(item.conversation_mode || "dedicated")}
             </p>
             <small>
               תוצאה אחרונה: {String(item.last_result || "טרם הופעלה")}
             </small>
             <footer>
-              <button onClick={() => setEditing(item)}>עריכה</button>
+              <IconButton icon="rename" label="עריכה" type="button" onClick={() => setEditing(item)} />
               {String(item.status) === "cancelled" && (
-                <button
+                <Button type="button"
                   onClick={() => void action({ action: "resume", id: item.id })}
                 >
                   המשך
-                </button>
+                </Button>
               )}
-              <button
-                disabled={["running", "cancelling"].includes(
+              <IconButton icon="play" label="הרץ שוב" type="button" disabled={["running", "cancelling"].includes(
                   String(item.status),
-                )}
-                onClick={() => void action({ action: "retry", id: item.id })}
-              >
-                הרץ שוב
-              </button>
-              <button
-                disabled={
+                )} onClick={() => void action({ action: "retry", id: item.id })} />
+              <IconButton icon="stop" label="ביטול" type="button" disabled={
                   !["scheduled", "running"].includes(String(item.status))
-                }
-                onClick={() => void action({ action: "cancel", id: item.id })}
-              >
-                ביטול
-              </button>
-              <button
-                disabled={["running", "cancelling"].includes(
+                } onClick={() => void action({ action: "cancel", id: item.id })} />
+              <IconButton icon="trash" label="מחיקה" type="button" disabled={["running", "cancelling"].includes(
                   String(item.status),
-                )}
-                onClick={() => setConfirmDelete(item)}
-              >
-                מחיקה
-              </button>
+                )} onClick={() => setConfirmDelete(item)} />
             </footer>
           </article>
         ))}
-        {!items.length && <p className="management-empty">אין משימות רקע.</p>}
+        {!loading && !items.length && <EmptyState icon="tasks" title="אין משימות רקע" description="אפשר לבקש מסמארטי לבצע פעולה בהמשך ולבחור מתי היא תרוץ." action={<Button icon="plus" onClick={() => setCreating(true)}>משימה חדשה</Button>} />}
+        {!loading && items.length > 0 && !items.some(item => String(item.prompt || item.message || "").includes(query)) && <EmptyState icon="search" title="אין תוצאות" description="נסה מילה אחרת מתוך תוכן המשימה." />}
       </div>
       {editing && (
         <InputDialog
@@ -182,8 +178,7 @@ export function TasksView() {
           initial={String(editing.prompt || editing.message || "")}
           onCancel={() => setEditing(null)}
           onConfirm={(value) => {
-            void action({ action: "edit", id: editing.id, prompt: value });
-            setEditing(null);
+            return action({ action: "edit", id: editing.id, prompt: value }).then(ok => { if (ok) setEditing(null); return ok; });
           }}
         />
       )}
@@ -194,8 +189,7 @@ export function TasksView() {
           danger
           onCancel={() => setConfirmDelete(null)}
           onConfirm={() => {
-            void action({ action: "delete", id: confirmDelete.id });
-            setConfirmDelete(null);
+            return action({ action: "delete", id: confirmDelete.id }).then(ok => { if (ok) setConfirmDelete(null); return ok; });
           }}
         />
       )}
@@ -203,7 +197,7 @@ export function TasksView() {
   );
 }
 
-export function ToolsView({ theme }: { theme: ResolvedTheme }) {
+export function ToolsView({ theme: _theme }: { theme: ResolvedTheme }) {
   const [data, setData] = useState<{ builtins: Json[]; extensions: Json[] }>({
     builtins: [],
     extensions: [],
@@ -214,17 +208,13 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
   const [packageDialog, setPackageDialog] = useState(false);
   const [deleting, setDeleting] = useState<Json | null>(null);
   const [message, setMessage] = useState("");
-  const icons = legacyAssets(theme);
-  const load = useCallback(
-    async () =>
-      setData(
-        await coreApi<{ builtins: Json[]; extensions: Json[] }>(
-          "GET",
-          "/v2/management/tools",
-        ),
-      ),
-    [],
-  );
+  const [loading, setLoading] = useState(true), [query, setQuery] = useState("");
+  const [pending, setPending] = useState(false), actionGuard = useRef(false);
+  const load = useCallback(async () => {
+    try { setData(await coreApi<{ builtins: Json[]; extensions: Json[] }>("GET", "/v2/management/tools")); }
+    catch (reason) { setMessage(`טעינת הכלים נכשלה: ${String(reason)}`); }
+    finally { setLoading(false); }
+  }, []);
   useEffect(() => {
     void load();
     const timer = window.setInterval(
@@ -234,6 +224,8 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
     return () => window.clearInterval(timer);
   }, [load]);
   const action = async (payload: Json) => {
+    if (actionGuard.current) return false;
+    actionGuard.current = true; setPending(true);
     try {
       setData(
         await coreApi<{ builtins: Json[]; extensions: Json[] }>(
@@ -243,11 +235,13 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
           true,
         ),
       );
-      setMessage("הפעולה הושלמה והקטלוג נטען מחדש.");
+      setMessage("");
       return true;
     } catch (reason) {
       setMessage(`הפעולה לא הושלמה: ${String(reason)}`);
       return false;
+    } finally {
+      actionGuard.current = false; setPending(false);
     }
   };
   const choosePath = async (
@@ -265,7 +259,7 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
     }
   };
   const builtinGroups = new Map<string, { label: string; items: Json[] }>();
-  for (const item of data.builtins) {
+  for (const item of data.builtins.filter(item => `${item.name} ${item.label} ${item.description} ${builtinToolDescription(String(item.name))}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))) {
     const category = String(item.category || "developer");
     const group = builtinGroups.get(category) || {
       label: String(item.category_label || category),
@@ -274,7 +268,7 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
     group.items.push(item);
     builtinGroups.set(category, group);
   }
-  const extensions = data.extensions;
+  const extensions = data.extensions.filter(item => `${item.name} ${item.description} ${item.source_label}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const externalGroups = [
     {
       kind: "custom",
@@ -314,41 +308,37 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
   const row = (item: Json, kind: string) => (
     <div
       className="source-tool-row"
+      data-kind={kind}
       key={`${kind}:${String(item.name)}`}
-      title={String(item.description || "")}
+      title={kind === "builtin" ? builtinToolDescription(String(item.name)) : String(item.description || "")}
     >
-      <label
+      <div
         className="source-tool-toggle"
         title={Boolean(item.enabled) ? "כיבוי" : "הפעלה"}
       >
-        <input
-          type="checkbox"
+        <Switch label={`${Boolean(item.enabled) ? "כבה" : "הפעל"} ${String(item.name)}`}
           checked={Boolean(item.enabled)}
-          onChange={() => toggle(item, kind)}
+          disabled={pending}
+          onCheckedChange={() => toggle(item, kind)}
           aria-label={`${Boolean(item.enabled) ? "כבה" : "הפעל"} ${String(item.name)}`}
         />
-      </label>
+      </div>
       {kind !== "builtin" && Boolean(item.removable) && (
-        <button
-          type="button"
-          className="source-tool-delete"
-          title="מחק לחלוטין"
-          aria-label={`מחק ${String(item.name)}`}
-          onClick={() => setDeleting(item)}
-        >
-          <LegacyIcon src={icons.delete} size={17} />
-        </button>
+        <div className="source-tool-delete"><IconButton icon="trash" label={`מחק ${String(item.name)}`} type="button" onClick={() => setDeleting(item)} /></div>
       )}
-      <button
+      <Button
         type="button"
         className="source-tool-name"
+        dir="rtl"
+        disabled={pending}
         onClick={() => toggle(item, kind)}
       >
         <b dir="auto">{String(item.label || item.name)}</b>
+        <small>{kind === "builtin" ? builtinToolDescription(String(item.name)) : String(item.description || "")}</small>
         {kind === "skill" && (
           <small>{String(item.source_label || "הותקן ידנית")}</small>
         )}
-      </button>
+      </Button>
     </div>
   );
   return (
@@ -357,19 +347,12 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
         title="ניהול כלים"
         description="כאן מנהלים אילו יכולות זמינות לסמארטי. התקנה ידנית זמינה מכפתור + ליד האזור המתאים."
         actions={
-          <button
-            className="source-tools-refresh"
-            title="רענון קטלוג הכלים"
-            aria-label="רענון קטלוג הכלים"
-            onClick={() => void action({ action: "refresh" })}
-          >
-            <LegacyIcon src={icons.checkUpdates} size={22} />
-          </button>
+          <IconButton icon={"refresh"} label="רענון קטלוג הכלים" type="button" className="source-tools-refresh" onClick={() => void action({ action: "refresh" })} />
         }
       />
-      <p role="status" className="settings-status">
-        {message}
-      </p>
+      <SearchField label="חיפוש כלים וחיבורים" hiddenLabel placeholder="חיפוש כלים וחיבורים" value={query} onChange={event => setQuery(event.target.value)} />
+      {loading && <LoadingState label="טוען כלים וחיבורים…" />}
+      <ManagementFeedback message={message} />
       <section className="source-tools-section">
         <header>
           <h3>כלים מובנים</h3>
@@ -389,16 +372,8 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
         return (
           <section className="source-tools-section" key={group.kind}>
             <header>
-              <button
-                type="button"
-                className="source-tools-add"
-                title={`הוספה: ${group.title}`}
-                aria-label={`הוספה: ${group.title}`}
-                onClick={group.add}
-              >
-                <LegacyIcon src={icons.plus} size={22} />
-              </button>
               <h3>{group.title}</h3>
+              <IconButton icon={"plus"} label={`הוספה: ${group.title}`} type="button" className="source-tools-add" onClick={group.add} />
             </header>
             {items.map((item) => row(item, group.kind))}
             {!items.length && (
@@ -408,56 +383,48 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
         );
       })}
       {installChoice && (
-        <div className="legacy-dialog-backdrop" role="presentation">
-          <section
-            className="legacy-input-dialog source-install-choice"
-            role="dialog"
-            aria-modal="true"
-            aria-label={
-              installChoice === "skill" ? "התקנת מיומנות" : "הוספת MCP"
-            }
-          >
-            <h2>{installChoice === "skill" ? "התקנת מיומנות" : "הוספת MCP"}</h2>
+        <Dialog open title={installChoice === "skill" ? "התקנת מיומנות" : "הוספת MCP"} onClose={() => setInstallChoice(null)}>
+          <section className="source-install-choice">
             <p>מקור התקנה:</p>
             <div>
               {installChoice === "skill" ? (
                 <>
-                  <button
+                  <Button type="button"
                     onClick={() => void choosePath("install_skill", "file")}
                   >
                     קובץ ZIP
-                  </button>
-                  <button
+                  </Button>
+                  <Button type="button"
                     onClick={() =>
                       void choosePath("install_skill", "directory")
                     }
                   >
                     תיקייה
-                  </button>
+                  </Button>
                 </>
               ) : (
                 <>
-                  <button
+                  <Button type="button"
                     onClick={() => {
                       setInstallChoice(null);
                       setPackageDialog(true);
                     }}
                   >
                     חבילת npm נעולה
-                  </button>
-                  <button
+                  </Button>
+                  <Button type="button"
                     onClick={() => void choosePath("install_mcp", "file")}
                   >
                     קובץ JSON
-                  </button>
+                  </Button>
                 </>
               )}
             </div>
             <footer>
-              <button onClick={() => setInstallChoice(null)}>ביטול</button>
+              <IconButton icon="stop" label="ביטול" type="button" onClick={() => setInstallChoice(null)} />
             </footer>
           </section>
-        </div>
+        </Dialog>
       )}
       {packageDialog && (
         <InputDialog
@@ -466,8 +433,7 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
           confirmLabel="התקנה"
           onCancel={() => setPackageDialog(false)}
           onConfirm={(value) => {
-            void action({ action: "install_mcp", package: value });
-            setPackageDialog(false);
+            return action({ action: "install_mcp", package: value }).then(ok => { if (ok) setPackageDialog(false); return ok; });
           }}
         />
       )}
@@ -478,12 +444,7 @@ export function ToolsView({ theme }: { theme: ResolvedTheme }) {
           danger
           onCancel={() => setDeleting(null)}
           onConfirm={() => {
-            void action({
-              action: "delete",
-              kind: deleting.kind,
-              name: deleting.name,
-            });
-            setDeleting(null);
+            return action({ action: "delete", kind: deleting.kind, name: deleting.name }).then(ok => { if (ok) setDeleting(null); return ok; });
           }}
         />
       )}
@@ -501,7 +462,7 @@ export function DiagnosticsView() {
   const scan = async (includeNetwork: boolean) => {
     setBusy(true);
     setProgress(0);
-    setMessage("בודק את Python Core ואת מעטפת Tauri…");
+    setMessage("בודק את המערכת…");
     const poll = window.setInterval(() => {
       void coreApi<Json>("GET", "/v2/management/diagnostics")
         .then((state) => {
@@ -573,22 +534,22 @@ export function DiagnosticsView() {
   };
   return (
     <div className="management-page">
+      <PageHero title="אבחון המערכת" description="בדיקות מערכת, תוצאות ותיקונים באישור מפורש." />
       <section className="diagnostic-hero">
         <strong>{score}</strong>
         <div>
-          <h2>Smarti Diagnostic</h2>
-          <p>{message}</p>
+          <ManagementFeedback message={message} />
           {busy && <progress value={progress} max="100" />}
         </div>
-        <button disabled={busy} onClick={() => void scan(false)}>
+        <Button type="button" disabled={busy} onClick={() => void scan(false)}>
           בדיקה מהירה
-        </button>
-        <button disabled={busy} onClick={() => void scan(true)}>
+        </Button>
+        <Button type="button" disabled={busy} onClick={() => void scan(true)}>
           בדיקה מלאה
-        </button>
-        <button disabled={!busy} onClick={() => void cancel()}>
+        </Button>
+        <Button type="button" disabled={!busy} onClick={() => void cancel().catch(reason => setMessage(`בקשת העצירה נכשלה: ${String(reason)}`))}>
           עצור
-        </button>
+        </Button>
       </section>
       <div className="diagnostic-filters">
         {[
@@ -597,13 +558,13 @@ export function DiagnosticsView() {
           ["pass", "תקין"],
           ["skipped", "דולג"],
         ].map(([id, label]) => (
-          <button
+          <Button type="button"
             className={filter === id ? "active" : ""}
             key={id}
             onClick={() => setFilter(id)}
           >
             {label}
-          </button>
+          </Button>
         ))}
         <span>
           {items.length} בדיקות · {errors} שגיאות · {warnings} אזהרות
@@ -623,11 +584,11 @@ export function DiagnosticsView() {
             </details>
             {Boolean(item.repair_action) && (
               <footer>
-                <button
+                <Button type="button"
                   onClick={() => setRepairing(item.repair_action as Json)}
                 >
                   {String((item.repair_action as Json).title_he)}
-                </button>
+                </Button>
               </footer>
             )}
           </article>
@@ -636,9 +597,9 @@ export function DiagnosticsView() {
       {repairing && (
         <ConfirmDialog
           title="אישור תיקון"
-          description={`לבצע את התיקון: ${String(repairing.title_he)}? רק הפעולה המתוארת תועבר ל־Python Core.`}
+          description={`לבצע את התיקון: ${String(repairing.title_he)}? רק הפעולה המתוארת תבוצע.`}
           onCancel={() => setRepairing(null)}
-          onConfirm={() => void repair()}
+          onConfirm={repair}
         />
       )}
     </div>
@@ -650,7 +611,7 @@ export { UsageView } from "./UsageView";
 export function LogsView() {
   const [lines, setLines] = useState<string[]>([]);
   const [path, setPath] = useState("");
-  const [personal, setPersonal] = useState(false);
+  const [personal, setPersonal] = useState(false), [query, setQuery] = useState(""), [error, setError] = useState("");
   const load = useCallback(async () => {
     const value = await coreApi<{ lines: string[]; path: string }>(
       "GET",
@@ -658,9 +619,10 @@ export function LogsView() {
     );
     setLines(value.lines);
     setPath(value.path);
+    setError("");
   }, [personal]);
   useEffect(() => {
-    void load();
+    void load().catch(reason => setError(`טעינת הלוג נכשלה: ${String(reason)}`));
   }, [load]);
   const exportLog = async () => {
     await invoke("save_text_file", {
@@ -671,26 +633,28 @@ export function LogsView() {
   return (
     <div className="management-page logs-page">
       <PageHero
-        title="Developer Trace"
+        title="מעקב למפתחים"
         description="התוכן האישי מוסתר כברירת מחדל; מטא־נתונים טכניים נשמרים."
         actions={
           <>
-            <label>
+            <div>
               הצג תוכן אישי{" "}
-              <input
-                type="checkbox"
+              <Switch label="הצג תוכן אישי"
+
                 checked={personal}
-                onChange={(event) => setPersonal(event.target.checked)}
+                onCheckedChange={(checked) => setPersonal(checked)}
               />
-            </label>
-            <button onClick={() => void load()}>רענון</button>
-            <button onClick={() => void exportLog()}>ייצוא</button>
+            </div>
+            <IconButton icon="refresh" label="רענון" type="button" onClick={() => void load().catch(reason => setError(`טעינת הלוג נכשלה: ${String(reason)}`))} />
+            <Button type="button" onClick={() => void exportLog().catch(reason => setError(`ייצוא הלוג נכשל: ${String(reason)}`))}>ייצוא</Button>
           </>
         }
       >
         <span dir="ltr">{path}</span>
       </PageHero>
-      <pre dir="ltr">{lines.join("\n") || "אין עדיין רשומות לוג."}</pre>
+      <ManagementFeedback message={error} />
+      <SearchField label="חיפוש בלוג" hiddenLabel placeholder="חיפוש בלוג" value={query} onChange={event => setQuery(event.target.value)} />
+      <pre dir="ltr">{lines.filter(line => line.toLocaleLowerCase().includes(query.toLocaleLowerCase())).join("\n") || "אין רשומות להצגה."}</pre>
     </div>
   );
 }
@@ -714,7 +678,7 @@ function relativeUpdateStatus(values: Json) {
 
 export function UpdateControls({
   compact = false,
-  theme = "dark",
+  theme: _theme = "dark",
 }: {
   compact?: boolean;
   theme?: ResolvedTheme;
@@ -722,13 +686,14 @@ export function UpdateControls({
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [status, setStatus] = useState("עדיין לא בוצעה בדיקת עדכונים.");
   const [checking, setChecking] = useState(false);
-  const icons = legacyAssets(theme);
+  const operation = useRef(false);
   useEffect(() => {
     void coreApi<SafeSettings>("GET", "/v2/settings")
       .then((safe) => setStatus(relativeUpdateStatus(safe.values)))
       .catch(() => undefined);
   }, []);
   const checkUpdate = async () => {
+    if (operation.current) return; operation.current = true;
     setChecking(true);
     setStatus("בודק עדכונים...");
     try {
@@ -741,10 +706,12 @@ export function UpdateControls({
       setStatus(`בדיקת העדכון נכשלה: ${String(reason)}`);
     } finally {
       setChecking(false);
+      operation.current = false;
     }
   };
   const install = async () => {
-    if (!update?.installer) return;
+    if (!update?.installer || operation.current) return;
+    operation.current = true; setChecking(true);
     setStatus("מוריד ומאמת חתימה…");
     try {
       await update.installer.downloadAndInstall((event) => {
@@ -754,37 +721,38 @@ export function UpdateControls({
       await relaunch();
     } catch (reason) {
       setStatus(`העדכון נכשל ללא שינוי בגרסה המותקנת: ${String(reason)}`);
+    } finally {
+      operation.current = false; setChecking(false);
     }
   };
   return (
     <div className={compact ? "update-controls compact" : "update-controls"}>
-      <span className="source-update-status" role="status">
-        {status}
-      </span>
-      <button disabled={checking} onClick={() => void checkUpdate()}>
-        <LegacyIcon src={icons.checkUpdates} size={18} />
+      <ManagementFeedback message={status} />
+      <Button type="button" disabled={checking} onClick={() => void checkUpdate()}>
+        <Icon name={"refresh"} size={18} />
         בדוק עדכונים עכשיו
-      </button>
+      </Button>
       {update && (
         <>
           {update.installer && (
-            <button onClick={() => void install()}>הורד והתקן</button>
+            <Button type="button" loading={checking} onClick={() => void install()}>הורד והתקן</Button>
           )}
           {update.releaseUrl && (
-            <button onClick={() => void invoke("open_chat_link", {
+            <Button type="button" onClick={() => void invoke("open_chat_link", {
               target: update.releaseUrl, local: false,
             }).catch((reason) => setStatus(`פתיחת עמוד הגרסה נכשלה: ${String(reason)}`))}>
               עמוד הגרסה
-            </button>
+            </Button>
           )}
-          <button
+          <Button type="button"
+            disabled={checking}
             onClick={() => {
               setUpdate(null);
               setStatus("העדכון נדחה. לא בוצע שינוי.");
             }}
           >
             אחר כך
-          </button>
+          </Button>
         </>
       )}
       {update?.body && (
@@ -798,11 +766,16 @@ export function UpdateControls({
 }
 
 export function AboutView({ theme }: { theme: ResolvedTheme }) {
-  const [data, setData] = useState<Json>({});
-  const icons = legacyAssets(theme);
-  useEffect(() => {
-    void coreApi<Json>("GET", "/v2/management/about").then(setData);
+  const [data, setData] = useState<Json>({}), [error, setError] = useState("");
+  const [legal, setLegal] = useState<LegalStatus | null>(null);
+  const load = useCallback(async () => {
+    setError("");
+    await Promise.allSettled([
+      coreApi<Json>("GET", "/v2/management/about").then(setData).catch(reason => setError(`טעינת פרטי התוכנה נכשלה: ${String(reason)}`)),
+      coreApi<LegalStatus>("GET", "/v2/management/legal").then(setLegal).catch(reason => setError(`טעינת ההסכמה נכשלה: ${String(reason)}`)),
+    ]);
   }, []);
+  useEffect(() => { void load(); }, [load]);
   const features = [
     "צ׳אט עם ספקי AI ומודלים מקומיים",
     "כלי Windows, קבצים ו־Office",
@@ -813,9 +786,11 @@ export function AboutView({ theme }: { theme: ResolvedTheme }) {
   ];
   return (
     <div className="management-page about-page">
+      <PageHero title="אודות והסכמות" description="מידע על התוכנה, תנאי השימוש ועדכונים." actions={<IconButton icon="refresh" label="רענון פרטי התוכנה" onClick={() => void load()} />} />
+      <ManagementFeedback message={error} />
       <section>
         <div className="about-logo-wrap">
-          <img className="about-logo" src={icons.logo} alt="SmartiAI" />
+          <img className="about-logo" src={legacyAssets(theme).logo} alt="SmartiAI" />
         </div>
         <h2>{String(data.name || "Smarti AI Agent for Windows")}</h2>
         <p className="about-tagline">סוכן AI חכם ל־Windows</p>
@@ -825,7 +800,7 @@ export function AboutView({ theme }: { theme: ResolvedTheme }) {
           Python {String(data.python || "")} · Control Plane{" "}
           {String(data.contract_version || "")}
         </small>
-        <button
+        <Button type="button"
           onClick={() =>
             void invoke("open_chat_link", {
               target:
@@ -835,7 +810,7 @@ export function AboutView({ theme }: { theme: ResolvedTheme }) {
           }
         >
           פתח את מאגר GitHub
-        </button>
+        </Button>
         <div className="about-feature-grid">
           {features.map((item) => (
             <article key={item}>{item}</article>
@@ -855,6 +830,11 @@ export function AboutView({ theme }: { theme: ResolvedTheme }) {
             משתמשים בספק, אתר או כלי חיצוני, ובכפוף למדיניות ההרשאות.
           </p>
         </section>
+        <details className="about-agreement">
+          <summary>מדיניות פרטיות ותנאי שימוש</summary>
+          {legal && <p>{legal.accepted ? "ההסכמה לגרסה הנוכחית שמורה" : "נדרשת הסכמה לגרסה הנוכחית"} · {legal.version}</p>}
+          <pre dir="rtl">{LEGAL_AGREEMENT_TEXT}</pre>
+        </details>
         <UpdateControls theme={theme} />
         <footer>
           פותח ע״י א.מ.ד. | 2026 |{" "}

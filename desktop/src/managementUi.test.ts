@@ -28,7 +28,7 @@ import { ToolsView } from "./ManagementPages";
 
 type InvokeCall = { command: string; args: Record<string, unknown> };
 const managementStyles = readFileSync(
-  "src/App.css",
+  "src/management.css",
   "utf8",
 );
 afterEach(() => cleanup());
@@ -37,19 +37,11 @@ HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", 
 HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
 
 describe("Point 16C source-derived settings behavior", () => {
-  it("scrolls the full management viewport around a transparent centered content shell", () => {
-    expect(managementStyles).toMatch(
-      /\.management-scroll-viewport\s*\{[^}]*overflow-x:\s*hidden[^}]*overflow-y:\s*auto/s,
-    );
-    expect(managementStyles).toMatch(
-      /\.management-content-shell\s*\{[^}]*margin-inline:\s*auto[^}]*overflow:\s*visible[^}]*background:\s*transparent/s,
-    );
-    expect(managementStyles).toMatch(
-      /\.source-settings-page\s*\{[^}]*height:\s*auto[^}]*overflow:\s*visible/s,
-    );
-    expect(managementStyles).toMatch(
-      /\.source-settings-scroll\s*\{[^}]*overflow:\s*visible[^}]*background:\s*transparent/s,
-    );
+  it("uses one management viewport with a centered fluid content shell", () => {
+    expect(managementStyles).toMatch(/\.management-scroll-viewport\s*\{[^}]*min-width:\s*0[^}]*overflow:\s*auto/s);
+    expect(managementStyles).toMatch(/\.management-content-shell\s*\{[^}]*max-width:\s*1000px[^}]*margin-inline:\s*auto/s);
+    expect(managementStyles).toMatch(/\.source-settings-scroll[^}]*display:\s*grid/s);
+    expect(managementStyles).not.toMatch(/\.ui-button|\.source-switch|#[0-9a-f]{3,8}/i);
   });
 
   it("keeps the PyQt ManagementCenter registration order and source icon fallbacks", () => {
@@ -575,7 +567,7 @@ describe("Point 16C source-derived settings behavior", () => {
     expect(screen.getByText("analyze_project")).toBeTruthy();
     expect(screen.getByText("כלים מובנים")).toBeTruthy();
     expect(screen.getByText("מיומנויות מותקנות")).toBeTruthy();
-    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
+    expect(screen.getAllByRole("switch")).toHaveLength(3);
     expect(screen.getAllByRole("button", { name: /מחק/ })).toHaveLength(1);
   });
 });

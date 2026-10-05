@@ -16,6 +16,7 @@ describe("task-center conversation routing", () => {
     render(<TasksView />);
     await waitFor(() => expect(coreApi).toHaveBeenCalledWith("GET", "/v2/management/tasks"));
 
+    fireEvent.click(screen.getAllByRole("button", { name: "משימה חדשה" })[0]);
     const routing = screen.getByRole("combobox", { name: "שיחת המשימה" }) as HTMLSelectElement;
     expect(routing.value).toBe("dedicated");
     expect(Array.from(routing.options, (option) => option.value)).toEqual(["dedicated", "new"]);

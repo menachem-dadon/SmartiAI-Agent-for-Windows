@@ -34,12 +34,14 @@ export function WorkspaceView({ onOpenWorkbench }: { onOpenWorkbench?: (tab: "br
   return <div className="workspace-preferences">
     <PageHeader title="סביבת עבודה ודפדפן" description="כלים לצד השיחה, עם ההעדפות והקבצים שלך." actions={<IconButton icon="refresh" label="רענן" disabled={busy} onClick={() => void load()} />} />
     {error && <Alert title="לא ניתן לעדכן את סביבת העבודה" tone="danger">{error}</Alert>}
-    <SettingsGroup title="פתיחה וסרגל צד">
-      <SettingRow title="פתיחה בחלון מוגדל" description="מתאים את חלון Smarti לשטח העבודה של Windows."><Switch label="פתיחה בחלון מוגדל" disabled={busy} checked={prefs.workspace_start_maximized !== false} onCheckedChange={value => void save({ workspace_start_maximized: value })} /></SettingRow>
+    <SettingsGroup title="פתיחה וסרגל צד" description="גודל החלון ומיקומו נשמרים אוטומטית. אפשר להגדיל אותו מכפתור ההגדלה בכותרת.">
       <SettingRow title="סרגל השיחות פתוח בכניסה" description="מציג את רשימת השיחות המלאה במקום מצב אייקונים."><Switch label="סרגל השיחות פתוח בכניסה" disabled={busy} checked={!Boolean(prefs.workspace_sidebar_collapsed)} onCheckedChange={value => void save({ workspace_sidebar_collapsed: !value })} /></SettingRow>
     </SettingsGroup>
-    <SettingsGroup title="סביבת עבודה" description="הלשוניות נשמרות כל עוד התוכנה פועלת. פתיחה חדשה מתחילה בסביבת עבודה ריקה.">
-      <SettingRow title="תיקיית העבודה" description={String((root.root as Json)?.path || root.path || "")}><Button icon="folder" onClick={() => onOpenWorkbench?.("files")}>פתח קבצים</Button></SettingRow>
+    <SettingsGroup title="קבצי העבודה" description="כאן נשמרים הקבצים והתוצרים של סמארטי.">
+      <div className="workspace-folder-row"><div>
+        <p className="workspace-folder-path"><bdi dir="ltr">{String((root.root as Json)?.path || root.path || "")}</bdi></p>
+        <p className="sds-hint">הלשוניות נשמרות בזמן העבודה; בהפעלה חדשה מתחילים בלי לשוניות פתוחות.</p>
+      </div><Button icon="folder" onClick={() => onOpenWorkbench?.("files")}>פתח קבצים</Button></div>
     </SettingsGroup>
     <SettingsGroup title="Smarti Browser" description={browser.available === false ? "WebView2 אינו זמין כרגע." : count === null ? "מספר יעדי הדפדפן אינו זמין כרגע. אפשר לנסות לרענן." : `יעדי דפדפן פעילים: ${count}`}>
       <div className="workspace-preferences-actions"><Button icon="browser" onClick={() => onOpenWorkbench?.("browser")}>פתח דפדפן</Button>

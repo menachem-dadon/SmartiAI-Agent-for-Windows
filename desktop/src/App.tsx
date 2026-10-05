@@ -774,9 +774,10 @@ export default function App() {
   }, [core.generation, core.state, activeId, foreground, refreshConversations, refreshLists, loadMessages]);
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
+      // Management and its dialogs own keyboard navigation while the chat is inert.
+      if (event.defaultPrevented || managementSection) return;
       if (event.key === "Escape") {
-        if (managementSection) setManagementSection(null);
-        else if (managementOpen) setManagementOpen(false);
+        if (managementOpen) setManagementOpen(false);
         else if (narrowWorkspace && workspace.conversationDrawerOpen)
           dispatch({ type: "set-conversations", open: false });
         else if (workspace.workbenchOpen) {
@@ -1344,6 +1345,7 @@ export default function App() {
       <WindowTitleBar />
       <section
         className={`workspace ${workspace.workbenchOpen && workbenchExpanded ? "is-workbench-expanded" : ""} ${workspace.workbenchOpen ? "has-workbench" : ""} ${narrowWorkspace ? "is-overlay-layout" : ""} ${workspaceResizing ? "is-resizing" : ""}`}
+        inert={Boolean(managementSection)}
         data-layout={narrowWorkspace ? "overlay" : "split"}
         style={{
           "--workbench-track-width": `${workbenchExpanded && workspace.workbenchOpen ? viewportWidth - (workspace.conversationDrawerOpen ? 240 : 72) : workspaceWorkbenchWidth(workspace, viewportWidth, workbenchWidth)}px`,
@@ -1556,7 +1558,7 @@ export default function App() {
             <WorkbenchSurface
               ref={workbenchRef}
               initial={workspace.activeWorkbenchTab}
-              visible={workspace.workbenchOpen}
+              visible={workspace.workbenchOpen && !managementSection}
               motionRevision={`${workspace.workbenchOpen}:${narrowWorkspace}:${workspace.conversationDrawerOpen}:${workbenchExpanded}`}
               restored={workbenchRestore}
               onStateChange={persistWorkbench}

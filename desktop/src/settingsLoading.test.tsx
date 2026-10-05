@@ -60,17 +60,17 @@ test.each(sections)("%s displays the saved advanced mode on its first populated 
   loadGate = new Promise<void>(resolve => { release = resolve; });
   const modes: boolean[] = [];
   render(<Profiler id="settings" onRender={() => {
-    const toggle = screen.queryByRole<HTMLInputElement>("checkbox", { name: "הצג הגדרות מתקדמות" });
+    const toggle = screen.queryByRole<HTMLInputElement>("switch", { name: "הצג הגדרות מתקדמות" });
     if (toggle) modes.push(toggle.checked);
   }}>{view(section)}</Profiler>);
 
   expect(document.querySelector("[data-setting-path]")).toBeNull();
-  expect(screen.queryByRole("checkbox", { name: "הצג הגדרות מתקדמות" })).toBeNull();
+  expect(screen.queryByRole("switch", { name: "הצג הגדרות מתקדמות" })).toBeNull();
   expect(screen.getByText("טוען הגדרות…")).toBeTruthy();
   expect(requests("GET", "/v2/providers/gemini/models")).toHaveLength(0);
   await act(async () => { release(); });
 
-  await screen.findByRole("checkbox", { name: "הצג הגדרות מתקדמות" });
+  await screen.findByRole("switch", { name: "הצג הגדרות מתקדמות" });
   expect(modes.length).toBeGreaterThan(0);
   expect(modes.every(Boolean)).toBe(true);
   expect(requests("GET", "/v2/settings")).toHaveLength(1);
@@ -88,14 +88,14 @@ test.each(sections)("%s displays the saved advanced mode on its first populated 
 test.each([false, undefined])("keeps advanced settings hidden for saved mode %s", async (mode) => {
   values.ui_preferences = { settings_show_advanced: mode };
   render(view("settings_tools"));
-  const toggle = await screen.findByRole<HTMLInputElement>("checkbox", { name: "הצג הגדרות מתקדמות" });
+  const toggle = await screen.findByRole<HTMLInputElement>("switch", { name: "הצג הגדרות מתקדמות" });
   expect(toggle.checked).toBe(false);
   expect(document.querySelector('[data-setting-path="email_imap_host"]')).toBeNull();
 });
 
 test("persists advanced changes, preserves other preferences and retains the mode across categories", async () => {
   const { rerender } = render(view("settings_tools"));
-  const toggle = await screen.findByRole<HTMLInputElement>("checkbox", { name: "הצג הגדרות מתקדמות" });
+  const toggle = await screen.findByRole<HTMLInputElement>("switch", { name: "הצג הגדרות מתקדמות" });
   fireEvent.click(toggle);
   expect(toggle.checked).toBe(false);
   expect(document.querySelector('[data-setting-path="email_imap_host"]')).toBeNull();
@@ -121,6 +121,6 @@ test("retries a failed initial load without exposing default settings", async ()
   expect(document.querySelector("[data-setting-path]")).toBeNull();
   failLoad = false;
   fireEvent.click(screen.getByRole("button", { name: "נסה שוב" }));
-  expect((await screen.findByRole<HTMLInputElement>("checkbox", { name: "הצג הגדרות מתקדמות" })).checked).toBe(true);
+  expect((await screen.findByRole<HTMLInputElement>("switch", { name: "הצג הגדרות מתקדמות" })).checked).toBe(true);
   expect(requests("GET", "/v2/settings")).toHaveLength(2);
 });

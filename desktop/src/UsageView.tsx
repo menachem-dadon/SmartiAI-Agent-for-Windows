@@ -1,3 +1,6 @@
+import { EmptyState, IconButton, SegmentedControl } from "./design-system";
+import { Button } from "./design-system";
+import { ManagementFeedback } from "./managementFeedback";
 import { useEffect, useRef, useState } from "react";
 import { coreApi } from "./coreApi";
 import { ConfirmDialog, PageHero } from "./SettingsManagement";
@@ -125,20 +128,20 @@ export function UsageView() {
   const partial = Boolean(snapshot?.unpriced_models);
   return (
     <div className="management-page usage-page" dir="rtl">
-      <PageHero title="שימוש ועלויות" description="סיכום הטוקנים והעלויות של השימוש ב־Smarti, לפי תקופה ומודל."
-        actions={<button className="danger" disabled={clearing} onClick={() => { setClearError(""); setConfirmClear(true); }}>ניקוי נתונים</button>} />
+      <PageHero title="שימוש ועלויות" description="סיכום הטוקנים והעלויות של השימוש ב־Smarti, לפי תקופה ומודל." />
       <div className="usage-toolbar">
-        <div className="segmented" role="group" aria-label="תקופת שימוש">
-          {periods.map(([id, label]) => <button key={id} className={timeframe === id ? "active" : ""}
-            aria-pressed={timeframe === id} disabled={clearing} onClick={() => setTimeframe(id)}>{label}</button>)}
-        </div>
+        <SegmentedControl label="תקופת שימוש">
+          {periods.map(([id, label]) => <Button type="button" key={id} className={timeframe === id ? "active" : ""}
+            aria-pressed={timeframe === id} disabled={clearing} onClick={() => setTimeframe(id)}>{label}</Button>)}
+        </SegmentedControl>
         <div className="usage-refresh">
           <span role="status" aria-live="polite">{clearing ? "מנקה נתונים…" : loading ? (snapshot ? "מעדכן נתונים…" : "טוען נתוני שימוש…") :
             updatedAt ? `עודכן ב־${updatedAt.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}` : snapshot ? "מציג נתונים שמורים" : ""}</span>
-          <button className="ui-button ui-button--secondary" disabled={loading || clearing} onClick={() => setRefresh(value => value + 1)}>רענון</button>
+          <IconButton icon="refresh" label="רענון" type="button"  disabled={loading || clearing} onClick={() => setRefresh(value => value + 1)} />
+          <IconButton icon="trash" label="ניקוי נתונים" type="button" variant="danger" disabled={clearing} onClick={() => { setClearError(""); setConfirmClear(true); }} />
         </div>
       </div>
-      {error && <p className="management-notice" role="alert">{error}{snapshot && " מוצגים הנתונים האחרונים שנשמרו."}</p>}
+      {error && <ManagementFeedback message={`טעינת נתוני השימוש נכשלה: ${error}${snapshot ? " מוצגים הנתונים האחרונים שנשמרו." : ""}`} />}
       <div className="usage-summary" aria-busy={loading}>
         <section className="usage-stat usage-stat--primary"><span>סה״כ טוקנים</span><strong dir="ltr">{snapshot ? count(snapshot.total_tokens) : "—"}</strong><small>{snapshot ? `${count(snapshot.models.length)} מודלים בתקופה שנבחרה` : "ממתין לנתונים"}</small></section>
         <section className="usage-stat"><span>קלט</span><strong dir="ltr">{snapshot ? count(snapshot.input_tokens) : "—"}</strong><small>כולל טוקנים מהמטמון</small></section>
@@ -157,7 +160,7 @@ export function UsageView() {
               <td><bdi className={item.cost_usd === null ? "usage-unpriced" : "usage-model-cost"}>{formatUsageCost(item.cost_usd)}</bdi><small>{item.cost_status === "recorded" ? "עלות מתועדת" : item.cost_status === "local" ? "מודל מקומי" : item.cost_status === "unavailable" ? "חסר תעריף" : "מוערכת"}</small></td>
             </tr>)}</tbody>
           </table></div>
-        </section> : <section className="usage-empty"><h3>אין שימוש בתקופה הזו</h3><p>נתוני שימוש יופיעו כאן אחרי שימוש במודלים.</p>{timeframe !== "all" && <button className="ui-button ui-button--secondary" onClick={() => setTimeframe("all")}>הצג את כל התקופות</button>}</section>}
+        </section> : <EmptyState icon="usage" title="אין שימוש בתקופה הזו" description="נתוני שימוש יופיעו כאן אחרי שימוש במודלים." action={timeframe !== "all" && <Button onClick={() => setTimeframe("all")}>הצג את כל התקופות</Button>} />}
       </>}
       {confirmClear && <ConfirmDialog title="ניקוי נתוני שימוש" danger
         description={clearError || "הנתונים המקומיים יאופסו לאחר יצירת גיבוי. פעולה זו אינה מוחקת היסטוריית שיחות."}

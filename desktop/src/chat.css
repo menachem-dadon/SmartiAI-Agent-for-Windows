@@ -66,17 +66,18 @@
 .composer-tool { background:transparent; color:var(--sds-color-text); }
 .composer-tool:hover { background:var(--sds-color-surface-muted); }
 .composer-controls { min-width:0; display:flex; align-items:center; flex-wrap:wrap; }
-.composer-selectors { min-width:0; width:100%; display:flex; align-items:center; justify-content:space-between; gap:4px; }
+.composer-selectors { min-width:0; width:100%; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:4px; }
+.composer-model-controls { min-width:0; display:flex; align-items:center; gap:4px; flex:0 1 auto; direction:ltr; }
 .quick-pill { position:relative; min-width:0; }
 .quick-pill summary { min-height:40px; min-width:40px; display:flex; align-items:center; gap:6px; padding:8px; cursor:pointer; list-style:none; color:var(--sds-color-text-muted); }
 .quick-pill summary::-webkit-details-marker { display:none; }
-.model-quick-pill { flex:0 1 auto; }
+.model-quick-pill { flex:0 1 auto; min-width:40px; }
 .model-quick-pill summary { direction:ltr; }
 .model-quick-pill .sds-hover-label { min-width:0; max-width:220px; }
 .autonomy-quick-pill { flex:none; direction:rtl; }
 .autonomy-quick-pill .sds-button { border:0; background:transparent; padding:8px; color:var(--sds-color-text-muted); gap:6px; }
 .autonomy-quick-pill .sds-button .sds-icon { order:-1; }
-.local-fast-mode { direction:rtl; display:flex; align-items:center; gap:8px; padding:4px; font-size:13px; }
+.local-fast-mode { direction:rtl; display:flex; align-items:center; gap:4px; padding:4px; font-size:13px; white-space:nowrap; flex:none; }
 .attachment-picker { display:none; }
 .pending-attachments { display:flex; gap:8px; overflow:auto; padding:4px; margin-bottom:8px; }
 .pending-image,.pending-file { position:relative; flex:none; width:148px; min-height:64px; border:1px solid var(--sds-color-border); border-radius:12px; padding:8px 44px 8px 8px; background:var(--sds-color-surface-muted); display:grid; gap:4px; }
@@ -206,6 +207,7 @@
   .composer-actions { gap:4px; }
   .composer { padding:10px 8px; }
   .composer-selectors { gap:0; }
+  .local-fast-mode-caption { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
   .quick-pill summary,.autonomy-quick-pill .sds-button { padding:8px 4px; font-size:13px; }
   .autonomy-quick-pill .sds-button .sds-icon { display:none; }
 }

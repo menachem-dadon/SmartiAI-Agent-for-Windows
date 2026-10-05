@@ -1,3 +1,7 @@
+import { Dialog, IconButton, Popover, PageHeader, SegmentedControl, SettingRow as SharedSettingRow, SettingsGroup, Switch, RangeField, LoadingState } from "./design-system";
+import { ManagementFeedback } from "./managementFeedback";
+import { ProviderPicker } from "./ProviderPicker";
+import { Button, Textarea, Field, Icon, SelectField, SearchField } from "./design-system";
 import {
   Fragment,
   useCallback,
@@ -10,14 +14,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { coreApi, encodePath } from "./coreApi";
 import { useSpeechPlayback } from "./speechPlayback";
 import type { ResolvedTheme, ThemePreference } from "./designSystem";
-import { LegacyIcon, legacyAssets } from "./legacyAssets";
-import { useDismissiblePopup } from "./popupDismissal";
+
+
 import {
   capabilityLabels,
   matchingSettings,
   patchForSetting,
   policyOptions,
-  providerOptions,
   providerSecretKeys,
   readSetting,
   settingsSectionTitles,
@@ -113,225 +116,59 @@ export async function validateAndPersistProviderKey({
   return result;
 }
 
-function settingNeedsInfo(
-  label: string,
-  help: string,
-  advanced = false,
-  forced?: boolean,
-) {
-  if (forced !== undefined) return forced;
-  if (advanced) return true;
-  const text = `${label} ${help}`.toLocaleLowerCase("he");
-  return [
-    "api",
-    "imap",
-    "smtp",
-    "ssl",
-    "mcp",
-    "shell",
-    "tavily",
-    "token",
-    "port",
-    "מפתח",
-    "סיסמת",
-    "שרת",
-    "פורט",
-    "ארגז חול",
-    "הרשאות",
-    "אוטונומי",
-    "אישור",
-    "חיבור",
-    "כלים חיצוניים",
-    "תאימות",
-    "לוג",
-    "trace",
-    "אודיט",
-  ].some((term) => text.includes(term));
-}
-
-function SettingsInfoButton({ label, help }: { label: string; help: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <span
-      className="settings-info-wrap"
-      onPointerEnter={() => setOpen(true)}
-      onPointerLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
-    >
-      <button
-        type="button"
-        className="settings-info"
-        aria-label={`מידע: ${label}`}
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        i
-      </button>
-      {open && <span role="tooltip">{help}</span>}
-    </span>
-  );
-}
-
-function SourceSettingField({
-  label,
-  help,
-  children,
-  className = "",
-  dataPath,
-  advanced = false,
-  info,
-}: {
-  label: string;
-  help: string;
-  children: React.ReactNode;
-  className?: string;
-  dataPath?: string;
-  advanced?: boolean;
-  info?: boolean;
+function SourceSettingField({ label, help, children, className = "", dataPath }: {
+  label: string; help: string; children: React.ReactNode; className?: string;
+  dataPath?: string; advanced?: boolean; info?: boolean;
 }) {
-  const showInfo = Boolean(
-    help && settingNeedsInfo(label, help, advanced, info),
-  );
-  return (
-    <section
-      className={`source-settings-field ${className}`.trim()}
-      data-setting-path={dataPath}
-    >
-      <header>
-        <b>{label}</b>
-        {showInfo && <SettingsInfoButton label={label} help={help} />}
-      </header>
-      <div className="source-settings-control">{children}</div>
-    </section>
-  );
+  return <section className={`source-settings-field ${className}`} data-setting-path={dataPath}>
+    <SharedSettingRow title={label} description={help}><div className="source-settings-control">{children}</div></SharedSettingRow>
+  </section>;
 }
 
-export function ConfirmDialog({
-  title,
-  description,
-  confirmLabel = "אישור מפורש",
-  danger = false,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  description: string;
-  confirmLabel?: string;
-  danger?: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
+export function ConfirmDialog({ title, description, confirmLabel = "אישור מפורש", danger = false, onCancel, onConfirm }: {
+  title: string; description: string; confirmLabel?: string; danger?: boolean;
+  onCancel: () => void; onConfirm: () => void | Promise<unknown>;
 }) {
-  return (
-    <div className="legacy-dialog-backdrop" role="presentation">
-      <div
-        className="legacy-input-dialog"
-        role="alertdialog"
-        aria-modal="true"
-        aria-label={title}
-      >
-        <h2>{title}</h2>
-        <p>{description}</p>
-        <footer>
-          <button onClick={onCancel}>ביטול</button>
-          <button className={danger ? "danger" : ""} onClick={onConfirm}>
-            {confirmLabel}
-          </button>
-        </footer>
-      </div>
-    </div>
-  );
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const guard = useRef(false), cancel = useRef<HTMLButtonElement>(null);
+  const confirm = async () => {
+    if (guard.current) return; guard.current = true; setBusy(true); setError("");
+    try { if (await onConfirm() === false) setError("הפעולה נכשלה. אפשר לנסות שוב."); } catch (reason) { setError(`הפעולה נכשלה: ${String(reason)}`); }
+    finally { guard.current = false; setBusy(false); }
+  };
+  return <Dialog open title={title} description={description} role="alertdialog" initialFocus={cancel} onClose={() => { if (!guard.current) onCancel(); }}>
+    <ManagementFeedback message={error} />
+    <footer className="sds-actions"><Button ref={cancel} disabled={busy} onClick={onCancel}>ביטול</Button>
+      <Button variant={danger ? "danger" : "primary"} loading={busy} onClick={() => void confirm()}>{confirmLabel}</Button></footer>
+  </Dialog>;
 }
 
-export function InputDialog({
-  title,
-  label,
-  initial = "",
-  confirmLabel = "שמירה",
-  multiline = true,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  label: string;
-  initial?: string;
-  confirmLabel?: string;
-  multiline?: boolean;
-  onCancel: () => void;
-  onConfirm: (value: string) => void;
+export function InputDialog({ title, label, initial = "", confirmLabel = "שמירה", multiline = true, onCancel, onConfirm }: {
+  title: string; label: string; initial?: string; confirmLabel?: string; multiline?: boolean;
+  onCancel: () => void; onConfirm: (value: string) => void | Promise<unknown>;
 }) {
-  const [value, setValue] = useState(initial);
-  return (
-    <div
-      className="legacy-dialog-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel();
-      }}
-    >
-      <form
-        className="legacy-input-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        onSubmit={(event) => {
-          event.preventDefault();
-          onConfirm(value.trim());
-        }}
-      >
-        <h2>{title}</h2>
-        <label>
-          {label}
-          {multiline ? (
-            <textarea
-              autoFocus
-              dir="auto"
-              value={value}
-              onChange={(event) => setValue(event.target.value)}
-            />
-          ) : (
-            <input
-              autoFocus
-              dir="auto"
-              value={value}
-              onChange={(event) => setValue(event.target.value)}
-            />
-          )}
-        </label>
-        <footer>
-          <button type="button" onClick={onCancel}>
-            ביטול
-          </button>
-          <button type="submit" disabled={!value.trim()}>
-            {confirmLabel}
-          </button>
-        </footer>
-      </form>
-    </div>
-  );
+  const [value, setValue] = useState(initial), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const guard = useRef(false);
+  const submit = async () => {
+    if (guard.current || !value.trim()) return; guard.current = true; setBusy(true); setError("");
+    try { if (await onConfirm(value.trim()) === false) setError("הפעולה נכשלה. הפרטים נשמרו כאן; אפשר לנסות שוב."); } catch (reason) { setError(`הפעולה נכשלה: ${String(reason)}`); }
+    finally { guard.current = false; setBusy(false); }
+  };
+  return <Dialog open title={title} onClose={() => { if (!guard.current) onCancel(); }}>
+    <form onSubmit={event => { event.preventDefault(); void submit(); }}>
+      {multiline ? <Textarea label={label} autoFocus value={value} disabled={busy} onChange={event => setValue(event.target.value)} />
+        : <Field label={label} autoFocus dir="auto" value={value} disabled={busy} onChange={event => setValue(event.target.value)} />}
+      <ManagementFeedback message={error} />
+      <footer className="sds-actions"><Button disabled={busy} onClick={onCancel}>ביטול</Button>
+        <Button type="submit" variant="primary" loading={busy} disabled={!value.trim()}>{confirmLabel}</Button></footer>
+    </form>
+  </Dialog>;
 }
 
-export function PageHero({
-  title,
-  description,
-  actions,
-  children,
-}: {
-  title: string;
-  description: string;
-  actions?: React.ReactNode;
-  children?: React.ReactNode;
+export function PageHero({ title, description, actions, children }: {
+  title: string; description: string; actions?: React.ReactNode; children?: React.ReactNode;
 }) {
-  return (
-    <section className="management-hero">
-      <div>
-        <h2>{title}</h2>
-        <p>{description}</p>
-        {children}
-      </div>
-      {actions}
-    </section>
-  );
+  return <><PageHeader title={title} description={description} actions={actions} />{children}</>;
 }
 
 function SettingRow({
@@ -341,7 +178,7 @@ function SettingRow({
   onSave,
   onSecretChanged,
   schema,
-  theme,
+  theme: _theme,
 }: {
   definition: SettingDefinition;
   values: Json;
@@ -398,10 +235,10 @@ function SettingRow({
         .split(";")
         .map((item) => item.trim())
         .filter(Boolean);
-    setStatus("שומר…");
+    setStatus("");
     try {
       await onSave(definition.path, value);
-      setStatus("נשמר");
+      setStatus("");
     } catch (reason) {
       setStatus(`השמירה נכשלה: ${String(reason)}`);
     }
@@ -428,9 +265,9 @@ function SettingRow({
             ]),
           ];
           setDraft(next.join("; "));
-          setStatus("שומר…");
+          setStatus("");
           await onSave(definition.path, next);
-          setStatus("נשמר");
+          setStatus("");
         } else {
           setDraft(selected);
           await saveDraft(selected);
@@ -443,9 +280,8 @@ function SettingRow({
   if (definition.control === "secret") {
     const state = secrets[definition.path] || { configured: false, masked: "" };
     const help = schema.secret_help[definition.path];
-    const icons = legacyAssets(theme);
     const persistSecret = async (next: string) => {
-      setStatus("שומר…");
+      setStatus("");
       try {
         if (next.trim())
           await coreApi(
@@ -462,7 +298,7 @@ function SettingRow({
             true,
           );
         setSecret("");
-        setStatus(next.trim() ? "נשמר" : "נמחק");
+        setStatus("");
         await onSecretChanged();
       } catch (reason) {
         setStatus(`השמירה נכשלה: ${String(reason)}`);
@@ -470,7 +306,7 @@ function SettingRow({
     };
     const editSecret = (next: string) => {
       setSecret(next);
-      setStatus("שומר…");
+      setStatus("");
       if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
       saveTimer.current = window.setTimeout(() => {
         saveTimer.current = null;
@@ -492,38 +328,25 @@ function SettingRow({
     return (
       <SourceSettingField {...sourceProps} className="secret-field">
         <div className="secret-link-row">
-          <input
-            type="password"
+          <Field label={definition.label} hiddenLabel
+            type={definition.path === "email_address" ? "email" : "password"}
+            dir="ltr"
             autoComplete="new-password"
             value={secret}
             onChange={(event) => editSecret(event.target.value)}
+            onBlur={() => {
+              if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; void persistSecret(secret); }
+            }}
             placeholder={
               state.configured
                 ? `מוגדר · ${state.masked || "••••"}`
                 : "הדבקת ערך חדש"
             }
           />
-          <button
-            className="icon-control"
-            type="button"
-            title="הדבק מפתח מלוח ההעתקה"
-            aria-label="הדבק מפתח מלוח ההעתקה"
-            onClick={() => void paste()}
-          >
-            <LegacyIcon src={icons.paste} size={19} />
-          </button>
-          <button
-            className="icon-control"
-            type="button"
-            title="מחק מפתח שמור"
-            aria-label="מחק מפתח שמור"
-            disabled={!secret && !state.configured}
-            onClick={() => editSecret("")}
-          >
-            <LegacyIcon src={icons.delete} size={17} />
-          </button>
+          <IconButton icon="paste" label="הדבק ערך מלוח ההעתקה" type="button" onClick={() => void paste()} />
+          <IconButton icon="trash" label="מחק ערך שמור" type="button" disabled={!secret && !state.configured} onClick={() => editSecret("")} />
           {help?.help_url && (
-            <button
+            <Button
               type="button"
               className="secret-help-link"
               onClick={() =>
@@ -534,140 +357,89 @@ function SettingRow({
               }
             >
               קבל מפתח
-            </button>
+            </Button>
           )}
         </div>
         {help?.key_instructions && (
           <small className="secret-instructions">{help.key_instructions}</small>
         )}
-        {status && (
-          <small role="status" className="settings-status">
-            {status}
-          </small>
-        )}
+        <ManagementFeedback message={status} />
       </SourceSettingField>
     );
   }
   if (definition.control === "directory") {
-    const icons = legacyAssets(theme);
     const clear = async () => {
-      setDraft("");
-      setStatus("שומר…");
-      await onSave(definition.path, definition.multiple ? [] : "");
-      setStatus("נשמר");
+      setStatus("");
+      try { await onSave(definition.path, definition.multiple ? [] : ""); setDraft(""); }
+      catch (reason) { setStatus(`השמירה נכשלה: ${String(reason)}`); }
     };
     return (
       <SourceSettingField {...sourceProps}>
         <div className="source-directory-picker">
-          <input readOnly dir="ltr" value={draft} />
-          <button
-            type="button"
-            title={definition.multiple ? "הוסף תיקייה" : "בחר תיקייה"}
-            aria-label={definition.multiple ? "הוסף תיקייה" : "בחר תיקייה"}
-            onClick={() => void choosePath()}
-          >
-            <LegacyIcon src={icons.folder} size={20} />
-          </button>
+          <Field label={definition.label} hiddenLabel readOnly dir="ltr" value={draft} />
+          <IconButton icon={"folder"} label={definition.multiple ? "הוסף תיקייה" : "בחר תיקייה"} type="button" onClick={() => void choosePath()} />
         </div>
         {definition.multiple && (
-          <button
+          <Button
             type="button"
             className="source-clear-paths"
             onClick={() => void clear()}
           >
             נקה
-          </button>
+          </Button>
         )}
-        {status && <small role="status">{status}</small>}
+        <ManagementFeedback message={status} />
       </SourceSettingField>
     );
   }
   if (definition.control === "switch") {
-    const showInfo = settingNeedsInfo(
-      definition.label,
-      definition.help,
-      Boolean(definition.advanced),
-      definition.info,
-    );
-    return (
-      <section
-        className={`source-settings-field source-checkbox-field${controlDisabled ? " is-disabled" : ""}`}
-        data-setting-path={definition.path}
-      >
-        <label>
-          <span className="source-switch">
-            <input
-              type="checkbox"
-              checked={Boolean(raw)}
-              disabled={controlDisabled}
-              onChange={(event) => {
-                setStatus("שומר…");
-                void onSave(definition.path, event.target.checked)
-                  .then(() => setStatus("נשמר"))
-                  .catch((reason) => setStatus(String(reason)));
-              }}
-            />
-            <span />
-          </span>
-          <b>{definition.label}</b>
-          {showInfo && (
-            <SettingsInfoButton
-              label={definition.label}
-              help={definition.help}
-            />
-          )}
-        </label>
-        {status && <small role="status">{status}</small>}
-      </section>
-    );
+    return <SourceSettingField {...sourceProps} className={controlDisabled ? "is-disabled" : ""}>
+      <Switch label={definition.label} checked={Boolean(raw)} disabled={controlDisabled}
+        onCheckedChange={checked => { setStatus(""); void onSave(definition.path, checked).catch(reason => setStatus(`השמירה נכשלה: ${String(reason)}`)); }} />
+      <ManagementFeedback message={status} />
+    </SourceSettingField>;
   }
+
   if (definition.control === "segmented") {
-    const icons = legacyAssets(theme);
-    const optionIcon = (value: string | number) =>
-      value === "locked_down"
-        ? icons.autonomySafe
-        : value === "balanced"
-          ? icons.autonomy
-          : value === "max_autonomy"
-            ? icons.autonomyFull
-            : "";
+    const optionIcon = (value: string | number) => value === "locked_down" ? "lock" : value === "balanced" ? "shield" : value === "max_autonomy" ? "spark" : value === "light" ? "sun" : value === "dark" ? "moon" : value === "system" ? "screen" : undefined;
     return (
       <SourceSettingField {...sourceProps}>
-        <div className="source-segmented">
+        <SegmentedControl className="source-segmented" label={definition.label}>
           {definition.options?.map((option) => (
-            <button
+            <Button
               type="button"
               key={String(option.value)}
+              aria-pressed={String(raw ?? "") === String(option.value)}
               className={
                 String(raw ?? "") === String(option.value) ? "active" : ""
               }
               onClick={() => {
-                setStatus("שומר…");
+                setStatus("");
                 void onSave(definition.path, option.value)
-                  .then(() => setStatus("נשמר"))
+                  .then(() => setStatus(""))
                   .catch((reason) => setStatus(String(reason)));
               }}
             >
               {optionIcon(option.value) && (
-                <LegacyIcon src={optionIcon(option.value)} size={18} />
+                <Icon name={optionIcon(option.value)!} size={18} />
               )}
               <span>{option.label}</span>
-            </button>
+            </Button>
           ))}
-        </div>
-        {status && <small role="status">{status}</small>}
+        </SegmentedControl>
+        <ManagementFeedback message={status} />
       </SourceSettingField>
     );
   }
   if (definition.control === "select")
     return (
       <SourceSettingField {...sourceProps}>
-        <select
+        <SelectField label={definition.label} hiddenLabel
           value={String(raw ?? "")}
           onChange={(event) => {
-            setStatus("שומר…");
+            setStatus("");
             void onSave(definition.path, event.target.value)
-              .then(() => setStatus("נשמר"))
+              .then(() => setStatus(""))
               .catch((reason) => setStatus(String(reason)));
           }}
         >
@@ -676,8 +448,8 @@ function SettingRow({
               {option.label}
             </option>
           ))}
-        </select>
-        {status && <small role="status">{status}</small>}
+        </SelectField>
+        <ManagementFeedback message={status} />
       </SourceSettingField>
     );
   if (definition.control === "range") {
@@ -692,27 +464,17 @@ function SettingRow({
           : `${draft} ${definition.suffix || ""}`.trim();
     return (
       <SourceSettingField {...sourceProps} className="range-field">
-        <div>
-          <input
-            type="range"
-            min={definition.min}
-            max={definition.max}
-            step={definition.step || 1}
-            value={draft || definition.min || 0}
-            onChange={(event) => setDraft(event.target.value)}
-            onPointerUp={() => void saveDraft()}
-            onKeyUp={() => void saveDraft()}
-          />
-          <output>{rangeLabel}</output>
-        </div>
-        {status && <small role="status">{status}</small>}
+        <RangeField label={definition.label} value={Number(draft || definition.min || 0)} min={definition.min ?? 0} max={definition.max ?? 100} step={definition.step || 1}
+          formatValue={() => rangeLabel} onValueChange={value => setDraft(String(value))}
+          onPointerUp={event => void saveDraft(event.currentTarget.value)} onKeyUp={event => void saveDraft(event.currentTarget.value)} />
+        <ManagementFeedback message={status} />
       </SourceSettingField>
     );
   }
   return (
     <SourceSettingField {...sourceProps}>
       <div>
-        <input
+        <Field label={definition.label} hiddenLabel
           dir={definition.control === "number" ? "ltr" : "auto"}
           type={definition.control === "number" ? "number" : "text"}
           min={definition.min}
@@ -729,142 +491,50 @@ function SettingRow({
         />
         {definition.suffix && <i>{definition.suffix}</i>}
         {["directory", "file"].includes(definition.control) && (
-          <button type="button" onClick={() => void choosePath()}>
+          <Button type="button" onClick={() => void choosePath()}>
             בחירה
-          </button>
+          </Button>
         )}
       </div>
-      {status && <small role="status">{status}</small>}
+      <ManagementFeedback message={status} />
     </SourceSettingField>
   );
 }
 
-function SearchableModelPicker({
-  models,
-  selected,
-  loading,
-  favorites,
-  theme,
-  onSelect,
-  onToggleFavorite,
-}: {
-  models: string[];
-  selected: string;
-  loading: boolean;
-  favorites: Json[];
-  theme: ResolvedTheme;
-  onSelect: (model: string) => Promise<void>;
-  onToggleFavorite: (model: string) => Promise<void>;
+function SearchableModelPicker({ models, selected, loading, favorites, onSelect, onToggleFavorite }: {
+  models: string[]; selected: string; loading: boolean; favorites: Json[]; theme: ResolvedTheme;
+  onSelect: (model: string) => Promise<void>; onToggleFavorite: (model: string) => Promise<void>;
 }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const root = useRef<HTMLDivElement | null>(null);
-  const icons = legacyAssets(theme);
-  const allModels = useMemo(
-    () => [...new Set([selected, ...models])].filter(Boolean),
-    [models, selected],
-  );
+  const [query, setQuery] = useState(""), [error, setError] = useState("");
+  const options = useRef<HTMLDivElement>(null);
+  const allModels = useMemo(() => [...new Set([selected, ...models])].filter(Boolean), [models, selected]);
   const filtered = useMemo(() => {
-    const terms = query
-      .toLocaleLowerCase("en")
-      .split(/[^a-z0-9]+/)
-      .filter(Boolean);
-    if (!terms.length) return allModels;
-    return allModels.filter((model) => {
-      const normalized = model
-        .toLocaleLowerCase("en")
-        .replace(/[^a-z0-9]+/g, " ");
-      const compact = normalized.replace(/ /g, "");
-      return terms.every(
-        (term) => normalized.includes(term) || compact.includes(term),
-      );
-    });
-  }, [allModels, query]);
-  useDismissiblePopup({
-    open,
-    roots: [root],
-    onDismiss: () => setOpen(false),
-  });
-  if (loading)
-    return (
-      <div className="source-model-loading" role="status">
-        <span aria-hidden="true" />
-        טוען מודלים...
-      </div>
-    );
-  return (
-    <div className="source-model-picker" ref={root}>
-      <button
-        type="button"
-        className="source-model-picker-current"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        {selected || (models.length ? "בחר מודל" : "לא נמצאו מודלים")}
-        <i aria-hidden="true" />
-      </button>
-      {open && (
-        <div className="source-model-popup">
-          <input
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setOpen(false);
-              if (event.key === "Enter" && filtered[0]) {
-                void onSelect(filtered[0]);
-                setOpen(false);
-              }
-            }}
-            placeholder="חפש מודל"
-            aria-label="חפש מודל"
-          />
-          <div role="listbox" aria-label="מודלים">
-            {filtered.length ? (
-              filtered.slice(0, 250).map((model) => {
-                const favorite = favorites.some(
-                  (item) => item.provider && item.model === model,
-                );
-                return (
-                  <div
-                    className={model === selected ? "selected" : ""}
-                    key={model}
-                  >
-                    <button
-                      type="button"
-                      className="source-model-star"
-                      title={favorite ? "הסר מהמועדפים" : "הוסף למועדפים"}
-                      aria-label={`${favorite ? "הסר" : "הוסף"} ${model} ${favorite ? "מהמועדפים" : "למועדפים"}`}
-                      onClick={() => void onToggleFavorite(model)}
-                    >
-                      <LegacyIcon
-                        src={favorite ? icons.starFilled : icons.starEmpty}
-                        size={18}
-                      />
-                    </button>
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={model === selected}
-                      onClick={() => {
-                        void onSelect(model);
-                        setOpen(false);
-                      }}
-                    >
-                      {model}
-                    </button>
-                  </div>
-                );
-              })
-            ) : (
-              <p>לא נמצאו מודלים</p>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    const terms = query.toLocaleLowerCase("en").split(/[^a-z0-9]+/).filter(Boolean);
+    return allModels.filter(model => { const normalized = model.toLocaleLowerCase("en").replace(/[^a-z0-9]+/g, " ");
+      return terms.every(term => normalized.includes(term) || normalized.replace(/ /g, "").includes(term)); });
+  }, [query, allModels]);
+  return <div className="source-model-picker"><Popover label={selected || (models.length ? "בחר מודל" : "לא נמצאו מודלים")}>
+    {close => <div className="source-model-popup" onKeyDown={event => {
+      const choices = [...(options.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') || [])];
+      const index = choices.indexOf(document.activeElement as HTMLButtonElement);
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) && choices.length) {
+        event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? choices.length - 1 : event.key === "ArrowDown" ? (index + 1) % choices.length : (index - 1 + choices.length) % choices.length;
+        choices[next].focus();
+      }
+    }}>
+      <SearchField label="חפש מודל" hiddenLabel autoFocus placeholder="חפש מודל" value={query} onChange={event => setQuery(event.target.value)} />
+      {loading && <LoadingState label="טוען מודלים…" />}
+      <ManagementFeedback message={error} />
+      <div ref={options} role="listbox" aria-label="מודלים">{filtered.slice(0,250).map(model => {
+        const favorite = favorites.some(item => item.model === model);
+        return <div key={model} className={model === selected ? "selected" : ""}>
+          <IconButton icon={favorite ? "starFilled" : "star"} label={`${favorite ? "הסר" : "הוסף"} ${model} ${favorite ? "מהמועדפים" : "למועדפים"}`}
+            onClick={() => void onToggleFavorite(model).catch(reason => setError(`שמירת המועדף נכשלה: ${String(reason)}`))} />
+          <Button variant="ghost" role="option" aria-selected={model === selected} onClick={() => void onSelect(model).then(close).catch(reason => setError(`בחירת המודל נכשלה: ${String(reason)}`))}><bdi>{model}</bdi></Button>
+        </div>;
+      })}{!filtered.length && <p className="sds-hint">לא נמצאו מודלים</p>}</div>
+    </div>}
+  </Popover></div>;
 }
 
 export function ProviderWorkflow({
@@ -903,7 +573,6 @@ export function ProviderWorkflow({
   const providerMetadata = schema.providers.find(
     (item) => item.id === provider,
   );
-  const icons = legacyAssets(theme);
   const refreshModels = useCallback(async () => {
     const generation = ++modelLoadGeneration.current;
     setModelsLoading(true);
@@ -968,10 +637,7 @@ export function ProviderWorkflow({
       )
     )
       return;
-    void save(
-      "favorite_models",
-      [{ provider, model }, ...favorites].slice(0, 60),
-    );
+    void save("favorite_models", [{ provider, model }, ...favorites].slice(0, 60)).catch(reason => setStatus(`שמירת המועדף נכשלה: ${String(reason)}`));
   }, [favorites, models, modelsLoading, provider, save, selectedModel]);
   useEffect(() => {
     if (selectedModel)
@@ -1113,20 +779,16 @@ export function ProviderWorkflow({
         help="בחר את שירות ה-AI שסמארטי ישתמש בו לתשובות ולתכנון פעולות."
         dataPath="api_mode"
       >
-        <select
-          value={provider}
-          onChange={(event) => {
-            const next = event.target.value;
+        <ProviderPicker value={provider}
+          onSelect={async next => {
+            if (next === provider) return;
             if (next !== provider) favoriteOnLoadProvider.current = next;
-            void save("api_mode", next);
+            validationGeneration.current++; if (validationTimer.current !== null) window.clearTimeout(validationTimer.current);
+            setKeyDraft(""); setStatus("");
+            try { await save("api_mode", next); }
+            catch (reason) { setStatus(`בחירת הספק נכשלה: ${String(reason)}`); throw reason; }
           }}
-        >
-          {providerOptions.map((option) => (
-            <option key={String(option.value)} value={String(option.value)}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        />
       </SourceSettingField>
       {secretKey && (
         <>
@@ -1137,7 +799,7 @@ export function ProviderWorkflow({
             dataPath="provider_api_key"
           >
             <div className="secret-link-row">
-              <input
+              <Field label="מפתח גישה לספק המודל" hiddenLabel
                 type="password"
                 autoComplete="new-password"
                 value={keyDraft}
@@ -1148,27 +810,10 @@ export function ProviderWorkflow({
                     : "הדבקת מפתח API"
                 }
               />
-              <button
-                className="icon-control"
-                type="button"
-                title="הדבק מפתח מלוח ההעתקה"
-                aria-label="הדבק מפתח מלוח ההעתקה"
-                onClick={() => void pasteKey()}
-              >
-                <LegacyIcon src={icons.paste} size={19} />
-              </button>
-              <button
-                className="icon-control"
-                type="button"
-                title="מחק מפתח שמור"
-                aria-label="מחק מפתח שמור"
-                disabled={!keyDraft && !configured?.configured}
-                onClick={() => void removeKey()}
-              >
-                <LegacyIcon src={icons.delete} size={17} />
-              </button>
+              <IconButton icon={"paste"} label="הדבק מפתח מלוח ההעתקה" className="icon-control" type="button" onClick={() => void pasteKey()} />
+              <IconButton icon={"trash"} label="מחק מפתח שמור" className="icon-control" type="button" disabled={!keyDraft && !configured?.configured} onClick={() => void removeKey().catch(reason => setStatus(`מחיקת המפתח נכשלה: ${String(reason)}`))} />
               {providerMetadata?.help_url && (
-                <button
+                <Button
                   type="button"
                   className="secret-help-link"
                   onClick={() =>
@@ -1179,32 +824,27 @@ export function ProviderWorkflow({
                   }
                 >
                   קבל מפתח
-                </button>
+                </Button>
               )}
-            </div>
+        </div>
           </SourceSettingField>
-          <p role="status" className="settings-status">
-            {status ||
-              (configured?.configured
-                ? `מפתח שמור: ${configured.masked}`
-                : "לא נשמר מפתח.")}
-          </p>
+          <ManagementFeedback message={status} />
           {providerMetadata?.key_instructions && (
             <p className="secret-instructions">
               {providerMetadata.key_instructions}
             </p>
           )}
           <div className="source-field-actions">
-            <button
+            <Button
               type="button"
               disabled={!keyDraft.trim()}
               onClick={() => void validateAndSaveKey()}
             >
               בדיקה ושמירה
-            </button>
-            <button type="button" onClick={() => void validateExisting()}>
+            </Button>
+            <Button type="button" onClick={() => void validateExisting()}>
               בדיקת החיבור
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -1214,7 +854,7 @@ export function ProviderWorkflow({
           help="המפתח וכתובת השרת חייבים להשתייך לאותו אזור, מרחב עבודה ומסלול ב-Alibaba Model Studio. העתק את Base URL ממסוף הספק. שדה ריק משתמש בברירת המחדל של סין."
           dataPath="qwen_base_url"
         >
-          <input
+          <Field label="כתובת API של Qwen" hiddenLabel
             type="url"
             dir="ltr"
             value={qwenUrlDraft}
@@ -1231,29 +871,13 @@ export function ProviderWorkflow({
           dataPath="provider_api_key"
         >
           <div className="secret-link-row">
-            <input
+            <Field label="מפתח גישה לספק המודל" hiddenLabel
               type="password"
               disabled
               placeholder="לא נדרש מפתח למודל מקומי"
             />
-            <button
-              className="icon-control"
-              type="button"
-              title="הדבק מפתח מלוח ההעתקה"
-              aria-label="הדבק מפתח מלוח ההעתקה"
-              disabled
-            >
-              <LegacyIcon src={icons.paste} size={19} />
-            </button>
-            <button
-              className="icon-control"
-              type="button"
-              title="מחק מפתח שמור"
-              aria-label="מחק מפתח שמור"
-              disabled
-            >
-              <LegacyIcon src={icons.delete} size={17} />
-            </button>
+            <IconButton icon={"paste"} label="הדבק מפתח מלוח ההעתקה" className="icon-control" type="button" disabled />
+            <IconButton icon={"trash"} label="מחק מפתח שמור" className="icon-control" type="button" disabled />
           </div>
         </SourceSettingField>
       )}
@@ -1264,26 +888,20 @@ export function ProviderWorkflow({
             help="התחברות רשמית עם חשבון ChatGPT או Codex. לא נשמרים סיסמה, API key או token בהגדרות של סמארטי."
             dataPath="codex_signin"
           >
-            <p className="settings-status">
-              {status || "יש לבחור OpenAI Codex Sign-in כדי להתחבר."}
-            </p>
+            <ManagementFeedback message={status || "אפשר להתחבר באמצעות חשבון ChatGPT / Codex."} />
             <div className="inline-actions codex-actions">
-              <button
+              <Button type="button" variant="primary"
                 className="primary"
                 onClick={() => void codexAction("codex_login")}
               >
-                התחבר עם
-                <br />
-                ChatGPT / Codex
-              </button>
-              <button onClick={() => void codexAction("codex_check")}>
-                בדוק
-                <br />
-                חיבור
-              </button>
-              <button onClick={() => void codexAction("codex_logout")}>
+                התחבר עם ChatGPT / Codex
+              </Button>
+              <Button type="button" onClick={() => void codexAction("codex_check")}>
+                בדוק חיבור
+              </Button>
+              <Button type="button" onClick={() => void codexAction("codex_logout")}>
                 התנתק
-              </button>
+              </Button>
             </div>
           </SourceSettingField>
           <p className="secret-instructions">
@@ -1313,7 +931,7 @@ export function ProviderWorkflow({
           help="קובעת את עוצמת החשיבה של המודל הפעיל. האפשרויות מותאמות אוטומטית לחוזה של משפחת המודל; בחירה באוטומטית משאירה את השדה ריק ומשתמשת בברירת הספק."
           dataPath="provider_reasoning_effort"
         >
-          <select
+          <SelectField label="עוצמת חשיבה" hiddenLabel
             value={reasoning.reasoning_effort || "auto"}
             onChange={(event) =>
               void coreApi<typeof reasoning>(
@@ -1321,7 +939,7 @@ export function ProviderWorkflow({
                 `/v2/providers/${encodePath(provider)}/reasoning`,
                 { model: selectedModel, effort: event.target.value },
                 true,
-              ).then(setReasoning)
+              ).then(setReasoning).catch(reason => setStatus(`שמירת החשיבה נכשלה: ${String(reason)}`))
             }
           >
             {reasoning.reasoning_options.map((item) => (
@@ -1329,7 +947,7 @@ export function ProviderWorkflow({
                 {item.label}
               </option>
             ))}
-          </select>
+          </SelectField>
         </SourceSettingField>
       ) : null}
     </div>
@@ -1360,11 +978,12 @@ export function PolicyMatrix({
             label={label}
             help="בחר אם סמארטי יוכל להשתמש ביכולת הזו, יבקש אישור בכל פעם, או יחסום אותה לחלוטין."
           >
-            <div className="source-segmented">
+            <SegmentedControl className="source-segmented" label={label}>
               {policyOptions.map((option) => (
-                <button
+                <Button
                   type="button"
                   key={String(option.value)}
+                  aria-pressed={String(matrix[key] || "ask") === String(option.value)}
                   className={
                     String(matrix[key] || "ask") === String(option.value)
                       ? "active"
@@ -1374,13 +993,13 @@ export function PolicyMatrix({
                     void save("policy_matrix", {
                       ...matrix,
                       [key]: option.value,
-                    })
+                    }).catch(() => undefined)
                   }
                 >
                   {option.label}
-                </button>
+                </Button>
               ))}
-            </div>
+            </SegmentedControl>
           </SourceSettingField>
         ))}
       </div>
@@ -1388,7 +1007,7 @@ export function PolicyMatrix({
   );
 }
 
-function AdvancedDeveloperLogPanel({ theme }: { theme: ResolvedTheme }) {
+function AdvancedDeveloperLogPanel({ theme: _theme }: { theme: ResolvedTheme }) {
   const [lines, setLines] = useState<string[]>([]);
   const [path, setPath] = useState("");
   const [limit, setLimit] = useState(500);
@@ -1396,7 +1015,6 @@ function AdvancedDeveloperLogPanel({ theme }: { theme: ResolvedTheme }) {
   const [hidePersonal, setHidePersonal] = useState(true);
   const [status, setStatus] = useState("טוען את הלוג המאוחד…");
   const [confirmClear, setConfirmClear] = useState(false);
-  const icons = legacyAssets(theme);
   const load = useCallback(
     async (requested = limit) => {
       setStatus("טוען לוגים…");
@@ -1447,7 +1065,6 @@ function AdvancedDeveloperLogPanel({ theme }: { theme: ResolvedTheme }) {
     }
   };
   const clearLog = async () => {
-    setConfirmClear(false);
     setStatus("מנקה את הלוג המאוחד…");
     try {
       await coreApi(
@@ -1458,8 +1075,11 @@ function AdvancedDeveloperLogPanel({ theme }: { theme: ResolvedTheme }) {
       );
       setLimit(500);
       await load(500);
+      setConfirmClear(false);
+      return true;
     } catch (reason) {
       setStatus(`ניקוי הלוג נכשל: ${String(reason)}`);
+      return false;
     }
   };
   return (
@@ -1471,29 +1091,21 @@ function AdvancedDeveloperLogPanel({ theme }: { theme: ResolvedTheme }) {
     >
       <div className="source-developer-log">
         <div className="source-log-actions">
-          <button type="button" onClick={() => void load()}>
+          <Button type="button" onClick={() => void load()}>
             רענן לוגים
-          </button>
-          <button type="button" disabled={limit >= 20_000} onClick={loadOlder}>
+          </Button>
+          <Button type="button" disabled={limit >= 20_000} onClick={loadOlder}>
             טען 500 שורות קודמות
-          </button>
-          <button
-            type="button"
-            className="icon-control"
-            title="ייצוא הלוג לקובץ טקסט"
-            aria-label="ייצוא הלוג לקובץ טקסט"
-            onClick={() => void exportLog()}
-          >
-            <LegacyIcon src={icons.exportJson} size={20} />
-          </button>
-          <button type="button" onClick={() => setConfirmClear(true)}>
+          </Button>
+          <IconButton icon={"export"} label="ייצוא הלוג לקובץ טקסט" type="button" className="icon-control" onClick={() => void exportLog()} />
+          <Button type="button" onClick={() => setConfirmClear(true)}>
             נקה לוג
-          </button>
+          </Button>
         </div>
         <div className="source-log-export">
-          <label>
+          <div>
             כמות שורות לייצוא
-            <select
+            <SelectField label="כמות שורות לייצוא" hiddenLabel
               value={exportLimit}
               onChange={(event) => setExportLimit(Number(event.target.value))}
             >
@@ -1503,18 +1115,18 @@ function AdvancedDeveloperLogPanel({ theme }: { theme: ResolvedTheme }) {
               <option value="5000">5,000 שורות אחרונות</option>
               <option value="10000">10,000 שורות אחרונות</option>
               <option value="0">כל הלוגים השמורים</option>
-            </select>
-          </label>
-          <label>
-            <input
-              type="checkbox"
+            </SelectField>
+          </div>
+          <div>
+            <Switch label="הסתר תוכן אישי"
+
               checked={hidePersonal}
-              onChange={(event) => setHidePersonal(event.target.checked)}
+              onCheckedChange={(checked) => setHidePersonal(checked)}
             />
             הסתר תוכן אישי
-          </label>
+          </div>
         </div>
-        <small role="status">{status}</small>
+        <ManagementFeedback message={status} />
         <code dir="ltr">{path}</code>
         <pre dir="ltr">
           {[
@@ -1530,7 +1142,7 @@ function AdvancedDeveloperLogPanel({ theme }: { theme: ResolvedTheme }) {
           confirmLabel="נקה"
           danger
           onCancel={() => setConfirmClear(false)}
-          onConfirm={() => void clearLog()}
+          onConfirm={clearLog}
         />
       )}
     </SourceSettingField>
@@ -1559,7 +1171,7 @@ function SslWorkflow({
   const [tested, setTested] = useState(
     Boolean(values.ssl_filter_setup_completed),
   );
-  const [testing, setTesting] = useState(false);
+  const [testing, setTesting] = useState(false), [insecureConfirm, setInsecureConfirm] = useState(false);
   const [status, setStatus] = useState("טרם בוצעה בדיקה עבור הבחירה הנוכחית.");
   const resetEditor = () => {
     setMode(String(values.ssl_trust_mode || "system"));
@@ -1636,7 +1248,7 @@ function SslWorkflow({
         true,
       );
       setTested(Boolean(result.verified));
-      setStatus(result.message);
+      setStatus(result.ok ? result.message : `הבדיקה נכשלה: ${result.message}`);
     } catch (reason) {
       setTested(false);
       setStatus(
@@ -1646,7 +1258,7 @@ function SslWorkflow({
       setTesting(false);
     }
   };
-  const persist = async () => {
+  const persist = async (confirmedInsecure = false) => {
     if (mode === "custom_ca" && !customPath) {
       setStatus("יש לבחור תחילה תעודת שורש ציבורית תקינה.");
       return;
@@ -1656,12 +1268,7 @@ function SslWorkflow({
         setStatus("יש לאשר שהמשמעות של כיבוי אימות תעודות HTTPS ברורה.");
         return;
       }
-      if (
-        !window.confirm(
-          "הבחירה מכבה באופן רחב את אימות תעודות HTTPS ב-Smarti ובכלים שמופעלים ממנו. להחיל את המצב הפחות בטוח?",
-        )
-      )
-        return;
+      if (!confirmedInsecure) { setInsecureConfirm(true); return; }
     }
     await saveValues({
       ssl_trust_mode: mode,
@@ -1671,7 +1278,7 @@ function SslWorkflow({
       ssl_trust_migration_version: 1,
       allow_insecure_ssl_compat: mode === "legacy_insecure",
     });
-    setExpanded(false);
+    setInsecureConfirm(false); setExpanded(false);
   };
   const summary =
     persistedMode === "custom_ca"
@@ -1709,7 +1316,7 @@ function SslWorkflow({
           <b>{summary.status}</b>
           <p>{summary.detail}</p>
         </div>
-        <button
+        <Button
           type="button"
           onClick={() => {
             if (!expanded) resetEditor();
@@ -1718,7 +1325,7 @@ function SslWorkflow({
         >
           {expanded ? "ביטול" : "הגדר"}
           <i aria-hidden="true" />
-        </button>
+        </Button>
       </header>
       {expanded && (
         <div className="source-ssl-editor">
@@ -1728,15 +1335,16 @@ function SslWorkflow({
             להתחיל במאגר האישורים של Windows. רק אם האפשרות הזו אינה עובדת, אפשר
             לייבא תעודת שורש ציבורית שהתקבלה מספק הסינון.
           </p>
-          <div className="source-segmented">
+          <SegmentedControl className="source-segmented" label="דרך החיבור המאובטח">
             {[
               ["system", "מאגר Windows"],
               ["custom_ca", "תעודה"],
               ["legacy_insecure", "ללא אימות"],
             ].map(([value, label]) => (
-              <button
+              <Button
                 type="button"
                 key={value}
+                aria-pressed={mode === value}
                 className={mode === value ? "active" : ""}
                 onClick={() => {
                   setMode(value);
@@ -1749,9 +1357,9 @@ function SslWorkflow({
                 }}
               >
                 {label}
-              </button>
+              </Button>
             ))}
-          </div>
+          </SegmentedControl>
           <section className="source-ssl-mode">
             {mode === "system" ? (
               <>
@@ -1772,18 +1380,18 @@ function SslWorkflow({
                   פרטי ותעודת שרת רגילה.
                 </p>
                 <div>
-                  <input
+                  <Field label="קובץ תעודה" hiddenLabel
                     readOnly
                     dir="ltr"
                     value={customPath}
                     placeholder="לא נבחרה תעודה"
                   />
-                  <button
+                  <Button
                     type="button"
-                    onClick={() => void chooseCertificate()}
+                    onClick={() => void chooseCertificate().catch(reason => setStatus(`בחירת התעודה נכשלה: ${String(reason)}`))}
                   >
                     בחירת תעודה
-                  </button>
+                  </Button>
                 </div>
                 <small>{certificateDetail}</small>
               </>
@@ -1800,14 +1408,14 @@ function SslWorkflow({
                   לשירות. יש להשתמש באפשרות זו רק אם מאגר Windows וייבוא תעודה
                   אינם פותרים את הבעיה.
                 </strong>
-                <label className="danger-ack">
-                  <input
-                    type="checkbox"
+                <div className="danger-ack">
+                  <Switch label="ברור לי שבמצב זה אימות תעודות HTTPS כבוי בכל רכיבי Smarti"
+
                     checked={ack}
-                    onChange={(event) => setAck(event.target.checked)}
+                    onCheckedChange={(checked) => setAck(checked)}
                   />
                   ברור לי שבמצב זה אימות תעודות HTTPS כבוי בכל רכיבי Smarti
-                </label>
+                </div>
               </>
             )}
           </section>
@@ -1819,18 +1427,18 @@ function SslWorkflow({
             </p>
             <code>https://www.gstatic.com/generate_204</code>
             <div>
-              <button
+              <Button
                 type="button"
                 disabled={testing}
                 onClick={() => void test()}
               >
                 בדיקת חיבור
-              </button>
-              <span role="status">{status}</span>
+              </Button>
+              <ManagementFeedback message={status} />
             </div>
           </section>
           <footer>
-            <button
+            <Button
               type="button"
               disabled={testing}
               onClick={() => {
@@ -1839,17 +1447,18 @@ function SslWorkflow({
               }}
             >
               ביטול
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               disabled={testing}
-              onClick={() => void persist()}
+              onClick={() => void persist().catch(reason => setStatus(`השמירה נכשלה: ${String(reason)}`))}
             >
               שמירה והחלה
-            </button>
+            </Button>
           </footer>
         </div>
       )}
+      {insecureConfirm && <ConfirmDialog title="כיבוי אימות תעודות HTTPS" description="הבחירה מכבה באופן רחב את אימות תעודות HTTPS ב־Smarti ובכלים שמופעלים ממנו. להחיל את המצב הפחות בטוח?" danger confirmLabel="החלה ללא אימות" onCancel={() => setInsecureConfirm(false)} onConfirm={() => persist(true)} />}
     </section>
   );
 }
@@ -1885,7 +1494,7 @@ export function SettingsView({
   const advanced = Boolean(
     (data.values.ui_preferences as Json | undefined)?.settings_show_advanced,
   );
-  const [saveStatus, setSaveStatus] = useState("מוכן");
+  const [saveStatus, setSaveStatus] = useState("");
   const [resetConfirm, setResetConfirm] = useState(false);
   const [pendingFocus, setPendingFocus] = useState("");
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -1907,7 +1516,7 @@ export function SettingsView({
     void load().catch((reason) => setLoadError(String(reason)));
   }, [load]);
   useEffect(() => {
-    void coreApi<SettingsSchema>("GET", "/v2/settings/schema").then(setSchema);
+    void coreApi<SettingsSchema>("GET", "/v2/settings/schema").then(setSchema).catch(reason => setLoadError(`טעינת קטלוג ההגדרות נכשלה: ${String(reason)}`));
   }, []);
   useEffect(() => {
     void coreApi<{ items: Array<{ id: string; name: string }> }>(
@@ -1917,7 +1526,7 @@ export function SettingsView({
       setTtsVoices(
         data.items.map((item) => ({ value: item.id, label: item.name })),
       ),
-    );
+    ).catch(reason => setLoadError(`טעינת קולות נכשלה: ${String(reason)}`));
   }, []);
   useEffect(() => {
     const raw = data.values.settings_recent_searches;
@@ -1942,7 +1551,7 @@ export function SettingsView({
     return () => window.cancelAnimationFrame(frame);
   }, [pendingFocus, section, data.values]);
   const save = async (path: string, value: unknown) => {
-    setSaveStatus("שומר…");
+    setSaveStatus("");
     let patch = patchForSetting(data.values, path, value);
     if (path === "autonomy_mode")
       patch = { ...patch, custom_permission_profile_enabled: false };
@@ -1958,7 +1567,7 @@ export function SettingsView({
       patch = { ...patch, allowed_write_dirs: [String(value || "")] };
     if (path === "updates_auto_check")
       patch = { ...patch, updates_check_interval_hours: 1 };
-    const persisted = await coreApi<SafeSettings>(
+    try { const persisted = await coreApi<SafeSettings>(
       "PATCH",
       "/v2/settings",
       { values: patch },
@@ -1971,18 +1580,20 @@ export function SettingsView({
       await invoke("desktop_set_voice_hotkey", { shortcut: value });
     if (path === "keep_running_in_tray")
       await invoke("desktop_set_close_to_tray", { enabled: value });
-    setSaveStatus("נשמר");
+    setSaveStatus("");
+    } catch (reason) { setSaveStatus(`השמירה נכשלה: ${String(reason)}`); throw reason; }
   };
   const saveValues = async (values: Json) => {
-    setSaveStatus("שומר…");
-    const persisted = await coreApi<SafeSettings>(
+    setSaveStatus("");
+    try { const persisted = await coreApi<SafeSettings>(
       "PATCH",
       "/v2/settings",
       { values },
       true,
     );
     setData(persisted);
-    setSaveStatus("נשמר");
+    setSaveStatus("");
+    } catch (reason) { setSaveStatus(`השמירה נכשלה: ${String(reason)}`); throw reason; }
   };
   const fields = useMemo(
     () => matchingSettings(section, query, advanced),
@@ -2035,10 +1646,11 @@ export function SettingsView({
           ? `ההגדרות אופסו. גיבוי: ${result.backup_path}`
           : "ההגדרות אופסו לברירת המחדל",
       );
+      setResetConfirm(false);
+      return true;
     } catch (reason) {
       setSaveStatus(`האיפוס נכשל: ${String(reason)}`);
-    } finally {
-      setResetConfirm(false);
+      return false;
     }
   };
   const rememberSearch = async () => {
@@ -2065,7 +1677,8 @@ export function SettingsView({
       ...data,
       values: { ...data.values, ui_preferences: nextPreferences },
     });
-    await save("ui_preferences", nextPreferences);
+    try { await save("ui_preferences", nextPreferences); }
+    catch (reason) { setData(data); throw reason; }
   };
   const activateSearchResult = async (definition: SettingDefinition) => {
     await rememberSearch();
@@ -2076,51 +1689,33 @@ export function SettingsView({
     onNavigate?.(definition.section);
   };
   const title = settingsSectionTitles[section];
-  const icons = legacyAssets(theme);
   // Mount the controls only after their values and visibility arrive together.
   if (!loadedData)
     return (
       <div className="management-page settings-page source-settings-page">
         {loadError ? (
           <>
-            <p role="alert">טעינת ההגדרות נכשלה: {loadError}</p>
-            <button onClick={() => void load().catch((reason) => setLoadError(String(reason)))}>
+            <ManagementFeedback message={`טעינת ההגדרות נכשלה: ${loadError}`} />
+            <Button type="button" onClick={() => void load().catch((reason) => setLoadError(String(reason)))}>
               נסה שוב
-            </button>
+            </Button>
           </>
         ) : (
-          <p role="status">טוען הגדרות…</p>
+          <LoadingState label="טוען הגדרות…" />
         )}
       </div>
     );
   return (
     <div className="management-page settings-page source-settings-page">
+      <ManagementFeedback message={loadError} />
       <div className="source-settings-head">
-        <div className="source-save-state" role="status">
-          <LegacyIcon src={icons.saveDone} size={18} />
-          <span>
-            {saveStatus === "מוכן" ? "אין שינויים חדשים" : saveStatus}
-          </span>
-        </div>
-        <div className="source-advanced-pill">
-          <span>הצג הגדרות מתקדמות</span>
-          <label className="source-switch">
-            <input
-              type="checkbox"
-              checked={advanced}
-              title="מציג שדות טכניים כמו פורטים, SSL, מגבלות זמן, לוגים ומטריצת הרשאות."
-              aria-label="הצג הגדרות מתקדמות"
-              onChange={(event) =>
-                void setAdvancedPersisted(event.target.checked)
-              }
-            />
-            <span />
-          </label>
-        </div>
+        <ManagementFeedback message={saveStatus} />
+        <SharedSettingRow title="הצג הגדרות מתקדמות" description="שדות טכניים, מגבלות זמן והרשאות מפורטות.">
+          <Switch label="הצג הגדרות מתקדמות" checked={advanced} onCheckedChange={checked => void setAdvancedPersisted(checked).catch(reason => setSaveStatus(`השמירה נכשלה: ${String(reason)}`))} />
+        </SharedSettingRow>
       </div>
       <div className="source-settings-search">
-        <LegacyIcon src={icons.search} size={26} />
-        <input
+        <SearchField label="חפש הגדרה" hiddenLabel
           value={query}
           onChange={(event) => {
             setPolicyOpen(false);
@@ -2129,7 +1724,7 @@ export function SettingsView({
           onKeyDown={(event) => {
             if (event.key === "Enter" && fields[0]) {
               event.preventDefault();
-              void activateSearchResult(fields[0]);
+              void activateSearchResult(fields[0]).catch(() => undefined);
             }
           }}
           placeholder="חפש הגדרה"
@@ -2137,10 +1732,7 @@ export function SettingsView({
       </div>
       <div className="source-settings-scroll">
         {!query && (
-          <header className="source-settings-section-title">
-            <h2>{policyOpen ? "שליטה מתקדמת ביכולות" : title.title}</h2>
-            <span />
-          </header>
+          <PageHeader title={policyOpen ? "שליטה מתקדמת ביכולות" : title.title} description={title.subtitle} />
         )}
         {query ? (
           <div className="source-search-results">
@@ -2150,17 +1742,17 @@ export function SettingsView({
                 : "לא נמצאו הגדרות. נסה מילה קרובה כמו מודל, קול, אימייל, אבטחה או תיקייה."}
             </p>
             {fields.slice(0, 40).map((definition) => (
-              <button
+              <Button
                 type="button"
                 key={`${definition.section}:${definition.path}`}
-                onClick={() => void activateSearchResult(definition)}
+                onClick={() => void activateSearchResult(definition).catch(() => undefined)}
               >
                 <b>{definition.label}</b>
                 <small>
                   {settingsSectionTitles[definition.section].title}
                   {definition.advanced ? "  ·  מתקדם" : ""}
                 </small>
-              </button>
+              </Button>
             ))}
           </div>
         ) : policyOpen ? (
@@ -2181,8 +1773,7 @@ export function SettingsView({
               <SslWorkflow values={data.values} saveValues={saveValues} />
             )}
             {groups.map(([group, definitions]) => (
-              <section className="source-settings-section" key={group}>
-                {section !== "settings_ai" && <h3>{group}</h3>}
+              <SettingsGroup title={group} key={group}>
                 <div className="management-fields">
                   {definitions
                     .filter((definition) => !definition.providerWorkflow)
@@ -2221,14 +1812,14 @@ export function SettingsView({
                               label="טבלת יכולות מפורטת"
                               help="לוח מתקדם לקביעה פרטנית אם סמארטי ישאל, ירשה או יחסום כל יכולת."
                             >
-                              <button
+                              <Button
                                 type="button"
                                 className="source-secondary-button"
                                 onClick={() => setPolicyOpen(true)}
                               >
-                                <LegacyIcon src={icons.policy} size={18} />
+                                <Icon name={"shield"} size={18} />
                                 הגדרת התאמה אישית
-                              </button>
+                              </Button>
                             </SourceSettingField>
                           )}
                         {definition.path === "email_password" && (
@@ -2238,18 +1829,18 @@ export function SettingsView({
                             dataPath="email_connection_test"
                           >
                             <div className="source-email-test">
-                              <span role="status">{emailTestStatus}</span>
-                              <button
+                              <ManagementFeedback message={emailTestStatus} />
+                              <Button
                                 type="button"
                                 className="source-secondary-button"
-                                onClick={() => void testEmail()}
+                                onClick={() => void testEmail().catch(reason => setEmailTestStatus(`הבדיקה נכשלה: ${String(reason)}`))}
                               >
-                                <LegacyIcon
-                                  src={icons.connectionTest}
+                                <Icon
+                                  name={"plug"}
                                   size={18}
                                 />
                                 בדוק חיבור
-                              </button>
+                              </Button>
                             </div>
                           </SourceSettingField>
                         )}
@@ -2260,21 +1851,21 @@ export function SettingsView({
                             dataPath="tts_preview"
                           >
                             <div className="source-tts-preview">
-                              <input
+                              <Field label="תצוגה מקדימה" hiddenLabel
                                 value={ttsPreviewText}
                                 onChange={(event) =>
                                   setTtsPreviewText(event.target.value)
                                 }
                               />
-                              <button
+                              <Button
                                 type="button"
                                 className="source-secondary-button"
                                 onClick={() => void speechPreview.toggle(ttsPreviewText)}
                                 disabled={speechPreview.pending}
                               >
-                                <LegacyIcon src={icons.speaker} size={18} />
+                                <Icon name={"speaker"} size={18} />
                                 {speechPreview.speaking ? "עצור הקראה" : "השמע"}
-                              </button>
+                              </Button>
                             </div>
                             {speechPreview.error && <p role="alert">{speechPreview.error}</p>}
                           </SourceSettingField>
@@ -2284,20 +1875,20 @@ export function SettingsView({
                       </Fragment>
                     ))}
                 </div>
-              </section>
+              </SettingsGroup>
             ))}
             {section === "settings_advanced" && advanced && (
               <AdvancedDeveloperLogPanel theme={theme} />
             )}
             {section === "settings_advanced" && (
               <footer className="settings-footer">
-                <button
+                <Button variant="danger"
                   type="button"
                   className="danger"
                   onClick={() => setResetConfirm(true)}
                 >
                   אפס הגדרות
-                </button>
+                </Button>
                 <small>
                   מאפס גם מפתחות, הרשאות כלים, תיקיות והגדרות מפתחים; לפני
                   האיפוס נוצר גיבוי.
@@ -2321,7 +1912,7 @@ export function SettingsView({
           confirmLabel="אפס"
           danger
           onCancel={() => setResetConfirm(false)}
-          onConfirm={() => void resetSettings()}
+          onConfirm={resetSettings}
         />
       )}
     </div>

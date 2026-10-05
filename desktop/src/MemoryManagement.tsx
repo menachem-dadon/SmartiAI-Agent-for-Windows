@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { Dialog, EmptyState, IconButton, LoadingState, SearchField, Switch } from "./design-system";
+import { ManagementFeedback } from "./managementFeedback";
+import { Textarea, SelectField, Button, Field, NumberField, Checkbox } from "./design-system";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { coreApi, encodePath } from "./coreApi";
 import { InputDialog, PageHero } from "./SettingsManagement";
 
@@ -16,7 +19,7 @@ type MemoryEditorValues = {
   memory_type: string;
   category: string;
   importance: number;
-  ttl_hours: number | null;
+  ttl_hours: number;
   tags: string[];
   pinned: boolean;
 };
@@ -63,7 +66,7 @@ function MemoryEditorDialog({
   title: string;
   entry?: Json;
   onCancel: () => void;
-  onConfirm: (values: MemoryEditorValues) => void;
+  onConfirm: (values: MemoryEditorValues) => Promise<boolean>;
 }) {
   const ttl = existingTtl(entry);
   const [content, setContent] = useState(String(entry.content || ""));
@@ -81,13 +84,16 @@ function MemoryEditorDialog({
   );
   const [pinned, setPinned] = useState(Boolean(entry.pinned));
   const [error, setError] = useState("");
-  const submit = () => {
+  const [busy, setBusy] = useState(false);
+  const guard = useRef(false);
+  const submit = async () => {
+    if (guard.current) return;
     if (!content.trim()) {
       setError("יש לכתוב מה סמארטי צריך לזכור.");
       return;
     }
-    const ttlValues: Record<string, number | null> = {
-      none: null,
+    const ttlValues: Record<string, number> = {
+      none: 0,
       day: 24,
       week: 168,
       month: 720,
@@ -101,44 +107,44 @@ function MemoryEditorDialog({
       setError("יש להזין מספר שעות חיובי, או לבחור תקופה מוכנה.");
       return;
     }
-    onConfirm({
+    guard.current = true; setBusy(true); setError("");
+    try { const ok = await onConfirm({
       subject: subject.trim(),
       content: content.trim(),
       memory_type: memoryType,
       category,
       importance,
-      ttl_hours: ttlHours ?? null,
+      ttl_hours: ttlHours ?? 0,
       tags: tags
         .split(",")
         .map((item) => item.trim())
         .filter(Boolean),
       pinned,
-    });
+    }); if (!ok) setError("השמירה נכשלה. הפרטים נשמרו כאן; אפשר לתקן ולנסות שוב."); }
+    catch (reason) { setError(`השמירה נכשלה: ${String(reason)}`); }
+    finally { guard.current = false; setBusy(false); }
   };
   return (
-    <div className="legacy-dialog-backdrop" role="presentation">
+    <Dialog open title={title} onClose={() => { if (!guard.current) onCancel(); }}>
       <form
-        className="legacy-input-dialog memory-editor-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
+        className="memory-editor-dialog"
+
         onSubmit={(event) => {
           event.preventDefault();
-          submit();
+          void submit();
         }}
       >
-        <h2>{title}</h2>
-        <label>
+        <div>
           מה סמארטי צריך לזכור?
-          <textarea
+          <Textarea label="מה סמארטי צריך לזכור?" hiddenLabel
             autoFocus
             value={content}
             onChange={(event) => setContent(event.target.value)}
           />
-        </label>
-        <label>
+        </div>
+        <div>
           קטגוריה
-          <select
+          <SelectField label="קטגוריה" hiddenLabel
             value={category}
             onChange={(event) => setCategory(event.target.value)}
           >
@@ -147,29 +153,29 @@ function MemoryEditorDialog({
                 {label}
               </option>
             ))}
-          </select>
-        </label>
-        <button
+          </SelectField>
+        </div>
+        <Button
           type="button"
           className="source-secondary-button"
           onClick={() => setAdvanced((value) => !value)}
         >
           {advanced ? "סגור אפשרויות נוספות" : "אפשרויות נוספות"}
-        </button>
+        </Button>
         {advanced && (
           <div className="memory-editor-advanced">
-            <label>
+            <div>
               כותרת קצרה
-              <input
+              <Field label="כותרת קצרה" hiddenLabel
                 value={subject}
                 placeholder="לא חובה"
                 onChange={(event) => setSubject(event.target.value)}
               />
-            </label>
+            </div>
             <div>
-              <label>
+              <div>
                 סוג זיכרון
-                <select
+                <SelectField label="סוג זיכרון" hiddenLabel
                   value={memoryType}
                   onChange={(event) => setMemoryType(event.target.value)}
                 >
@@ -178,11 +184,11 @@ function MemoryEditorDialog({
                       {label}
                     </option>
                   ))}
-                </select>
-              </label>
-              <label>
+                </SelectField>
+              </div>
+              <div>
                 חשיבות
-                <select
+                <SelectField label="חשיבות" hiddenLabel
                   value={importance}
                   onChange={(event) =>
                     setImportance(Number(event.target.value))
@@ -193,12 +199,12 @@ function MemoryEditorDialog({
                       {value} מתוך 5
                     </option>
                   ))}
-                </select>
-              </label>
+                </SelectField>
+              </div>
             </div>
-            <label>
+            <div>
               לכמה זמן לשמור?
-              <select
+              <SelectField label="לכמה זמן לשמור?" hiddenLabel
                 value={ttlPreset}
                 onChange={(event) => setTtlPreset(event.target.value)}
               >
@@ -207,50 +213,44 @@ function MemoryEditorDialog({
                 <option value="week">שבוע</option>
                 <option value="month">30 יום</option>
                 <option value="custom">תקופה אחרת…</option>
-              </select>
-            </label>
+              </SelectField>
+            </div>
             {ttlPreset === "custom" && (
-              <label>
+              <div>
                 מספר שעות
-                <input
-                  type="number"
+                <NumberField label="מספר שעות" hiddenLabel
+
                   min="1"
                   value={customTtl}
                   onChange={(event) => setCustomTtl(event.target.value)}
                 />
-              </label>
+              </div>
             )}
-            <label>
+            <div>
               תגיות
-              <input
+              <Field label="תגיות" hiddenLabel
                 value={tags}
                 placeholder="למשל: פרויקט, כתיבה"
                 onChange={(event) => setTags(event.target.value)}
               />
-            </label>
-            <label className="memory-editor-pin">
-              <input
-                type="checkbox"
+            </div>
+            <div className="memory-editor-pin">
+              <Switch label="הצג את הזיכרון בראש הרשימה"
+
                 checked={pinned}
-                onChange={(event) => setPinned(event.target.checked)}
+                onCheckedChange={(checked) => setPinned(checked)}
               />
               הצג את הזיכרון בראש הרשימה
-            </label>
+            </div>
           </div>
         )}
-        {error && (
-          <p className="management-notice" role="alert">
-            {error}
-          </p>
-        )}
+        <ManagementFeedback message={error} />
         <footer>
-          <button type="button" onClick={onCancel}>
-            ביטול
-          </button>
-          <button type="submit">שמירה</button>
+          <Button disabled={busy} onClick={onCancel}>ביטול</Button>
+          <Button type="submit" variant="primary" loading={busy}>שמירה</Button>
         </footer>
       </form>
-    </div>
+    </Dialog>
   );
 }
 
@@ -274,19 +274,17 @@ export function MemoryView() {
     null,
   );
   const [clearConfirm, setClearConfirm] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(""), [loading, setLoading] = useState(true);
+  const readGeneration = useRef(0);
   const load = useCallback(async () => {
-    setData(
-      await coreApi<Json>(
-        "GET",
-        `/v2/management/memories?query=${encodeURIComponent(query)}&status=${statusFilter}&memory_type=${type}&sensitivity=${sensitivity}&page=${page}&page_size=8`,
-      ),
-    );
+    const generation = ++readGeneration.current; setLoading(true);
+    try {
+      const result = await coreApi<Json>("GET", `/v2/management/memories?query=${encodeURIComponent(query)}&status=${statusFilter}&memory_type=${type}&sensitivity=${sensitivity}&page=${page}&page_size=8`);
+      if (generation === readGeneration.current) { setData(result); setMessage(""); }
+    } catch (reason) { if (generation === readGeneration.current) setMessage(`טעינת הזיכרונות נכשלה: ${String(reason)}`); }
+    finally { if (generation === readGeneration.current) setLoading(false); }
   }, [query, statusFilter, type, sensitivity, page]);
-  useEffect(() => {
-    const timer = setTimeout(() => void load(), 220);
-    return () => clearTimeout(timer);
-  }, [load]);
+  useEffect(() => { const timer = setTimeout(() => void load(), 220); return () => { clearTimeout(timer); readGeneration.current++; }; }, [load]);
   const act = async (id: unknown, action: string, extra: Json = {}) => {
     try {
       const result = await coreApi<Json>(
@@ -295,11 +293,11 @@ export function MemoryView() {
         { action, ...extra },
         true,
       );
-      if (["details", "reveal"].includes(action)) setSelected(result);
+      if (["details", "reveal"].includes(action)) { setSelected(result); setMessage(""); }
       else await load();
-      setMessage("הפעולה הושלמה.");
+      return true;
     } catch (reason) {
-      setMessage(String(reason));
+      setMessage(`הפעולה נכשלה: ${String(reason)}`); return false;
     }
   };
   const collection = async (payload: Json) => {
@@ -312,9 +310,9 @@ export function MemoryView() {
       );
       setData(result);
       setSelectedIds([]);
-      setMessage("הפעולה הושלמה.");
+      setMessage(""); return true;
     } catch (reason) {
-      setMessage(String(reason));
+      setMessage(`הפעולה נכשלה: ${String(reason)}`); return false;
     }
   };
   const beginEdit = async (item: Json) => {
@@ -339,6 +337,7 @@ export function MemoryView() {
       <PageHero
         title="ניהול זיכרון"
         description="תוכן רגיש נשאר מוצפן וממוסך עד לחשיפה מפורשת. אפשר ליצור, לסנן, לערוך, לארכב, לייבא ולייצא."
+        actions={<><IconButton icon="refresh" label="רענון זיכרונות" disabled={loading} onClick={() => void load()} /><IconButton icon="trash" label="ניקוי כל הזיכרונות" variant="danger" onClick={() => setClearConfirm(true)} /></>}
       >
         <div className="memory-stats">
           <span>פעילים {Number(stats.active || 0)}</span>
@@ -347,7 +346,7 @@ export function MemoryView() {
         </div>
       </PageHero>
       <div className="memory-toolbar">
-        <input
+        <SearchField label="חיפוש בזיכרונות" hiddenLabel
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
@@ -355,7 +354,7 @@ export function MemoryView() {
           }}
           placeholder="חיפוש בזיכרון"
         />
-        <select
+        <SelectField label="מצב הזיכרון" hiddenLabel
           value={statusFilter}
           onChange={(event) => {
             setStatusFilter(event.target.value);
@@ -365,62 +364,58 @@ export function MemoryView() {
           <option value="active">פעילים</option>
           <option value="archive">ארכיון</option>
           <option value="all">הכול</option>
-        </select>
-        <select value={type} onChange={(event) => setType(event.target.value)}>
+        </SelectField>
+        <SelectField label="סוג הזיכרון" hiddenLabel value={type} onChange={(event) => { setType(event.target.value); setPage(1); }}>
           <option value="any">כל הסוגים</option>
           <option value="user">פרטים והעדפות</option>
           <option value="long_term">ארוך טווח</option>
           <option value="short_term">קצר טווח</option>
           <option value="tool">תוצאות כלים</option>
-        </select>
-        <select
+        </SelectField>
+        <SelectField label="רגישות" hiddenLabel
           value={sensitivity}
-          onChange={(event) => setSensitivity(event.target.value)}
+          onChange={(event) => { setSensitivity(event.target.value); setPage(1); }}
         >
           <option value="any">כל רמות הרגישות</option>
           <option value="ordinary">רגיל</option>
           <option value="sensitive">רגיש</option>
-        </select>
+        </SelectField>
       </div>
       <div className="inline-actions">
-        <button onClick={() => setCreating(true)}>זיכרון חדש</button>
-        <button onClick={() => setPathAction("import")}>ייבוא מוצפן</button>
-        <button onClick={() => setPathAction("export")}>ייצוא מוצפן</button>
+        <Button type="button" icon="plus" variant="primary" onClick={() => setCreating(true)}>זיכרון חדש</Button>
+        <Button type="button" icon="download" onClick={() => setPathAction("import")}>ייבוא מוצפן</Button>
+        <Button type="button" icon="export" onClick={() => setPathAction("export")}>ייצוא מוצפן</Button>
         {selectedIds.length > 0 && (
           <>
-            <button
+            <Button type="button"
               onClick={() =>
                 void collection({ action: "bulk_archive", ids: selectedIds })
               }
             >
               ארכוב נבחרים
-            </button>
-            <button
+            </Button>
+            <Button type="button"
               onClick={() =>
                 void collection({ action: "bulk_restore", ids: selectedIds })
               }
             >
               שחזור נבחרים
-            </button>
-            <button
+            </Button>
+            <Button type="button"
               onClick={() =>
                 void collection({ action: "bulk_delete", ids: selectedIds })
               }
             >
               מחיקת נבחרים
-            </button>
+            </Button>
           </>
         )}
-        <button className="danger" onClick={() => setClearConfirm(true)}>
-          ניקוי כל הזיכרונות
-        </button>
+
       </div>
-      <p role="status" className="settings-status">
-        {message}
-      </p>
+      <ManagementFeedback message={message} />
       {selected && (
         <article className="memory-details">
-          <button onClick={() => setSelected(null)}>×</button>
+          <IconButton icon="close" label="סגור פרטי זיכרון" type="button" onClick={() => setSelected(null)} />
           <h3>{String(selected.subject || "פרטי זיכרון")}</h3>
           <p>{String(selected.masked_content || selected.content || "")}</p>
           <small>
@@ -428,19 +423,20 @@ export function MemoryView() {
             {String(selected.importance || "")}
           </small>
           {selected.sensitivity === "sensitive" && !selected.content && (
-            <button onClick={() => void act(selected.id, "reveal")}>
+            <Button type="button" onClick={() => void act(selected.id, "reveal")}>
               חשיפה מפורשת
-            </button>
+            </Button>
           )}
         </article>
       )}
+      {loading && <LoadingState label="טוען זיכרונות…" />}
       <div className="management-cards compact">
         {items.map((item) => (
           <article key={String(item.id)}>
             <header>
-              <label>
-                <input
-                  type="checkbox"
+              <div>
+                <Checkbox label={`בחר זיכרון ${String(item.subject || "זיכרון")}`}
+
                   checked={selectedIds.includes(String(item.id))}
                   onChange={(event) =>
                     setSelectedIds((current) =>
@@ -451,7 +447,7 @@ export function MemoryView() {
                   }
                 />{" "}
                 <b>{String(item.subject || "זיכרון")}</b>
-              </label>
+              </div>
               <span>
                 {item.pinned ? "מוצמד" : String(item.sensitivity || "רגיל")}
               </span>
@@ -461,61 +457,46 @@ export function MemoryView() {
               {String(item.type || "")} · {String(item.updated_at || "")}
             </small>
             <footer>
-              <button onClick={() => void act(item.id, "details")}>
-                פרטים
-              </button>
-              <button onClick={() => void beginEdit(item)}>
-                {item.sensitivity === "sensitive" ? "חשיפה ועריכה" : "עריכה"}
-              </button>
-              <button
-                onClick={() =>
+              <IconButton icon="info" label="פרטים" type="button" onClick={() => void act(item.id, "details")} />
+              <IconButton icon="rename" label={item.sensitivity === "sensitive" ? "חשיפה ועריכה" : "עריכה"} type="button" onClick={() => void beginEdit(item).catch(reason => setMessage(`טעינת הזיכרון נכשלה: ${String(reason)}`))} />
+              <IconButton icon="pin" label={item.pinned ? "בטל הצמדה" : "הצמד"} type="button" onClick={() =>
                   void act(item.id, "pin", { pinned: !item.pinned })
-                }
-              >
-                {item.pinned ? "בטל הצמדה" : "הצמד"}
-              </button>
-              <button
-                onClick={() =>
+                } />
+              <IconButton icon={item.status === "archive" ? "history" : "archive"} label={item.status === "archive" ? "שחזור" : "ארכוב"} type="button" onClick={() =>
                   void act(
                     item.id,
                     item.status === "archive" ? "restore" : "archive",
                   )
-                }
-              >
-                {item.status === "archive" ? "שחזור" : "ארכוב"}
-              </button>
-              <button onClick={() => void act(item.id, "delete")}>מחיקה</button>
+                } />
+              <IconButton icon="trash" label="מחיקה" type="button" onClick={() => void act(item.id, "delete")} />
             </footer>
           </article>
         ))}
-        {!items.length && (
-          <p className="management-empty">לא נמצאו זיכרונות.</p>
-        )}
+        {!loading && !items.length && <EmptyState icon="memory" title="לא נמצאו זיכרונות" description="סמארטי שומר מידע שביקשת לזכור. אפשר להוסיף זיכרון או לשנות את המסננים." /> }
       </div>
       <div className="pagination">
-        <button
+        <Button type="button"
           disabled={page <= 1}
           onClick={() => setPage((value) => value - 1)}
         >
           הקודם
-        </button>
+        </Button>
         <span>
           עמוד {Number(data.page || page)} מתוך {Number(data.pages || 1)}
         </span>
-        <button
+        <Button type="button"
           disabled={page >= Number(data.pages || 1)}
           onClick={() => setPage((value) => value + 1)}
         >
           הבא
-        </button>
+        </Button>
       </div>
       {creating && (
         <MemoryEditorDialog
           title="זיכרון חדש"
           onCancel={() => setCreating(false)}
           onConfirm={(values) => {
-            void collection({ action: "create", ...values });
-            setCreating(false);
+            return collection({ action: "create", ...values }).then(ok => { if (ok) setCreating(false); return ok; });
           }}
         />
       )}
@@ -525,8 +506,7 @@ export function MemoryView() {
           entry={editing}
           onCancel={() => setEditing(null)}
           onConfirm={(values) => {
-            void act(editing.id, "edit", values);
-            setEditing(null);
+            return act(editing.id, "edit", values).then(ok => { if (ok) setEditing(null); return ok; });
           }}
         />
       )}
@@ -542,8 +522,7 @@ export function MemoryView() {
           confirmLabel={pathAction === "import" ? "ייבוא" : "ייצוא"}
           onCancel={() => setPathAction(null)}
           onConfirm={(path) => {
-            void collection({ action: pathAction, path });
-            setPathAction(null);
+            return collection({ action: pathAction, path }).then(ok => { if (ok) setPathAction(null); return ok; });
           }}
         />
       )}
@@ -553,11 +532,11 @@ export function MemoryView() {
           label="כדי לאשר הקלד/י: מחק הכול"
           confirmLabel="מחיקה"
           onCancel={() => setClearConfirm(false)}
-          onConfirm={(confirmation) => {
-            if (confirmation === "מחק הכול")
-              void collection({ action: "clear", confirmation });
-            else setMessage("הטקסט לא תאם; דבר לא נמחק.");
-            setClearConfirm(false);
+          onConfirm={async (confirmation) => {
+            if (confirmation !== "מחק הכול") throw new Error("הטקסט לא תאם; יש להקליד: מחק הכול");
+            const ok = await collection({ action: "clear", confirmation });
+            if (ok) setClearConfirm(false);
+            return ok;
           }}
         />
       )}

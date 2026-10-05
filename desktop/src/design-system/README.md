@@ -1,12 +1,37 @@
 # Smarti shared design system · UX-2
 
-Authority: `docs/ui_ux_redesign_plan.md`, accepted UX-1 v7 and ledger §21–34.
+Authority: `docs/ui_ux_redesign_plan.md`, accepted UX-1 v7 and ledger §21–39.
 UX-2 is complete within the shared-foundation scope; UX-3 product shell and chat
 are complete within ledger §30 after product feedback D45–48 and closing review.
-UX-4 is complete within ledger §34; UX-5 management/settings is ready. Preserve the
+UX-4 is complete within ledger §34; UX-5 management/settings is complete within
+§39 after user acceptance and independent review. UX-6 is ready, not started.
+Preserve the
 697px reading/composer cap, sticky input, draft/scroll owners, D48, and the real
 workbench lifecycles D50–54. The shared chevron baseline is in §24.
 Import product foundations from `src/design-system`; never from `src/ux1` or `src/ux2`.
+
+## Preserve the accepted visual language (UX-D58)
+
+The user accepted the language after UX-5 while reserving further layout and UI
+refinements. Plan §2.1 and ledger §38 apply to every subsequent UI change,
+including maintenance after UX-6. Routine fixes and new controls extend the
+accepted language; changing the overall direction requires an explicit user
+choice. This does not freeze layouts or prevent requested improvements.
+
+Reuse the semantic tokens, typography, spacing, corners, icon families, focus,
+control states and restrained motion. Reuse existing primitives first. Extend
+the shared foundation for a shared need; keep local composition CSS scoped and
+token-based. Do not add another palette, control family, global App.css override
+layer, or copied prototype renderer. Preserve later accepted decisions over
+superseded prototype details.
+
+For material visual changes, check the affected product beside an accepted
+surface in light/dark and wide/narrow layouts with physical RTL. Interaction
+changes also check keyboard, focus/Escape and reduced motion where applicable.
+Record relevant screenshots/checks and retain functional persistence/ownership
+coverage. A shared primitive change must cover its other affected consumers.
+Document intentional changes to a shared rule in the plan and ledger with scope
+and reason. A source/build pass alone does not establish visual or native quality.
 
 ## Single sources and scope
 
@@ -165,8 +190,8 @@ evidence/setup and its limits are in ledger §25–30. Never point it at the per
 
 WorkbenchSurface, WorkbenchFiles, WorkbenchTerminal, CanvasPanel, BrowserPanel,
 BrowserPreviewCard and WorkspaceView now use these controls and semantic colors.
-`workbench.css` owns the converted surfaces; management regions still migrate in
-UX-5. Button supports a React 19 button ref. Menu's optional `onOpenChange` reports
+`workbench.css` owns the converted surfaces; `management.css` now owns management
+composition. Button supports a React 19 button ref. Menu's optional `onOpenChange` reports
 its HTML overlay so a native child surface can hide during the overlay.
 
 `workbenchSession.ts` stores only session UI recovery. It ignores old Core tab
@@ -204,6 +229,80 @@ checks a real quit/relaunch with the same QA data and verifies empty session tab
 alongside retained Core artifacts/preferences. It quits the QA app when finished.
 `pwsh -NoProfile -File scripts/restart_ux4_native.ps1` reopens that same isolated
 QA profile for inspection after validating the prepared executable and manifest.
+
+## UX-5 management/settings (ledger §35–39, complete within stage scope)
+
+ManagementCenter, SettingsManagement, ManagementPages, MemoryManagement,
+UsageView and LegalAgreement use the shared controls and semantic colors.
+Navigation labels remain present in the horizontally scrolling narrow layout.
+The chat/workbench stay mounted and inert while management is active; native
+browser visibility follows that state through the existing broker lifecycle.
+No product module imports a UX-1/2 fixture or renderer. Original PNG assets remain.
+The obsolete `ui-*` management rules and competing theme palettes are removed.
+
+Additional shared contracts:
+
+| Control | Contract |
+|---|---|
+| Field / Textarea / SearchField | Optional `hiddenLabel` hides the real associated label visually; it never removes the accessible name. |
+| SelectField | Native select, associated label and help/error IDs; preserves native keyboard operation and caller values. |
+| Checkbox | Native checkbox for explicit opt-in and bulk selection; toggled preferences use Switch. |
+| Popover | Body portal within the design provider, viewport bounds, focus departure/outside-pointer dismissal, Escape returns to trigger. Boundary Tab resumes from trigger. Optional `triggerContent` preserves a separate accessible label; ArrowDown/Up can open. Caller keeps options, search and async selection authority. |
+| Dialog | Escape stops propagation to app shortcuts while preserving native cancel/close. Closing an inner dialog retains management and restores its trigger focus. |
+| SegmentedControl | One semantic group and shared frame for existing mutually exclusive buttons. Caller retains values, `aria-pressed`, click handlers and persistence; native Tab/Space/Enter remain available. |
+
+Settings autosave stays silent on success. Protected email_address uses the
+existing secret route, never a safe-settings PATCH or plaintext readback.
+Provider keys still validate before persistence. Memory's no-expiry value is 0
+as required by the existing numeric contract. Mutation dialogs retain drafts
+and report errors until the caller confirms actual success. Workspace startup
+describes D53's saved normal bounds without changing historical preference data.
+About can display the same full agreement text and real consent state.
+
+UX-D56 / ledger §36 refines management copy and physical RTL layout. Built-in
+tool descriptions are concise Hebrew product copy in `toolDescriptions.ts`;
+Core schemas and execution descriptions remain unchanged. Tool names align
+right even when their text is English; remove sits between name and switch.
+Navigation no longer has a separate screen search. Management search is half
+width and right aligned; destructive memory/usage actions stay by refresh.
+FastMode and its model selector share one unwrapped group. Only the visible
+FastMode text is hidden in the narrowest container; the accessible name and
+hover hint remain, and the selector keeps a 40px target.
+
+`--feedback` on the UX-5 browser/native verifiers checks physical sides, shared
+frames, header actions, search width and local-model control adjacency. Browser
+QA adds three synthetic extension rows for custom/MCP/skill layout only; their
+installation and trust authority are not claimed as native test evidence.
+
+UX-D57 / ledger §37 adds the supplied provider artwork in `src/provider-icons/`
+to the settings provider picker. `ProviderPicker` uses shared Popover/Button,
+all 18 catalog values and the existing save handler. Decorative 20px icons sit
+physically right of bidi-isolated names; monochrome masks inherit theme text
+and color assets stay unchanged. No icon library or runtime network is added.
+The supplied MIT notice is in `public/licenses/lobe-icons-MIT.txt`; see NOTICE.
+`scripts/verify_ux5_provider_icons.cjs` checks the guarded isolated Windows app,
+asset loading, geometry, keyboard, real provider persistence and reload.
+
+Product QA: start an owned Vite server on 1439, then run
+`node scripts/verify_ux5_product.cjs http://127.0.0.1:1439 .codex-local/ux-5/product-review-final-fixed`.
+It uses actual React/Core with temporary data/keyring/workspace before imports;
+Edge adapts native IPC and generation is deterministic. This is not native proof.
+
+Native trial: `pwsh -NoProfile -File scripts/prepare_ux5_native.ps1` prepares
+ux5-native.exe / ai.smarti.ux5native with its own profile, keyring and workspace.
+It uses a distinct QA library name, Vite 1439 and unused CDP port 19457.
+The verifiers check executable, URL and actual app identifier before mutation.
+`node scripts/verify_ux5_native.cjs http://127.0.0.1:19457 .codex-local/ux-5/native-final`
+checks real Rust/Core/WebView2, rendered management pages and physical RTL.
+`node scripts/verify_ux5_relaunch.cjs` additionally measures the native child
+window moving outside the client area during management and returning with the
+same owner, then verifies actual process restart, disk settings and consent.
+`pwsh -NoProfile -File scripts/restart_ux5_native.ps1` reopens the same closed QA
+profile; it validates identity and refuses a port owned by another process.
+Reports contain no auth tokens or personal content. The keyring is deliberately
+temporary; do not enter personal credentials in this trial. All native evidence
+is at the measured 125% DPI. Real providers/OAuth/audio, other DPI/text scaling,
+screen reader, Office/system pickers/performance and signed packages remain UX-6.
 
 `node scripts/verify_ux4_window_regressions.cjs .codex-local/ux-4/regression-native`
 requires a prepared, closed QA app. It reproduces a legacy maximized placement

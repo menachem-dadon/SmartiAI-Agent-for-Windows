@@ -159,7 +159,7 @@ describe("settings synchronization through the real API client", () => {
       else fireEvent.keyDown(document, { key: "Escape" });
     };
     goBack();
-    expect(screen.getByRole("dialog", { name: "הגדרות וניהול" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "הגדרות וניהול" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "אבטחה ופרטיות" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "שליטה מתקדמת ביכולות" })).toBeNull();
     expect(screen.getByRole("button", { name: "אבטחה ופרטיות" }).className).toContain("active");
@@ -172,15 +172,15 @@ describe("settings synchronization through the real API client", () => {
     expect(screen.getByRole("heading", { name: "אבטחה ופרטיות" })).toBeTruthy();
     if (backAction === "button") fireEvent.click(screen.getByRole("button", { name: "חזרה לצ׳אט" }));
     else fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "הגדרות וניהול" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "הגדרות וניהול" })).toBeNull();
     expect(values.policy_matrix.file_write).toBe("deny");
   });
 
   test("updates provider while settings are open and model after a delayed save finishes after closing", async () => {
     await start();
     fireEvent.click(screen.getByText("manage-models"));
-    await waitFor(() => expect(setting("api_mode")?.value).toBe("gemini"));
-    fireEvent.change(setting("api_mode"), { target: { value: "openai" } });
+    fireEvent.click(await screen.findByRole("button", { name: "ספק המודל: Google Gemini" }));
+    fireEvent.click(screen.getByRole("option", { name: "OpenAI" }));
     await waitFor(() => expect(composer().provider).toBe("openai"));
     fireEvent.click(await screen.findByRole("button", { name: "openai-a" }));
     const gate = deferred(); patchGate = gate;
@@ -196,7 +196,7 @@ describe("settings synchronization through the real API client", () => {
     fireEvent.click(screen.getByText("chat-model"));
     await waitFor(() => expect(values.selected_openai_model).toBe("openai-b"));
     fireEvent.click(screen.getByText("manage-models"));
-    await waitFor(() => expect(setting("api_mode")?.value).toBe("openai"));
+    await screen.findByRole("button", { name: "ספק המודל: OpenAI" });
     expect(await screen.findByRole("button", { name: "openai-b" })).toBeTruthy();
     await waitFor(() => expect(setting("provider_reasoning_effort")).toBeTruthy());
     fireEvent.change(setting("provider_reasoning_effort"), { target: { value: "high" } });

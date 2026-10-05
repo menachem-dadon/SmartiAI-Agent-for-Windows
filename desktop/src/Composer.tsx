@@ -584,6 +584,7 @@ export function Composer({
         </span>
         <div className="composer-controls">
           <div className="composer-selectors">
+            <div className="composer-model-controls">
             <DismissibleDetails
               ref={modelMenu} popupRef={modelPopup}
               className="quick-pill model-quick-pill"
@@ -599,15 +600,16 @@ export function Composer({
               </summary>
               {modelMenuOpen ? createPortal(modelPopupContent, document.body) : modelPopupContent}
             </DismissibleDetails>
+            {provider.toLowerCase() === "local" && (
+              <label className="local-fast-mode" dir="rtl" title="FastMode"><span className="local-fast-mode-caption">FastMode</span><Switch label="FastMode" checked={localFastMode} onCheckedChange={value => void onLocalFastMode(value)} /></label>
+            )}
+            </div>
             <span className="autonomy-quick-pill"><Menu label="פרופיל בטיחות" icon="shield" items={[
               { id: "locked_down", label: "בטוח", icon: "lock", onSelect: () => void onAutonomyMode("locked_down") },
               { id: "balanced", label: "מאוזן", icon: "shield", onSelect: () => void onAutonomyMode("balanced") },
               { id: "max_autonomy", label: "אוטונומי", icon: "spark", onSelect: () => void onAutonomyMode("max_autonomy") },
             ]}><span>{autonomyLabels[autonomyMode] || autonomyLabels.balanced}</span></Menu></span>
           </div>
-          {provider.toLowerCase() === "local" && (
-            <label className="local-fast-mode" dir="rtl"><span>FastMode</span><Switch label="FastMode" checked={localFastMode} onCheckedChange={value => void onLocalFastMode(value)} /></label>
-          )}
         </div>
         <button
           className="composer-tool"
