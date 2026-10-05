@@ -77,6 +77,7 @@ export function ManagementCenter({
                 <button
                   key={item.id}
                   className={section === item.id ? "active" : ""}
+                  aria-label={item.label}
                   onClick={() => navigate(item.id)}
                 >
                   {item.icon && <LegacyIcon src={icons[item.icon]} size={19} />}

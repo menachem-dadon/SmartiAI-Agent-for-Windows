@@ -5,6 +5,7 @@ import { WorkbenchSurface } from "./WorkbenchPanels";
 import { coreApi } from "./coreApi";
 import type { WorkbenchSnapshot } from "./workspaceState";
 
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => true) }));
 vi.mock("./coreApi", () => ({ coreApi: vi.fn(), encodePath: encodeURIComponent }));
 vi.mock("./BrowserPanel", () => ({ BrowserPanel: () => <input aria-label="browser state" defaultValue="open page" />, forgetBrowserWorkspaceSession: vi.fn() }));
 vi.mock("./CanvasPanel", () => ({ CanvasPanel: () => null }));
@@ -25,7 +26,7 @@ const row = () => screen.getByRole("tablist");
 const pointer = (clientX: number, extras = {}) => ({ pointerId: 1, button: 0, clientX, clientY: 25, ...extras });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.clearAllMocks(); sessionStorage.clear();
   frames = new Map(); frameId = 0;
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
   vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
@@ -43,8 +44,9 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     if (this.getAttribute("role") === "tablist") return rect(100, this.clientWidth || 360);
     if (this.getAttribute("role") === "tab") {
-      const parent = this.parentElement!;
-      const index = Array.from(parent.children).indexOf(this);
+      const wrapper = this.parentElement!;
+      const parent = wrapper.parentElement!;
+      const index = Array.from(parent.children).indexOf(wrapper);
       return rect(100 + index * 120 - parent.scrollLeft, 120);
     }
     return rect(0, 0);

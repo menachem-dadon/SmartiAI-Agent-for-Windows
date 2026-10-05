@@ -1,4 +1,4 @@
-import { cloneElement, createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactElement, type ReactNode, type RefObject, type TextareaHTMLAttributes } from "react";
+import { cloneElement, createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactElement, type ReactNode, type Ref, type RefObject, type TextareaHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
 import { designTokenStyle, type DesignTheme } from "./tokens";
 import { Icon, IconTheme, IconFamilyContext, type IconFamily, type IconName } from "./icons";
@@ -67,7 +67,7 @@ export function Tooltip({ label, children }: { label: string; children: ReactEle
   </span>;
 }
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "ghost" | "danger"; icon?: IconName; loading?: boolean };
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { ref?: Ref<HTMLButtonElement>; variant?: "primary" | "secondary" | "ghost" | "danger"; icon?: IconName; loading?: boolean };
 export function Button({ className = "", variant = "secondary", icon, loading = false, disabled, children, ...props }: ButtonProps) {
   return <button type="button" {...props} disabled={disabled || loading} aria-busy={loading || undefined} className={`sds-button sds-button--${variant} ${className}`}>{loading ? <Icon name="loader" className="sds-spin" /> : icon && <Icon name={icon} />}{children}</button>;
 }
@@ -99,8 +99,9 @@ export function RangeField({ label, value, min, max, step = 1, onValueChange, fo
 }
 
 export type MenuItem = { id: string; label: string; icon?: IconName; disabled?: boolean; tone?: "danger"; onSelect: () => void };
-export function Menu({ label, icon = "more", items, children }: { label: string; icon?: IconName; items: MenuItem[]; children?: ReactNode }) {
+export function Menu({ label, icon = "more", items, children, onOpenChange }: { label: string; icon?: IconName; items: MenuItem[]; children?: ReactNode; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false); const id = useId();
+  useEffect(() => { onOpenChange?.(open); return () => onOpenChange?.(false); }, [open, onOpenChange]);
   const trigger = useRef<HTMLButtonElement>(null); const menu = useRef<HTMLDivElement>(null); const openingKey = useRef<"first" | "last">("first");
   const position = useFloating(trigger, open, 240);
   const dismiss = (restore: boolean) => { setOpen(false); if (restore) trigger.current?.focus(); };

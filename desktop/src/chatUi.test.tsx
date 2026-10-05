@@ -12,7 +12,7 @@ import {
 import { agentToolIcon, agentToolIconName } from "./agentToolIcons";
 import { WorkbenchSurface } from "./WorkbenchPanels";
 
-const chatStyles = readFileSync(new URL("./App.css", import.meta.url), "utf8") + readFileSync(new URL("./chat.css", import.meta.url), "utf8");
+const chatStyles = readFileSync(new URL("./App.css", import.meta.url), "utf8") + readFileSync(new URL("./chat.css", import.meta.url), "utf8") + readFileSync(new URL("./workbench.css", import.meta.url), "utf8");
 
 describe("rich daily chat UI", () => {
   test("formats code-language labels with their conventional casing", () => {
@@ -41,8 +41,8 @@ describe("rich daily chat UI", () => {
   test("keeps compact surfaces above the mounted chat and preserves native transition guards", () => {
     expect(chatStyles).toMatch(/\.workspace\.is-overlay-layout\s*\{[^}]*position:\s*relative/);
     expect(chatStyles).toMatch(/\.conversation-drawer\.is-open\s*\{[^}]*position:absolute[^}]*right:0/);
-    expect(chatStyles).toMatch(/\.workspace\.is-overlay-layout \.workbench\s*\{[^}]*pointer-events:\s*none[^}]*transform:/);
-    expect(chatStyles).toMatch(/\.workspace\.is-overlay-layout \.workbench\.is-open\s*\{[^}]*pointer-events:\s*auto/);
+    expect(chatStyles).toMatch(/\.workbench\s*\{[^}]*pointer-events:\s*none[^}]*transform:/);
+    expect(chatStyles).toMatch(/\.workbench\.is-open\s*\{[^}]*pointer-events:\s*auto/);
     expect(chatStyles).not.toMatch(/transition:[^;}]*(?:grid-template-columns|max-width|flex-basis|backdrop-filter)/);
     expect(chatStyles).not.toContain("will-change: width");
   });
@@ -60,7 +60,8 @@ describe("rich daily chat UI", () => {
       />,
     );
 
-    expect(html).toContain('class="ui-icon-button workbench-close-control"');
+    expect(html).toContain('workbench-return');
+    expect(html).toContain('data-icon="panel"');
     expect(html).toContain('aria-label="סגירת סביבת העבודה"');
   });
 

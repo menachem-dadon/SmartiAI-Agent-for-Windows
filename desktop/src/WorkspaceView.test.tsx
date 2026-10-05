@@ -89,6 +89,6 @@ test("retains unavailable status and the real workbench navigation callbacks", a
   render(<WorkspaceView onOpenWorkbench={open} />);
   await screen.findByText("WebView2 אינו זמין כרגע.");
   fireEvent.click(screen.getByRole("button", { name: "פתח קבצים" }));
-  fireEvent.click(screen.getByRole("button", { name: "פתח את Smarti Browser" }));
+  fireEvent.click(screen.getByRole("button", { name: "פתח דפדפן" }));
   expect(open.mock.calls).toEqual([["files"], ["browser"]]);
 });

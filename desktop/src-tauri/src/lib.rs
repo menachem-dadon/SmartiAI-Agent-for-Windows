@@ -695,7 +695,7 @@ async fn desktop_open_with(
     supervisor: tauri::State<'_, CoreSupervisor>,
 ) -> Result<bool, String> {
     let supervisor = supervisor.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let absolute_path = tauri::async_runtime::spawn_blocking(move || {
         let response = supervisor_core_api(
             &supervisor,
             CoreApiRequest {
@@ -714,23 +714,39 @@ async fn desktop_open_with(
                 .unwrap_or("Core rejected the workspace file")
                 .to_string());
         }
-        let absolute_path = response
+        response
             .body
             .pointer("/data/absolute_path")
             .and_then(Value::as_str)
-            .ok_or("Core omitted the validated workspace file path")?;
-        #[cfg(windows)]
-        {
-            windows_integration::open_with_dialog(&window, absolute_path)
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = (window, absolute_path);
-            Err("Windows Open With is unavailable on this platform".into())
-        }
+            .map(str::to_owned)
+            .ok_or_else(|| "Core omitted the validated workspace file path".to_string())
     })
     .await
-    .map_err(|error| format!("Windows Open With worker failed: {error}"))?
+    .map_err(|error| format!("Windows Open With path validation failed: {error}"))??;
+    #[cfg(windows)]
+    {
+        // Shell COM needs the GUI STA and its message loop, rather than a
+        // blocking-pool thread that has no Windows event dispatcher.
+        let (sender, mut receiver) = tauri::async_runtime::channel(1);
+        let owner = window.clone();
+        window
+            .run_on_main_thread(move || {
+                let _ = sender.try_send(windows_integration::open_with_dialog(
+                    &owner,
+                    &absolute_path,
+                ));
+            })
+            .map_err(|error| format!("Windows Open With dispatch failed: {error}"))?;
+        receiver
+            .recv()
+            .await
+            .ok_or_else(|| "Windows Open With dispatcher closed".to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, absolute_path);
+        Err("Windows Open With is unavailable on this platform".into())
+    }
 }
 
 fn supervisor_core_api(
@@ -1409,9 +1425,9 @@ fn has_signed_update_configuration(config: Option<&Value>) -> bool {
         && key != "UNSIGNED_LOCAL_BUILD_NO_UPDATES"
         && endpoints.is_some_and(|items| {
             !items.is_empty()
-                && items.iter().all(|item| {
-                    item.as_str().is_some_and(|url| url.starts_with("https://"))
-                })
+                && items
+                    .iter()
+                    .all(|item| item.as_str().is_some_and(|url| url.starts_with("https://")))
         })
 }
 

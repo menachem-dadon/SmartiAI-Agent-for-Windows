@@ -53,7 +53,6 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const launcher = () => screen.getByRole("group", { name: "מה תרצה לפתוח?" });
-const workbench = () => screen.getByLabelText("Workbench");
 const workbenchRequests = () => vi.mocked(coreApi).mock.calls.filter(([, path]) => path.startsWith("/v2/workbench/"));
 
 async function start() {
@@ -61,146 +60,74 @@ async function start() {
   await waitFor(() => expect(document.querySelector(".workbench-empty")).toBeTruthy());
 }
 
-describe("Workbench launcher through the app shell", () => {
-  test("dismisses the browser thumbnail until the next collapse and reopens the exact Workbench browser", async () => {
-    preferences = { workspace_workbench_open: true, workspace_workbench: {
-      tabs: [
-        { id: "browser-1", kind: "browser", title: "דפדפן" },
-        { id: "browser-2", kind: "browser", title: "דפדפן 2" },
-      ], active: "browser-2",
-    } };
-    render(<App />);
+describe("Workbench session lifecycle through the product shell", () => {
+  const cache = () => JSON.parse(sessionStorage.getItem("smarti-workbench-session-v2")!);
+  const seed = (snapshot: unknown, open = false) => sessionStorage.setItem("smarti-workbench-session-v2", JSON.stringify({ owner: "qa", snapshot, open, expanded: false }));
+  const openPanel = () => fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
+  const add = (name: string) => { fireEvent.click(screen.getByRole("button", { name: "פתיחת לשונית" })); fireEvent.click(screen.getByRole("menuitem", { name })); };
+
+  test.each([[1800, "button"], [1800, "shortcut"], [900, "button"], [900, "shortcut"]] as const)("opens exactly four empty entries at %i via %s without starting a tool", async (width, trigger) => {
+    vi.stubGlobal("innerWidth", width); await start();
+    if (trigger === "button") openPanel(); else fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    expect(within(launcher()).getAllByRole("button").map(button => button.textContent)).toEqual(["דפדפן", "קבצים", "מסוף", "תוצרים"]);
+    expect(screen.queryAllByRole("tab")).toHaveLength(0); expect(BrowserPanel).not.toHaveBeenCalled(); expect(workbenchRequests()).toHaveLength(0);
+    expect(preferences.workspace_workbench).toBeUndefined();
+  });
+  test.each([["קבצים", "/v2/workbench/tree?depth=3"], ["מסוף", "/v2/workbench/terminals"], ["תוצרים", "/v2/workbench/artifacts"]])("starts %s only after choosing it", async (label, path) => {
+    await start(); openPanel(); expect(workbenchRequests()).toHaveLength(0);
+    fireEvent.click(within(launcher()).getByRole("button", { name: label }));
+    await waitFor(() => expect(workbenchRequests().some(([, request]) => request === path)).toBe(true));
+    expect(screen.getAllByRole("tab")).toHaveLength(1); expect(screen.queryByRole("group", { name: "מה תרצה לפתוח?" })).toBeNull();
+  });
+  test("preserves the last active tab and native owner on panel close/reopen and WebView reload", async () => {
+    seed({ tabs: [{ id: "browser-1", kind: "browser", title: "דפדפן" }, { id: "browser-2", kind: "browser", title: "דפדפן 2" }], active: "browser-2" }, true);
+    const view = render(<App />);
     await waitFor(() => expect(vi.mocked(BrowserPanel).mock.lastCall?.[0].workspaceTabId).toBe("browser-2"));
     const activity = { workspaceId: "browser-2", tabId: "tab-2", title: "Second browser", url: "https://two.test/", loading: false, previewDataUrl: "data:image/jpeg;base64,page" };
-    const publish = async () => { await act(async () => { vi.mocked(BrowserPanel).mock.lastCall?.[0].onActivity?.(activity); }); };
-    await publish();
+    await act(async () => vi.mocked(BrowserPanel).mock.lastCall?.[0].onActivity?.(activity));
     fireEvent.click(screen.getByRole("button", { name: "סגירת סביבת העבודה" }));
     expect(screen.getByRole("img", { name: "תצוגה מקדימה של Second browser" }).getAttribute("src")).toBe(activity.previewDataUrl);
     fireEvent.click(screen.getByRole("button", { name: "סגירת התצוגה המקדימה" }));
-    await publish();
+    await act(async () => vi.mocked(BrowserPanel).mock.lastCall?.[0].onActivity?.(activity));
     expect(screen.queryByLabelText("תצוגה מקדימה של הדפדפן")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
+    openPanel(); expect(screen.getByRole("tab", { name: "דפדפן 2" }).getAttribute("aria-selected")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "סגירת סביבת העבודה" }));
     fireEvent.click(screen.getByRole("button", { name: "פתיחת Second browser" }));
-    expect(screen.getAllByRole("tab").find((tab) => tab.getAttribute("aria-selected") === "true")?.dataset.tabId).toBe("browser-2");
-    expect(screen.queryByLabelText("תצוגה מקדימה של הדפדפן")).toBeNull();
+    expect(vi.mocked(BrowserPanel).mock.lastCall?.[0].workspaceTabId).toBe("browser-2");
+    await waitFor(() => expect(cache().snapshot.active).toBe("browser-2"));
+    view.unmount(); render(<App />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "דפדפן 2" }).getAttribute("aria-selected")).toBe("true"));
   });
-
-  test("removes the thumbnail when its browser closes and rejects late activity from the closed browser", async () => {
-    await start();
-    fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
-    fireEvent.click(within(launcher()).getByRole("button", { name: "דפדפן" }));
-    const callback = vi.mocked(BrowserPanel).mock.lastCall?.[0].onActivity;
-    const activity = { workspaceId: "browser-1", tabId: "tab-1", title: "Closed", url: "https://closed.test/", loading: false };
-    await act(async () => callback?.(activity));
+  test("a new WebView starts empty despite legacy Core snapshots, retaining all personal preferences", async () => {
+    preferences = { workspace_workbench_open: true, workspace_workbench: { tabs: [{ id: "browser-8", kind: "browser", title: "דפדפן" }], active: "browser-8" }, unrelated: "preserve" };
+    await start(); openPanel(); expect(launcher()).toBeTruthy(); expect(BrowserPanel).not.toHaveBeenCalled();
+    expect(preferences.unrelated).toBe("preserve"); expect((preferences.workspace_workbench as any).tabs[0].id).toBe("browser-8");
+  });
+  test("closes the final tab, rejects its late preview, and returns to the empty chooser", async () => {
+    await start(); openPanel(); fireEvent.click(within(launcher()).getByRole("button", { name: "דפדפן" }));
+    const props = vi.mocked(BrowserPanel).mock.lastCall?.[0];
+    const activity = { workspaceId: props!.workspaceTabId!, tabId: "tab-1", title: "Closed", url: "https://closed.test/", loading: false };
     fireEvent.click(screen.getByRole("button", { name: "סגירת דפדפן" }));
+    await waitFor(() => expect(launcher()).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "סגירת סביבת העבודה" }));
-    await act(async () => callback?.(activity));
-    expect(screen.queryByLabelText("תצוגה מקדימה של הדפדפן")).toBeNull();
-    expect(preferences.workspace_workbench).toEqual({ tabs: [], active: "" });
+    await act(async () => props?.onActivity?.(activity)); expect(screen.queryByLabelText("תצוגה מקדימה של הדפדפן")).toBeNull();
+    openPanel(); expect(launcher()).toBeTruthy(); expect(cache().snapshot).toEqual({ tabs: [], active: "" });
   });
-
-  test.each([
-    [1800, "button"], [1800, "shortcut"], [900, "button"], [900, "shortcut"],
-  ] as const)("opens an empty chooser at %i px using %s without starting a tool", async (width, trigger) => {
-    vi.stubGlobal("innerWidth", width);
-    await start();
-    if (trigger === "button") fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
-    else fireEvent.keyDown(window, { key: "b", ctrlKey: true });
-
-    expect(within(launcher()).getAllByRole("button").map((button) => button.textContent))
-      .toEqual(["קבצים", "דפדפן", "מסוף", "קנבס", "תוצרים"]);
-    expect(screen.queryAllByRole("tab")).toHaveLength(0);
-    expect(BrowserPanel).not.toHaveBeenCalled();
-    expect(workbenchRequests()).toHaveLength(0);
-    await waitFor(() => expect(preferences.workspace_workbench_open).toBe(true));
+  test("adds repeatable tabs through the shared menu, reuses titles, and keeps IDs unique", async () => {
+    seed({ tabs: [{ id: "browser-8", kind: "browser", title: "דפדפן" }], active: "browser-8" }, true);
+    render(<App />); await screen.findByRole("tab", { name: "דפדפן" }); add("קבצים"); add("דפדפן");
+    expect(screen.getAllByRole("tab").map(tab => tab.textContent)).toEqual(["דפדפן", "קבצים", "דפדפן 2"]);
+    const ids = screen.getAllByRole("tab").map(tab => tab.dataset.tabId); expect(new Set(ids).size).toBe(3);
+    fireEvent.click(screen.getByRole("button", { name: "סגירת דפדפן" })); await waitFor(() => expect(screen.queryByRole("tab", { name: "דפדפן" })).toBeNull()); add("דפדפן");
+    expect(screen.getAllByRole("tab").map(tab => tab.textContent)).toEqual(["קבצים", "דפדפן 2", "דפדפן"]);
   });
-
-  test.each([
-    ["קבצים", "/v2/workbench/tree?depth=3"],
-    ["מסוף", "/v2/workbench/terminals"],
-    ["תוצרים", "/v2/workbench/artifacts"],
-  ])("starts %s only after choosing it", async (label, path) => {
-    await start();
-    fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
-    expect(workbenchRequests()).toHaveLength(0);
-    fireEvent.click(within(launcher()).getByRole("button", { name: label }));
-    await waitFor(() => expect(workbenchRequests().some(([, requestPath]) => requestPath === path)).toBe(true));
-    expect(screen.getAllByRole("tab")).toHaveLength(1);
-    expect(screen.queryByRole("group", { name: "מה תרצה לפתוח?" })).toBeNull();
-    expect(BrowserPanel).not.toHaveBeenCalled();
-  });
-
-  test("returns to the chooser after closing the last tab and keeps it empty on reopen", async () => {
-    await start();
-    fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
-    fireEvent.click(within(launcher()).getByRole("button", { name: "דפדפן" }));
-    expect(screen.getByText("browser-content")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "סגירת דפדפן" }));
-    expect(launcher()).toBeTruthy();
-    await waitFor(() => expect(preferences.workspace_workbench).toEqual({ tabs: [], active: "" }));
-    expect(workbench().getAttribute("aria-hidden")).toBe("false");
-    expect(preferences.workspace_workbench_open).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "סגירת סביבת העבודה" }));
-    fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
-    expect(launcher()).toBeTruthy();
-    expect(screen.queryAllByRole("tab")).toHaveLength(0);
-    fireEvent.click(within(launcher()).getByRole("button", { name: "קנבס" }));
-    expect(screen.getByText("canvas-content")).toBeTruthy();
-  });
-
-  test("uses per-kind tab numbers and reuses a title after its tab closes", async () => {
-    await start();
-    fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
-    fireEvent.click(within(launcher()).getByRole("button", { name: "דפדפן" }));
-    const add = (label: string) => {
-      const menu = within(document.querySelector(".workbench-add")!);
-      fireEvent.click(menu.getByRole("button", { name: "פתיחת לשונית" }));
-      fireEvent.click(menu.getByRole("button", { name: new RegExp(`${label}$`) }));
-    };
-    add("קבצים");
-    add("דפדפן");
-    expect(vi.mocked(BrowserPanel).mock.lastCall?.[0].workspaceTabId).toBe("browser-3");
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.replace("×", "").trim()))
-      .toEqual(["◎דפדפן", "▤קבצים", "◎דפדפן 2"]);
-    fireEvent.click(screen.getByRole("button", { name: "סגירת דפדפן" }));
-    add("דפדפן");
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.replace("×", "").trim()))
-      .toEqual(["▤קבצים", "◎דפדפן 2", "◎דפדפן"]);
-  });
-
-  test("keeps restored tab IDs unique while numbering their titles from open tabs", async () => {
-    preferences = { workspace_workbench_open: true, workspace_workbench: {
-      tabs: [{ id: "browser-8", kind: "browser", title: "דפדפן" }], active: "browser-8",
-    } };
-    render(<App />);
-    await waitFor(() => expect(screen.getAllByRole("tab")).toHaveLength(1));
-    const menu = within(document.querySelector(".workbench-add")!);
-    fireEvent.click(menu.getByRole("button", { name: "פתיחת לשונית" }));
-    fireEvent.click(menu.getByRole("button", { name: /דפדפן$/ }));
-    expect(screen.getAllByRole("tab").map((tab) => tab.dataset.tabId)).toEqual(["browser-8", "browser-9"]);
-    expect(screen.getByRole("button", { name: "סגירת דפדפן 2" })).toBeTruthy();
-  });
-
-  test("restores an open empty Workbench after restarting", async () => {
-    preferences = { workspace_workbench_open: true, workspace_workbench: { tabs: [], active: "" } };
-    await start();
-    expect(launcher()).toBeTruthy();
-    expect(workbench().getAttribute("aria-hidden")).toBe("false");
-    expect(BrowserPanel).not.toHaveBeenCalled();
-    expect(workbenchRequests()).toHaveLength(0);
-  });
-
-  test("reopens saved tabs without adding or switching to a browser", async () => {
-    preferences = { workspace_workbench_open: false, workspace_workbench: {
-      tabs: [{ id: "canvas-1", kind: "canvas", title: "קנבס" }], active: "canvas-1",
-    } };
-    render(<App />);
-    await waitFor(() => expect(document.querySelector(".workbench-panel")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "פתיחת סביבת העבודה" }));
-    expect(screen.getAllByRole("tab")).toHaveLength(1);
-    expect(screen.getByText("canvas-content")).toBeTruthy();
-    expect(BrowserPanel).not.toHaveBeenCalled();
+  test("expands and returns to split mode without remounting the selected panel", async () => {
+    await start(); openPanel(); fireEvent.click(within(launcher()).getByRole("button", { name: "קבצים" }));
+    const field = screen.getByRole("textbox", { name: "נתיב תיקיית העבודה" }); fireEvent.change(field, { target: { value: "draft path" } });
+    fireEvent.click(screen.getByRole("button", { name: "הרחבת סביבת העבודה" }));
+    expect(document.querySelector(".chat-column")?.hasAttribute("inert")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "חזרה לעבודה משולבת" }));
+    expect(screen.getByRole("textbox", { name: "נתיב תיקיית העבודה" })).toBe(field); expect((field as HTMLInputElement).value).toBe("draft path");
+    expect(document.querySelector(".chat-column")?.hasAttribute("inert")).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { coreApi, encodePath } from "./coreApi";
+import { Alert, Button, Dialog, EmptyState, IconButton, LoadingState, Switch } from "./design-system";
 
 type CanvasSummary = {
   id: string;
@@ -41,22 +42,29 @@ export function securedCanvasDocument(
   return `<!doctype html><html lang="he" dir="rtl"><head>${bridge}</head><body>${document}</body></html>`;
 }
 
-export function CanvasPanel({
+type CanvasPanelProps = { sessionId: string; onAction: (text: string) => void | Promise<void>; canvasId?: string };
+export function CanvasPanel(props: CanvasPanelProps) {
+  return <CanvasView key={`${props.sessionId}:${props.canvasId || ""}`} {...props} />;
+}
+function CanvasView({
   sessionId,
   onAction,
-}: {
-  sessionId: string;
-  onAction: (text: string) => void;
-}) {
+  canvasId,
+}: CanvasPanelProps) {
   const [items, setItems] = useState<CanvasSummary[]>([]);
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(canvasId || "");
   const [canvas, setCanvas] = useState<CanvasArtifact | null>(null);
   const [allowRemote, setAllowRemote] = useState(false);
   const [pendingAction, setPendingAction] = useState<CanvasButton | null>(null);
   const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const actionGuard = useRef(false);
+  const listRequest = useRef(0);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const layoutTimer = useRef<number | null>(null);
   const refresh = useCallback(async () => {
+    const request = ++listRequest.current;
     if (!sessionId) {
       setItems([]);
       setCanvas(null);
@@ -66,33 +74,45 @@ export function CanvasPanel({
       "GET",
       `/v2/conversations/${encodePath(sessionId)}/canvases`,
     );
+    if (request !== listRequest.current) return;
     setItems(result.items);
     setSelected((current) =>
       result.items.some((item) => item.id === current)
         ? current
-        : result.items.find((item) => !item.closed)?.id ||
+        : (canvasId && result.items.some(item => item.id === canvasId) ? canvasId : "") || result.items.find((item) => !item.closed)?.id ||
           result.items[0]?.id ||
           "",
     );
-  }, [sessionId]);
+    setNotice("");
+  }, [sessionId, canvasId]);
   useEffect(() => {
     void refresh().catch((error) => setNotice(String(error)));
+    return () => { ++listRequest.current; };
   }, [refresh]);
   useEffect(() => {
+    let alive = true;
+    setCanvas(null);
+    setPendingAction(null);
     if (!selected) {
       setCanvas(null);
+      setLoading(false);
       return;
     }
     const suffix = allowRemote ? "?allow_remote_images=true" : "";
+    setLoading(true);
     void coreApi<{ canvas: CanvasArtifact }>(
       "GET",
       `/v2/conversations/${encodePath(sessionId)}/canvases/${encodePath(selected)}${suffix}`,
     )
       .then(({ canvas: value }) => {
+        if (!alive) return;
         setCanvas(value);
         setPendingAction(null);
+        setNotice("");
       })
-      .catch((error) => setNotice(String(error)));
+      .catch((error) => { if (alive) setNotice(String(error)); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
   }, [selected, sessionId, allowRemote]);
   useEffect(() => {
     const receive = (event: MessageEvent<CanvasMessage>) => {
@@ -153,7 +173,9 @@ export function CanvasPanel({
     [canvas, allowRemote],
   );
   const setClosed = async (closed: boolean) => {
-    if (!canvas) return;
+    if (!canvas || actionGuard.current) return;
+    actionGuard.current = true; setBusy(true);
+    try {
     await coreApi(
       "PATCH",
       `/v2/conversations/${encodePath(sessionId)}/canvases/${encodePath(canvas.id)}`,
@@ -161,13 +183,20 @@ export function CanvasPanel({
       true,
     );
     await refresh();
+    setCanvas(current => current ? { ...current, closed } : current);
+    } catch (reason) { setNotice(String(reason)); }
+    finally { actionGuard.current = false; setBusy(false); }
   };
-  const confirmAction = () => {
-    if (!canvas || !pendingAction) return;
-    onAction(
+  const confirmAction = async () => {
+    if (!canvas || !pendingAction || actionGuard.current) return;
+    actionGuard.current = true; setBusy(true);
+    try {
+    await onAction(
       `[נתוני משתמש מהקנבס ${canvas.id}]\n${JSON.stringify({ action: pendingAction.action || pendingAction.id, target: pendingAction.target || "", id: pendingAction.id }, null, 2)}`,
     );
     setPendingAction(null);
+    } catch (reason) { setNotice(String(reason)); }
+    finally { actionGuard.current = false; setBusy(false); }
   };
   return (
     <div className="canvas-panel">
@@ -184,24 +213,17 @@ export function CanvasPanel({
             </option>
           ))}
         </select>
-        <label>
-          <input
-            type="checkbox"
-            checked={allowRemote}
-            onChange={(event) => setAllowRemote(event.target.checked)}
-          />{" "}
-          תמונות HTTPS
-        </label>
-        <button onClick={() => void refresh()}>רענון</button>
+        <label className="canvas-remote-images"><span>תמונות חיצוניות</span><Switch label="תמונות HTTPS" checked={allowRemote} onCheckedChange={setAllowRemote} /></label>
+        <IconButton icon="refresh" label="רענון" onClick={() => void refresh().catch(reason => setNotice(String(reason)))} />
         {canvas && (
-          <button onClick={() => void setClosed(!canvas.closed)}>
+          <Button disabled={busy} onClick={() => void setClosed(!canvas.closed)}>
             {canvas.closed ? "פתיחה מחדש" : "סגירה"}
-          </button>
+          </Button>
         )}
       </header>
-      {notice && <p className="workbench-error">{notice}</p>}
-      {!canvas ? (
-        <p className="canvas-empty">אין Canvas בשיחה הנוכחית.</p>
+      {notice && <Alert title="פעולת הקנבס נכשלה" tone="danger">{notice}</Alert>}
+      {loading ? <LoadingState label="טוען קנבס…" /> : !canvas ? (
+        <EmptyState icon="canvas" title="אין קנבס בשיחה זו" description="קנבס שנוצר בשיחה נפתח מהכרטיס שלו בצ׳אט." />
       ) : (
         <>
           <iframe
@@ -211,20 +233,15 @@ export function CanvasPanel({
             referrerPolicy="no-referrer"
             srcDoc={srcDoc}
           />
-          <footer>
-            <span>Renderer מבודד · ללא Tauri API, קבצים, ניווט או popups</span>
-          </footer>
         </>
       )}
-      {pendingAction && (
-        <div className="canvas-action-confirm" role="dialog" aria-modal="true">
+      <Dialog open={Boolean(pendingAction)} title="פעולה מהקנבס" onClose={() => { if (!busy) setPendingAction(null); }}>
           <p>
-            הקנבס ביקש להפעיל: <b>{pendingAction.label}</b>
+            הקנבס ביקש להפעיל: <b>{pendingAction?.label}</b>
           </p>
-          <button onClick={() => setPendingAction(null)}>ביטול</button>
-          <button onClick={confirmAction}>שליחה לסמארטי</button>
-        </div>
-      )}
+          {notice && <Alert title="השליחה נכשלה" tone="danger">{notice}</Alert>}
+          <footer><Button disabled={busy} onClick={() => setPendingAction(null)}>ביטול</Button><Button variant="primary" loading={busy} onClick={() => void confirmAction()}>שליחה לסמארטי</Button></footer>
+      </Dialog>
     </div>
   );
 }

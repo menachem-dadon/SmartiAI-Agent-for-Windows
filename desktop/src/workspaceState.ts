@@ -8,7 +8,7 @@ export interface WorkspaceState {
   activeWorkbenchTab: WorkbenchTab | null;
 }
 
-export type WorkbenchTabRecord = { id: string; kind: WorkbenchTab; title: string };
+export type WorkbenchTabRecord = { id: string; kind: WorkbenchTab; title: string; sessionId?: string; targetId?: string };
 export type WorkbenchSnapshot = { tabs: WorkbenchTabRecord[]; active: string };
 export const workbenchLabels: Record<WorkbenchTab, string> = {
   browser: "דפדפן",
@@ -69,10 +69,14 @@ export function parseWorkbenchSnapshot(value: unknown): WorkbenchSnapshot | null
     const kind = String(candidate.kind || "") as WorkbenchTab;
     const id = String(candidate.id || "").slice(0, 100);
     if (!id || !workbenchKinds.has(kind)) return [];
-    return [{ id, kind, title: String(candidate.title || kind).slice(0, 100) }];
+    return [{ id, kind, title: String(candidate.title || kind).slice(0, 100),
+      ...(typeof candidate.sessionId === "string" ? { sessionId: candidate.sessionId.slice(0, 200) } : {}),
+      ...(typeof candidate.targetId === "string" ? { targetId: candidate.targetId.slice(0, 500) } : {}),
+    }];
   });
   const tabs: WorkbenchTabRecord[] = [];
   for (const tab of parsedTabs) {
+    if (tabs.some((item) => item.id === tab.id)) continue;
     const base = workbenchLabels[tab.kind];
     const suffix = tab.title.startsWith(`${base} `) ? tab.title.slice(base.length + 1) : "";
     const generatedTitle = tab.title === base || (/^[1-9]\d*$/.test(suffix) && Number(suffix) >= 2);
@@ -87,7 +91,9 @@ export function openWorkbenchTab(
   tab: WorkbenchTabRecord,
   forceNew = false,
 ): WorkbenchSnapshot {
-  const existing = state.tabs.find((item) => item.kind === tab.kind);
+  const matches = (item: WorkbenchTabRecord) => item.kind === tab.kind &&
+    (tab.kind !== "canvas" || (item.sessionId === tab.sessionId && item.targetId === tab.targetId));
+  const existing = state.tabs.find(item => item.id === state.active && matches(item)) ?? state.tabs.find(matches);
   const singleton = tab.kind === "canvas" || tab.kind === "artifacts";
   if (existing && (!forceNew || singleton))
     return { ...state, active: existing.id };
@@ -160,7 +166,7 @@ export function workspaceWorkbenchWidth(
   totalWidth = 1380,
   workbenchOverride: number | null = null,
 ): number {
-  const sidebarWidth = state.conversationDrawerOpen ? 286 : 58;
+  const sidebarWidth = state.conversationDrawerOpen ? 240 : 72;
   return workbenchOverride === null
     ? workspaceOpenSizes(totalWidth, sidebarWidth).workbench
     : clampWorkbenchResize(totalWidth, sidebarWidth, workbenchOverride);

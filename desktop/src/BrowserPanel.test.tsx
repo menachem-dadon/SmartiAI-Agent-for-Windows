@@ -287,7 +287,7 @@ describe("native browser overlay visibility", () => {
     vi.stubGlobal("matchMedia", () => ({ matches: true }));
     render(<aside className="workbench"><BrowserPanel visible geometryRevision="open" /></aside>);
     await waitFor(() => expect(lastNativeVisibility()).toEqual({ visible: true }));
-    expect(mocks.invoke.mock.calls.some(([command, args]) => command === "browser_set_visible" && !args.visible)).toBe(false);
+    expect(mocks.invoke.mock.calls.findIndex(([command]) => command === "browser_set_bounds")).toBeLessThan(mocks.invoke.mock.calls.findIndex(([command, args]) => command === "browser_set_visible" && args.visible));
   });
 
   it("does not reveal at rejected bounds and uses a bounded retry", async () => {
@@ -299,7 +299,7 @@ describe("native browser overlay visibility", () => {
     });
     render(<BrowserPanel visible />);
     await waitFor(() => expect(lastNativeBounds()).toBeDefined());
-    expect(lastNativeVisibility()).toBeUndefined();
+    expect(mocks.invoke.mock.calls.some(([command, args]) => command === "browser_set_visible" && args.visible)).toBe(false);
     rejectBounds = false;
     await waitFor(() => expect(lastNativeVisibility()).toEqual({ visible: true }));
   });
@@ -345,6 +345,7 @@ describe("native browser overlay visibility", () => {
     const trigger = screen.getByRole("button", { name: "תפריט דפדפן" });
     const browser = trigger.closest(".embedded-browser");
     expect(browser).not.toBeNull();
+    const beforeMenu = mocks.invoke.mock.calls.length;
     fireEvent.click(trigger);
 
     await waitFor(() =>
@@ -370,7 +371,7 @@ describe("native browser overlay visibility", () => {
       bounds: { x: 10, y: 200, width: 800, height: 600 },
     });
     expect(
-      mocks.invoke.mock.calls
+      mocks.invoke.mock.calls.slice(beforeMenu)
         .filter(([command]) => command === "browser_set_visible")
         .every(([, args]) => args.visible === true),
     ).toBe(true);
@@ -415,7 +416,7 @@ describe("native browser overlay visibility", () => {
       }),
     );
 
-    fireEvent.click(within(findForm!).getByRole("button", { name: "×" }));
+    fireEvent.click(within(findForm!).getByRole("button", { name: "סגירת חיפוש בדף" }));
     await waitFor(() =>
       expect(browser!.classList.contains("has-native-find-space")).toBe(false),
     );

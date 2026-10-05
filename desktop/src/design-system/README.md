@@ -1,10 +1,11 @@
 # Smarti shared design system · UX-2
 
-Authority: `docs/ui_ux_redesign_plan.md`, accepted UX-1 v7 and ledger §21–30.
+Authority: `docs/ui_ux_redesign_plan.md`, accepted UX-1 v7 and ledger §21–34.
 UX-2 is complete within the shared-foundation scope; UX-3 product shell and chat
 are complete within ledger §30 after product feedback D45–48 and closing review.
-UX-4 is ready; preserve the 697px reading/composer cap, sticky input, draft/scroll
-owners and D48 while converting the workbench. The shared chevron baseline is in §24.
+UX-4 is complete within ledger §34; UX-5 management/settings is ready. Preserve the
+697px reading/composer cap, sticky input, draft/scroll owners, D48, and the real
+workbench lifecycles D50–54. The shared chevron baseline is in §24.
 Import product foundations from `src/design-system`; never from `src/ux1` or `src/ux2`.
 
 ## Single sources and scope
@@ -159,3 +160,55 @@ ai.smarti.ux3native, ux3-native.exe, its own SMARTI_DATA_DIR/keyring and CDP por
 and `.codex-local/ux-3/native-ui.pid`. It verifies the process/identifier before
 reload or Core writes; it is not a launcher or a package verifier. Existing native
 evidence/setup and its limits are in ledger §25–30. Never point it at the personal app.
+
+## UX-4 product workbench (ledger §31–34)
+
+WorkbenchSurface, WorkbenchFiles, WorkbenchTerminal, CanvasPanel, BrowserPanel,
+BrowserPreviewCard and WorkspaceView now use these controls and semantic colors.
+`workbench.css` owns the converted surfaces; management regions still migrate in
+UX-5. Button supports a React 19 button ref. Menu's optional `onOpenChange` reports
+its HTML overlay so a native child surface can hide during the overlay.
+
+`workbenchSession.ts` stores only session UI recovery. It ignores old Core tab
+snapshots without deleting them. A random owner prefixes new workspace IDs;
+browser hydration reattaches live broker owners and never launches stored URLs.
+Canvas references retain conversation/target IDs. Terminal recovery retains the
+actual process ID and closes it only on an explicit tab close or stop.
+Native window actions use `get_window("main")`: a host with browser children is
+no longer a Tauri WebviewWindow, although its Windows window still exists.
+
+From the repository root, with bundled Playwright available via NODE_PATH:
+`node scripts/verify_ux4_product.cjs http://localhost:1420 .codex-local/ux-4/product-final`.
+The host selects a workspace under its temporary SMARTI_DATA_DIR **before writing
+fixtures**; data/profile isolation alone does not isolate the default Documents
+workspace. The ledger records the first-run isolation mistake and recovery.
+
+`pwsh -NoProfile -File scripts/prepare_ux4_native.ps1` prepares a separate QA app,
+data directory and in-memory keyring; it never launches the personal profile.
+`node scripts/verify_ux4_native.cjs http://127.0.0.1:19446 .codex-local/ux-4/native-final --skip-open-with`
+checks real IPC, PowerShell and WebView2. That flag explicitly leaves Windows
+Open With unverified in that automated report. Strict mode only recognizes a
+classic HWND dialog; a modern composited picker can appear as an overlay without
+a separately discoverable window. Its probe failure cannot prove UI absence.
+Ledger §34 records the GUI-thread dispatch repair, the user's actual observation
+of the chooser and Escape cancellation, and separate read-only checks that the
+button recovered without a file error or Core restart. This is human-assisted
+native acceptance, not an automated picker or application-selection test.
+Keep Core path validation off the UI thread and the shell chooser on the owning
+GUI STA/message loop. Do not report an API success code, interim broker window,
+or mocked false result as proof of a user selection.
+The native verifier leaves the QA app running for inspection; quit only after
+checking its identifier and process. These scripts are not package verification.
+`node scripts/verify_ux4_relaunch.cjs`
+checks a real quit/relaunch with the same QA data and verifies empty session tabs
+alongside retained Core artifacts/preferences. It quits the QA app when finished.
+`pwsh -NoProfile -File scripts/restart_ux4_native.ps1` reopens that same isolated
+QA profile for inspection after validating the prepared executable and manifest.
+
+`node scripts/verify_ux4_window_regressions.cjs .codex-local/ux-4/regression-native`
+requires a prepared, closed QA app. It reproduces a legacy maximized placement
+inside QA data, verifies normal startup and real caption minimize/maximize/restore
+and relaunch, checks actual Windows icon fonts, and opens management pages in
+wide/narrow light/dark layouts without changing settings in the personal profile.
+It quits QA on completion. Window maximization is kept within the current app
+session; saving geometry preserves the last normal window bounds.

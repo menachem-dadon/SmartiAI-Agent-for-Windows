@@ -26,7 +26,7 @@ describe("Workspace shell state", () => {
   test("opens one dynamic tab and clears it completely on close", () => {
     const opened = workspaceReducer(initialWorkspaceState, { type: "open-workbench", tab: "browser" });
     expect(opened).toMatchObject({ workbenchOpen: true, activeWorkbenchTab: "browser" });
-    expect(workspaceColumns(opened)).toBe("var(--drawer-width) minmax(0, 1fr) 568px");
+    expect(workspaceColumns(opened)).toBe("var(--drawer-width) minmax(0, 1fr) 592px");
     expect(workspaceReducer(opened, { type: "close-workbench" })).toEqual(initialWorkspaceState);
   });
 
@@ -37,7 +37,7 @@ describe("Workspace shell state", () => {
 
     const open = { conversationDrawerOpen: true, workbenchOpen: true, activeWorkbenchTab: "browser" as const };
     expect(workspaceColumns(open, 1205)).toBe("var(--rail-width) minmax(0, 1fr) 0px");
-    expect(workspaceColumns(open, 1206)).toBe("var(--drawer-width) minmax(0, 1fr) 400px");
+    expect(workspaceColumns(open, 1206)).toBe("var(--drawer-width) minmax(0, 1fr) 446px");
   });
 
   test("numbers repeatable tabs by the lowest available title of their own kind", () => {
@@ -76,8 +76,8 @@ describe("Workspace shell state", () => {
 
   test("keeps the native surface width stable while only its reserved space closes", () => {
     const opened = { ...initialWorkspaceState, workbenchOpen: true };
-    expect(workspaceWorkbenchWidth(opened, 1380)).toBe(568);
-    expect(workspaceWorkbenchWidth(initialWorkspaceState, 1380)).toBe(568);
+    expect(workspaceWorkbenchWidth(opened, 1380)).toBe(592);
+    expect(workspaceWorkbenchWidth(initialWorkspaceState, 1380)).toBe(592);
     expect(workspaceColumns(opened, 1380, 700)).toBe("var(--drawer-width) minmax(0, 1fr) 700px");
     expect(workspaceColumns(initialWorkspaceState, 1380, 700)).toBe("var(--drawer-width) minmax(0, 1fr) 0px");
   });

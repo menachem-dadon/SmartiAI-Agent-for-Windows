@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WorkbenchSurface } from "./WorkbenchPanels";
-import { coreApi, CoreApiError } from "./coreApi";
+import { coreApi } from "./coreApi";
 import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -13,7 +13,7 @@ vi.mock("./coreApi", async (importOriginal) => {
 vi.mock("./BrowserPanel", () => ({ BrowserPanel: () => null }));
 vi.mock("./CanvasPanel", () => ({ CanvasPanel: () => null }));
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); sessionStorage.clear(); vi.resetAllMocks(); });
 
 function showArtifacts() {
   render(<WorkbenchSurface initial={null} visible onClose={() => {}} closeIcon="/close.svg"
@@ -52,7 +52,7 @@ describe("artifacts panel", () => {
     fireEvent.click(await within(list).findByRole("button", { name: /folder\/notes.md/ }));
     await waitFor(() => expect(within(screen.getByLabelText("תצוגת תוצר")).getByRole("heading", { name: "שלום" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "פתח באמצעות" }));
-    await waitFor(() => expect(coreApi).toHaveBeenCalledWith("POST", "/v2/workbench/open", { path: "folder/notes.md", action: "open_with" }, true));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_open_with", { path: "folder/notes.md" }));
   });
 
   test("keeps Open With available when a file cannot be previewed", async () => {
@@ -66,29 +66,25 @@ describe("artifacts panel", () => {
     fireEvent.click(await within(screen.getByLabelText("רשימת תוצרים")).findByRole("button", { name: /large.pdf/ }));
     await waitFor(() => expect(screen.getAllByText("Error: preview unavailable").length).toBeGreaterThan(0));
     fireEvent.click(screen.getByRole("button", { name: "פתח באמצעות" }));
-    await waitFor(() => expect(coreApi).toHaveBeenCalledWith("POST", "/v2/workbench/open", { path: "large.pdf", action: "open_with" }, true));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("desktop_open_with", { path: "large.pdf" }));
   });
 
-  test("restarts a stale development Core and retries Open With once", async () => {
-    let openAttempts = 0;
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "core_status") return { state: "ready" } as never;
-      return {} as never;
-    });
+  test("shows a Rust Open With failure, keeps the selection and retries explicitly without restarting Core", async () => {
     vi.mocked(coreApi).mockImplementation(async (method, path) => {
-      if (method === "GET" && path === "/v2/workbench/artifacts")
-        return { items: [{ name: "sample.txt", path: "sample.txt", size: 4, modified_at: "2026-09-24T12:00:00" }] } as never;
-      if (method === "GET" && path.startsWith("/v2/workbench/file?"))
-        return { name: "sample.txt", path: "sample.txt", kind: "text", mime_type: "text/plain", size: 4, text: "text" } as never;
-      if (method === "POST" && path === "/v2/workbench/open" && ++openAttempts === 1)
-        throw new CoreApiError("Additional properties are not allowed ('action' was unexpected)", 400);
+      if (method === "GET" && path === "/v2/workbench/artifacts") return { items: [{ name: "sample.txt", path: "sample.txt", size: 4, modified_at: "2026-09-24T12:00:00" }] } as never;
+      if (path.startsWith("/v2/workbench/file?")) return { name: "sample.txt", path: "sample.txt", kind: "text", mime_type: "text/plain", size: 4, text: "text" } as never;
       return {} as never;
     });
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("Windows Open With failed")).mockResolvedValueOnce(false);
     showArtifacts();
     fireEvent.click(await within(screen.getByLabelText("רשימת תוצרים")).findByRole("button", { name: /sample.txt/ }));
     fireEvent.click(screen.getByRole("button", { name: "פתח באמצעות" }));
-    await waitFor(() => expect(openAttempts).toBe(2));
-    expect(invoke).toHaveBeenCalledWith("core_restart");
-    expect(invoke).toHaveBeenCalledWith("core_status");
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Windows Open With failed"));
+    expect(within(screen.getByLabelText("תצוגת תוצר")).getByText("text")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "פתח באמצעות" }));
+    await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "desktop_open_with")).toHaveLength(2));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(invoke).not.toHaveBeenCalledWith("core_restart");
+    expect(coreApi).not.toHaveBeenCalledWith("POST", "/v2/workbench/open", expect.anything(), true);
   });
 });

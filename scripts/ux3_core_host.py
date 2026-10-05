@@ -71,7 +71,11 @@ def generate(text, **_kwargs):
     return "תשובה: " + text
 
 core.send_message = generate
-print(json.dumps({**handshake, "sample": sample, "other": other}), flush=True)
+workbench = {}
+if os.environ.get("UX4_WORKBENCH_QA") == "1":
+    from ux4_qa_fixtures import seed_workbench
+    workbench = seed_workbench(service, sample)
+print(json.dumps({**handshake, "sample": sample, "other": other, "workbench": workbench}), flush=True)
 
 def control():
     try:

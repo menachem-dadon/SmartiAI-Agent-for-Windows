@@ -54,6 +54,7 @@ struct WindowPlacement {
 impl WindowPlacement {
     fn can_restore(&self) -> bool {
         self.layout_version == WINDOW_LAYOUT_VERSION
+            && !self.maximized
             && (1..=8192).contains(&self.width)
             && (1..=8192).contains(&self.height)
     }
@@ -192,7 +193,7 @@ pub fn desktop_popup_rtl_menu(
 }
 
 pub fn show_main(app: &AppHandle, activation: DesktopActivation) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -205,7 +206,7 @@ pub fn show_main(app: &AppHandle, activation: DesktopActivation) {
 pub fn open_with_dialog(window: &Window, path: &str) -> Result<bool, String> {
     use windows::core::PCWSTR;
     use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
-    use windows::Win32::UI::Shell::{SHOpenWithDialog, OPENASINFO, OAIF_EXEC};
+    use windows::Win32::UI::Shell::{SHOpenWithDialog, OAIF_EXEC, OPENASINFO};
     use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
 
     let hwnd = window.hwnd().map_err(|error| error.to_string())?;
@@ -219,8 +220,8 @@ pub fn open_with_dialog(window: &Window, path: &str) -> Result<bool, String> {
         .ok()
         .map_err(|error| format!("Windows Open With COM initialization failed: {error}"))?;
     let result = (|| {
-        // This runs in Smarti's foreground GUI process, with its main window as
-        // the chooser owner. Windows can then present the chooser over Smarti.
+        // Called on the owning GUI STA, with its Windows message loop and main
+        // window as chooser owner. A blocking-pool STA has no event dispatcher.
         unsafe {
             let _ = SetForegroundWindow(hwnd);
             SHOpenWithDialog(Some(hwnd), &info)
@@ -276,7 +277,7 @@ fn placement_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|path| path.join("window-placement.json"))
 }
 
-fn save_placement(app: &AppHandle, window: &WebviewWindow) {
+fn save_placement(app: &AppHandle, window: &Window) {
     if window.is_minimized().unwrap_or(false) {
         return;
     }
@@ -287,6 +288,11 @@ fn save_placement(app: &AppHandle, window: &WebviewWindow) {
     ) else {
         return;
     };
+    // Maximized bounds cover the work area and are not the user's normal size.
+    // Keep the last normal placement so a new app session starts restored.
+    if maximized {
+        return;
+    }
     let placement = WindowPlacement {
         layout_version: WINDOW_LAYOUT_VERSION,
         x: position.x,
@@ -306,7 +312,7 @@ fn save_placement(app: &AppHandle, window: &WebviewWindow) {
     }
 }
 
-fn restore_placement(app: &AppHandle, window: &WebviewWindow) -> bool {
+fn restore_placement(app: &AppHandle, window: &Window) -> bool {
     let Some(path) = placement_path(app) else {
         return false;
     };
@@ -316,8 +322,8 @@ fn restore_placement(app: &AppHandle, window: &WebviewWindow) -> bool {
     let Ok(value) = serde_json::from_slice::<WindowPlacement>(&data) else {
         return false;
     };
-    // Apply the wide default once for pre-existing compact placements. Subsequent
-    // user resizes keep their normal persistence behavior.
+    // Old maximized records stored the entire screen as the normal bounds.
+    // Ignore those once; later normal resizes retain their saved placement.
     if !value.can_restore() {
         return false;
     }
@@ -346,11 +352,11 @@ fn restore_placement(app: &AppHandle, window: &WebviewWindow) -> bool {
     {
         return false;
     }
-    !value.maximized || window.maximize().is_ok()
+    true
 }
 
 #[cfg(windows)]
-fn apply_windows_identity(window: &WebviewWindow) {
+fn apply_windows_identity(window: &Window) {
     use windows::core::HSTRING;
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE};
     use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
@@ -369,12 +375,10 @@ fn apply_windows_identity(window: &WebviewWindow) {
 }
 
 #[cfg(not(windows))]
-fn apply_windows_identity(_window: &WebviewWindow) {}
+fn apply_windows_identity(_window: &Window) {}
 
 pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or("main window missing")?;
+    let window = app.get_window("main").ok_or("main window missing")?;
     apply_windows_identity(&window);
     let app_for_window = app.clone();
     window.on_window_event(move |event| match event {
@@ -384,7 +388,7 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                 .workspace_ready
                 .load(Ordering::Acquire)
             {
-                if let Some(window) = app_for_window.get_webview_window("main") {
+                if let Some(window) = app_for_window.get_window("main") {
                     save_placement(&app_for_window, &window);
                 }
             }
@@ -400,7 +404,7 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     .load(Ordering::Acquire) =>
         {
             api.prevent_close();
-            if let Some(window) = app_for_window.get_webview_window("main") {
+            if let Some(window) = app_for_window.get_window("main") {
                 let _ = window.hide();
             }
             let _ = app_for_window.emit("desktop://hidden-to-tray", ());
@@ -473,9 +477,7 @@ pub fn desktop_finish_startup(app: AppHandle) -> Result<(), String> {
     if state.workspace_ready.load(Ordering::Acquire) {
         return Ok(());
     }
-    let window = app
-        .get_webview_window("main")
-        .ok_or("main window missing")?;
+    let window = app.get_window("main").ok_or("main window missing")?;
     let monitor = window
         .current_monitor()
         .ok()
@@ -533,7 +535,7 @@ fn workspace_default_size(available_width: f64, available_height: f64) -> (f64, 
     )
 }
 
-fn voice_overlay_position(main: &WebviewWindow, width: f64) -> LogicalPosition<f64> {
+fn voice_overlay_position(main: &Window, width: f64) -> LogicalPosition<f64> {
     let scale = main.scale_factor().unwrap_or(1.0).max(0.5);
     let position = main.outer_position().unwrap_or(PhysicalPosition::new(0, 0));
     let size = main.outer_size().unwrap_or(PhysicalSize::new(980, 680));
@@ -557,9 +559,7 @@ pub fn desktop_show_voice_overlay(app: AppHandle) -> Result<(), String> {
 }
 
 pub(crate) fn create_voice_overlay(app: &AppHandle, show: bool) -> Result<WebviewWindow, String> {
-    let main = app
-        .get_webview_window("main")
-        .ok_or("main window missing")?;
+    let main = app.get_window("main").ok_or("main window missing")?;
     let main_foreground = main.is_visible().unwrap_or(false)
         && !main.is_minimized().unwrap_or(false)
         && main.is_focused().unwrap_or(false);
@@ -609,9 +609,9 @@ pub fn desktop_hide_voice_overlay(app: AppHandle) {
 
 #[tauri::command]
 pub fn desktop_focus_main(app: AppHandle) -> Result<(), String> {
-    let main = app
-        .get_webview_window("main")
-        .ok_or("main window missing")?;
+    // Browser children turn the shell into a multi-WebView window. Tauri's
+    // get_webview_window excludes that host; window actions still use "main".
+    let main = app.get_window("main").ok_or("main window missing")?;
     main.show().map_err(|error| error.to_string())?;
     main.unminimize().map_err(|error| error.to_string())?;
     main.set_focus().map_err(|error| error.to_string())
@@ -711,9 +711,7 @@ pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
     if state.unread_count.load(Ordering::Acquire) == count {
         return Ok(());
     }
-    let window = app
-        .get_webview_window("main")
-        .ok_or("main window missing")?;
+    let window = app.get_window("main").ok_or("main window missing")?;
     let taskbar_title = if count == 0 {
         "SmartiAI".to_string()
     } else {
@@ -722,7 +720,11 @@ pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
     window
         .set_title(&taskbar_title)
         .map_err(|error| error.to_string())?;
-    let badge = if count > 0 { Some(crate::taskbar_badge::unread_badge(count)?) } else { None };
+    let badge = if count > 0 {
+        Some(crate::taskbar_badge::unread_badge(count)?)
+    } else {
+        None
+    };
     window
         .set_overlay_icon(badge)
         .map_err(|error| error.to_string())?;
@@ -735,7 +737,11 @@ pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
             let info = FLASHWINFO {
                 cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
                 hwnd,
-                dwFlags: if count == 0 { FLASHW_STOP } else { FLASHW_ALL | FLASHW_TIMERNOFG },
+                dwFlags: if count == 0 {
+                    FLASHW_STOP
+                } else {
+                    FLASHW_ALL | FLASHW_TIMERNOFG
+                },
                 uCount: 3,
                 dwTimeout: 0,
             };
@@ -803,6 +809,24 @@ mod tests {
         let restored: WindowPlacement = serde_json::from_slice(&saved).unwrap();
         assert!(restored.can_restore());
         assert_eq!((restored.width, restored.height), (720, 560));
+    }
+
+    #[test]
+    fn saved_maximized_bounds_do_not_replace_the_normal_startup_size() {
+        let placement: WindowPlacement = serde_json::from_str(
+            r#"{"layout_version":1,"x":-9,"y":-9,"width":1938,"height":1038,"maximized":true}"#,
+        )
+        .unwrap();
+        assert!(!placement.can_restore());
+        let normal = WindowPlacement {
+            maximized: false,
+            x: 150,
+            y: 100,
+            width: 1280,
+            height: 780,
+            ..placement
+        };
+        assert!(normal.can_restore());
     }
 
     #[test]

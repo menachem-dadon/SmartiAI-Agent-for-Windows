@@ -23,10 +23,11 @@ import {
 } from "./browserState";
 import { coreApi } from "./coreApi";
 import { subscribeSettingsChanges } from "./settingsChanges";
-import { IconButton } from "./ui";
+import { Button, Field, Icon, IconButton, SearchField } from "./design-system";
 import { useNativeBrowserSurface } from "./useNativeBrowserSurface";
 import { useBrowserPreview } from "./useBrowserPreview";
 import type { BrowserViewportMode } from "./browserViewport";
+import { openBrowserWorkspace } from "./browserWorkspaceLifecycle";
 
 type HistoryEntry = {
   id: string;
@@ -84,14 +85,14 @@ type StoredSessionTab = { url: string; pinned?: boolean; workspaceId?: string };
 const permissionKey = "smarti-browser-permissions-v1";
 const readJson = <T,>(key: string, fallback: T): T => {
   try {
-    return JSON.parse(localStorage.getItem(key) || "") as T;
+    return JSON.parse((key === sessionKey ? sessionStorage : localStorage).getItem(key) || "") as T;
   } catch {
     return fallback;
   }
 };
 export function forgetBrowserWorkspaceSession(workspaceId: string) {
   const stored = readJson<StoredSessionTab[]>(sessionKey, []);
-  if (Array.isArray(stored)) localStorage.setItem(sessionKey, JSON.stringify(stored.filter((tab) => tab.workspaceId !== workspaceId)));
+  if (Array.isArray(stored)) sessionStorage.setItem(sessionKey, JSON.stringify(stored.filter((tab) => tab.workspaceId !== workspaceId)));
 }
 const saveFile = async (base64: string, _mime: string, name: string) => {
   const bytes = Uint8Array.from(atob(base64), (value) => value.charCodeAt(0));
@@ -111,11 +112,13 @@ export function BrowserPanel({
   geometryRevision,
   onActivity,
   workspaceTabId = "",
+  obscured = false,
 }: {
   visible: boolean;
   geometryRevision?: boolean | string;
   onActivity?: (activity: BrowserActivity | null) => void;
   workspaceTabId?: string;
+  obscured?: boolean;
 }) {
   const [browser, setBrowser] = useState<BrowserSnapshot>(initialBrowser);
   const [hydrated, setHydrated] = useState(false);
@@ -124,7 +127,7 @@ export function BrowserPanel({
   const openingWorkspace = useRef(new Set<string>());
   const groupTabs = useMemo(() => workspaceBrowserTabs(browser, workspaceTabId), [browser, workspaceTabId]);
   const current = useMemo(() => workspaceActiveTab(browser, workspaceTabId, lastActiveByWorkspace.current[workspaceTabId]), [browser, workspaceTabId]);
-  const surfaceVisible = visible && (!browser.tabs.length || (current !== null && browser.activeTabId === current.tabId));
+  const surfaceVisible = visible && !obscured && current !== null && browser.activeTabId === current.tabId;
   const [address, setAddress] = useState("");
   const [notice, setNotice] = useState("");
   const [findText, setFindText] = useState("");
@@ -144,9 +147,8 @@ export function BrowserPanel({
   const [sources, setSources] = useState<ImportSource[]>([]);
   const [sourceId, setSourceId] = useState("");
   const [importing, setImporting] = useState(false);
-  const { viewportRef, boundsReady: nativeBoundsReady, viewportError } = useNativeBrowserSurface(surfaceVisible, geometryRevision, Boolean(panel), showFind, current?.tabId ?? null, viewportMode);
+  const { viewportRef, viewportError } = useNativeBrowserSurface(surfaceVisible, geometryRevision, Boolean(panel), showFind, current?.tabId ?? null, viewportMode);
   const addressRef = useRef<HTMLInputElement>(null);
-  const initialTabRequested = useRef(false);
   const legacyMigrationAttempted = useRef(false);
   const nativeMenuGuard = useRef({ active: false, releaseTimer: 0 });
   const browserRef = useRef(browser);
@@ -292,7 +294,7 @@ export function BrowserPanel({
         const persistent = payload.tabs
           .filter((tab) => tab.profile === "persistent")
           .map((tab) => ({ url: tab.url, pinned: tab.pinned, workspaceId: tab.workspaceId || "" }));
-        localStorage.setItem(sessionKey, JSON.stringify(persistent));
+        sessionStorage.setItem(sessionKey, JSON.stringify(persistent));
       },
     );
     const downloadListener = listen<Record<string, unknown>>(
@@ -334,50 +336,13 @@ export function BrowserPanel({
     setShowFind(false);
     setPanel("");
   }, [visible, workspaceTabId]);
-  useEffect(() => {
-    if (
-      !visible ||
-      !hydrated ||
-      initialTabRequested.current ||
-      (!nativeBoundsReady && browser.tabs.length === 0)
-    )
-      return;
-    initialTabRequested.current = true;
-    const stored = readJson<StoredSessionTab[]>(
-      sessionKey,
-      [],
-    );
-    const restore = async () => {
-      try {
-        if (browser.tabs.length) {
-          setRestoreComplete(true);
-          return;
-        }
-        if (Array.isArray(stored) && stored.length) {
-          for (const item of stored.slice(0, 12)) {
-            const state = await invoke<BrowserSnapshot>("browser_open", {
-              profile: "persistent",
-              url: item.url,
-              workspaceId: item.workspaceId || workspaceTabId || undefined,
-            });
-            const tab = activeTab(state);
-            if (tab && item.pinned)
-              await invoke("browser_pin", { tabId: tab.tabId, pinned: true });
-          }
-        }
-        await refresh();
-        setRestoreComplete(true);
-      } catch (error) {
-        initialTabRequested.current = false;
-        setNotice(String(error));
-      }
-    };
-    void restore();
-  }, [browser.tabs.length, hydrated, visible, nativeBoundsReady, refresh, workspaceTabId]);
+  // The broker survives WebView reload. Reattach live owners only; a new app
+  // must not reopen persisted tabs or adopt another/background workspace.
+  useEffect(() => { if (hydrated) setRestoreComplete(true); }, [hydrated]);
   useEffect(() => {
     if (!visible || !hydrated || !restoreComplete || groupTabs.length || openingWorkspace.current.has(workspaceTabId)) return;
     openingWorkspace.current.add(workspaceTabId);
-    void invoke<BrowserSnapshot>("browser_open", { profile: "persistent", url: "https://www.google.com/?hl=he", workspaceId: workspaceTabId || undefined })
+    void openBrowserWorkspace(workspaceTabId, "persistent", "https://www.google.com/?hl=he")
       .then(setBrowser)
       .catch((error) => setNotice(String(error)))
       .finally(() => openingWorkspace.current.delete(workspaceTabId));
@@ -404,7 +369,7 @@ export function BrowserPanel({
       url = "https://www.google.com/?hl=he",
     ) =>
       setBrowser(
-        await invoke<BrowserSnapshot>("browser_open", { profile, url, workspaceId: workspaceTabId || undefined }),
+        await openBrowserWorkspace(workspaceTabId, profile, url),
       ),
     [workspaceTabId],
   );
@@ -818,120 +783,32 @@ export function BrowserPanel({
     <div
       className={`embedded-browser ${panel ? "has-native-side-panel" : ""} ${showFind ? "has-native-find-space" : ""}`}
     >
-      <div className="browser-tabs" role="tablist" aria-label="כרטיסיות דפדפן">
-        {groupTabs.map((tab) => (
-          <button
-            key={tab.tabId}
-            draggable
-            role="tab"
-            aria-selected={tab.tabId === current?.tabId}
-            onDragStart={(event) =>
-              event.dataTransfer.setData("text/plain", tab.tabId)
-            }
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              void invoke<BrowserSnapshot>("browser_reorder", {
-                tabId: event.dataTransfer.getData("text/plain"),
-                index: browser.tabs.findIndex((item) => item.tabId === tab.tabId),
-              }).then(setBrowser);
-            }}
-            onClick={() =>
-              void invoke<BrowserSnapshot>("browser_activate", {
-                tabId: tab.tabId,
-              }).then(setBrowser)
-            }
-          >
-            <span className={tab.profile === "guest" ? "guest-dot" : "tab-dot"}>
-              {tab.crashed
-                ? "!"
-                : tab.audioPlaying
-                  ? "♪"
-                  : tab.loading
-                    ? "◌"
-                    : tab.pinned
-                      ? "◆"
-                      : "●"}
-            </span>
-            <span>{pageTitle(tab)}</span>
-            <i
-              onClick={(event) => {
-                event.stopPropagation();
-                void closeTab(tab);
-              }}
-            >
-              ×
-            </i>
-          </button>
-        ))}
-        <IconButton label="כרטיסייה חדשה" onClick={() => void newTab()}>
-          ＋
-        </IconButton>
+      <div className="browser-tabs" role="tablist" dir="ltr" aria-label="כרטיסיות דפדפן">
+        {groupTabs.map((tab, index) => <div className={`browser-tab${tab.tabId === current?.tabId ? " is-active" : ""}`} key={tab.tabId}>
+          <IconButton icon="close" tooltip={false} className="browser-tab-close" label={`סגירת ${pageTitle(tab)}`} onClick={() => void closeTab(tab)} />
+          <Button variant="ghost" role="tab" draggable aria-selected={tab.tabId === current?.tabId} tabIndex={tab.tabId === current?.tabId ? 0 : -1}
+            onDragStart={event => event.dataTransfer.setData("text/plain", tab.tabId)} onDragOver={event => event.preventDefault()}
+            onDrop={event => { event.preventDefault(); void invoke<BrowserSnapshot>("browser_reorder", { tabId: event.dataTransfer.getData("text/plain"), index: browser.tabs.findIndex(item => item.tabId === tab.tabId) }).then(setBrowser).catch(error => setNotice(String(error))); }}
+            onClick={() => void invoke<BrowserSnapshot>("browser_activate", { tabId: tab.tabId }).then(setBrowser).catch(error => setNotice(String(error)))}
+            onKeyDown={event => {
+              if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+                event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? groupTabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + groupTabs.length) % groupTabs.length;
+                void invoke<BrowserSnapshot>("browser_activate", { tabId: groupTabs[next].tabId }).then(setBrowser).catch(error => setNotice(String(error)));
+                const strip = event.currentTarget.closest('[role="tablist"]'); (strip?.querySelectorAll<HTMLElement>('[role="tab"]')[next])?.focus();
+              }
+              if (event.key === "Delete") { event.preventDefault(); void closeTab(tab); }
+            }}><span className={tab.profile === "guest" ? "guest-dot" : "tab-dot"} aria-label={tab.profile === "guest" ? "גלישה זמנית" : "פרופיל מתמשך"}><Icon size={16} name={tab.crashed ? "alert" : tab.audioPlaying ? "speaker" : tab.loading ? "loader" : tab.pinned ? "pin" : "globe"} /></span><span dir="auto" title={pageTitle(tab)}>{pageTitle(tab)}</span></Button>
+        </div>)}
+        <IconButton icon="plus" label="כרטיסייה חדשה" onClick={() => void newTab()} />
       </div>
       <div className="browser-toolbar" dir="ltr">
-        <IconButton
-          label="חזרה"
-          onClick={() => current && void historyMove(current, "back")}
-        >
-          ←
-        </IconButton>
-        <IconButton
-          label="קדימה"
-          onClick={() => current && void historyMove(current, "forward")}
-        >
-          →
-        </IconButton>
-        <IconButton
-          label={current?.loading ? "עצירה" : "רענון"}
-          onClick={() =>
-            current &&
-            void invoke(current.loading ? "browser_stop" : "browser_reload", {
-              tabId: current.tabId,
-            })
-          }
-        >
-          {current?.loading ? "×" : "↻"}
-        </IconButton>
-        <IconButton
-          label="בית"
-          onClick={() =>
-            current &&
-            void invoke<BrowserSnapshot>("browser_navigate", {
-              tabId: current.tabId,
-              url: "https://www.google.com/?hl=he",
-            }).then(setBrowser)
-          }
-        >
-          ⌂
-        </IconButton>
-        <form onSubmit={submit}>
-          <span
-            title={
-              current?.url.startsWith("https:")
-                ? "חיבור HTTPS"
-                : "חיבור לא מאובטח"
-            }
-          >
-            {current?.url.startsWith("https:") ? "▣" : "ⓘ"}
-          </span>
-          <input
-            ref={addressRef}
-            aria-label="כתובת או חיפוש"
-            value={address}
-            onChange={(event) => setAddress(event.target.value)}
-            spellCheck={false}
-          />
-        </form>
-        <IconButton label="סימנייה" onClick={bookmark}>
-          ☆
-        </IconButton>
-        <IconButton
-          className="browser-menu-trigger"
-          label="תפריט דפדפן"
-          onClick={(event) => void showBrowserMenu(event)}
-        >
-          ⋮
-        </IconButton>
+        <IconButton icon="back" label="חזרה" disabled={!current} onClick={() => current && void historyMove(current, "back")} />
+        <IconButton icon="forward" label="קדימה" disabled={!current} onClick={() => current && void historyMove(current, "forward")} />
+        <IconButton icon={current?.loading ? "stop" : "refresh"} label={current?.loading ? "עצירה" : "רענון"} disabled={!current} onClick={() => current && void invoke(current.loading ? "browser_stop" : "browser_reload", { tabId: current.tabId }).catch(error => setNotice(String(error)))} />
+        <IconButton icon="home" label="בית" disabled={!current} onClick={() => current && void invoke<BrowserSnapshot>("browser_navigate", { tabId: current.tabId, url: "https://www.google.com/?hl=he" }).then(setBrowser).catch(error => setNotice(String(error)))} />
+        <form onSubmit={submit}><Icon name={current?.url.startsWith("https:") ? "lock" : "info"} size={16} /><Field ref={addressRef} label="כתובת או חיפוש" value={address} onChange={event => setAddress(event.target.value)} spellCheck={false} dir="ltr" /></form>
+        <IconButton icon="star" label="סימנייה" onClick={bookmark} />
+        <IconButton icon="more" className="browser-menu-trigger" label="תפריט דפדפן" onClick={event => void showBrowserMenu(event)} />
       </div>
       {showFind && (
         <form
@@ -941,16 +818,9 @@ export function BrowserPanel({
             void find();
           }}
         >
-          <input
-            autoFocus
-            value={findText}
-            onChange={(event) => setFindText(event.target.value)}
-            placeholder="חיפוש בדף"
-          />
-          <button>הבא</button>
-          <button type="button" onClick={() => setShowFind(false)}>
-            ×
-          </button>
+          <Field label="חיפוש בדף" placeholder="חיפוש בדף" autoFocus value={findText} onChange={event => setFindText(event.target.value)} />
+          <Button type="submit">הבא</Button>
+          <IconButton icon="close" tooltip={false} label="סגירת חיפוש בדף" onClick={() => setShowFind(false)} />
         </form>
       )}
       <div
@@ -963,10 +833,7 @@ export function BrowserPanel({
         )}
         {groupTabs.length === 0 && <span>פותח את Smarti Browser…</span>}
       </div>
-      <div className="browser-status">
-        {notice || viewportError ||
-          `${current?.profile === "guest" ? "Guest זמני" : "פרופיל Smarti מתמשך"} · אותו יעד גלוי ומאושר לאוטומציה`}
-      </div>
+      <div className="browser-status">{notice || viewportError ? <span role="alert">{notice || viewportError}</span> : current?.profile === "guest" ? "גלישה זמנית" : "פרופיל Smarti"}</div>
       {panel && (
         <aside className="browser-side-panel" dir="rtl">
           <header>
@@ -979,11 +846,11 @@ export function BrowserPanel({
                     ? "פרטיות והרשאות"
                     : "ייבוא פרופיל"}
             </h3>
-            <button onClick={() => setPanel("")}>×</button>
+            <IconButton icon="close" tooltip={false} label="סגירת פרטי הדפדפן" onClick={() => setPanel("")} />
           </header>
           {panel === "library" && (
             <>
-              <input
+              <SearchField label="חיפוש בספריית הדפדפן"
                 value={libraryQuery}
                 onChange={(event) => setLibraryQuery(event.target.value)}
                 placeholder="חיפוש בהיסטוריה ובסימניות"
@@ -998,12 +865,12 @@ export function BrowserPanel({
                 )
                 .slice(0, 100)
                 .map((item) => (
-                  <button
+                  <Button
                     key={item.id}
                     onClick={() => void openLibraryUrl(item.url)}
                   >
                     {item.title || item.url}
-                  </button>
+                  </Button>
                 ))}
               <h4>היסטוריה</h4>
               {library.history
@@ -1014,7 +881,7 @@ export function BrowserPanel({
                 )
                 .slice(0, 200)
                 .map((item) => (
-                  <button
+                  <Button
                     key={item.id}
                     onClick={() => void openLibraryUrl(item.url)}
                   >
@@ -1022,7 +889,7 @@ export function BrowserPanel({
                     <small>
                       {new Date(item.visitedAt).toLocaleString("he-IL")}
                     </small>
-                  </button>
+                  </Button>
                 ))}
             </>
           )}
@@ -1044,7 +911,7 @@ export function BrowserPanel({
                 Guest נמחק בסגירה ואינו נכנס להיסטוריה או לסימניות של Smarti.
                 Smarti אינו קורא או מציג סיסמאות.
               </p>
-              <button
+              <Button
                 onClick={() =>
                   void invoke("browser_clear_profile", {
                     profile: current?.profile || "persistent",
@@ -1052,7 +919,7 @@ export function BrowserPanel({
                 }
               >
                 ניקוי נתוני הפרופיל הנוכחי
-              </button>
+              </Button>
               {(
                 [
                   "camera",
@@ -1064,15 +931,15 @@ export function BrowserPanel({
               ).map((name) => (
                 <div className="permission-row" key={name}>
                   <span>{name}</span>
-                  <button onClick={() => void permission(name, "granted")}>
+                  <Button onClick={() => void permission(name, "granted")}>
                     אפשר
-                  </button>
-                  <button onClick={() => void permission(name, "denied")}>
+                  </Button>
+                  <Button onClick={() => void permission(name, "denied")}>
                     חסום
-                  </button>
-                  <button onClick={() => void permission(name, "prompt")}>
+                  </Button>
+                  <Button onClick={() => void permission(name, "prompt")}>
                     שאל
-                  </button>
+                  </Button>
                 </div>
               ))}
             </>
@@ -1103,9 +970,9 @@ export function BrowserPanel({
                 המקור מועתק לפני קריאה ולעולם אינו משתנה. הצפנה חסומה תדווח
                 כדילוג; אין ייבוא סיסמאות.
               </p>
-              <button disabled={!sourceId || importing}>
+              <Button type="submit" disabled={!sourceId || importing}>
                 {importing ? "מייבא…" : "ייבוא"}
-              </button>
+              </Button>
             </form>
           )}
         </aside>

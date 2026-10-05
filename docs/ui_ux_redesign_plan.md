@@ -7,6 +7,7 @@
 - Design direction accepted: 2026-10-04, UX-1 v7; closing review and binding UX-2 handoff in execution ledger §21. This accepts the prototype direction; production implementation and acceptance follow in UX-2–6.
 - Shared foundations accepted: 2026-10-05, UX-2 with Tabler SVG and reversible original PNG assets; independent closing review and UX-3 handoff in execution ledger §24.
 - Product shell and chat accepted: 2026-10-05, UX-3 after product feedback D45–48 and independent closing review; scope, remaining evidence and binding UX-4 handoff in execution ledger §30.
+- Product workbench accepted: 2026-10-05, UX-4 after independent review and user-confirmed Windows Open With display/cancel; binding UX-5 handoff and remaining native acceptance in execution ledger §34.
 - מקור: הדו״ח המלא בשיחת התכנון, הסקירה החיה מ־2026-09-30 ובקשת המשתמש מ־2026-10-02 להכין את הפרויקט לביצוע.
 - סמכות: יעד העיצוב הפעיל של Smarti ב־Tauri. התוכנית מחליפה את הדרישה הישנה להעתקה חזותית מדויקת של PyQt.
 - מצב הביצוע והראיות נמצאים רק ב־[יומן הביצוע](ui_ux_redesign_execution.md). הכנת מסמכים אינה מימוש או קבלת מוצר.
