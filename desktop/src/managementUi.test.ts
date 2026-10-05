@@ -33,6 +33,9 @@ const managementStyles = readFileSync(
 );
 afterEach(() => cleanup());
 
+HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
+
 describe("Point 16C source-derived settings behavior", () => {
   it("scrolls the full management viewport around a transparent centered content shell", () => {
     expect(managementStyles).toMatch(
@@ -465,7 +468,7 @@ describe("Point 16C source-derived settings behavior", () => {
           helpUrl: "https://platform.openai.com/api-keys",
           keyInstructions: "צור מפתח והעתק אותו.",
         },
-        onCancel: () => {
+        onCancel: async () => {
           cancelled = true;
         },
       }),
@@ -482,7 +485,7 @@ describe("Point 16C source-derived settings behavior", () => {
     fireEvent.change(input, { target: { value: "invalid-key" } });
     fireEvent.click(screen.getByRole("button", { name: "שמירה והמשך" }));
     await waitFor(() =>
-      expect(screen.getByRole("status").textContent).toContain("מפתח לא תקין"),
+      expect(screen.getByRole("alert").textContent).toContain("מפתח לא תקין"),
     );
     expect(
       calls.some(

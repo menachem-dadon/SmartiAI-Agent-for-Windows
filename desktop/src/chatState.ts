@@ -12,11 +12,14 @@ export type ApiKeyRequest = {
   keyInstructions: string;
 };
 export function mergeMessages(older: ChatMessage[], current: ChatMessage[]) {
-  const seen = new Set<string>();
-  return [...older, ...current].filter((message) => {
-    const key = `${message.role}|${message.created_at || ""}|${message.content}`;
-    if (seen.has(key)) return false; seen.add(key); return true;
-  });
+  const messages = new Map<string, ChatMessage>();
+  for (const message of [...older, ...current]) {
+    const run = message.role === "assistant" && message.metadata?.run_id;
+    const identity = run ? `run:${run}` : message.created_at
+      ? `${message.role}:${message.created_at}:${message.content}` : `${message.role}:${message.content}`;
+    messages.set(identity, message);
+  }
+  return [...messages.values()];
 }
 
 export function recentConversations(conversations: Conversation[]) {

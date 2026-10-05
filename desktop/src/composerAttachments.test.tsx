@@ -3,6 +3,7 @@ import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { coreApi } from "./coreApi";
 import { Composer } from "./Composer";
 import type { PendingAttachment } from "./chatTypes";
 
@@ -89,4 +90,37 @@ test("repeated send events cannot submit one draft twice and failures retain it"
   fireEvent.keyDown(input, { key: "Enter" });
   expect(screen.queryByRole("alert")).toBeNull();
   await act(async () => { retry.resolve(); });
+});
+
+test("a pending voice start is single and cannot attach to a different conversation", async () => {
+  const pending = deferred<{session_id:string}>();
+  vi.mocked(coreApi).mockImplementation((_method, path) => (path === "/v2/audio/voice" ? pending.promise : Promise.resolve({})) as never);
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  const props = {attachments:[], onAttachments:vi.fn(), onSend:vi.fn(), onCancel:vi.fn()};
+  const view=render(<Composer {...props} conversationId="a" />);
+  fireEvent.click(screen.getByRole("button",{name:"הכתבה קולית"}));
+  fireEvent.click(screen.getByRole("button",{name:"הכתבה קולית"}));
+  expect(vi.mocked(coreApi).mock.calls.filter(([,path])=>path==="/v2/audio/voice")).toHaveLength(1);
+  view.rerender(<Composer {...props} conversationId="b" />);
+  await act(async()=>pending.resolve({session_id:"voice-a"}));
+  expect(coreApi).toHaveBeenCalledWith("POST","/v2/audio/voice/stop",{},true);
+  expect(invoke).not.toHaveBeenCalledWith("desktop_show_voice_overlay");
+  expect(props.onSend).not.toHaveBeenCalled();
+});
+
+test("the voice hotkey obeys the current run and disabled state after rerender", async () => {
+  vi.mocked(coreApi).mockResolvedValue({ session_id: "hotkey-voice", active: true });
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  const props = { attachments: [], onAttachments: vi.fn(), onSend: vi.fn(), onCancel: vi.fn() };
+  const view = render(<Composer {...props} />);
+  view.rerender(<Composer {...props} running />);
+  fireEvent(window, new Event("smarti:voice-hotkey"));
+  expect(coreApi).not.toHaveBeenCalledWith("POST", "/v2/audio/voice", {}, true);
+  view.rerender(<Composer {...props} disabled />);
+  fireEvent(window, new Event("smarti:voice-hotkey"));
+  expect(coreApi).not.toHaveBeenCalledWith("POST", "/v2/audio/voice", {}, true);
+  view.rerender(<Composer {...props} />);
+  await act(async () => { fireEvent(window, new Event("smarti:voice-hotkey")); });
+  expect(coreApi).toHaveBeenCalledWith("POST", "/v2/audio/voice", {}, true);
+  expect(invoke).toHaveBeenCalledWith("desktop_show_voice_overlay");
 });

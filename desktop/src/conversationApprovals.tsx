@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { coreApi, encodePath } from "./coreApi";
+import { Button, Icon } from "./design-system";
 import type { Approval } from "./chatTypes";
 
 // Mounted at App scope: navigation and tool-event replay never own or discard
@@ -48,14 +49,14 @@ export function ConversationApprovals({ items, busy, errors, onResolve }: {
         {items.map((approval) => (
           <details className={`conversation-approval risk-${approval.risk_level}`} key={approval.id} open>
             <summary>
-              <strong>{approval.title || "אישור פעולה"}</strong>
+              <Icon name="shield" /><strong>{approval.title || "אישור פעולה"}</strong>
               <span>{approval.risk_level === "high" ? "סיכון גבוה" : approval.risk_level === "low" ? "סיכון נמוך" : "סיכון בינוני"}</span>
             </summary>
-            <pre dir="auto" tabIndex={0}>{approval.prompt}</pre>
+            <pre dir="rtl" tabIndex={0}>{approval.prompt.replace(/\n[\t ]*\n+/g, "\n")}</pre>
             {errors[approval.id] && <p role="alert">{errors[approval.id]}</p>}
             <footer>
-              <button type="button" className="reject" disabled={busy.has(approval.id)} onClick={() => onResolve(approval, false)}>דחה</button>
-              <button type="button" className="accept" disabled={busy.has(approval.id)} onClick={() => onResolve(approval, true)}>אשר</button>
+              <Button variant="ghost" disabled={busy.has(approval.id)} onClick={() => onResolve(approval, false)}>דחה</Button>
+              <Button variant="primary" loading={busy.has(approval.id)} onClick={() => onResolve(approval, true)}>אשר</Button>
               {busy.has(approval.id) && <span role="status">שולח החלטה...</span>}
             </footer>
           </details>

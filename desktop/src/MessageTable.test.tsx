@@ -60,10 +60,10 @@ describe("chat table copy and export", () => {
     const frame = tables[1].closest(".message-table-frame") as HTMLElement;
     fireEvent.click(within(frame).getByRole("button", { name: "העתק טבלה" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("סוג\tכמות\r\nשני\t2"));
-    expect(within(frame).getByRole("status").textContent).toBe("הטבלה הועתקה כטקסט");
+    expect(within(frame).queryByRole("status")).toBeNull();
     view.rerender(<RichMessage message={{ ...message, content: `${message.content}\n\nעוד טקסט` }} />);
     expect(screen.getAllByRole("table")[1]).toBe(tables[1]);
-    expect(within(frame).getByRole("status").textContent).toBe("הטבלה הועתקה כטקסט");
+    expect(within(frame).queryByRole("status")).toBeNull();
   });
 
   test("copies a standalone RTL HTML table plus tab-separated text, with no toolbar or executable markup", async () => {
@@ -72,7 +72,7 @@ describe("chat table copy and export", () => {
       <tbody><tr><td><strong>טקסט</strong><br /><img src="https://example.com/p.png" alt="תמונה" /></td><td>{'<script>alert("x")</script>'}</td></tr></tbody>
     </MessageTable>);
     fireEvent.click(screen.getByRole("button", { name: "העתק טבלה" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("הטבלה הועתקה"));
+    await waitFor(() => expect(write).toHaveBeenCalledOnce());
     const item = write.mock.calls[0][0][0] as TestClipboardItem;
     const html = await readBlob(item.data["text/html"]);
     const plain = await readBlob(item.data["text/plain"]);
@@ -92,7 +92,7 @@ describe("chat table copy and export", () => {
     write.mockRejectedValue(new Error("HTML clipboard unavailable"));
     render(sampleTable());
     fireEvent.click(screen.getByRole("button", { name: "העתק טבלה" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("הטבלה הועתקה כטקסט"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText.mock.calls[0][0]).toContain("שם\tהערה\tסכום");
   });
@@ -101,7 +101,7 @@ describe("chat table copy and export", () => {
     vi.mocked(invoke).mockResolvedValue("C:\\Exports\\table.csv");
     render(sampleTable());
     fireEvent.click(screen.getByRole("button", { name: "ייצוא CSV" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("הקובץ נשמר"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledOnce());
     expect(invoke).toHaveBeenCalledWith("save_text_file", {
       suggestedName: "smarti_table.csv",
       contents: '\uFEFFשם,הערה,סכום\r\nדנה,"אמר ""שלום"", שוב",-12.5\r\nעוד,"שורה\nשנייה",\'=1+1\r\n,00123,\r\n',
@@ -113,7 +113,7 @@ describe("chat table copy and export", () => {
     vi.mocked(invoke).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
     render(sampleTable());
     fireEvent.click(screen.getByRole("button", { name: "ייצוא CSV" }));
-    expect((screen.getByRole("button", { name: "שומר…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "ייצוא CSV" }) as HTMLButtonElement).disabled).toBe(true);
     const copyButton = screen.getByRole("button", { name: "העתק טבלה" });
     expect((copyButton as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(copyButton);
@@ -136,7 +136,8 @@ describe("chat table copy and export", () => {
     write.mockResolvedValue(undefined);
     vi.mocked(invoke).mockResolvedValue("C:\\Exports\\table.csv");
     fireEvent.click(screen.getByRole("button", { name }));
-    await waitFor(() => expect(screen.getByRole("status")).not.toBeNull());
+    await waitFor(() => expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false));
+    expect(action === "copy" ? write.mock.calls.length : vi.mocked(invoke).mock.calls.length).toBe(2);
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });

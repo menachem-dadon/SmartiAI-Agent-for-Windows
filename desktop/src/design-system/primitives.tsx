@@ -14,8 +14,11 @@ export function DesignSystemProvider({ theme, iconFamily = "tabler", dir = "rtl"
 }
 
 function Overlay({ children }: { children: ReactNode }) {
-  const { host } = useContext(DesignContext);
-  return host ? createPortal(children, host) : null;
+  const { host, theme, dir, reduced } = useContext(DesignContext);
+  // Dialogs belong to the browser's top layer. Other floating surfaces must
+  // escape sidebar overflow and the native-motion stacking context.
+  if (host?.closest("dialog")) return createPortal(children, host);
+  return createPortal(<div className="sds-root sds-floating-layer" data-theme={theme} data-reduced-motion={reduced} dir={dir} style={designTokenStyle(theme)}>{children}</div>, document.body);
 }
 function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean, width: number) {
   const [position, setPosition] = useState({ top: 0, left: 0, maxHeight: 400, transform: "none" });
@@ -44,12 +47,13 @@ export function Tooltip({ label, children }: { label: string; children: ReactEle
   const [hover, setHover] = useState(false);
   const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const enterHover = () => { clearTimeout(hoverTimer.current); setHover(true); setDismissed(false); };
-  const leaveHover = () => { clearTimeout(hoverTimer.current); hoverTimer.current = setTimeout(() => setHover(false), 180); };
-  useEffect(() => () => clearTimeout(hoverTimer.current), []);
+  const bubble = useRef<HTMLSpanElement>(null);
+  const enterHover = () => { setHover(true); setDismissed(false); };
+  const leaveHover = () => { setHover(false); setFocused(false); };
   const open = (hover || focused) && !dismissed;
-  const position = useFloating(anchor, open, 220);
+  const [width, setWidth] = useState(220);
+  const position = useFloating(anchor, open, width);
+  useLayoutEffect(() => { if (open && bubble.current) setWidth(bubble.current.getBoundingClientRect().width); }, [open, label]);
   useEffect(() => {
     if (!open) return;
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setDismissed(true); };
@@ -57,9 +61,9 @@ export function Tooltip({ label, children }: { label: string; children: ReactEle
     return () => document.removeEventListener("keydown", escape, true);
   }, [open]);
   const describedBy = [children.props["aria-describedby"], open ? id : undefined].filter(Boolean).join(" ") || undefined;
-  return <span className="sds-tooltip-anchor" ref={anchor} onPointerEnter={(event) => { if (event.pointerType !== "touch") enterHover(); }} onPointerLeave={leaveHover} onFocus={() => { setFocused(true); setDismissed(false); }} onBlur={() => setFocused(false)}>
+  return <span className="sds-tooltip-anchor" ref={anchor} onPointerEnter={(event) => { if (event.pointerType !== "touch") enterHover(); }} onPointerLeave={leaveHover} onFocus={(event) => { setFocused(event.target instanceof HTMLElement && event.target.matches(":focus-visible")); setDismissed(false); }} onBlur={() => setFocused(false)}>
     {cloneElement(children, { "aria-describedby": describedBy })}
-    {open && <Overlay><span id={id} role="tooltip" className="sds-tooltip" style={position} onPointerEnter={enterHover} onPointerLeave={leaveHover}>{label}</span></Overlay>}
+    {open && <Overlay><span ref={bubble} id={id} role="tooltip" className="sds-tooltip" style={position}>{label}</span></Overlay>}
   </span>;
 }
 
@@ -67,8 +71,9 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primar
 export function Button({ className = "", variant = "secondary", icon, loading = false, disabled, children, ...props }: ButtonProps) {
   return <button type="button" {...props} disabled={disabled || loading} aria-busy={loading || undefined} className={`sds-button sds-button--${variant} ${className}`}>{loading ? <Icon name="loader" className="sds-spin" /> : icon && <Icon name={icon} />}{children}</button>;
 }
-export function IconButton({ label, icon, round = false, ...props }: Omit<ButtonProps, "children" | "icon"> & { label: string; icon: IconName; round?: boolean }) {
-  return <Tooltip label={label}><Button {...props} aria-label={label} icon={icon} className={`sds-icon-button ${round ? "sds-round" : ""} ${round && props.variant === "primary" ? "sds-main-action" : ""} ${props.className || ""}`} /></Tooltip>;
+export function IconButton({ label, icon, round = false, tooltip = true, ...props }: Omit<ButtonProps, "children" | "icon"> & { label: string; icon: IconName; round?: boolean; tooltip?: boolean }) {
+  const button = <Button {...props} aria-label={label} icon={icon} className={`sds-icon-button ${round ? "sds-round" : ""} ${round && props.variant === "primary" ? "sds-main-action" : ""} ${props.className || ""}`} />;
+  return tooltip ? <Tooltip label={label}>{button}</Tooltip> : button;
 }
 
 type FieldProps = InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: string; error?: string; ref?: RefObject<HTMLInputElement | null> };
@@ -109,7 +114,7 @@ export function Menu({ label, icon = "more", items, children }: { label: string;
     document.addEventListener("pointerdown", outside); document.addEventListener("focusin", focusOutside);
     return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("focusin", focusOutside); };
   }, [open]);
-  return <><button ref={trigger} type="button" className={`sds-button ${children ? "" : "sds-icon-button"}`} aria-label={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} title={label} onClick={() => { openingKey.current = "first"; setOpen(!open); }} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); openingKey.current = event.key === "ArrowUp" ? "last" : "first"; setOpen(true); } }}>{children}<Icon name={icon} /></button>
+  return <><button ref={trigger} type="button" className={`sds-button ${children ? "" : "sds-icon-button"}`} aria-label={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => { openingKey.current = "first"; setOpen(!open); }} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); openingKey.current = event.key === "ArrowUp" ? "last" : "first"; setOpen(true); } }}>{children}<Icon name={icon} /></button>
     {open && <Overlay><div ref={menu} id={id} role="menu" aria-label={label} className="sds-menu" style={position} onKeyDown={(event) => {
       const buttons = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []);
       const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
@@ -146,7 +151,7 @@ function DialogContent({ title, description, children, onClose, initialFocus, ro
     else if (event.shiftKey && (document.activeElement === first || document.activeElement === node)) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && (document.activeElement === last || document.activeElement === node)) { event.preventDefault(); first.focus(); }
   }} onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom)) onClose(); }}>
-    <header><h2 id={titleId}>{title}</h2><IconButton variant="ghost" icon="close" label="סגירה" onClick={onClose} /></header>{description && <p className="sds-hint" id={descId}>{description}</p>}{children}
+    <header><h2 id={titleId}>{title}</h2><IconButton tooltip={false} variant="ghost" icon="close" label="סגירה" onClick={onClose} /></header>{description && <p className="sds-hint" id={descId}>{description}</p>}{children}
     <div ref={setHost} className="sds-overlay-host" />
   </dialog></DesignContext.Provider>;
 }
@@ -199,8 +204,8 @@ export function HoverLabel({ text }: { text: string }) {
   const [travel, setTravel] = useState({ distance: 0, rtl: true });
   useLayoutEffect(() => {
     const measure = () => { if (viewport.current && content.current) setTravel({ distance: Math.max(0, content.current.scrollWidth - viewport.current.clientWidth), rtl: getComputedStyle(viewport.current).direction === "rtl" }); };
-    measure(); const observer = new ResizeObserver(measure); if (viewport.current) observer.observe(viewport.current);
-    return () => observer.disconnect();
+    measure(); const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure); if (viewport.current) observer?.observe(viewport.current);
+    return () => observer?.disconnect();
   }, [text]);
   return <span ref={viewport} className="sds-hover-label" title={text} dir="auto" data-overflow={travel.distance > 1} style={{ "--sds-label-shift": `${travel.rtl ? travel.distance : -travel.distance}px`, "--sds-label-duration": `${Math.max(1.2, travel.distance / 72)}s` } as CSSProperties}><span ref={content}>{text}</span></span>;
 }

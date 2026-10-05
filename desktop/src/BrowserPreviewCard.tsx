@@ -9,8 +9,8 @@ export function BrowserPreviewCard({ activity, onOpen, onDismiss }: {
     <header>
       <span className={`browser-preview-status${activity.loading ? " is-loading" : ""}`} aria-label={activity.loading ? "הדפדפן טוען" : "דפדפן פעיל"} />
       <strong title={activity.title}>{activity.title || "דפדפן"}</strong>
-      <button type="button" aria-label="הרחבת תצוגת הדפדפן" title="הרחבת תצוגת הדפדפן" onClick={onOpen}>↗</button>
-      <button type="button" aria-label="סגירת התצוגה המקדימה" title="סגירת התצוגה המקדימה" onClick={onDismiss}>×</button>
+      <button type="button" aria-label="הרחבת תצוגת הדפדפן" onClick={onOpen}>↗</button>
+      <button type="button" aria-label="סגירת התצוגה המקדימה" onClick={onDismiss}>×</button>
     </header>
     <button type="button" className="browser-preview-image" aria-label={`פתיחת ${activity.title || "הדפדפן"}`} onClick={onOpen}>
       {activity.previewDataUrl

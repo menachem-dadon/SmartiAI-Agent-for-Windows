@@ -15,7 +15,6 @@ import {
   ACTIVE_RUN_STATES,
   mergeMessages,
   pendingApiKeyRequest,
-  recentConversations,
   type ApiKeyRequest,
 } from "./chatState";
 import type {
@@ -25,7 +24,6 @@ import type {
   Conversation,
   ConversationList,
   MessagePage,
-  PendingAttachment,
   ReasoningOption,
   RunEvent,
   RunRecord,
@@ -40,12 +38,11 @@ import {
   type ThemePreference,
 } from "./designSystem";
 import { RichMessage } from "./RichMessage";
-import { Alert, Button, IconButton } from "./ui";
-import { LegacyIcon, legacyAssets } from "./legacyAssets";
-import {
-  DismissibleDetails,
-  useDismissiblePopup,
-} from "./popupDismissal";
+import { Alert, Button, DesignSystemProvider, Dialog, Field, Icon, IconButton, Menu } from "./design-system";
+import { ChatSidebar, conversationActions } from "./ChatSidebar";
+import { useChatDrafts } from "./chatDrafts";
+import { savedChatPosition, useChatFooterFlow, useChatScroll } from "./chatScroll";
+import { legacyAssets } from "./legacyAssets";
 import {
   clampWorkbenchResize,
   initialWorkspaceState,
@@ -56,8 +53,9 @@ import {
   type WorkbenchSnapshot,
   type WorkbenchTab,
 } from "./workspaceState";
-import { activityState, legacyUi, workspaceIsNarrow } from "./legacyUiParity";
+import { legacyUi, workspaceIsNarrow } from "./legacyUiParity";
 import "./App.css";
+import "./chat.css";
 import { useChatLayoutMotion } from "./workspaceMotion";
 import { useConversationAttention } from "./conversationAttention";
 import { settingsRevision, subscribeSettingsChanges } from "./settingsChanges";
@@ -82,13 +80,16 @@ export function ApiKeyRequiredDialog({
   onCancel,
 }: {
   request: ApiKeyRequest;
-  onCancel: () => void;
+  onCancel: () => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState("");
+  const [validating, setValidating] = useState(false);
+  const providing = useRef(false);
   const provide = async () => {
     const value = draft.trim();
-    if (!value) return;
+    if (!value || providing.current) return;
+    providing.current = true; setValidating(true);
     setStatus("בודק את המפתח לפני שמירה…");
     try {
       await validateProviderKey({ provider: request.provider, secret: value });
@@ -106,25 +107,26 @@ export function ApiKeyRequiredDialog({
       setStatus(
         `המפתח לא נשמר: ${reason instanceof Error ? reason.message : String(reason)}`,
       );
-    }
+    } finally { providing.current = false; setValidating(false); }
+  };
+  const cancelRequest = async () => {
+    if (providing.current) return;
+    providing.current = true; setValidating(true);
+    try { await onCancel(); } catch (reason) { setStatus(`לא ניתן לבטל: ${String(reason)}`); }
+    finally { providing.current = false; setValidating(false); }
   };
   return (
-    <div className="action-confirm-backdrop">
+    <Dialog open title={request.title} description={request.message} onClose={() => { if (!validating) void cancelRequest(); }}>
       <form
-        className="api-key-required-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="api-key-required-title"
+        className="chat-api-key"
         onSubmit={(event) => {
           event.preventDefault();
           void provide();
         }}
       >
-        <h2 id="api-key-required-title">{request.title}</h2>
-        <p>{request.message}</p>
-        <b className="api-key-provider">ספק פעיל: {request.providerLabel}</b>
-        <label>
-          <input
+
+        <b className="chat-api-key-provider">ספק פעיל: {request.providerLabel}</b>
+          <Field label="מפתח API"
             autoFocus
             type="password"
             autoComplete="off"
@@ -135,10 +137,9 @@ export function ApiKeyRequiredDialog({
               setStatus("");
             }}
           />
-        </label>
         {request.helpUrl && (
           <button
-            className="api-key-help"
+            className="chat-api-key-help"
             type="button"
             onClick={() =>
               void invoke("open_chat_link", {
@@ -151,43 +152,23 @@ export function ApiKeyRequiredDialog({
           </button>
         )}
         {request.keyInstructions && (
-          <p className="api-key-instructions">{request.keyInstructions}</p>
+          <p className="chat-api-key-instructions">{request.keyInstructions}</p>
         )}
-        <p className="api-key-note">
+        <p className="chat-api-key-note">
           המפתח יישמר כמו שאר המפתחות של סמארטי, ולא יוצג בלוגים.
         </p>
         {status && (
-          <p className="api-key-validation-status" role="status">
+          <p className="chat-api-key-validation-status" role={status.startsWith("בודק") ? "status" : "alert"}>
             {status}
           </p>
         )}
         <footer>
-          <button type="button" className="reject" onClick={onCancel}>
-            ביטול
-          </button>
-          <button type="submit" className="accept" disabled={!draft.trim()}>
-            שמירה והמשך
-          </button>
+          <Button disabled={validating} onClick={() => void cancelRequest()}>ביטול</Button>
+          <Button type="submit" variant="primary" loading={validating} disabled={!draft.trim()}>שמירה והמשך</Button>
         </footer>
       </form>
-    </div>
+    </Dialog>
   );
-}
-
-function conversationMeta(item: Conversation): string {
-  let date = "";
-  if (item.updated_at) {
-    const value = new Date(item.updated_at);
-    if (!Number.isNaN(value.getTime()))
-      date = value.toLocaleString("he-IL", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-  }
-  return `${date}${date ? " · " : ""}${item.message_count || 0} הודעות`;
 }
 
 function useTheme() {
@@ -223,8 +204,6 @@ export default function App() {
     initialWorkspaceState,
   );
   const [managementOpen, setManagementOpen] = useState(false);
-  const managementTrigger = useRef<HTMLSpanElement | null>(null);
-  const managementPopup = useRef<HTMLDivElement | null>(null);
   const [managementSection, setManagementSection] =
     useState<ManagementSection | null>(null);
   const { resolved, setPreference } = useTheme();
@@ -241,11 +220,15 @@ export default function App() {
   const [loadedNavigationRevision, setLoadedNavigationRevision] = useState(0);
   const [readyNavigationRevision, setReadyNavigationRevision] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [newUserRun, setNewUserRun] = useState("");
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const [page, setPage] = useState<MessagePage | null>(null);
   const setActiveId = useCallback((id: string) => {
     if (activeIdRef.current !== id) {
       ++messageRequest.current;
       setMessages([]);
+      messagesRef.current = [];
       setPage(null);
       loadedAttentionIds.current.clear();
     }
@@ -255,13 +238,15 @@ export default function App() {
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const approvalQueue = useApprovalQueue();
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [query, setQuery] = useState("");
   const queryRef = useRef(query);
   queryRef.current = query;
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [error, setError] = useState("");
+  const drafts = useChatDrafts(activeId, setError);
+  const { attachments } = drafts.draft;
+  const setAttachments = drafts.setAttachments;
   const attention = useConversationAttention(setError);
   const [foreground, setForeground] = useState(() => !document.hidden && document.hasFocus());
   const [availableUpdateVersion, setAvailableUpdateVersion] = useState("");
@@ -301,15 +286,39 @@ export default function App() {
     if (workspace.workbenchOpen) setDismissedBrowserPreview("");
   }, [workspace.workbenchOpen]);
   const [bootstrapReady, setBootstrapReady] = useState(false);
+  const restoredModelOwner = useRef("");
+  const modelOperations = useRef<Promise<unknown>>(Promise.resolve());
+  const [restoringModel, setRestoringModel] = useState(false);
+  useEffect(() => {
+    if (!bootstrapReady || restoredModelOwner.current === activeId) return;
+    setRestoringModel(false);
+    if (!activeId) { restoredModelOwner.current = ""; return; }
+    restoredModelOwner.current = activeId;
+    setRestoringModel(false);
+    const selected = drafts.draft.selection;
+    if (!selected || (selected.provider === provider && selected.model === model && selected.effort === reasoningEffort)) return;
+    let disposed = false;
+    setRestoringModel(true);
+    void (async () => {
+      const accepted = await selectFavoriteModel(selected);
+      if (!accepted || disposed) return;
+      if (!disposed && selected.effort !== "auto") {
+        const available = await loadReasoning(selected.provider, selected.model, activeId);
+        if (disposed) return;
+        if (available.reasoning_options.some(option => option.value === selected.effort))
+          await coreApi("POST", `/v2/providers/${encodePath(selected.provider)}/reasoning`, { model: selected.model, effort: selected.effort }, true);
+      }
+      const latest = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
+      if (!disposed) { syncSettings(latest); drafts.setSelection({ provider: selected.provider, model: selected.model, effort: latest.chat_models.reasoning_effort || "auto" }); }
+    })().catch(reason => { if (!disposed) setError(`לא ניתן לשחזר את בחירת המודל: ${String(reason)}`); })
+      .finally(() => { if (!disposed) setRestoringModel(false); });
+    return () => { disposed = true; };
+  }, [activeId, bootstrapReady]);
   const [workspaceWindowReady, setWorkspaceWindowReady] = useState(false);
   const [legalStatus, setLegalStatus] = useState<LegalStatus | null>(null);
   const [legalChecked, setLegalChecked] = useState(false);
   const [voiceHotkey, setVoiceHotkey] = useState("Ctrl+Shift+Space");
-  useDismissiblePopup({
-    open: managementOpen,
-    roots: [managementTrigger, managementPopup],
-    onDismiss: () => setManagementOpen(false),
-  });
+
   const [keepRunningInTray, setKeepRunningInTray] = useState(true);
   const notifiedAttention = useRef(new Set<string>());
   const unreadUpdate = useRef(Promise.resolve());
@@ -359,8 +368,10 @@ export default function App() {
     if (sessionId !== activeIdRef.current || request !== messageRequest.current) return;
     // An older toast can refer to a reply outside the newest history page.
     // Include that page before positioning; pending runs are found by their user message.
-    while (targetRun && value.has_older && value.next_before_ordinal !== null &&
-        !value.messages.some((message) => message.metadata?.run_id === targetRun)) {
+    const savedCount = Math.max(savedChatPosition(sessionId)?.count || 0, messagesRef.current.length);
+    while (value.has_older && value.next_before_ordinal !== null &&
+        ((targetRun && !value.messages.some(message => message.metadata?.run_id === targetRun)) ||
+          value.messages.length < savedCount)) {
       const older = await coreApi<MessagePage>("GET",
         `/v2/conversations/${encodePath(sessionId)}/messages?limit=48&before=${value.next_before_ordinal}`,
       );
@@ -374,7 +385,7 @@ export default function App() {
     setLoadedNavigationRevision(revision);
     loadedAttentionIds.current = new Set(value.unread_attention_ids || []);
     setPage(value);
-    setMessages(value.messages);
+    setMessages(mergeMessages(messagesRef.current, value.messages));
   }, []);
   const refreshConversations = useCallback(async (search = queryRef.current) => {
     const request = ++listRequest.current;
@@ -686,6 +697,14 @@ export default function App() {
     workspaceWindowReady && !managementSection && loadedNavigationRevision === navigation?.revision &&
       readyNavigationRevision === navigation?.revision,
   );
+  const scroll = useChatScroll(chatViewportRef, activeId,
+    workspaceWindowReady && !managementSection && page?.session_id === activeId,
+    messages.length, messages);
+  useEffect(() => {
+    if (!newUserRun || !messages.some(message => message.role === "user" && message.metadata?.run_id === newUserRun)) return;
+    const timer = window.setTimeout(() => setNewUserRun(""), 240);
+    return () => window.clearTimeout(timer);
+  }, [newUserRun, messages]);
   useEffect(() => {
     if (!activeRunId || core.state !== "ready") return;
     void coreApi<{ items: RunEvent[] }>(
@@ -805,19 +824,27 @@ export default function App() {
   const activeApprovals = approvalQueue.items.filter(
     (item) => item.session_id === activeId,
   );
-  const activeApiKeyRequest = pendingApiKeyRequest(activeEvents);
+  const chatFooterRef = useRef<HTMLDivElement>(null);
+  const flowingFooter = useChatFooterFlow(chatViewportRef, chatFooterRef,
+    `${activeId}:${activeApprovals.length}:${scroll.hasNewContent}:${workspaceWindowReady}:${managementSection}`);
+  const activeApiKeyRequest = pendingApiKeyRequest(activeEvents.filter(event =>
+    runs.some(run => run.id === event.run_id && run.status === "waiting_for_input")));
   const eventsForRun = (runId: string) =>
     activeEvents.filter((item) => item.run_id === runId);
-  const activeAssistantRecorded = Boolean(
-    activeRun &&
-    messages.some(
-      (message) =>
-        message.role === "assistant" &&
-        String(message.metadata?.run_id || "") === activeRun.id,
-    ),
-  );
+  // Runtime and message requests can finish in different orders. Keep the
+  // observed run mounted through that gap, using the Core's terminal record.
+  const observedReplies = useRef<Record<string, string>>({});
+  if (activeRun) observedReplies.current[activeId] = activeRun.id;
+  const terminalReply = runs.find(run => run.id === observedReplies.current[activeId] &&
+    ["completed", "failed"].includes(run.status));
+  const displayRun = activeRun || terminalReply;
+  const activeAssistantRecorded = Boolean(displayRun && messages.some(message =>
+    message.role === "assistant" && message.metadata?.run_id === displayRun.id));
+
   const createConversation = async () => {
     try {
+      const empty = conversations.find(item => !item.message_count && !item.is_busy);
+      if (empty) { await selectConversation(empty.id); return; }
       const data = await coreApi<{ conversation: Conversation }>(
         "POST",
         "/v2/conversations",
@@ -828,7 +855,6 @@ export default function App() {
       setActiveId(data.conversation.id);
       setMessages([]);
       setPage(null);
-      setAttachments([]);
       if (narrowWorkspace)
         dispatch({ type: "set-conversations", open: false });
     } catch (reason) {
@@ -836,18 +862,18 @@ export default function App() {
     }
   };
   const selectConversation = async (id: string, runId?: string) => {
+    if (!restoringModel && provider && model) drafts.setSelection({ provider, model, effort: reasoningEffort });
     setManagementSection(null);
     setManagementOpen(false);
     navigationTarget.current = runId || "";
     setNavigation({ sessionId: id, revision: ++navigationRevision.current, runId });
     setActiveId(id);
-    setAttachments([]);
     if (narrowWorkspaceRef.current)
       dispatch({ type: "set-conversations", open: false });
   };
   const renameConversation = async (item: Conversation) => {
     setRenameValue(item.title);
-    setConversationDialog({ kind: "rename", item });
+    setDialogError(""); setConversationDialog({ kind: "rename", item });
   };
   const togglePinned = async (item: Conversation) => {
     await coreApi(
@@ -874,9 +900,16 @@ export default function App() {
       setError("יש לעצור את הפעולה בשיחה לפני מחיקתה.");
       return;
     }
-    setConversationDialog({ kind: "delete", item });
+    setDialogError(""); setConversationDialog({ kind: "delete", item });
   };
+  const dialogGuard = useRef(false);
+  const dialogCancel = useRef<HTMLButtonElement>(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
+  const [dialogError, setDialogError] = useState("");
   const confirmConversationDialog = async () => {
+    if (dialogGuard.current) return;
+    dialogGuard.current = true; setDialogBusy(true); setDialogError("");
+    try {
     if (!conversationDialog) return;
     const { item, kind } = conversationDialog;
     if (kind === "rename") {
@@ -898,9 +931,12 @@ export default function App() {
         setActiveId("");
         setMessages([]);
       }
+      drafts.remove(item.id);
     }
     setConversationDialog(null);
     await refreshLists();
+    } catch (reason) { setDialogError(String(reason)); }
+    finally { dialogGuard.current = false; setDialogBusy(false); }
   };
   const send = async (text: string, isVoice = false) => {
     setError("");
@@ -914,7 +950,6 @@ export default function App() {
         true,
       );
       sessionId = data.conversation.id;
-      setActiveId(sessionId);
     }
     const handles: string[] = [];
     for (const item of submittedAttachments) {
@@ -928,7 +963,7 @@ export default function App() {
       );
       handles.push(data.attachment.handle);
     }
-    await coreApi(
+    const submitted = await coreApi<{ run: RunRecord }>(
       "POST",
       `/v2/conversations/${encodePath(sessionId)}/runs`,
       {
@@ -941,7 +976,9 @@ export default function App() {
       },
       true,
     );
-    setAttachments((current) => current.filter((item) => !submittedAttachments.includes(item)));
+    setNewUserRun(submitted.run?.id || "");
+    setAttachments((current) => current.filter(item => !submittedAttachments.includes(item)));
+    if (!activeId) { drafts.transfer("", sessionId); setActiveId(sessionId); }
     // A refresh failure must not restore a draft whose run was already accepted.
     try {
       await refreshLists();
@@ -950,11 +987,11 @@ export default function App() {
       setError(`ההודעה נשלחה, אך רענון התצוגה נכשל: ${String(reason)}`);
     }
   };
-  const cancel = async () => {
-    if (activeRun)
+  const cancel = async (runId = activeRun?.id) => {
+    if (runId)
       await coreApi(
         "POST",
-        `/v2/runs/${encodePath(activeRun.id)}/cancel`,
+        `/v2/runs/${encodePath(runId)}/cancel`,
         {},
         true,
       );
@@ -1013,7 +1050,7 @@ export default function App() {
     await approvalQueue.resolve(approval, approved);
     await refreshLists().catch((reason) => setError(String(reason)));
   };
-  const loadReasoning = async (nextProvider: string, nextModel: string) => {
+  const loadReasoning = async (nextProvider: string, nextModel: string, owner = activeIdRef.current) => {
     const data = await coreApi<{
       reasoning_effort: string;
       reasoning_options: ReasoningOption[];
@@ -1021,10 +1058,16 @@ export default function App() {
       "GET",
       `/v2/providers/${encodePath(nextProvider)}/reasoning?model=${encodeURIComponent(nextModel)}`,
     );
-    setReasoningEffort(data.reasoning_effort || "auto");
-    setReasoningOptions(data.reasoning_options || []);
+    if (owner === activeIdRef.current) {
+      setReasoningEffort(data.reasoning_effort || "auto");
+      setReasoningOptions(data.reasoning_options || []);
+    }
+    return data;
   };
   const selectFavoriteModel = async (item: FavoriteModel) => {
+    const owner = activeId;
+    const operation = modelOperations.current.catch(() => undefined).then(async () => {
+    if (owner !== activeIdRef.current) return false;
     const previousProvider = provider;
     const previousModel = model;
     setProvider(item.provider);
@@ -1050,12 +1093,19 @@ export default function App() {
         ...current,
         [item.provider]: "user",
       }));
-      await loadReasoning(item.provider, item.model);
+      const reasoning = await loadReasoning(item.provider, item.model, owner);
+      drafts.setSelection({ ...item, effort: reasoning.reasoning_effort || "auto" });
+      return true;
     } catch (reason) {
-      setProvider(previousProvider);
-      setModel(previousModel);
-      setError(`לא ניתן להחליף מודל: ${String(reason)}`);
+      if (owner === activeIdRef.current) {
+        setProvider(previousProvider); setModel(previousModel);
+        setError(`לא ניתן להחליף מודל: ${String(reason)}`);
+      }
+      return false;
     }
+    });
+    modelOperations.current = operation;
+    return operation;
   };
   const changeReasoning = async (effort: string) => {
     const previous = reasoningEffort;
@@ -1068,6 +1118,7 @@ export default function App() {
         true,
       );
       setReasoningEffort(data.reasoning_effort);
+      drafts.setSelection({ provider, model, effort: data.reasoning_effort });
     } catch (reason) {
       setReasoningEffort(previous);
       setError(`לא ניתן לעדכן עוצמת חשיבה: ${String(reason)}`);
@@ -1227,7 +1278,7 @@ export default function App() {
     const copy = copyForState(core.state, core.lastError);
     const failed = ["crashed", "fatal", "repair"].includes(core.state);
     return (
-      <main
+      <DesignSystemProvider theme={resolved} className="chat-design"><main
         className={`startup-shell theme-${resolved}`}
         dir="rtl"
         data-state={core.state}
@@ -1238,14 +1289,14 @@ export default function App() {
             <div>
               <h1>SmartiAI</h1>
               <p>סוכן AI חכם ל-Windows</p>
-              <small>גרסה 0.87.0 • Python Core • Windows</small>
+              <small>גרסה 0.87.0</small>
             </div>
           </div>
           <div className="splash-spacer" />
           <p className="splash-status">
             {failed ? copy.status : copy.description}
           </p>
-          <div className="splash-progress">
+          <div className="splash-progress" role="progressbar" aria-label="פותח את סמארטי">
             <i />
           </div>
           {failed && (
@@ -1259,7 +1310,7 @@ export default function App() {
             </div>
           )}
         </section>
-      </main>
+      </main></DesignSystemProvider>
     );
   }
 
@@ -1285,7 +1336,7 @@ export default function App() {
   const openWorkbench = (tab: WorkbenchTab) => setWorkbenchOpen(true, tab);
   const icons = legacyAssets(resolved);
   return (
-    <main
+    <DesignSystemProvider theme={resolved} className="chat-design"><main
       className={`smarti-app theme-${resolved}`}
       dir="rtl"
       data-theme={resolved}
@@ -1319,216 +1370,30 @@ export default function App() {
           }
           onClick={dismissWorkspaceOverlay}
         />
-        <aside
-          className={`conversation-drawer ${workspace.conversationDrawerOpen ? "is-open" : "is-rail"}`}
-          aria-label="שיחות"
-        >
-          <div className="drawer-head">
-            <button
-              className="drawer-brand"
-              type="button"
-              aria-label={
-                workspace.conversationDrawerOpen
-                  ? "כיווץ תפריט הצד"
-                  : "פתיחת תפריט הצד"
-              }
-              onClick={() => void toggleConversationDrawer()}
-            >
-              <img className="drawer-logo" src={icons.logo} alt="" />
-              <LegacyIcon src={icons.sidebarExpand} size={19} />
-              <strong>SmartiAI</strong>
-            </button>
-            <IconButton
-              className="drawer-collapse-control"
-              label="כיווץ תפריט הצד"
-              aria-hidden={!workspace.conversationDrawerOpen}
-              tabIndex={workspace.conversationDrawerOpen ? 0 : -1}
-              onClick={() => void toggleConversationDrawer()}
-            >
-              <LegacyIcon src={icons.sidebarCollapse} />
-            </IconButton>
-          </div>
-          <button
-            className="new-chat-button"
-            type="button"
-            onClick={() => void createConversation()}
-          >
-            <LegacyIcon src={icons.newChat} />
-            <span>שיחה חדשה</span>
-          </button>
-          <div
-            className="drawer-expanded-content"
-            aria-hidden={!workspace.conversationDrawerOpen}
-          >
-            <label className="conversation-search">
-                <LegacyIcon src={icons.search} size={26} />
-                <input
-                  dir="rtl"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="חיפוש לפי שם או תוכן"
-                  aria-label="חיפוש בשיחות"
-                />
-                {query && (
-                  <button
-                    className="conversation-search-clear"
-                    type="button"
-                    aria-label="ניקוי חיפוש"
-                    onClick={() => setQuery("")}
-                  >
-                    ×
-                  </button>
-                )}
-            </label>
-            <div className="conversation-list">
-                {historyLoading && (
-                  <p className="drawer-state" role="status">
-                    טוען שיחות…
-                  </p>
-                )}
-                {historyError && (
-                  <p className="drawer-state is-error" role="alert">
-                    {historyError}
-                  </p>
-                )}
-                {recentConversations(conversations).map((item) => {
-                  const state = activityState({ ...item, unread_count:
-                    attention.items.filter((entry) => entry.session_id === item.id).length,
-                  });
-                  return (
-                    <div
-                      className={`conversation-row ${item.id === activeId ? "is-active" : ""}`}
-                      key={item.id}
-                    >
-                      <button
-                        className="conversation-select"
-                        type="button"
-                        onClick={() => void selectConversation(item.id)}
-                      >
-                        <span className="conversation-label">
-                          <strong>{item.title}</strong>
-                          <small>{conversationMeta(item)}</small>
-                        </span>
-                      </button>
-                      {item.pinned && <LegacyIcon src={icons.pin} size={16} />}
-                      {state !== "idle" && (
-                        <span
-                          title={
-                            state === "running"
-                              ? "סמארטי עובד בשיחה הזאת"
-                              : state === "waiting_for_approval"
-                                ? item.runtime_status === "waiting_for_input"
-                                  ? "סמארטי ממתין למפתח API"
-                                  : "סמארטי ממתין לאישור"
-                                : "התקבלה תשובה חדשה"
-                          }
-                          className={`conversation-activity ${state === "running" ? "is-busy" : state === "waiting_for_approval" ? "needs-input" : "has-unread"}`}
-                        />
-                      )}
-                      <DismissibleDetails className="conversation-menu">
-                        <summary aria-label={`פעולות עבור ${item.title}`}>
-                          <LegacyIcon src={icons.menu} size={18} />
-                        </summary>
-                        <div>
-                          <button
-                            type="button"
-                            onClick={() => void togglePinned(item)}
-                          >
-                            <LegacyIcon
-                              src={item.pinned ? icons.unpin : icons.pin}
-                              size={15}
-                            />
-                            {item.pinned ? "בטל הצמדה" : "הצמד שיחה"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void renameConversation(item)}
-                          >
-                            <LegacyIcon src={icons.rename} size={15} />
-                            שנה שם
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void exportConversation(item)}
-                          >
-                            <LegacyIcon src={icons.exportJson} size={15} />
-                            יצוא JSON
-                          </button>
-                          <hr />
-                          <button
-                            type="button"
-                            onClick={() => void deleteConversation(item)}
-                          >
-                            <LegacyIcon src={icons.delete} size={15} />
-                            מחק שיחה
-                          </button>
-                        </div>
-                      </DismissibleDetails>
-                    </div>
-                  );
-                })}
-                {!conversations.length && (
-                  <p className="drawer-empty">
-                    {query ? "לא נמצאו שיחות" : "עדיין אין שיחות"}
-                  </p>
-                )}
-            </div>
-          </div>
-          <DismissibleDetails className="profile-menu">
-            <summary className="profile-button" aria-label="פרופיל והגדרות">
-              <span aria-hidden="true" />
-              <b>פרופיל משתמש</b>
-            </summary>
-            <div>
-              <button
-                type="button"
-                onClick={() => setManagementSection("usage")}
-              >
-                נתוני שימוש
-              </button>
-              <button
-                type="button"
-                onClick={() => setManagementSection("settings_ai")}
-              >
-                הגדרות וניהול
-              </button>
-              <button
-                type="button"
-                onClick={() => setManagementSection("diagnostics")}
-              >
-                Smarti Diagnostic
-              </button>
-              <hr />
-              <button
-                type="button"
-                onClick={() => setManagementSection("about")}
-              >
-                אודות
-              </button>
-            </div>
-          </DismissibleDetails>
-        </aside>
+        <ChatSidebar open={workspace.conversationDrawerOpen} logo={icons.logo}
+          conversations={conversations} activeId={activeId} query={query}
+          loading={historyLoading} error={historyError}
+          unread={id => attention.items.filter(item => item.session_id === id).length}
+          onToggle={() => void toggleConversationDrawer()} onCreate={() => void createConversation()}
+          onQuery={setQuery} onSelect={id => void selectConversation(id)}
+          onManagement={setManagementSection} actions={item => conversationActions(item, {
+            pin: item => void togglePinned(item).catch(reason => setError(String(reason))),
+            rename: item => void renameConversation(item),
+            export: item => void exportConversation(item).catch(reason => setError(String(reason))),
+            remove: item => void deleteConversation(item),
+          })} />
         <section className="chat-column" ref={chatMotionRef} aria-label="צ׳אט מרכזי">
           <div className="chat-toolbar">
-            <div className="chat-toolbar-controls" dir="ltr">
-              <span className="chat-menu-trigger" ref={managementTrigger}>
-                <IconButton
-                  label="פעולות שיחה"
-                  aria-expanded={managementOpen}
-                  onClick={() => setManagementOpen((open) => !open)}
-                >
-                  <LegacyIcon src={icons.menu} size={26} />
-                </IconButton>
-              </span>
-              {!workspace.workbenchOpen && (
-                <IconButton
-                  className="chat-workbench-open-control"
-                  label="פתיחת סביבת העבודה"
-                  onClick={() => setWorkbenchOpen(true)}
-                >
-                  <LegacyIcon src={icons.workbenchOpen} />
-                </IconButton>
-              )}
+            <div className="chat-toolbar-controls" dir="rtl">
+              <Menu label="פעולות שיחה" items={activeConversation ? conversationActions(activeConversation, {
+                pin: item => void togglePinned(item).catch(reason => setError(String(reason))),
+                rename: item => void renameConversation(item),
+                export: item => void exportConversation(item).catch(reason => setError(String(reason))),
+                remove: item => void deleteConversation(item),
+              }) : []} />
+              <IconButton icon="panel" variant="ghost"
+                label={workspace.workbenchOpen ? "סגירת סביבת העבודה" : "פתיחת סביבת העבודה"}
+                onClick={() => setWorkbenchOpen(!workspace.workbenchOpen)} />
             </div>
             {availableUpdateVersion && (
               <button
@@ -1536,67 +1401,17 @@ export default function App() {
                 className="chat-update-available"
                 onClick={() => setManagementSection("settings_appearance")}
               >
-                <LegacyIcon src={icons.checkUpdates} size={18} />
+                <Icon name="refresh" />
                 עדכון {availableUpdateVersion}
               </button>
             )}
             <h1>{activeConversation?.title || "שיחה חדשה"}</h1>
-            {managementOpen && (
-              <div className="legacy-management-menu" ref={managementPopup}>
-                {activeConversation ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => void togglePinned(activeConversation)}
-                    >
-                      <LegacyIcon
-                        src={
-                          activeConversation.pinned ? icons.unpin : icons.pin
-                        }
-                        size={18}
-                      />
-                      {activeConversation.pinned ? "בטל הצמדה" : "הצמד שיחה"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void renameConversation(activeConversation)
-                      }
-                    >
-                      <LegacyIcon src={icons.rename} size={18} />
-                      שנה שם
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void exportConversation(activeConversation)
-                      }
-                    >
-                      <LegacyIcon src={icons.exportJson} size={18} />
-                      יצוא JSON
-                    </button>
-                    <hr />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void deleteConversation(activeConversation)
-                      }
-                    >
-                      <LegacyIcon src={icons.delete} size={18} />
-                      מחק שיחה
-                    </button>
-                  </>
-                ) : (
-                  <span>אין פעולות זמינות</span>
-                )}
-              </div>
-            )}
+
           </div>
           {error && (
             <div className="chat-error">
-              <Alert tone="danger" title="הפעולה לא הושלמה">
+              <Alert tone="danger" title="הפעולה לא הושלמה" action={<Button variant="ghost" onClick={() => setError("")}>סגירה</Button>}>
                 {error}
-                <button onClick={() => setError("")}>סגירה</button>
               </Alert>
             </div>
           )}
@@ -1604,13 +1419,15 @@ export default function App() {
             ref={chatViewportRef}
             className={`chat-stage ${messages.length || activeRun ? "has-messages" : ""}`}
           >
+            <div className="chat-scroll-content">
+            <div className="chat-messages">
             {page?.has_older && (
-              <Button variant="ghost" onClick={() => void loadOlder()}>
+              <Button variant="ghost" onClick={() => void loadOlder().catch(reason => setError(String(reason)))}>
                 טעינת {page.older_count} הודעות קודמות
               </Button>
             )}
             {!messages.length && !activeRun ? (
-              <div className="legacy-welcome">
+              <div className="chat-welcome">
                 <h2>
                   {displayName
                     ? `היי ${displayName}, במה תרצה שאתמקד?`
@@ -1619,7 +1436,7 @@ export default function App() {
               </div>
             ) : (
               <div className="message-list">
-                {messages.map((message, index) => {
+                {[...messages, ...(displayRun && !activeAssistantRecorded ? [{ role: "assistant" as const, content: displayRun.response_text || "", metadata: { run_id: displayRun.id, is_error: displayRun.status === "failed" } }] : [])].map((message, index) => {
                   const runId = String(message.metadata?.run_id || "");
                   const messageActive = Boolean(
                     message.role === "assistant" &&
@@ -1628,8 +1445,9 @@ export default function App() {
                   );
                   return (
                     <RichMessage
-                      key={`${message.created_at}-${index}`}
+                      key={message.role === "assistant" && runId ? `run-${runId}` : `${message.role}:${message.created_at || index}:${message.content}`}
                       message={message}
+                      isNew={message.role === "user" && runId === newUserRun}
                       events={
                         message.role === "assistant" && runId
                           ? eventsForRun(runId)
@@ -1642,24 +1460,11 @@ export default function App() {
                     />
                   );
                 })}
-                {activeRun && !activeAssistantRecorded && (
-                  <RichMessage
-                    key={`active-${activeRun.id}`}
-                    message={{
-                      role: "assistant",
-                      content: "",
-                      metadata: { run_id: activeRun.id },
-                    }}
-                    events={eventsForRun(activeRun.id)}
-                    active
-                    runStatus={activeRun.status}
-                    theme={resolved}
-                    onOpenCanvas={() => openWorkbench("canvas")}
-                  />
-                )}
+
               </div>
             )}
           </div>
+          <div ref={chatFooterRef} className={`chat-input-panel ${flowingFooter ? "is-flowing" : ""}`}>
           <ConversationApprovals
             items={activeApprovals}
             busy={approvalQueue.busy}
@@ -1670,64 +1475,27 @@ export default function App() {
             <ApiKeyRequiredDialog
               key={`${activeApiKeyRequest.runId}:${activeApiKeyRequest.secretKey}`}
               request={activeApiKeyRequest}
-              onCancel={() => void cancel()}
+              onCancel={() => cancel(activeApiKeyRequest.runId)}
             />
           )}
-          {conversationDialog && (
-            <div
-              className="legacy-dialog-backdrop"
-              onMouseDown={(event) => {
-                if (event.target === event.currentTarget)
-                  setConversationDialog(null);
-              }}
-            >
-              <form
-                className="legacy-input-dialog"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="conversation-dialog-title"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void confirmConversationDialog();
-                }}
-              >
-                <h2 id="conversation-dialog-title">
-                  {conversationDialog.kind === "rename"
-                    ? "שינוי שם שיחה"
-                    : "מחיקת שיחה"}
-                </h2>
-                {conversationDialog.kind === "rename" ? (
-                  <label>
-                    שם חדש:
-                    <input
-                      autoFocus
-                      value={renameValue}
-                      onChange={(event) => setRenameValue(event.target.value)}
-                    />
-                  </label>
-                ) : (
-                  <p>למחוק את השיחה הזו לצמיתות?</p>
-                )}
-                <footer>
-                  <button
-                    type="button"
-                    onClick={() => setConversationDialog(null)}
-                  >
-                    ביטול
-                  </button>
-                  <button
-                    type="submit"
-                    autoFocus={conversationDialog.kind === "delete"}
-                  >
-                    אישור
-                  </button>
-                </footer>
-              </form>
-            </div>
-          )}
+          <Dialog open={!!conversationDialog}
+            title={conversationDialog?.kind === "rename" ? "שינוי שם שיחה" : "מחיקת שיחה"}
+            initialFocus={conversationDialog?.kind === "delete" ? dialogCancel : undefined}
+            onClose={() => { if (!dialogBusy) setConversationDialog(null); }}>
+            <form onSubmit={event => { event.preventDefault(); void confirmConversationDialog(); }}>
+              {dialogError && <Alert tone="danger" title={dialogError} />}
+              {conversationDialog?.kind === "rename"
+                ? <Field autoFocus label="שם חדש" value={renameValue} onChange={event => setRenameValue(event.target.value)} />
+                : <p>למחוק את השיחה הזו לצמיתות?</p>}
+              <footer className="sds-actions"><button ref={dialogCancel} type="button" className="sds-button" disabled={dialogBusy} onClick={() => setConversationDialog(null)}>ביטול</button><Button loading={dialogBusy} type="submit" variant={conversationDialog?.kind === "delete" ? "danger" : "primary"}>אישור</Button></footer>
+            </form>
+          </Dialog>
+          <div className="chat-composer-panel">
+          {scroll.hasNewContent && <Button className="chat-new-content" variant="ghost" onClick={scroll.follow}>לתוכן החדש <Icon name="chevron" /></Button>}
           <Composer
             theme={resolved}
-            disabled={reconnecting}
+            conversationId={activeId} draft={drafts.draft.text} onDraftChange={drafts.setText}
+            disabled={reconnecting || restoringModel}
             running={Boolean(activeRun)}
             attachments={attachments}
             provider={provider}
@@ -1737,15 +1505,19 @@ export default function App() {
             reasoningOptions={reasoningOptions}
             autonomyMode={autonomyMode}
             localFastMode={localFastMode}
-            onFavoriteModel={selectFavoriteModel}
+            onFavoriteModel={async item => { await selectFavoriteModel(item); }}
             onReasoningEffort={changeReasoning}
             onManageModels={() => setManagementSection("settings_ai")}
             onAutonomyMode={changeAutonomy}
             onLocalFastMode={changeLocalFastMode}
             onAttachments={setAttachments}
             onSend={send}
-            onCancel={() => void cancel()}
+            onCancel={() => void cancel().catch(reason => setError(String(reason)))}
           />
+          </div>
+          </div>
+          </div>
+          </div>
           {!workspace.workbenchOpen &&
             browserActivity &&
             dismissedBrowserPreview !== browserActivity.workspaceId &&
@@ -1788,6 +1560,7 @@ export default function App() {
               onCanvasAction={(text) => void send(text)}
               onClose={() => setWorkbenchOpen(false)}
               closeIcon={icons.workbenchClose}
+              showCloseControl={false}
             />
           )}
         </aside>
@@ -1804,6 +1577,6 @@ export default function App() {
           theme={resolved}
         />
       )}
-    </main>
+    </main></DesignSystemProvider>
   );
 }

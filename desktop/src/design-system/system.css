@@ -13,8 +13,16 @@
 .sds-root :is(button,input,textarea,select,[tabindex]):focus-visible { outline:var(--sds-size-focus) solid var(--sds-color-focus); outline-offset:3px; }
 .sds-root :is(button,input,textarea):disabled { opacity:.5; cursor:default; }
 .sds-root ::placeholder { color:var(--sds-color-text-muted); opacity:1; }
-.sds-root ::-webkit-scrollbar { width:9px; height:9px; }
-.sds-root ::-webkit-scrollbar-thumb { background:var(--sds-color-scrollbar); border:2px solid var(--sds-color-surface); border-radius:var(--sds-radius-pill); }
+.sds-root { --sds-scrollbar-idle:color-mix(in srgb,var(--sds-color-scrollbar) 50%,transparent); }
+.sds-root * { scrollbar-width:auto; scrollbar-color:auto; }
+.sds-root ::-webkit-scrollbar { width:8px; height:8px; }
+.sds-root ::-webkit-scrollbar-track,.sds-root ::-webkit-scrollbar-corner { background:transparent; }
+.sds-root ::-webkit-scrollbar-thumb { background:var(--sds-scrollbar-idle); border:2px solid transparent; background-clip:padding-box; border-radius:var(--sds-radius-pill); }
+.sds-root ::-webkit-scrollbar-thumb:is(:hover,:active) { background:var(--sds-color-scrollbar); background-clip:padding-box; }
+.sds-root ::-webkit-scrollbar-button { display:none; }
+.sds-root :is(.sds-menu,.ui-scroll-area) { scrollbar-width:auto; scrollbar-color:auto; scrollbar-gutter:stable; }
+.sds-floating-layer { position:fixed; inset:0; z-index:200; pointer-events:none; background:transparent; }
+.sds-floating-layer>* { pointer-events:auto; }
 .sds-icon { flex:none; object-fit:contain; vertical-align:middle; }
 .sds-button { display:inline-flex; align-items:center; justify-content:center; gap:var(--sds-space-2); min-height:var(--sds-size-target); min-width:var(--sds-size-target); padding:var(--sds-space-2) var(--sds-space-3); border:var(--sds-size-stroke) solid var(--sds-color-border); border-radius:var(--sds-radius-control); color:var(--sds-color-text); background:var(--sds-color-surface); cursor:pointer; transition:background var(--sds-motion-fast) var(--sds-motion-ease); overflow-wrap:anywhere; }
 .sds-button:hover:not(:disabled) { background:var(--sds-color-surface-muted); }
@@ -34,7 +42,7 @@
 .sds-main-action.sds-button--primary:active:not(:disabled) { background:var(--sds-color-action-pressed); }
 .sds-root .sds-main-action.sds-button--primary img.sds-icon { filter:brightness(0) invert(1); }
 .sds-tooltip-anchor { display:inline-flex; max-width:100%; }
-.sds-tooltip { position:fixed; z-index:40; width:220px; max-width:calc(100vw - 32px); padding:var(--sds-space-2) var(--sds-space-3); border:1px solid var(--sds-color-border); border-radius:var(--sds-radius-control); background:var(--sds-color-surface); color:var(--sds-color-text); box-shadow:var(--sds-shadow-floating); font-size:var(--sds-font-caption); overflow-wrap:anywhere; }
+.sds-tooltip { position:fixed; z-index:40; width:max-content; max-width:min(280px,calc(100vw - 32px)); padding:var(--sds-space-2) var(--sds-space-3); border:1px solid var(--sds-color-border); border-radius:var(--sds-radius-control); background:var(--sds-color-surface); color:var(--sds-color-text); box-shadow:var(--sds-shadow-floating); font-size:var(--sds-font-caption); overflow-wrap:anywhere; pointer-events:none; }
 .sds-field-group { display:flex; flex-direction:column; gap:var(--sds-space-2); min-width:0; width:100%; }
 .sds-field-group>label,.sds-range-field>label { font-weight:500; }
 .sds-field { width:100%; min-width:0; min-height:var(--sds-size-target); color:var(--sds-color-text); background:var(--sds-color-surface); border:1px solid var(--sds-color-control-border); border-radius:var(--sds-radius-control); padding:var(--sds-space-2) var(--sds-space-3); }
@@ -76,7 +84,7 @@
 .sds-dialog::backdrop { background:var(--sds-color-overlay); }
 .sds-dialog>header { display:flex; align-items:center; justify-content:space-between; gap:var(--sds-space-4); margin-bottom:var(--sds-space-3); }
 .sds-dialog>.sds-hint { margin-bottom:var(--sds-space-6); }
-.sds-dialog>footer { margin-top:var(--sds-space-6); justify-content:flex-end; }
+.sds-dialog :is(footer.sds-actions,form>footer) { margin-top:var(--sds-space-6); justify-content:flex-end; }
 .sds-actions { display:flex; flex-wrap:wrap; align-items:center; gap:var(--sds-space-2); }
 .sds-page-header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:var(--sds-space-6); }
 .sds-page-header .sds-hint { margin-top:var(--sds-space-2); font-size:var(--sds-font-control); }

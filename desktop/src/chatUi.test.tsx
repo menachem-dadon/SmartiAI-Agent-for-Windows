@@ -12,7 +12,7 @@ import {
 import { agentToolIcon, agentToolIconName } from "./agentToolIcons";
 import { WorkbenchSurface } from "./WorkbenchPanels";
 
-const chatStyles = readFileSync(new URL("./App.css", import.meta.url), "utf8");
+const chatStyles = readFileSync(new URL("./App.css", import.meta.url), "utf8") + readFileSync(new URL("./chat.css", import.meta.url), "utf8");
 
 describe("rich daily chat UI", () => {
   test("formats code-language labels with their conventional casing", () => {
@@ -31,54 +31,20 @@ describe("rich daily chat UI", () => {
     expect(codeDisplayLanguage("powershell")).toBe("PowerShell");
   });
 
-  test("uses a full-width scroll viewport with transparent, non-clipping content gutters", () => {
-    expect(chatStyles).toContain("--chat-content-width:");
-    expect(chatStyles).toMatch(
-      /\.chat-stage\.has-messages\s*\{[^}]*width:\s*100%[^}]*overflow-x:\s*hidden[^}]*overflow-y:\s*auto/s,
-    );
-    expect(chatStyles).toMatch(
-      /\.message-list\s*\{[^}]*width:\s*calc\(var\(--chat-content-width\) \+ 56px\)[^}]*padding:\s*0 28px 10px[^}]*overflow:\s*visible[^}]*background:\s*transparent/s,
-    );
-    expect(chatStyles).toMatch(
-      /\.chat-message-row\s*\{[^}]*overflow:\s*visible/s,
-    );
-    expect(chatStyles).toMatch(
-      /\.composer\s*\{[^}]*width:\s*var\(--chat-content-width\)/s,
-    );
-    expect(chatStyles).toMatch(
-      /\.agent-tool-row pre\s*\{[^}]*width:\s*100%[^}]*max-width:\s*100%[^}]*overflow:\s*auto/s,
-    );
+  test("keeps the reading viewport, composer and long tool output within their own surface", () => {
+    expect(chatStyles).toMatch(/\.chat-stage\s*\{[^}]*min-width:0[^}]*overflow-y:auto/);
+    expect(chatStyles).toMatch(/\.message-list\s*\{[^}]*width:min\(var\(--chat-reading-width\),100%\)/);
+    expect(chatStyles).toMatch(/\.composer-design\s*\{[^}]*width:min\(var\(--chat-reading-width\),100%\)/);
+    expect(chatStyles).toMatch(/\.agent-tool-row pre\s*\{[^}]*max-width:100%[^}]*overflow:auto/);
   });
 
-  test("keeps compact side surfaces above a visible chat instead of replacing it", () => {
-    expect(chatStyles).toMatch(
-      /\.workspace\.is-overlay-layout\s*\{[^}]*position:\s*relative[^}]*grid-template-columns:\s*var\(--rail-width\) minmax\(0,1fr\) 0/s,
-    );
-    expect(chatStyles).toMatch(
-      /\.conversation-drawer\s*\{[^}]*position:\s*absolute[^}]*right:\s*0[^}]*width:\s*min\(var\(--drawer-width\)[^}]*transition:\s*clip-path/s,
-    );
-    expect(chatStyles).toMatch(
-      /\.conversation-drawer\.is-rail\s*\{[^}]*clip-path:\s*inset\(0 0 0 calc\(100% - var\(--rail-width\)\)\)/s,
-    );
-    expect(chatStyles).toMatch(
-      /\.conversation-drawer\.is-rail \.drawer-collapse-control\s*\{[^}]*pointer-events:\s*none/s,
-    );
+  test("keeps compact surfaces above the mounted chat and preserves native transition guards", () => {
+    expect(chatStyles).toMatch(/\.workspace\.is-overlay-layout\s*\{[^}]*position:\s*relative/);
+    expect(chatStyles).toMatch(/\.conversation-drawer\.is-open\s*\{[^}]*position:absolute[^}]*right:0/);
+    expect(chatStyles).toMatch(/\.workspace\.is-overlay-layout \.workbench\s*\{[^}]*pointer-events:\s*none[^}]*transform:/);
+    expect(chatStyles).toMatch(/\.workspace\.is-overlay-layout \.workbench\.is-open\s*\{[^}]*pointer-events:\s*auto/);
     expect(chatStyles).not.toMatch(/transition:[^;}]*(?:grid-template-columns|max-width|flex-basis|backdrop-filter)/);
     expect(chatStyles).not.toContain("will-change: width");
-    expect(chatStyles).toMatch(
-      /\.workspace\.is-overlay-layout \.workbench\s*\{[^}]*position:\s*absolute[^}]*left:\s*8px[^}]*grid-column:\s*auto[^}]*pointer-events:\s*none[^}]*transform:/s,
-    );
-    expect(chatStyles).toMatch(
-      /\.workspace\.is-overlay-layout \.workbench\.is-open\s*\{[^}]*pointer-events:\s*auto[^}]*transform:\s*translateX\(0\)/s,
-    );
-    expect(chatStyles).not.toContain(".workspace.is-workbench-narrow .chat-column { visibility: hidden; }");
-    const workbenchMotion = chatStyles.match(/\.workspace\.is-overlay-layout \.workbench\s*\{([^}]*)\}/)?.[1];
-    expect(workbenchMotion).not.toContain("scale(");
-    expect(workbenchMotion).toContain("opacity: 1");
-    expect(chatStyles).toContain("--ease-premium:");
-    expect(chatStyles).toMatch(
-      /\.workspace\.is-overlay-layout \.workspace-overlay-backdrop\.is-active\s*\{[^}]*opacity:\s*1[^}]*pointer-events:\s*auto/s,
-    );
   });
 
   test("keeps the Workbench close control inside its own header", () => {
@@ -264,7 +230,8 @@ describe("rich daily chat UI", () => {
     expect(html.indexOf("message-actions")).toBeGreaterThan(
       html.lastIndexOf("chat-message--user"),
     );
-    expect(html).toMatch(/<\/div><div class="message-actions">/);
+    expect(html).toContain('footer class="sds-message-actions"');
+    expect(html.indexOf("sds-message-actions")).toBeGreaterThan(html.indexOf("sds-user-bubble"));
   });
 
   test("projects persisted memory and Canvas metadata into the original message actions", () => {
@@ -356,7 +323,7 @@ describe("rich daily chat UI", () => {
     expect(html).toContain('aria-checked="true"');
     expect(html).toContain("autonomy-quick-pill");
     expect(html).toContain("בטוח");
-    expect(html).toContain("אוטונומי");
+    expect(html).toContain('aria-label="פרופיל בטיחות"');
   });
 
   test("keeps a compact Codex quota summary inside the unified favorite-model menu", () => {

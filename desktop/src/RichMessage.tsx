@@ -5,14 +5,12 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage, RunEvent } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
-import { LegacyIcon, legacyAssets } from "./legacyAssets";
-import { IconButton } from "./ui";
+import { DesignSystemProvider, Icon, IconButton, MessageFrame, UserBubble, toolIcons } from "./design-system";
+import "./chat.css";
 import { legacyUi } from "./legacyUiParity";
 import { MessageTable } from "./MessageTable";
 import { useSpeechPlayback } from "./speechPlayback";
 import {
-  agentToolGroupIcon,
-  agentToolIcon,
   agentToolIconName,
   type AgentToolIconName,
 } from "./agentToolIcons";
@@ -424,6 +422,18 @@ export function formatAgentDuration(seconds: number): string {
   return `${secs} שנ׳`;
 }
 
+function CodeFrame({ children, onCopy, onDownload }: { children: React.ReactNode; onCopy: (text: string) => Promise<void>; onDownload: (text: string, language: string) => Promise<void> }) {
+  const [wrapped, setWrapped] = useState(false);
+  const text = codeText(children); const language = codeLanguage(children);
+  const [error, setError] = useState("");
+  const execute = async (action: () => Promise<void>) => { setError(""); try { await action(); } catch (reason) { setError(`הפעולה לא הושלמה: ${String(reason)}`); } };
+  return <div className={`code-frame ${wrapped ? "is-wrapped" : ""}`} dir="ltr"><div className="code-frame-head">
+    <IconButton tooltip={false} icon="copy" label="העתק קוד" onClick={() => void execute(() => onCopy(text))} />
+    <IconButton tooltip={false} icon="download" label="הורד קובץ" onClick={() => void execute(() => onDownload(text, language))} />
+    <IconButton icon="wrap" label="גלישת שורות קוד" aria-pressed={wrapped} onClick={() => setWrapped(value => !value)} />
+    <span>{codeDisplayLanguage(language)}</span></div><pre>{children}</pre>{error && <p className="message-link-error" role="alert">{error}</p>}</div>;
+}
+
 export function RichMessage({
   message,
   events = [],
@@ -431,6 +441,7 @@ export function RichMessage({
   active = false,
   runStatus,
   onOpenCanvas,
+  isNew = false,
 }: {
   message: ChatMessage;
   events?: RunEvent[];
@@ -438,6 +449,7 @@ export function RichMessage({
   active?: boolean;
   runStatus?: string;
   onOpenCanvas?: (canvasId: string) => void;
+  isNew?: boolean;
 }) {
   const [processOpen, setProcessOpen] = useState(active);
   const speechOwner = useId();
@@ -526,7 +538,6 @@ export function RichMessage({
     observer.observe(node);
     return () => observer.disconnect();
   }, [message.content, message.role]);
-  const icons = legacyAssets(theme);
   const isError =
     Boolean(message.metadata?.error || message.metadata?.is_error) ||
     /^שגיאה\s*:/u.test(message.content);
@@ -558,101 +569,7 @@ export function RichMessage({
       setLinkError(`לא ניתן לפתוח את הקישור: ${String(reason)}`);
     }
   };
-  return (
-    <article
-      className={`chat-message-row chat-message-row--${message.role} ${backgroundTask ? "is-background-task" : ""}`}
-      data-run-id={String(message.metadata?.run_id || "") || undefined}
-      dir="auto"
-    >
-      {!!rows.length && (
-        <details
-          className="agent-process"
-          open={processOpen}
-          onToggle={(event) => setProcessOpen(event.currentTarget.open)}
-        >
-          <summary>
-            <LegacyIcon src={icons.dropdown} size={16} />
-            <AgentStatusText active={active}>
-              {active ? "סמארטי עובד" : "סמארטי עבד"}{" "}
-              {formatAgentDuration(elapsed)}
-            </AgentStatusText>
-          </summary>
-          <div className="agent-process-details">
-            {rows.map((row) =>
-              row.kind === "report" ? (
-                <p className="agent-report" key={row.key}>
-                  {row.text}
-                </p>
-              ) : row.standalone ? (
-                <p
-                  className="agent-standalone"
-                  key={row.key}
-                >
-                  <LegacyIcon src={agentToolIcon(theme, row.icon)} size={16} />
-                  <AgentStatusText active={active && row.running}>{row.label}</AgentStatusText>
-                </p>
-              ) : (
-                <details className="agent-tool-group" key={row.key}>
-                  <summary>
-                    <LegacyIcon src={icons.dropdown} size={14} />
-                    <AgentStatusText active={active && row.running}>
-                      {row.label}
-                    </AgentStatusText>
-                    <LegacyIcon
-                      src={
-                        row.running &&
-                        row.tools.filter((tool) => tool.status === "running")
-                          .length === 1
-                          ? agentToolIcon(
-                              theme,
-                              row.tools.find(
-                                (tool) => tool.status === "running",
-                              )!.icon,
-                            )
-                          : agentToolGroupIcon(theme)
-                      }
-                      size={16}
-                    />
-                  </summary>
-                  <div>
-                    {row.tools.map((tool) => (
-                      <details className="agent-tool-row" key={tool.key}>
-                        <summary>
-                          <LegacyIcon src={icons.dropdown} size={14} />
-                          <AgentStatusText active={active && tool.status === "running"}>
-                            {tool.status === "running"
-                              ? "רץ"
-                              : tool.status === "error"
-                                ? "שגיאה"
-                                : "הסתיים"}{" "}
-                            · {tool.name}
-                          </AgentStatusText>
-                          <LegacyIcon
-                            src={agentToolIcon(theme, tool.icon)}
-                            size={16}
-                          />
-                        </summary>
-                        <div>
-                          <strong>קלט ופרמטרי הפעלה</strong>
-                          <pre dir="ltr">{tool.query || "אין קלט."}</pre>
-                          {tool.status !== "running" && (
-                            <>
-                              <strong>פלט הכלי</strong>
-                              <pre dir="ltr">{tool.output || "אין פלט."}</pre>
-                            </>
-                          )}
-                        </div>
-                      </details>
-                    ))}
-                  </div>
-                </details>
-              ),
-            )}
-          </div>
-        </details>
-      )}
-      {canThink && <DelayedThinking key={thinkingKey} />}
-      <div
+  const content = (<div
         className={`chat-message chat-message--${message.role} ${isError ? "is-error" : ""} ${backgroundTask ? "is-background-task" : ""}`}
       >
         {backgroundTask && (
@@ -672,7 +589,7 @@ export function RichMessage({
               ) : (
                 <span className="attachment-tile" key={`${item.name}-${index}`}>
                   <i>
-                    <LegacyIcon src={icons.file} size={28} />
+                    <Icon name="file" size={24} />
                   </i>
                   <b>{item.name}</b>
                   <small>
@@ -713,32 +630,7 @@ export function RichMessage({
                       {children}
                     </code>
                   ),
-                  pre: ({ children }) => {
-                    const text = codeText(children);
-                    const language = codeLanguage(children);
-                    return (
-                      <div className="code-frame" dir="ltr">
-                        <div className="code-frame-head">
-                          <button
-                            type="button"
-                            aria-label="העתק קוד"
-                            onClick={() => void copy(text)}
-                          >
-                            <LegacyIcon src={icons.copy} size={18} />
-                          </button>
-                          <button
-                            type="button"
-                            aria-label="הורד קובץ"
-                            onClick={() => void downloadCode(text, language)}
-                          >
-                            <LegacyIcon src={icons.codeDownload} size={18} />
-                          </button>
-                          <span>{codeDisplayLanguage(language)}</span>
-                        </div>
-                        <pre>{children}</pre>
-                      </div>
-                    );
-                  },
+                  pre: ({ children }) => <CodeFrame onCopy={copy} onDownload={downloadCode}>{children}</CodeFrame>,
                 }}
               >
                 {prepareMessageMarkdown(message.content)}
@@ -752,7 +644,15 @@ export function RichMessage({
             {linkError}
           </p>
         )}
-        {!!canvases.length && (
+
+      </div>);
+  return (
+    <DesignSystemProvider theme={theme} className="message-design"><article
+      className={`chat-message-row chat-message-row--${message.role} ${backgroundTask ? "is-background-task" : ""}`}
+      data-run-id={String(message.metadata?.run_id || "") || undefined}
+      dir="auto"
+    >
+      <MessageFrame outputs={!!canvases.length && (
           <div className="message-canvases">
             {canvases.map((canvas, index) => (
               <article
@@ -782,45 +682,115 @@ export function RichMessage({
                       : "תאריך לא זמין"}
                   </small>
                 </div>
-                <LegacyIcon src={icons.canvas} size={30} />
+                <Icon name="canvas" size={24} />
               </article>
             ))}
           </div>
-        )}
-      </div>
-      {actionsAvailable && (
+        )} actions={actionsAvailable && (
         <div className="message-actions">
-          <IconButton label="העתק" onClick={() => void copy(message.content)}>
-            <LegacyIcon src={icons.copy} size={22} />
-          </IconButton>
+          <IconButton tooltip={false} icon="copy" label="העתק" variant="ghost" onClick={() => void copy(message.content).catch(reason => setLinkError(`ההעתקה נכשלה: ${String(reason)}`))} />
           {message.role === "assistant" && (
             <IconButton
+              tooltip={false}
+              icon={speaking ? "stop" : "speaker"} variant="ghost"
               label={speaking ? "עצור הקראה" : "הקרא בקול"}
               onClick={() => void speech.toggle(message.content)}
               disabled={speech.pending}
-            >
-              {speaking ? "■" : <LegacyIcon src={icons.speaker} size={22} />}
-            </IconButton>
+            />
           )}
           {memoryUpdated && (
             <span className="memory-updated">
-              <LegacyIcon src={icons.agentMemory} size={15} />
+              <Icon name="memory" />
               הזיכרון עודכן
             </span>
           )}
           {collapsible && (
             <IconButton
-              className="message-expand-button"
+              icon="chevron" variant="ghost" className="message-expand-button"
               label={userExpanded ? "כווץ הודעה" : "הרחב הודעה"}
               aria-expanded={userExpanded}
               aria-controls={contentId}
               onClick={() => setUserExpanded((value) => !value)}
-            >
-              <LegacyIcon src={icons.dropdown} size={18} />
-            </IconButton>
+            />
           )}
         </div>
+      )}>
+      {!!rows.length && (
+        <details
+          className="agent-process"
+          open={processOpen}
+          onToggle={(event) => setProcessOpen(event.currentTarget.open)}
+        >
+          <summary>
+            <Icon name="chevron" size={16} className="process-chevron" />
+            <AgentStatusText active={active}>
+              {active ? "סמארטי עובד" : "סמארטי עבד"}{" "}
+              {formatAgentDuration(elapsed)}
+            </AgentStatusText>
+            <Icon name="activity" size={20} />
+          </summary>
+          <div className="agent-process-details">
+            {rows.map((row) =>
+              row.kind === "report" ? (
+                <p className="agent-report" key={row.key}>
+                  {row.text}
+                </p>
+              ) : row.standalone ? (
+                <p
+                  className="agent-standalone"
+                  key={row.key}
+                >
+                  <Icon name={toolIcons[row.icon] || "tools"} />
+                  <AgentStatusText active={active && row.running}>{row.label}</AgentStatusText>
+                </p>
+              ) : (
+                <details className="agent-tool-group" key={row.key}>
+                  <summary>
+                    <Icon name="chevron" size={16} className="process-chevron" />
+                    <AgentStatusText active={active && row.running}>
+                      {row.label}
+                    </AgentStatusText>
+                    <Icon name={row.running && row.tools.filter(tool => tool.status === "running").length === 1
+                      ? toolIcons[row.tools.find(tool => tool.status === "running")!.icon] || "tools" : "tools"} />
+                  </summary>
+                  <div>
+                    {row.tools.map((tool) => (
+                      <details className="agent-tool-row" key={tool.key}>
+                        <summary>
+                          <Icon name="chevron" size={16} className="process-chevron" />
+                          <AgentStatusText active={active && tool.status === "running"}>
+                            {tool.status === "running"
+                              ? "רץ"
+                              : tool.status === "error"
+                                ? "שגיאה"
+                                : "הסתיים"}{" "}
+                            · {tool.name}
+                          </AgentStatusText>
+                          <Icon name={toolIcons[tool.icon] || "tools"} />
+                        </summary>
+                        <div>
+                          <strong>קלט ופרמטרי הפעלה</strong>
+                          <pre dir="ltr">{tool.query || "אין קלט."}</pre>
+                          {tool.status !== "running" && (
+                            <>
+                              <strong>פלט הכלי</strong>
+                              <pre dir="ltr">{tool.output || "אין פלט."}</pre>
+                            </>
+                          )}
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                </details>
+              ),
+            )}
+          </div>
+        </details>
       )}
-    </article>
+      {canThink && <DelayedThinking key={thinkingKey} />}
+      {message.role === "user" ? <UserBubble isNew={isNew}>{content}</UserBubble> : content}
+
+      </MessageFrame>
+    </article></DesignSystemProvider>
   );
 }

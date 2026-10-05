@@ -42,7 +42,6 @@ export function WindowTitleBar() {
       <button
         type="button"
         aria-label="מזער"
-        title="מזער"
         onClick={() => void appWindow.minimize()}
       >
         <WindowCaptionIcon action="minimize" />
@@ -50,7 +49,6 @@ export function WindowTitleBar() {
       <button
         type="button"
         aria-label={maximized ? "שחזר" : "הגדל"}
-        title={maximized ? "שחזר" : "הגדל"}
         onClick={() => void appWindow.toggleMaximize()}
       >
         <WindowCaptionIcon action={maximized ? "restore" : "maximize"} />
@@ -59,7 +57,6 @@ export function WindowTitleBar() {
         type="button"
         className="window-close"
         aria-label="סגירה"
-        title="סגירה"
         onClick={() => void appWindow.close()}
       >
         <WindowCaptionIcon action="close" />

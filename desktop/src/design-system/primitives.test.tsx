@@ -3,7 +3,7 @@ import { useState } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Button, ConfirmDialog, DesignSystemProvider, Dialog, Field, Menu, MessageFrame, RangeField, Switch, Tabs, Textarea, Tooltip, UserBubble } from "./primitives";
+import { Button, ConfirmDialog, DesignSystemProvider, Dialog, Field, IconButton, Menu, MessageFrame, RangeField, Switch, Tabs, Textarea, Tooltip, UserBubble } from "./primitives";
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 beforeAll(() => {
   // jsdom lacks native dialog behavior; real modality is tested in Edge.
@@ -74,6 +74,21 @@ describe("UX-2 shared interaction contracts", () => {
     render(wrap(<Tooltip label="עזרה"><button aria-describedby="help">פקד</button></Tooltip>));
     await userEvent.tab(); expect(screen.getByRole("tooltip").textContent).toBe("עזרה"); expect(screen.getByRole("button").getAttribute("aria-describedby")).toContain("help");
     await userEvent.keyboard("{Escape}"); expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+  test("tooltip escapes a clipped provider and disappears immediately on pointer leave", async () => {
+    render(wrap(<div style={{ overflow: "hidden" }}><Tooltip label="משימות"><button>פתח משימות</button></Tooltip></div>));
+    const button = screen.getByRole("button", { name: "פתח משימות" });
+    await userEvent.hover(button);
+    expect(screen.getByRole("tooltip").closest(".sds-floating-layer")?.parentElement).toBe(document.body);
+    await userEvent.unhover(button);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+  test("a self-explanatory icon retains its accessible name without a tooltip", async () => {
+    render(wrap(<IconButton icon="copy" label="העתק" tooltip={false} />));
+    const button = screen.getByRole("button", { name: "העתק" });
+    await userEvent.hover(button); await userEvent.tab();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(button.getAttribute("aria-label")).toBe("העתק");
   });
   test("a hovered tooltip cannot intercept Escape from an open menu", async () => {
     render(wrap(<><Tooltip label="הכתבה"><button>קול</button></Tooltip><Menu label="פעולות" items={[{ id: "one", label: "עריכה", onSelect: () => undefined }]} /></>));

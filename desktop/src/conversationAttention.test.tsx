@@ -118,7 +118,7 @@ afterEach(() => {
   cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals();
 });
 
-const row = (session: string) => screen.getByText(`chat-${session}`, { selector: "strong" }).closest(".conversation-row")!;
+const row = (session: string) => screen.getByText(`chat-${session}`, { selector: ".conversation-select span" }).closest(".conversation-row")!;
 const open = (session: string) => fireEvent.click(row(session).querySelector("button")!);
 const badge = () => vi.mocked(invoke).mock.calls.filter(([name]) => name === "desktop_set_unread").slice(-1)[0]?.[1];
 async function start() {
@@ -150,16 +150,16 @@ describe("conversation read state and reply navigation", () => {
     open("b");
     await screen.findByText("answer-b");
     await waitFor(() => expect(badge()).toEqual({ count: 1 }));
-    expect(row("b").querySelector(".has-unread")).toBeNull();
-    expect(row("c").querySelector(".has-unread")).not.toBeNull();
+    expect(row("b").querySelector(".conversation-activity.unread")).toBeNull();
+    expect(row("c").querySelector(".conversation-activity.unread")).not.toBeNull();
     expect(readCalls).toEqual([{ session: "b", ids: ["unread-b"] }]);
     await act(async () => readGate!.resolve());
   });
 
   test("keeps the global count while sidebar search hides unread conversations", async () => {
     await start();
-    fireEvent.change(screen.getByRole("textbox", { name: "חיפוש בשיחות" }), { target: { value: "chat-a" } });
-    await waitFor(() => expect(screen.queryByText("chat-b", { selector: "strong" })).toBeNull());
+    fireEvent.change(screen.getByRole("searchbox", { name: "חיפוש בשיחות" }), { target: { value: "chat-a" } });
+    await waitFor(() => expect(screen.queryByText("chat-b", { selector: ".conversation-select span" })).toBeNull());
     expect(badge()).toEqual({ count: 2 });
   });
 
@@ -168,7 +168,7 @@ describe("conversation read state and reply navigation", () => {
     attention.push({ id: "unread-a", session_id: "a", kind: "response", title: "chat-a" });
     await start();
     expect(readCalls).toEqual([]);
-    expect(row("a").querySelector(".has-unread")).not.toBeNull();
+    expect(row("a").querySelector(".conversation-activity.unread")).not.toBeNull();
     focused = true;
     fireEvent.focus(window);
     await waitFor(() => expect(readCalls).toContainEqual({ session: "a", ids: ["unread-a"] }));
@@ -200,7 +200,7 @@ describe("conversation read state and reply navigation", () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1250)); });
     expect(screen.getByText("new-answer-a")).toBeDefined();
     expect(readCalls).toContainEqual({ session: "a", ids: ["late-a"] });
-    expect(row("a").querySelector(".has-unread")).toBeNull();
+    expect(row("a").querySelector(".conversation-activity.unread")).toBeNull();
     expect(badge()).toEqual({ count: 2 });
   });
 
@@ -227,7 +227,7 @@ describe("conversation read state and reply navigation", () => {
     await act(async () => gate.resolve());
     expect(screen.queryByText("answer-b")).toBeNull();
     expect(readCalls.some((call) => call.session === "b")).toBe(false);
-    expect(row("b").querySelector(".has-unread")).not.toBeNull();
+    expect(row("b").querySelector(".conversation-activity.unread")).not.toBeNull();
   });
 
   test("notification activation shows the pending approval and the start of its active response", async () => {
@@ -239,12 +239,12 @@ describe("conversation read state and reply navigation", () => {
     await act(async () => native.handlers.get("desktop://activation")!({ payload: { command: "notification", sessionId: "b" } }));
     const panel = await screen.findByRole("region", { name: "בקשות הרשאה" });
     expect(within(panel).getByText("Approve file")).toBeDefined();
-    expect(document.querySelector(".chat-stage")!.contains(panel)).toBe(false);
+    expect(document.querySelector(".chat-input-panel")!.contains(panel)).toBe(true);
     expect(panel.querySelector('[aria-modal="true"]')).toBeNull();
     await waitFor(() => expect(document.querySelector<HTMLElement>(".chat-stage")!.scrollTop).toBe(1384));
     expect(readCalls).toContainEqual({ session: "b", ids: ["unread-b"] });
     // Reading the request never resolves the underlying permission.
-    expect(row("b").querySelector(".needs-input")).not.toBeNull();
+    expect(row("b").querySelector(".conversation-activity.waiting_for_approval")).not.toBeNull();
     expect(vi.mocked(coreApi).mock.calls.some(([, path]) => path.endsWith("/resolve"))).toBe(false);
   });
 });

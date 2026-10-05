@@ -7,7 +7,7 @@ import {
   IconDownload, IconExternalLink, IconFile, IconFileExport, IconFolder, IconHistory,
   IconHome, IconInfoCircle, IconLayersIntersect, IconLayoutBoard, IconLayoutSidebarRight,
   IconLoader2, IconLock, IconMail, IconMessagePlus, IconMicrophone, IconMoon,
-  IconPencil, IconPin, IconPlayerPause, IconPlayerPlay, IconPlayerStop, IconPlug,
+  IconPencil, IconPin, IconPlayerPause, IconPlayerPlay, IconPlayerStopFilled, IconPlug,
   IconPlus, IconRefresh, IconSearch, IconSettings, IconShield, IconSparkles,
   IconStar, IconStarFilled, IconSun, IconTerminal2, IconTextWrap, IconTools,
   IconTrash, IconUser, IconVolume, IconWorld, IconX,
@@ -23,7 +23,7 @@ export type IconName = typeof iconNames[number];
 // Physical arrow directions match the accepted v7 actions; caller-owned transforms stay intact.
 // Both chevron families start down: rotate 90deg for collapsed-left, none for expanded-down.
 export const tablerIcons = {
-  plus: IconPlus, send: IconArrowUp, mic: IconMicrophone, stop: IconPlayerStop,
+  plus: IconPlus, send: IconArrowUp, mic: IconMicrophone, stop: IconPlayerStopFilled,
   chevron: IconChevronDown, search: IconSearch, settings: IconSettings, file: IconFile,
   expand: IconArrowsMaximize, shrink: IconArrowsMinimize, archive: IconArchive, close: IconX,
   check: IconCheck, sun: IconSun, moon: IconMoon, panel: IconLayoutSidebarRight,

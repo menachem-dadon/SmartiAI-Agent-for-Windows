@@ -410,6 +410,7 @@ export function WorkbenchSurface({
   onBrowserActivity,
   onClose,
   closeIcon,
+  showCloseControl = true,
   sessionId,
   onCanvasAction,
 }: {
@@ -422,6 +423,7 @@ export function WorkbenchSurface({
   onBrowserActivity?: (activity: BrowserActivity | null) => void;
   onClose: () => void;
   closeIcon: string;
+  showCloseControl?: boolean;
   sessionId: string;
   onCanvasAction: (text: string) => void;
 }) {
@@ -564,13 +566,13 @@ export function WorkbenchSurface({
             </div>
           )}
         </div>
-        <IconButton
+        {showCloseControl && <IconButton
           className="workbench-close-control"
           label="סגירת סביבת העבודה"
           onClick={onClose}
         >
           <LegacyIcon src={closeIcon} size={20} />
-        </IconButton>
+        </IconButton>}
       </header>
       <div className="workbench-body">
         {!current && (

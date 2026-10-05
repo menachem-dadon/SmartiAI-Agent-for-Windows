@@ -1,8 +1,10 @@
 # Smarti shared design system · UX-2
 
-Authority: `docs/ui_ux_redesign_plan.md`, accepted UX-1 v7 and ledger §21–24.
-UX-2 is complete within the shared-foundation scope; UX-3 is ready. Closing review,
-the shared chevron baseline and the binding product handoff are in ledger §24.
+Authority: `docs/ui_ux_redesign_plan.md`, accepted UX-1 v7 and ledger §21–30.
+UX-2 is complete within the shared-foundation scope; UX-3 product shell and chat
+are complete within ledger §30 after product feedback D45–48 and closing review.
+UX-4 is ready; preserve the 697px reading/composer cap, sticky input, draft/scroll
+owners and D48 while converting the workbench. The shared chevron baseline is in §24.
 Import product foundations from `src/design-system`; never from `src/ux1` or `src/ux2`.
 
 ## Single sources and scope
@@ -72,21 +74,22 @@ import { DesignSystemProvider, Button, SettingRow, Switch, MessageFrame } from "
 ```
 
 The provider accepts the existing resolved theme; it neither reads nor writes
-personal preferences. Set it once around the converted surface. Its explicit
-overlay host receives menus/tooltips through React portals; triggers are owned
-refs. There is no DOM search for anchors, MutationObserver or raster replacement.
+personal preferences. Set it once around the converted surface. Menus/tooltips
+use a themed body-level portal to escape sidebar clipping and stacking contexts;
+native dialogs retain their own overlay host in the browser's top layer. Triggers
+are owned refs. There is no DOM search for anchors, MutationObserver or raster replacement.
 Keep the provider outside transformed/clipped native surfaces; a WebView2 window
 still needs its existing hide/preview/final-bounds/show lifecycle.
 
 | Component | Contract / integration responsibility |
 |---|---|
-| Button / IconButton / Icon | Native button props and explicit semantic icon; loading disables activation and exposes aria-busy. Icon actions have names and focus/hover tooltips. A round primary IconButton keeps the accepted blue/white action treatment in both themes, separately from text-button accent roles. Caller retains duplicate-send guards and domain cancellation. |
+| Button / IconButton / Icon | Native button props and explicit semantic icon; loading disables activation and exposes aria-busy. Icon actions retain names; tooltip=false removes redundant hints for copy/TTS/close/download. Stop uses the official filled Tabler square; original PNGs remain intact. A round primary IconButton keeps the accepted blue/white action treatment in both themes, separately from text-button accent roles. Caller retains duplicate-send guards and domain cancellation. |
 | Field / SearchField / NumberField / Textarea | Native control props, label, unique ID, hint/error associations and optional ref. Textarea defaults to dir=auto for Hebrew/English writing; callers may override it. Numbers stay short; parsing, validation, secrets masking and persistence stay with existing handlers. |
 | RangeField | Controlled numeric value and synchronous onValueChange; native pointer/keyboard behavior, textual output and filled track. Caller supplies min/max/step/formatValue; 0 has no invented meaning. |
 | Switch | Controlled checkbox with switch semantics; Space and disabled remain native. Track 44×26 inside a 44×40 target. Active thumb physically left in RTL, right in LTR. |
 | Menu | Explicit item callbacks/disabled/tone; click toggles, outside interaction, Escape, Home/End, arrows, single-character lookup and Tab. Focus returns for Escape/selection; outside click preserves destination focus. No X. |
 | Dialog / ConfirmDialog | Controlled open/onClose. Native HTML dialog provides modality; explicit Tab/Shift+Tab looping retains focus in the app. Unique title/description IDs; optional initialFocus; previous focus restored. A dialog-owned overlay host keeps tooltips in the top layer. Confirm focuses cancel, caller controls busy/error and closes only on actual success. No action is synthesized. |
-| Tooltip | Focus/hover, associated description, hoverable overlay, Escape. Essential actions remain present on touch. Tooltip text cannot be the sole accessible name. |
+| Tooltip | Keyboard focus/hover, associated description and Escape. Natural content width within the viewport, immediate pointer-leave dismissal, and no focus hint retained after a mouse click. Essential actions remain present on touch. Tooltip text cannot be the sole accessible name. |
 | Tabs | Controlled active/onSelect with explicit panels. RTL-aware arrows, Home/End, roving tab stops, linked panels; hidden panels remain mounted to preserve drafts and state. Caller must give a valid enabled active ID. |
 | PageHeader / SettingsGroup / SettingRow / Card | Slots for hierarchy, adjacent descriptions and controls. Wrap based on available container width, not old PyQt constants. |
 | Alert / Badge / EmptyState / LoadingState | Distinguish actual errors, explicit results, empty content and loading. Errors use role=alert; loading has text and aria-busy. Do not add routine save-success copy. |
@@ -143,3 +146,16 @@ modal focus, narrow bounds and reduced motion. SVG stroke/fill colors are measur
 from rendered shapes; original PNG colors are measured separately. Ledger §22/23
 records results before and after the user's icon change; §24 records the current
 independent closing evidence and the remaining product checks.
+
+UX-3 product QA from root: `node scripts/verify_ux3_product.cjs http://127.0.0.1:1437 .codex-local/ux-3/product-review`.
+Start an owned Vite server on a free private port first. This runs real product
+React with authenticated Core in a temporary profile and an in-memory keyring
+installed before runtime imports by tests/__init__.py. Only model generation is
+deterministic and native IPC is adapted for Edge. It never uses the personal Core.
+An optional fourth argument is a frozen v7 URL or a prior report with references;
+comparisons are omitted without it, and reports distinguish browser from native.
+`verify_ux3_native.cjs` requires a separately prepared QA Tauri app identified as
+ai.smarti.ux3native, ux3-native.exe, its own SMARTI_DATA_DIR/keyring and CDP port,
+and `.codex-local/ux-3/native-ui.pid`. It verifies the process/identifier before
+reload or Core writes; it is not a launcher or a package verifier. Existing native
+evidence/setup and its limits are in ledger §25–30. Never point it at the personal app.

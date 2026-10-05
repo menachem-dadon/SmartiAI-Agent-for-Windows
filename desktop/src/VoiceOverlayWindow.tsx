@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { coreApi } from "./coreApi";
 import { parseThemePreference, resolveTheme, THEME_STORAGE_KEY } from "./designSystem";
-import { LegacyIcon, legacyAssets } from "./legacyAssets";
+import { DesignSystemProvider, Icon, IconButton } from "./design-system";
+import "./chat.css";
 import "./App.css";
 
 type VoiceState = {
@@ -23,7 +24,6 @@ export function VoiceOverlayWindow({ fixture = false }: { fixture?: boolean }) {
   const theme = resolveTheme(preference, matchMedia("(prefers-color-scheme: dark)").matches);
   const expanded = new URLSearchParams(location.search).get("expanded") === "1";
   const [status, setStatus] = useState("אפשר לדבר עכשיו");
-  const icons = legacyAssets(theme);
   useEffect(() => {
     if (fixture) return;
     let stopped = false;
@@ -52,20 +52,16 @@ export function VoiceOverlayWindow({ fixture = false }: { fixture?: boolean }) {
     }
   };
   return (
-    <main className={`voice-overlay-root theme-${theme}`} data-theme={theme}>
+    <DesignSystemProvider theme={theme} className="voice-design"><main>
       <section className="voice-listening-overlay" role="status" aria-live="polite">
-        <button type="button" aria-label="בטל האזנה" title="בטל האזנה" onClick={() => void cancel()}>
-          <LegacyIcon src={icons.close} size={18} />
-        </button>
-        {expanded && <button type="button" aria-label="פתח את סמארטי" title="פתח את סמארטי" onClick={() => void invoke("desktop_focus_main")}>
-          <LegacyIcon src={icons.voiceOverlayOpen} size={18} />
-        </button>}
+        <IconButton tooltip={false} icon="close" label="בטל האזנה" onClick={() => void cancel().catch(reason => setStatus(String(reason)))} />
+        {expanded && <IconButton icon="expand" label="פתח את סמארטי" onClick={() => void invoke("desktop_focus_main").catch(reason => setStatus(String(reason)))} />}
         <div>
           <strong>{titleFor(status)}</strong>
           <span>{status || "אפשר לדבר עכשיו"}</span>
         </div>
-        <img src={icons.voiceListening} alt="" />
+        <Icon name="mic" size={28} />
       </section>
-    </main>
+    </main></DesignSystemProvider>
   );
 }

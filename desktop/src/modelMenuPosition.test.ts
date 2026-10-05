@@ -23,7 +23,7 @@ describe("model menu viewport placement", () => {
   });
 
   test("keeps physical RTL columns and independent scroll areas at every breakpoint", () => {
-    const css = readFileSync(new URL("./App.css", import.meta.url), "utf8");
+    const css = readFileSync(new URL("./chat.css", import.meta.url), "utf8");
     expect(css).not.toContain("model-provider-submenu");
     expect(css).toMatch(/\.model-menu-models\s*\{[^}]*grid-column:\s*1/);
     expect(css).toMatch(/\.model-menu-providers\s*\{[^}]*grid-column:\s*2/);

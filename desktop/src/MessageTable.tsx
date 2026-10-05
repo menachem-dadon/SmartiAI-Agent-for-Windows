@@ -3,7 +3,7 @@ import type { ComponentPropsWithoutRef } from "react";
 import type { ExtraProps } from "react-markdown";
 import { invoke } from "@tauri-apps/api/core";
 import type { ResolvedTheme } from "./designSystem";
-import { LegacyIcon, legacyAssets } from "./legacyAssets";
+import { IconButton } from "./design-system";
 
 function cellText(cell: HTMLTableCellElement): string {
   const content = cell.cloneNode(true) as HTMLElement;
@@ -56,13 +56,12 @@ function clipboardHtml(table: HTMLTableElement, rows: string[][]): string {
 
 export function MessageTable({
   node: _node,
-  theme = "dark",
+  theme: _theme = "dark",
   ...props
 }: ComponentPropsWithoutRef<"table"> & ExtraProps & { theme?: ResolvedTheme }) {
   const tableRef = useRef<HTMLTableElement>(null);
   const [busy, setBusy] = useState<"copy" | "export" | null>(null);
   const [feedback, setFeedback] = useState<{ text: string; error?: boolean } | null>(null);
-  const icons = legacyAssets(theme);
 
   useEffect(() => {
     if (!feedback || feedback.error) return;
@@ -113,19 +112,13 @@ export function MessageTable({
   return (
     <div className="message-table-frame">
       <div className="message-table-actions" role="group" aria-label="פעולות טבלה" dir="rtl">
-        <button type="button" disabled={busy !== null} onClick={() => void perform("copy")}>
-          <LegacyIcon src={icons.copy} size={16} />
-          {busy === "copy" ? "מעתיק…" : "העתק טבלה"}
-        </button>
-        <button type="button" disabled={busy !== null} onClick={() => void perform("export")}>
-          <LegacyIcon src={icons.codeDownload} size={16} />
-          {busy === "export" ? "שומר…" : "ייצוא CSV"}
-        </button>
+        <IconButton tooltip={false} icon="copy" label="העתק טבלה" variant="ghost" loading={busy === "copy"} disabled={busy !== null} onClick={() => void perform("copy")} />
+        <IconButton icon="download" label="ייצוא CSV" variant="ghost" loading={busy === "export"} disabled={busy !== null} onClick={() => void perform("export")} />
       </div>
       <div className="message-table-scroll" role="region" aria-label="טבלה בהודעה" tabIndex={0}>
         <table {...props} ref={tableRef} />
       </div>
-      {feedback && (
+      {feedback?.error && (
         <p className="message-table-feedback" role={feedback.error ? "alert" : "status"} dir="rtl">
           {feedback.text}
         </p>

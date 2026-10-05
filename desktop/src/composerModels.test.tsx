@@ -13,7 +13,7 @@ const callbacks = {
 
 async function openModels() {
   fireEvent.click(screen.getByLabelText("בחירת מודל"));
-  await waitFor(() => expect(screen.getByRole("dialog", { name: "מודלים מועדפים" }).parentElement).toBe(document.body));
+  await waitFor(() => expect(screen.getByRole("dialog", { name: "מודלים מועדפים" }).parentElement?.parentElement).toBe(document.body));
   return screen.getByRole("dialog", { name: "מודלים מועדפים" });
 }
 

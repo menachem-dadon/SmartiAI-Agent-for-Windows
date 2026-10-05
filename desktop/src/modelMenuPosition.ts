@@ -11,7 +11,7 @@ export function modelMenuContentViewport(viewport: Viewport, titlebarBottom: num
 
 export function modelMenuBounds(anchor: Anchor, viewport: Viewport, preferredHeight: number) {
   const gap = 8;
-  const width = Math.min(530, Math.max(0, viewport.width - gap * 2));
+  const width = Math.min(460, Math.max(0, viewport.width - gap * 2));
   const minTop = viewport.top + gap;
   const maxBottom = viewport.top + viewport.height - gap;
   const above = Math.max(0, Math.min(maxBottom, anchor.top - gap) - minTop);

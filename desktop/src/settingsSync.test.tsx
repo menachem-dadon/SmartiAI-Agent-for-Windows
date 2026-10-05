@@ -214,7 +214,7 @@ describe("settings synchronization through the real API client", () => {
     expect(invoke).toHaveBeenCalledWith("desktop_set_voice_hotkey", { shortcut: "Ctrl+Alt+V" });
     expect(invoke).toHaveBeenCalledWith("desktop_set_close_to_tray", { enabled: false });
     // The next layout write must merge the freshly saved preferences.
-    const toggle = document.querySelector<HTMLButtonElement>(".drawer-collapse-control");
+    const toggle = document.querySelector<HTMLButtonElement>(".drawer-brand");
     if (!toggle) throw new Error("missing conversation sidebar toggle");
     fireEvent.click(toggle);
     await waitFor(() => expect(values.ui_preferences.workspace_sidebar_collapsed).toBeDefined());

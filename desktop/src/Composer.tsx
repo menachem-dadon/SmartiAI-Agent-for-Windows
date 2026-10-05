@@ -13,13 +13,17 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import type { PendingAttachment, ReasoningOption } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
-import { LegacyIcon, legacyAssets } from "./legacyAssets";
+import { DesignSystemProvider, HoverLabel, Icon, Menu, Switch } from "./design-system";
+import "./chat.css";
 import { DismissibleDetails } from "./popupDismissal";
 import { autonomyLabels } from "./legacyUiParity";
 import { coreApi } from "./coreApi";
 import { useModelMenuPosition } from "./modelMenuPosition";
 
 interface ComposerProps {
+  draft?: string;
+  onDraftChange?: (text: string) => void;
+  conversationId?: string;
   theme?: ResolvedTheme;
   disabled?: boolean;
   running?: boolean;
@@ -120,6 +124,9 @@ function resetText(timestamp?: number): string {
   return `איפוס בעוד ${days} ימים${restHours ? ` ו-${restHours} שע׳` : ""}`;
 }
 export function Composer({
+  draft,
+  onDraftChange,
+  conversationId,
   theme = "dark",
   disabled,
   running,
@@ -140,8 +147,14 @@ export function Composer({
   onSend,
   onCancel,
 }: ComposerProps) {
-  const [text, setText] = useState("");
+  const [localText, setLocalText] = useState("");
+  const text = draft ?? localText;
+  const setText = (value: string) => { if (onDraftChange) onDraftChange(value); else setLocalText(value); };
   const [listening, setListening] = useState(false);
+  const startingVoice = useRef(false);
+  const [voiceStarting, setVoiceStarting] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [error, setError] = useState("");
   const [staging, setStaging] = useState(0);
   const stagingCount = useRef(0);
@@ -157,9 +170,19 @@ export function Composer({
   const modelPopup = useRef<HTMLDivElement>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [browsedProvider, setBrowsedProvider] = useState(provider);
-  const autonomyMenu = useRef<HTMLDetailsElement>(null);
   const voiceSession = useRef("");
   const voiceConsumed = useRef("");
+  const owner = useRef(conversationId);
+  useEffect(() => {
+    setError("");
+    if (owner.current !== conversationId && voiceSession.current) {
+      voiceSession.current = "";
+      setListening(false);
+      void coreApi("POST", "/v2/audio/voice/stop", {}, true).catch(() => undefined);
+      void invoke("desktop_hide_voice_overlay").catch(() => undefined);
+    }
+    owner.current = conversationId;
+  }, [conversationId]);
   const refreshQuota = async (minimumAgeSeconds = 0) => {
     if (
       provider !== "openai_codex_signin" ||
@@ -232,7 +255,7 @@ export function Composer({
     void stageFiles(files);
   };
   const send = async () => {
-    if ((!text.trim() && !attachments.length) || disabled || running || sending.current || stagingCount.current) return;
+    if ((!text.trim() && !attachments.length) || disabled || running || listening || startingVoice.current || sending.current || stagingCount.current) return;
     sending.current = true;
     setSubmitting(true);
     setError("");
@@ -257,18 +280,18 @@ export function Composer({
   const stopListening = async () => {
     try {
       await coreApi("POST", "/v2/audio/voice/stop", {}, true);
-    } finally {
-      await invoke("desktop_hide_voice_overlay").catch(() => undefined);
-      setListening(false);
-      setError("");
-      area.current?.focus();
-    }
+      await invoke("desktop_hide_voice_overlay");
+      setListening(false); setError(""); area.current?.focus();
+    } catch (reason) { setError(`לא ניתן להפסיק הכתבה: ${String(reason)}`); }
   };
   const listen = async () => {
+    if (running || disabled || startingVoice.current || sending.current || stagingCount.current) return;
     if (listening) {
       await stopListening();
       return;
     }
+    const voiceOwner = owner.current;
+    startingVoice.current = true; setVoiceStarting(true);
     setError("");
     try {
       const state = await coreApi<VoiceState>(
@@ -277,6 +300,10 @@ export function Composer({
         {},
         true,
       );
+      if (!mounted.current || owner.current !== voiceOwner) {
+        await coreApi("POST", "/v2/audio/voice/stop", {}, true);
+        return;
+      }
       voiceSession.current = state.session_id;
       voiceConsumed.current = "";
       await invoke("desktop_show_voice_overlay");
@@ -288,7 +315,7 @@ export function Composer({
       setListening(false);
       void invoke("desktop_hide_voice_overlay");
       setError(`לא ניתן להפעיל זיהוי קולי: ${String(reason)}`);
-    }
+    } finally { startingVoice.current = false; if (mounted.current) setVoiceStarting(false); }
   };
   useEffect(() => {
     if (!listening) return;
@@ -333,12 +360,13 @@ export function Composer({
       clearInterval(timer);
     };
   }, [listening, onSend]);
+  const currentVoiceAction = useRef(listen);
+  currentVoiceAction.current = listen;
   useEffect(() => {
-    const activate = () => void listen();
+    const activate = () => void currentVoiceAction.current();
     window.addEventListener("smarti:voice-hotkey", activate);
     return () => window.removeEventListener("smarti:voice-hotkey", activate);
-  }, [listening]);
-  const icons = legacyAssets(theme);
+  }, []);
   // Keep the active model accessible even when no favorites have been saved.
   const menuModels = provider && model && !favoriteModels.some(
     (item) => item.provider === provider && item.model === model,
@@ -346,8 +374,8 @@ export function Composer({
   const modelProviders = Array.from(new Set(menuModels.map(item => item.provider)));
   const shownProvider = modelProviders.includes(browsedProvider) ? browsedProvider : modelProviders[0] || "";
   const footerHeight = (reasoningOptions.length ? 42 : 0) +
-    (provider === "openai_codex_signin" ? 64 : 0) + (!favoriteModels.length ? 32 : 0);
-  const modelBounds = useModelMenuPosition(modelMenuOpen, modelMenu, 398 + footerHeight);
+    (provider === "openai_codex_signin" ? 96 : 0) + (!favoriteModels.length ? 32 : 0);
+  const modelBounds = useModelMenuPosition(modelMenuOpen, modelMenu, Math.min(300, Math.max(120, menuModels.length * 44)) + 48 + footerHeight);
   const quotaStatus = quotaError ? "לא ניתן לטעון את המכסה כרגע"
     : !quota ? "טוען נתוני מכסה…"
     : !quota.available ? "נתוני המכסה אינם זמינים כרגע"
@@ -378,7 +406,7 @@ export function Composer({
     }
   };
   const modelPopupContent = (
-    <div ref={modelPopup} className={`quick-pill-menu model-quick-menu theme-${theme}${modelBounds && modelBounds.height < 320 ? " is-compact" : ""}`}
+    <DesignSystemProvider theme={theme}><div ref={modelPopup} className={`quick-pill-menu model-quick-menu${modelBounds && modelBounds.height < 250 ? " is-compact" : ""}`}
       hidden={!modelMenuOpen}
       role="dialog" aria-label="מודלים מועדפים" dir="rtl"
       style={modelBounds || undefined}
@@ -386,12 +414,11 @@ export function Composer({
       <header className="model-menu-title">
         <strong>מודלים מועדפים</strong>
         {onManageModels && <button type="button" role="menuitem" className="model-menu-settings"
-          aria-label="הגדרות מודלים ומועדפים" title="הגדרות מודלים ומועדפים"
-          onClick={() => { closeModelMenu(); onManageModels(); }}>הגדרות</button>}
+          aria-label="הגדרות מודלים ומועדפים"
+          onClick={() => { closeModelMenu(); onManageModels(); }}><Icon name="settings" /></button>}
       </header>
       <div className="model-menu-columns">
         <section className="model-menu-models" aria-label="מודלים של הספק">
-          <h3 className="model-menu-header">{providerLabels[shownProvider] || shownProvider || "מודלים"}</h3>
           <div className="model-menu-list" role="menu" aria-label={providerLabels[shownProvider] || shownProvider || "מודלים"} key={shownProvider}>
             {menuModels.filter(item => item.provider === shownProvider).map(item => (
               <button type="button" role="menuitemradio"
@@ -399,22 +426,20 @@ export function Composer({
                 className={item.provider === provider && item.model === model ? "is-selected" : ""}
                 key={`${item.provider}:${item.model}`} title={item.model}
                 onClick={() => { closeModelMenu(); void onFavoriteModel(item); }}>
-                <span dir="auto">{modelLabel(item.model)}</span><i className="model-menu-check" aria-hidden="true">✓</i>
+                <HoverLabel text={modelLabel(item.model)} /><Icon name="check" className="model-menu-check" />
               </button>
             ))}
           </div>
         </section>
         <section className="model-menu-providers" aria-label="ספקים">
-          <h3 className="model-menu-header">ספק</h3>
           <div className="model-menu-list">
             {modelProviders.map(favoriteProvider => (
               <button type="button" key={favoriteProvider} aria-pressed={shownProvider === favoriteProvider}
                 onMouseEnter={() => setBrowsedProvider(favoriteProvider)}
                 onFocus={() => setBrowsedProvider(favoriteProvider)}
                 onClick={() => setBrowsedProvider(favoriteProvider)}>
-                <span>{providerLabels[favoriteProvider] || favoriteProvider}</span>
-                <small>{menuModels.filter(item => item.provider === favoriteProvider).length}</small>
-                <LegacyIcon src={icons.dropdown} size={13} />
+                <HoverLabel text={providerLabels[favoriteProvider] || favoriteProvider} />
+                <Icon name="chevron" size={16} />
               </button>
             ))}
           </div>
@@ -453,10 +478,10 @@ export function Composer({
         )}
         {!favoriteModels.length && <p className="model-menu-empty">אפשר להוסיף מודלים מועדפים בהגדרות</p>}
       </div>}
-    </div>
+    </div></DesignSystemProvider>
   );
   return (
-    <div
+    <DesignSystemProvider theme={theme} className="composer-design"><div
       className={`composer ${running ? "is-running" : ""}`}
       onDragOver={(event) => event.preventDefault()}
       onDrop={drop}
@@ -478,13 +503,13 @@ export function Composer({
                     onAttachments((current) => current.filter((attachment) => attachment !== item))
                   }
                 >
-                  ×
+                  <Icon name="close" size={18} />
                 </button>
               </span>
             ) : (
               <span className="pending-file" key={`${item.path}-${index}`}>
                 <i>
-                  <LegacyIcon src={icons.file} size={28} />
+                  <Icon name="file" size={24} />
                 </i>
                 <b>{item.name}</b>
                 <small>
@@ -500,7 +525,7 @@ export function Composer({
                     onAttachments((current) => current.filter((attachment) => attachment !== item))
                   }
                 >
-                  ×
+                  <Icon name="close" size={18} />
                 </button>
               </span>
             ),
@@ -512,7 +537,7 @@ export function Composer({
         ref={area}
         rows={1}
         value={text}
-        disabled={disabled || running || listening || submitting}
+        disabled={disabled || listening || voiceStarting || submitting}
         placeholder="בקש כל דבר"
         onChange={(event) => setText(event.target.value)}
         onKeyDown={key}
@@ -536,25 +561,25 @@ export function Composer({
             aria-label={
               running
                 ? "עצירה"
-                : canSend
-                  ? "שליחה"
-                  : listening
-                    ? "הפסקת הכתבה"
+                : listening
+                  ? "הפסקת הכתבה"
+                  : canSend
+                    ? "שליחה"
                     : "הכתבה קולית"
             }
-            disabled={!running && (disabled || submitting || staging > 0)}
+            aria-busy={voiceStarting || submitting || undefined}
+            disabled={!running && (disabled || voiceStarting || submitting || staging > 0)}
             onClick={
               running
                 ? onCancel
-                : canSend
+                : listening
+                  ? () => void stopListening()
+                  : canSend
                   ? () => void send()
                   : () => void listen()
             }
           >
-            <LegacyIcon
-              src={running ? icons.stop : canSend ? icons.send : icons.mic}
-              size={28}
-            />
+            <Icon name={running || listening ? "stop" : canSend ? "send" : "mic"} size={24} />
           </button>
         </span>
         <div className="composer-controls">
@@ -569,82 +594,19 @@ export function Composer({
               }}
               onKeyDown={event => menuKey(event, modelMenu.current)}
             >
-              <summary title="בחירת מודל" aria-label="בחירת מודל" aria-haspopup="dialog">
-                <span>{modelLabel(model || provider || "מודל")}</span>
-                <LegacyIcon src={icons.dropdown} size={13} />
+              <summary aria-label="בחירת מודל" aria-haspopup="dialog">
+                <Icon name="chevron" size={16} /><HoverLabel text={modelLabel(model || provider || "מודל")} />
               </summary>
               {modelMenuOpen ? createPortal(modelPopupContent, document.body) : modelPopupContent}
             </DismissibleDetails>
-            <DismissibleDetails
-              ref={autonomyMenu}
-              className="quick-pill autonomy-quick-pill"
-            >
-              <summary title="פרופיל בטיחות">
-                <LegacyIcon
-                  src={
-                    autonomyMode === "locked_down"
-                      ? icons.autonomySafe
-                      : autonomyMode === "max_autonomy"
-                        ? icons.autonomyFull
-                        : icons.autonomy
-                  }
-                  size={18}
-                />
-                <span>
-                  {autonomyLabels[autonomyMode] || autonomyLabels.balanced}
-                </span>
-                <LegacyIcon src={icons.dropdown} size={13} />
-              </summary>
-              <div className="quick-pill-menu autonomy-menu" dir="rtl">
-                <button
-                  type="button"
-                  className={autonomyMode === "locked_down" ? "is-selected" : ""}
-                  onClick={() => {
-                    autonomyMenu.current?.removeAttribute("open");
-                    void onAutonomyMode("locked_down");
-                  }}
-                >
-                  <LegacyIcon src={icons.autonomySafe} size={18} />
-                  בטוח
-                </button>
-                <button
-                  type="button"
-                  className={autonomyMode === "balanced" ? "is-selected" : ""}
-                  onClick={() => {
-                    autonomyMenu.current?.removeAttribute("open");
-                    void onAutonomyMode("balanced");
-                  }}
-                >
-                  <LegacyIcon src={icons.autonomy} size={18} />
-                  מאוזן
-                </button>
-                <button
-                  type="button"
-                  className={autonomyMode === "max_autonomy" ? "is-selected" : ""}
-                  onClick={() => {
-                    autonomyMenu.current?.removeAttribute("open");
-                    void onAutonomyMode("max_autonomy");
-                  }}
-                >
-                  <LegacyIcon src={icons.autonomyFull} size={18} />
-                  אוטונומי
-                </button>
-              </div>
-            </DismissibleDetails>
+            <span className="autonomy-quick-pill"><Menu label="פרופיל בטיחות" icon="shield" items={[
+              { id: "locked_down", label: "בטוח", icon: "lock", onSelect: () => void onAutonomyMode("locked_down") },
+              { id: "balanced", label: "מאוזן", icon: "shield", onSelect: () => void onAutonomyMode("balanced") },
+              { id: "max_autonomy", label: "אוטונומי", icon: "spark", onSelect: () => void onAutonomyMode("max_autonomy") },
+            ]}><span>{autonomyLabels[autonomyMode] || autonomyLabels.balanced}</span></Menu></span>
           </div>
           {provider.toLowerCase() === "local" && (
-            <label
-              className={`local-fast-mode ${localFastMode ? "is-enabled" : ""}`}
-              title="מצב הקשר חסכוני למודלים מקומיים קטנים או לחומרה חלשה"
-            >
-              <span>FastMode</span>
-              <input
-                type="checkbox"
-                checked={localFastMode}
-                onChange={(event) => void onLocalFastMode(event.target.checked)}
-              />
-              <i />
-            </label>
+            <label className="local-fast-mode" dir="rtl"><span>FastMode</span><Switch label="FastMode" checked={localFastMode} onCheckedChange={value => void onLocalFastMode(value)} /></label>
           )}
         </div>
         <button
@@ -653,9 +615,9 @@ export function Composer({
           aria-label="צירוף קובץ"
           onClick={() => picker.current?.click()}
         >
-          <LegacyIcon src={icons.plus} size={24} />
+          <Icon name="plus" size={24} />
         </button>
       </div>
-    </div>
+    </div></DesignSystemProvider>
   );
 }
