@@ -260,6 +260,7 @@ Additional shared contracts:
 
 | Control | Contract |
 |---|---|
+| SettingsGroup | Optional `hideHeader` omits the visible heading/description while preserving the region name through `aria-label`. Other consumers retain the default header. D70 applies it only to the redundant AI settings group heading. |
 | Field / Textarea / SearchField | Optional `hiddenLabel` hides the real associated label visually; it never removes the accessible name. |
 | SelectField | Native select, associated label and help/error IDs; preserves native keyboard operation and caller values. |
 | ChoiceField | Controlled `value` / `options` / `onValueChange` for styled settings choices. Reuses Popover/Button/Icon and the provider picker's spacing, selected row and check. All labels share a hidden intrinsic grid cell, so the trigger keeps the widest rendered label's width across selection; the popup matches it and both respect available space. Opens on the saved enabled value (or first enabled option), supports arrows/Home/End/character lookup, explicit Enter/Space/click selection, Escape/Tab and outside dismissal. The real label, selected-value description, help/error IDs and disabled choices stay accessible. Caller owns saving and errors. D65 covers reasoning, conversation title, TTS voice and skill scan policy settings. |

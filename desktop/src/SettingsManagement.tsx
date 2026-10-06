@@ -303,9 +303,9 @@ function SettingRow({
         setStatus(`ההדבקה נכשלה: ${String(reason)}`);
       }
     };
-    return (
+    const secretField = (
       <SourceSettingField {...sourceProps} className="secret-field">
-        <div className="secret-link-row">
+        <div className={`secret-link-row${definition.path === "tavily_api_key" ? " secret-link-row--stacked" : ""}`}>
           <Field label={definition.label} hiddenLabel fitContent
             type={definition.path === "email_address" ? "email" : "password"}
             dir="ltr"
@@ -337,12 +337,18 @@ function SettingRow({
             </Button>
           )}
         </div>
-        {help?.key_instructions && (
+        {definition.path !== "tavily_api_key" && help?.key_instructions && (
           <small className="secret-instructions">{help.key_instructions}</small>
         )}
         <ManagementFeedback message={status} />
       </SourceSettingField>
     );
+    return definition.path === "tavily_api_key" ? (
+      <div className="source-key-setting">
+        {secretField}
+        {help?.key_instructions && <p className="secret-instructions">{help.key_instructions}</p>}
+      </div>
+    ) : secretField;
   }
   if (definition.control === "directory") {
     const clear = async () => {
@@ -721,14 +727,14 @@ export function ProviderWorkflow({
         />
       </SourceSettingField>
       {secretKey && (
-        <>
+        <div className="source-key-setting">
           <SourceSettingField
             label="מפתח גישה לספק המודל"
             help="מפתח API הוא קוד גישה אישי שמאפשר לסמארטי לשלוח בקשות מאובטחות לספק המודל. הוא נדרש לספקים חיצוניים, נבדק מול הספק לפני שמירה ונשמר כמפתח מוסתר שלא מוצג בלוגים."
             className="provider-secret-field"
             dataPath="provider_api_key"
           >
-            <div className="secret-link-row">
+            <div className="secret-link-row secret-link-row--stacked">
               <Field label="מפתח גישה לספק המודל" hiddenLabel fitContent
                 type="password"
                 dir="ltr"
@@ -745,23 +751,25 @@ export function ProviderWorkflow({
                 }
               />
               <IconButton icon="trash" variant="danger" label="מחק מפתח שמור" type="button" disabled={!keySave.draft && !configured?.configured && !keySave.busy} onClick={() => { setStatus(""); keySave.remove(); }} />
-              <Button icon="plug" onClick={() => void validateExisting()} disabled={keySave.busy || Boolean(keySave.draft.trim()) || !configured?.configured}>בדוק חיבור</Button>
-              {providerMetadata?.help_url && (
-                <Button
-                  type="button"
-                  icon="key"
-                  className="secret-help-link"
-                  onClick={() =>
-                    void invoke("open_chat_link", {
-                      target: providerMetadata.help_url,
-                      local: false,
-                    })
-                  }
-                >
-                  קבל מפתח
-                </Button>
-              )}
-        </div>
+              <div className="source-field-actions">
+                <Button icon="plug" onClick={() => void validateExisting()} disabled={keySave.busy || Boolean(keySave.draft.trim()) || !configured?.configured}>בדוק חיבור</Button>
+                {providerMetadata?.help_url && (
+                  <Button
+                    type="button"
+                    icon="key"
+                    className="secret-help-link"
+                    onClick={() =>
+                      void invoke("open_chat_link", {
+                        target: providerMetadata.help_url,
+                        local: false,
+                      })
+                    }
+                  >
+                    קבל מפתח
+                  </Button>
+                )}
+              </div>
+            </div>
           </SourceSettingField>
           <ManagementFeedback message={status} />
           {providerMetadata?.key_instructions && (
@@ -769,7 +777,7 @@ export function ProviderWorkflow({
               {providerMetadata.key_instructions}
             </p>
           )}
-        </>
+        </div>
       )}
       {provider === "qwen" && (
         <SourceSettingField
@@ -793,7 +801,7 @@ export function ProviderWorkflow({
           help="מפתח API אינו נדרש כאשר משתמשים בשרת מודל מקומי."
           dataPath="provider_api_key"
         >
-          <div className="secret-link-row">
+          <div className="secret-link-row secret-link-row--stacked">
             <Field label="מפתח גישה לספק המודל" hiddenLabel fitContent
               type="password"
               disabled
@@ -801,7 +809,9 @@ export function ProviderWorkflow({
               inputAction={<IconButton icon="paste" variant="ghost" label="הדבק מפתח מלוח ההעתקה" disabled />}
             />
             <IconButton icon="trash" variant="danger" label="מחק מפתח שמור" type="button" disabled />
-            <Button icon="plug" onClick={() => void validateExisting()}>בדוק חיבור</Button>
+            <div className="source-field-actions">
+              <Button icon="plug" onClick={() => void validateExisting()}>בדוק חיבור</Button>
+            </div>
           </div>
         </SourceSettingField>
       )}
@@ -1625,7 +1635,7 @@ export function SettingsView({
       </div>
     );
   return (
-    <div className="management-page settings-page source-settings-page">
+    <div className={`management-page settings-page source-settings-page${section === "settings_ai" ? " source-settings-page--ai" : ""}`}>
       <ManagementFeedback message={loadError} />
       <ManagementFeedback message={saveStatus} />
       <div className="source-settings-head">
@@ -1692,7 +1702,7 @@ export function SettingsView({
               <SslWorkflow values={data.values} saveValues={saveValues} />
             )}
             {groups.map(([group, definitions]) => (
-              <SettingsGroup title={group} key={group} variant={section === "settings_ai" ? "plain" : "card"}>
+              <SettingsGroup title={group} key={group} variant={section === "settings_ai" ? "plain" : "card"} hideHeader={section === "settings_ai" && group === "ספק ומודל"}>
                 <div className="management-fields">
                   {definitions
                     .filter((definition) => !definition.providerWorkflow)

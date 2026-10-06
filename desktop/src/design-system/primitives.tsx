@@ -224,8 +224,8 @@ export function PageHeader({ title, description, eyebrow, actions }: { title: st
 export function SegmentedControl({ label, children, className = "", ...props }: HTMLAttributes<HTMLDivElement> & { label: string }) {
   return <div {...props} className={`sds-segmented ${className}`} role="group" aria-label={label}>{children}</div>;
 }
-export function SettingsGroup({ title, description, children, variant = "card" }: { title: string; description?: string; children: ReactNode; variant?: "card" | "plain" }) {
-  const id = useId(); return <section className={`sds-settings-group${variant === "plain" ? " sds-settings-group--plain" : ""}`} aria-labelledby={id}><header><h2 id={id}>{title}</h2>{description && <p className="sds-hint">{description}</p>}</header>{children}</section>;
+export function SettingsGroup({ title, description, children, variant = "card", hideHeader = false }: { title: string; description?: string; children: ReactNode; variant?: "card" | "plain"; hideHeader?: boolean }) {
+  const id = useId(); return <section className={`sds-settings-group${variant === "plain" ? " sds-settings-group--plain" : ""}`} aria-labelledby={hideHeader ? undefined : id} aria-label={hideHeader ? title : undefined}>{!hideHeader && <header><h2 id={id}>{title}</h2>{description && <p className="sds-hint">{description}</p>}</header>}{children}</section>;
 }
 export function SettingRow({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return <div className="sds-setting-row"><div><strong>{title}</strong>{description && <p className="sds-hint">{description}</p>}</div><div className="sds-setting-control">{children}</div></div>;
