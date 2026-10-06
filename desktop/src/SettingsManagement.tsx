@@ -1627,27 +1627,27 @@ export function SettingsView({
   return (
     <div className="management-page settings-page source-settings-page">
       <ManagementFeedback message={loadError} />
+      <ManagementFeedback message={saveStatus} />
       <div className="source-settings-head">
-        <ManagementFeedback message={saveStatus} />
+        <div className="source-settings-search">
+          <SearchField label="חפש הגדרה" hiddenLabel
+            value={query}
+            onChange={(event) => {
+              setPolicyOpen(false);
+              setQuery(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && fields[0]) {
+                event.preventDefault();
+                void activateSearchResult(fields[0]).catch(() => undefined);
+              }
+            }}
+            placeholder="חפש הגדרה"
+          />
+        </div>
         <SharedSettingRow title="הצג הגדרות מתקדמות" description="שדות טכניים, מגבלות זמן והרשאות מפורטות.">
           <Switch label="הצג הגדרות מתקדמות" checked={advanced} onCheckedChange={checked => void setAdvancedPersisted(checked).catch(reason => setSaveStatus(`השמירה נכשלה: ${String(reason)}`))} />
         </SharedSettingRow>
-      </div>
-      <div className="source-settings-search">
-        <SearchField label="חפש הגדרה" hiddenLabel
-          value={query}
-          onChange={(event) => {
-            setPolicyOpen(false);
-            setQuery(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && fields[0]) {
-              event.preventDefault();
-              void activateSearchResult(fields[0]).catch(() => undefined);
-            }
-          }}
-          placeholder="חפש הגדרה"
-        />
       </div>
       <div className="source-settings-scroll">
         {!query && (
