@@ -32,6 +32,7 @@
 .source-settings-field .sds-setting-control { flex:1 1 280px; }
 .source-settings-field:has(.sds-switch) .sds-setting-control { flex:0 0 auto; }
 .source-settings-control { min-width:0; display:grid; gap:8px; }
+.source-settings-control:has(>.sds-choice-field) { grid-template-columns:minmax(0,1fr); }
 .source-settings-control:has(>.source-segmented--described) { grid-template-columns:minmax(0,1fr); }
 .source-segmented--described { flex-direction:column; flex-wrap:nowrap; width:max-content; }
 .source-segmented--described>.sds-button { justify-content:flex-start; }

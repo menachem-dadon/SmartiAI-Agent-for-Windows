@@ -1,7 +1,7 @@
 import { Dialog, IconButton, Popover, PageHeader, SegmentedControl, SettingRow as SharedSettingRow, SettingsGroup, Switch, RangeField, LoadingState } from "./design-system";
 import { ManagementFeedback } from "./managementFeedback";
 import { ProviderPicker } from "./ProviderPicker";
-import { Button, Textarea, Field, Icon, SelectField, SearchField } from "./design-system";
+import { Button, Textarea, Field, Icon, ChoiceField, SelectField, SearchField } from "./design-system";
 import {
   Fragment,
   useCallback,
@@ -436,21 +436,16 @@ function SettingRow({
   if (definition.control === "select")
     return (
       <SourceSettingField {...sourceProps}>
-        <SelectField label={definition.label} hiddenLabel
+        <ChoiceField label={definition.label} hiddenLabel
           value={String(raw ?? "")}
-          onChange={(event) => {
+          options={(definition.options || []).map(option => ({ value: String(option.value), label: option.label }))}
+          onValueChange={(next) => {
             setStatus("");
-            void onSave(definition.path, event.target.value)
+            void onSave(definition.path, next)
               .then(() => setStatus(""))
               .catch((reason) => setStatus(String(reason)));
           }}
-        >
-          {definition.options?.map((option) => (
-            <option key={String(option.value)} value={String(option.value)}>
-              {option.label}
-            </option>
-          ))}
-        </SelectField>
+        />
         <ManagementFeedback message={status} />
       </SourceSettingField>
     );
@@ -933,23 +928,18 @@ export function ProviderWorkflow({
           help="קובעת את עוצמת החשיבה של המודל הפעיל. האפשרויות מותאמות אוטומטית לחוזה של משפחת המודל; בחירה באוטומטית משאירה את השדה ריק ומשתמשת בברירת הספק."
           dataPath="provider_reasoning_effort"
         >
-          <SelectField label="עוצמת חשיבה" hiddenLabel
+          <ChoiceField label="עוצמת חשיבה" hiddenLabel
             value={reasoning.reasoning_effort || "auto"}
-            onChange={(event) =>
+            options={reasoning.reasoning_options}
+            onValueChange={(next) =>
               void coreApi<typeof reasoning>(
                 "POST",
                 `/v2/providers/${encodePath(provider)}/reasoning`,
-                { model: selectedModel, effort: event.target.value },
+                { model: selectedModel, effort: next },
                 true,
               ).then(setReasoning).catch(reason => setStatus(`שמירת החשיבה נכשלה: ${String(reason)}`))
             }
-          >
-            {reasoning.reasoning_options.map((item) => (
-              <option key={item.value} value={item.value}>
-                {item.label}
-              </option>
-            ))}
-          </SelectField>
+          />
         </SourceSettingField>
       ) : null}
     </div>

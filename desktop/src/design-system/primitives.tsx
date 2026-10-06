@@ -108,7 +108,8 @@ export function RangeField({ label, value, min, max, step = 1, onValueChange, fo
 }
 
 export type MenuItem = { id: string; label: string; description?: string; icon?: IconName; disabled?: boolean; tone?: "danger"; onSelect: () => void };
-export function Popover({ label, triggerContent, className = "", matchTriggerWidth = false, children }: { label: string; triggerContent?: ReactNode; className?: string; matchTriggerWidth?: boolean; children: (close: () => void) => ReactNode }) {
+type PopoverTriggerProps = Pick<ButtonHTMLAttributes<HTMLButtonElement>, "id" | "className" | "disabled" | "aria-describedby" | "aria-invalid">;
+export function Popover({ label, triggerContent, triggerProps, className = "", matchTriggerWidth = false, children }: { label: string; triggerContent?: ReactNode; triggerProps?: PopoverTriggerProps; className?: string; matchTriggerWidth?: boolean; children: (close: () => void) => ReactNode }) {
   const trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -122,7 +123,7 @@ export function Popover({ label, triggerContent, className = "", matchTriggerWid
     document.addEventListener("pointerdown", outside); document.addEventListener("focusin", focusOutside); document.addEventListener("keydown", escape, true);
     return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("focusin", focusOutside); document.removeEventListener("keydown", escape, true); };
   }, [open]);
-  return <><Button ref={trigger} aria-label={label} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)} onKeyDown={event => {
+  return <><Button ref={trigger} aria-label={label} aria-haspopup="dialog" {...triggerProps} aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)} onKeyDown={event => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen(true); }
   }}>{triggerContent ?? label}<Icon name="chevron" /></Button>
     {open && <Overlay><div ref={popup} id={id} className={`sds-popover ${className}`} role="dialog" aria-label={label} style={position} onKeyDown={event => {

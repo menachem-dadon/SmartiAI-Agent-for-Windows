@@ -45,7 +45,6 @@ const reasoning = () => ({
   reasoning_options: [{ value: "auto", label: "אוטומטית" }, { value: "high", label: "גבוהה" }],
 });
 const composer = () => JSON.parse(screen.getByTestId("composer").textContent!);
-const setting = (path: string) => document.querySelector<HTMLSelectElement>(`[data-setting-path="${path}"] select`)!;
 
 beforeEach(() => {
   values = defaults(); patchGate = null; bootstrapGate = null; failPatch = false; failUpdateCheck = false;
@@ -198,8 +197,8 @@ describe("settings synchronization through the real API client", () => {
     fireEvent.click(screen.getByText("manage-models"));
     await screen.findByRole("button", { name: "ספק המודל: OpenAI" });
     expect(await screen.findByRole("button", { name: "openai-b" })).toBeTruthy();
-    await waitFor(() => expect(setting("provider_reasoning_effort")).toBeTruthy());
-    fireEvent.change(setting("provider_reasoning_effort"), { target: { value: "high" } });
+    fireEvent.click(await screen.findByRole("button", { name: "עוצמת חשיבה" }));
+    fireEvent.click(screen.getByRole("option", { name: "גבוהה" }));
     await waitFor(() => expect(composer().reasoning).toBe("high"));
   });
 
