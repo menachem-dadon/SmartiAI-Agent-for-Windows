@@ -2,6 +2,7 @@ import { Dialog, IconButton, Popover, PageHeader, SegmentedControl, SettingRow a
 import { ManagementFeedback } from "./managementFeedback";
 import { ProviderPicker } from "./ProviderPicker";
 import { useSecretAutosave } from "./useSecretAutosave";
+import { readClipboardText } from "./clipboardText";
 import { Button, Textarea, Field, Icon, ChoiceField, SelectField, SearchField } from "./design-system";
 import {
   Fragment,
@@ -292,7 +293,7 @@ function SettingRow({
     };
     const paste = async () => {
       try {
-        const value = (await navigator.clipboard.readText()).trim();
+        const value = (await readClipboardText()).trim();
         if (!value) {
           setStatus("לוח ההעתקה אינו מכיל טקסט.");
           return;
@@ -305,7 +306,7 @@ function SettingRow({
     return (
       <SourceSettingField {...sourceProps} className="secret-field">
         <div className="secret-link-row">
-          <Field label={definition.label} hiddenLabel
+          <Field label={definition.label} hiddenLabel fitContent
             type={definition.path === "email_address" ? "email" : "password"}
             dir="ltr"
             autoComplete="new-password"
@@ -455,7 +456,7 @@ function SettingRow({
           step={definition.step}
           value={draft}
           inputAction={definition.path === "local_server_url" ? <IconButton icon="paste" variant="ghost" label="הדבק כתובת שרת מלוח ההעתקה" onClick={() => {
-            void navigator.clipboard.readText().then(value => {
+            void readClipboardText().then(value => {
               if (!value.trim()) { setStatus("לוח ההעתקה אינו מכיל טקסט."); return; }
               queueSave(value.trim());
             }).catch(reason => setStatus(`ההדבקה נכשלה: ${String(reason)}`));
@@ -645,7 +646,7 @@ export function ProviderWorkflow({
   };
   const pasteKey = async () => {
     try {
-      const value = (await navigator.clipboard.readText()).trim();
+      const value = (await readClipboardText()).trim();
       if (!value) {
         setStatus("לוח ההעתקה אינו מכיל טקסט.");
         return;
@@ -728,7 +729,7 @@ export function ProviderWorkflow({
             dataPath="provider_api_key"
           >
             <div className="secret-link-row">
-              <Field label="מפתח גישה לספק המודל" hiddenLabel
+              <Field label="מפתח גישה לספק המודל" hiddenLabel fitContent
                 type="password"
                 dir="ltr"
                 autoComplete="new-password"
@@ -793,7 +794,7 @@ export function ProviderWorkflow({
           dataPath="provider_api_key"
         >
           <div className="secret-link-row">
-            <Field label="מפתח גישה לספק המודל" hiddenLabel
+            <Field label="מפתח גישה לספק המודל" hiddenLabel fitContent
               type="password"
               disabled
               placeholder="לא נדרש מפתח למודל מקומי"

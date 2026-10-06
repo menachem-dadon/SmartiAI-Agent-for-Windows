@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "clipboard-read",
+  "description": "Read clipboard text for explicit paste actions in trusted main Smarti settings. No remote WebViews, images, writes or background polling.",
+  "webviews": ["main"],
+  "permissions": ["clipboard-manager:allow-read-text"]
+}

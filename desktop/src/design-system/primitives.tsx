@@ -78,13 +78,17 @@ export function IconButton({ label, icon, round = false, tooltip = true, ...prop
   return tooltip ? <Tooltip label={label}>{button}</Tooltip> : button;
 }
 
-type FieldProps = InputHTMLAttributes<HTMLInputElement> & { label: string; hiddenLabel?: boolean; hint?: string; error?: string; inputAction?: ReactNode; ref?: RefObject<HTMLInputElement | null> };
-export function Field({ label, hiddenLabel = false, hint, error, inputAction, className = "", id: suppliedId, ...props }: FieldProps) {
+type FieldProps = InputHTMLAttributes<HTMLInputElement> & { label: string; hiddenLabel?: boolean; hint?: string; error?: string; inputAction?: ReactNode; fitContent?: boolean; ref?: RefObject<HTMLInputElement | null> };
+export function Field({ label, hiddenLabel = false, hint, error, inputAction, fitContent = false, className = "", id: suppliedId, ...props }: FieldProps) {
   const generatedId = useId();
   const id = suppliedId || generatedId;
   const description = [props["aria-describedby"], hint ? `${id}-hint` : undefined, error ? `${id}-error` : undefined].filter(Boolean).join(" ") || undefined;
-  const input = <input {...props} id={id} className="sds-field" aria-invalid={error ? true : props["aria-invalid"]} aria-describedby={description} />;
-  return <div className={`sds-field-group ${className}`}><label className={hiddenLabel ? "sds-visually-hidden" : undefined} htmlFor={id}>{label}</label>{inputAction ? <div className="sds-field-with-action">{input}<span className="sds-field-action">{inputAction}</span></div> : input}{hint && <p className="sds-hint" id={`${id}-hint`}>{hint}</p>}{error && <p className="sds-field-error" id={`${id}-error`} role="alert">{error}</p>}</div>;
+  const input = <input {...props} size={fitContent ? 1 : props.size} id={id} className="sds-field" aria-invalid={error ? true : props["aria-invalid"]} aria-describedby={description} />;
+  const value = String(props.value ?? props.defaultValue ?? "");
+  // Password measurement contains only bullets; no plaintext secret is copied
+  // into an auxiliary DOM node. Saved placeholders are already Core-masked.
+  const display = value ? props.type === "password" ? "•".repeat(value.length) : value : props.placeholder || "";
+  return <div className={`sds-field-group ${fitContent ? "sds-field-group--fit" : ""} ${className}`}><label className={hiddenLabel ? "sds-visually-hidden" : undefined} htmlFor={id}>{label}</label>{inputAction || fitContent ? <div className={`${inputAction ? "sds-field-with-action" : ""} ${fitContent ? "sds-field-with-content" : ""}`}>{fitContent && <span className="sds-field-width-text" aria-hidden="true">{display}</span>}{input}{inputAction && <span className="sds-field-action">{inputAction}</span>}</div> : input}{hint && <p className="sds-hint" id={`${id}-hint`}>{hint}</p>}{error && <p className="sds-field-error" id={`${id}-error`} role="alert">{error}</p>}</div>;
 }
 export function SearchField(props: Omit<FieldProps, "type">) { return <div className="sds-search"><Icon name="search" /><Field {...props} type="search" /></div>; }
 export function NumberField(props: Omit<FieldProps, "type">) { return <Field {...props} type="number" className={`sds-number ${props.className || ""}`} />; }

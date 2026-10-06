@@ -8,7 +8,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   capabilityLabels,
   managementNavigation,
@@ -31,7 +31,7 @@ const managementStyles = readFileSync(
   "src/management.css",
   "utf8",
 );
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
 HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
@@ -306,6 +306,7 @@ describe("Point 16C source-derived settings behavior", () => {
   });
 
   it("wires the rendered Settings secret controls to help, paste, validate, save and delete", async () => {
+    vi.stubGlobal("isTauri", true);
     const calls: InvokeCall[] = [];
     (
       window as typeof window & {
@@ -319,6 +320,7 @@ describe("Point 16C source-derived settings behavior", () => {
     ).__TAURI_INTERNALS__ = {
       invoke: async (command: string, args: Record<string, unknown> = {}) => {
         calls.push({ command, args });
+        if (command === "plugin:clipboard-manager|read_text") return "pasted-secret";
         if (command !== "core_api") return null;
         const request = args.request as {
           method: string;
@@ -336,7 +338,7 @@ describe("Point 16C source-derived settings behavior", () => {
     };
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
-      value: { readText: async () => "pasted-secret" },
+      value: { readText: async () => { throw new Error("browser clipboard must not be used in Tauri"); } },
     });
     let reloads = 0;
     render(
@@ -379,6 +381,7 @@ describe("Point 16C source-derived settings behavior", () => {
     await waitFor(() =>
       expect(screen.getByDisplayValue("pasted-secret")).toBeTruthy(),
     );
+    expect(calls.filter(call => call.command === "plugin:clipboard-manager|read_text")).toHaveLength(1);
     fireEvent.blur(screen.getByLabelText("מפתח גישה לספק המודל"));
     await waitFor(() => expect(reloads).toBe(1));
     const coreRequests = calls

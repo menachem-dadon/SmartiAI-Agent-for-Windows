@@ -40,9 +40,9 @@
 .source-settings-field:has(.sds-range) .sds-range-field>label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 .secret-link-row,.source-directory-picker,.source-field-actions,.source-tts-preview,.source-email-test,.source-log-actions,.source-log-export,.inline-actions,.pagination,.diagnostic-filters,.usage-toolbar,.usage-refresh,.workspace-preferences-actions { min-width:0; display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .source-directory-picker>.sds-field-group,.source-tts-preview>.sds-field-group { flex:1 1 160px; width:auto; }
-.secret-link-row>.sds-field-group { flex:0 1 26ch; width:26ch; max-width:100%; }
+.secret-link-row>.sds-field-group { flex:0 1 auto; width:max-content; min-width:min(32ch,100%); max-width:100%; }
 .source-server-url-field .source-settings-control { grid-template-columns:minmax(0,1fr); }
-.source-server-url-field .sds-field-group { width:32ch; max-width:100%; }
+.source-server-url-field .sds-field-group { width:40ch; max-width:100%; }
 .secret-instructions { margin:0; color:var(--sds-color-text-muted); line-height:1.65; }
 .source-setting-highlight { outline:2px solid var(--sds-color-focus); outline-offset:4px; border-radius:var(--sds-radius-control); }
 .source-search-results { display:grid; gap:8px; }

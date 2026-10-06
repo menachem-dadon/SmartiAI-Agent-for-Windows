@@ -126,7 +126,7 @@ still needs its existing hide/preview/final-bounds/show lifecycle.
 | Component | Contract / integration responsibility |
 |---|---|
 | Button / IconButton / Icon | Native button props and explicit semantic icon; loading disables activation and exposes aria-busy. Icon actions retain names; tooltip=false removes redundant hints for copy/TTS/close/download. Stop uses the official filled Tabler square; original PNGs remain intact. A round primary IconButton keeps the accepted blue/white action treatment in both themes, separately from text-button accent roles. Caller retains duplicate-send guards and domain cancellation. |
-| Field / SearchField / NumberField / Textarea | Native control props, label, unique ID, hint/error associations and optional ref. Field.inputAction embeds an optional action on the physical right with reserved input padding; use a ghost IconButton for paste. Textarea defaults to dir=auto for Hebrew/English writing; callers may override it. Numbers stay short; parsing, validation, secrets masking and persistence stay with existing handlers. |
+| Field / SearchField / NumberField / Textarea | Native control props, label, unique ID, hint/error associations and optional ref. Field.inputAction embeds an optional action on the physical right with reserved input padding; use a ghost IconButton for paste. Field.fitContent opts controlled fields into intrinsic sizing from the displayed value/placeholder, bounded by available space. Password drafts measure bullets only, never plaintext in a second DOM node; long values scroll inside the input. Textarea defaults to dir=auto for Hebrew/English writing; callers may override it. Numbers stay short; parsing, validation, secrets masking and persistence stay with existing handlers. |
 | RangeField | Controlled numeric value and synchronous onValueChange; native pointer/keyboard behavior, textual output and filled track. Caller supplies min/max/step/formatValue; 0 has no invented meaning. |
 | Switch | Controlled checkbox with switch semantics; Space and disabled remain native. Track 44×26 inside a 44×40 target. Active thumb physically left in RTL, right in LTR. |
 | Menu | Explicit item callbacks/disabled/tone; click toggles, outside interaction, Escape, Home/End, arrows, single-character lookup and Tab. Focus returns for Escape/selection; outside click preserves destination focus. No X. Optional `description` appears below the label and is linked by `aria-describedby`, retaining a short accessible name. Optional `fitContent` uses intrinsic width and measures the surface for positioning, retaining viewport limits and shared padding. Current/history conversation actions (D62) and safety profiles (D64) opt in; other menus retain the default width. |
@@ -422,3 +422,12 @@ Provider/search secret fields use Field.inputAction with ghost paste, danger
 removal and key help. The local URL gets the same paste affordance. Favorite
 stars use ghost buttons with aria-pressed. Only AI settings groups opt into
 plain; the shared card style and all other consumers remain available.
+
+UX-D67 / ledger §48 widens secret fields to fit the displayed mask and typed
+password bullets, with a 32ch minimum and no value-length limit. Available
+space bounds the intrinsic grid even while typing long keys. The local server
+URL is 40ch, 25% wider than D66. Explicit settings paste actions use
+readClipboardText: native Tauri text reads in the trusted main WebView, browser
+clipboard permissions in ordinary web previews. The separate read-only
+capability excludes remote browser WebViews and the voice overlay. Native
+failures surface in the existing setting status without a browser fallback.

@@ -120,3 +120,16 @@ describe("UX-2 shared interaction contracts", () => {
     rerender(wrap(<UserBubble isNew>תוכן מעודכן</UserBubble>)); expect(container.querySelector('.sds-user-bubble--new')).toBeNull();
   });
 });
+
+test("content-sized password fields measure only masking glyphs and keep focus while editing", () => {
+  const secret = "a-private-api-key";
+  const { container, rerender } = render(wrap(<Field label="מפתח" type="password" fitContent value={secret} onChange={() => {}} inputAction={<IconButton icon="paste" variant="ghost" label="הדבק" />} />));
+  const input = screen.getByLabelText("מפתח") as HTMLInputElement;
+  expect(input.value).toBe(secret);
+  expect(container.querySelector(".sds-field-width-text")?.textContent).toBe("•".repeat(secret.length));
+  expect(container.textContent).not.toContain(secret);
+  input.focus();
+  rerender(wrap(<Field label="מפתח" type="password" fitContent value={secret + "-longer"} onChange={() => {}} inputAction={<IconButton icon="paste" variant="ghost" label="הדבק" />} />));
+  expect(document.activeElement).toBe(input);
+  expect(container.querySelector(".sds-field-width-text")?.textContent).toBe("•".repeat((secret + "-longer").length));
+});
