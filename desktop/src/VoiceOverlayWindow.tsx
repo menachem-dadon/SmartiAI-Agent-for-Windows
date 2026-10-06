@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { coreApi } from "./coreApi";
 import { parseThemePreference, resolveTheme, THEME_STORAGE_KEY } from "./designSystem";
-import { DesignSystemProvider, Icon, IconButton } from "./design-system";
+import { Card, DesignSystemProvider, Icon, IconButton } from "./design-system";
 import "./chat.css";
 import "./App.css";
 
@@ -53,7 +53,9 @@ export function VoiceOverlayWindow({ fixture = false }: { fixture?: boolean }) {
   };
   return (
     <DesignSystemProvider theme={theme} className="voice-design"><main>
-      <section className="voice-listening-overlay" role="status" aria-live="polite">
+      <Card className="voice-listening-overlay" role="status" aria-live="polite" onKeyDown={event => {
+        if (event.key === "Escape") { event.preventDefault(); void cancel().catch(reason => setStatus(String(reason))); }
+      }}>
         <IconButton tooltip={false} icon="close" label="בטל האזנה" onClick={() => void cancel().catch(reason => setStatus(String(reason)))} />
         {expanded && <IconButton icon="expand" label="פתח את סמארטי" onClick={() => void invoke("desktop_focus_main").catch(reason => setStatus(String(reason)))} />}
         <div>
@@ -61,7 +63,7 @@ export function VoiceOverlayWindow({ fixture = false }: { fixture?: boolean }) {
           <span>{status || "אפשר לדבר עכשיו"}</span>
         </div>
         <Icon name="mic" size={28} />
-      </section>
+      </Card>
     </main></DesignSystemProvider>
   );
 }

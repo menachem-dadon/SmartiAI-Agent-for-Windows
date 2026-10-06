@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -40,7 +40,7 @@ import {
 import { RichMessage } from "./RichMessage";
 import { Alert, Button, DesignSystemProvider, Dialog, Field, Icon, IconButton, Menu } from "./design-system";
 import { ChatSidebar, conversationActions } from "./ChatSidebar";
-import { useChatDrafts } from "./chatDrafts";
+import { useChatDrafts, readActiveConversation, rememberActiveConversation, restoreActiveConversation } from "./chatDrafts";
 import { savedChatPosition, useChatFooterFlow, useChatScroll } from "./chatScroll";
 import { legacyAssets } from "./legacyAssets";
 import {
@@ -63,6 +63,7 @@ import { settingsRevision, subscribeSettingsChanges } from "./settingsChanges";
 import { ConversationApprovals, useApprovalQueue } from "./conversationApprovals";
 import { useReplyNavigation, type ReplyNavigation } from "./replyNavigation";
 import { WindowTitleBar } from "./WindowTitleBar";
+import { StartupRecovery, useStartupWatchdog } from "./InterfaceRecovery";
 
 const initialCore: CoreSnapshot = {
   state: "starting",
@@ -74,6 +75,7 @@ const initialCore: CoreSnapshot = {
   stderrTail: [],
 };
 const cursorKey = "smarti.desktop.event-cursor";
+const EMPTY_MESSAGE_EVENTS: RunEvent[] = [];
 type FavoriteModel = { provider: string; model: string };
 
 export function ApiKeyRequiredDialog({
@@ -207,10 +209,17 @@ export default function App() {
   const [managementOpen, setManagementOpen] = useState(false);
   const [managementSection, setManagementSection] =
     useState<ManagementSection | null>(null);
+  const managementReturnFocus = useRef<HTMLElement | null>(null);
+  const openManagement = useCallback((section: ManagementSection, trigger?: HTMLElement) => {
+    // Capture before the chat becomes inert: WebView2 may blur it on commit.
+    managementReturnFocus.current = trigger || (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    setManagementSection(section);
+  }, []);
   const { resolved, setPreference } = useTheme();
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeId, setActiveIdState] = useState("");
-  const activeIdRef = useRef("");
+  const [error, setError] = useState("");
+  const [activeId, setActiveIdState] = useState(readActiveConversation);
+  const activeIdRef = useRef(activeId);
   const messageRequest = useRef(0);
   const loadedAttentionIds = useRef(new Set<string>());
   const listRequest = useRef(0);
@@ -235,6 +244,7 @@ export default function App() {
     }
     activeIdRef.current = id;
     setActiveIdState(id);
+    if (!rememberActiveConversation(id)) setError("לא ניתן לשמור את השיחה הפעילה לרענון. הטיוטות נשארות בבעלות השיחות שלהן.");
   }, []);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [events, setEvents] = useState<RunEvent[]>([]);
@@ -244,7 +254,6 @@ export default function App() {
   queryRef.current = query;
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
-  const [error, setError] = useState("");
   const drafts = useChatDrafts(activeId, setError);
   const { attachments } = drafts.draft;
   const setAttachments = drafts.setAttachments;
@@ -321,6 +330,7 @@ export default function App() {
   const [workspaceWindowReady, setWorkspaceWindowReady] = useState(false);
   const [legalStatus, setLegalStatus] = useState<LegalStatus | null>(null);
   const [legalChecked, setLegalChecked] = useState(false);
+  const startupDelayed = useStartupWatchdog(core.state === "ready" && (!workspaceWindowReady || !legalChecked));
   const [voiceHotkey, setVoiceHotkey] = useState("Ctrl+Shift+Space");
 
   const [keepRunningInTray, setKeepRunningInTray] = useState(true);
@@ -507,7 +517,7 @@ export default function App() {
       workbench: initialWorkbench.open,
       tab: restoredTab,
     });
-    const first = activeIdRef.current || data.conversations[0]?.id || "";
+    const first = restoreActiveConversation(data.conversations, activeIdRef.current);
     setActiveId(first);
     if (first) await loadMessages(first);
     await refreshLists();
@@ -828,8 +838,14 @@ export default function App() {
     `${activeId}:${activeApprovals.length}:${scroll.hasNewContent}:${workspaceWindowReady}:${managementSection}`);
   const activeApiKeyRequest = pendingApiKeyRequest(activeEvents.filter(event =>
     runs.some(run => run.id === event.run_id && run.status === "waiting_for_input")));
-  const eventsForRun = (runId: string) =>
-    activeEvents.filter((item) => item.run_id === runId);
+  const messageEvents = useMemo(() => {
+    const grouped = new Map<string, RunEvent[]>();
+    for (const event of events) if (event.session_id === activeId) {
+      const row = grouped.get(event.run_id) || [];
+      row.push(event); grouped.set(event.run_id, row);
+    }
+    return grouped;
+  }, [events, activeId]);
   // Runtime and message requests can finish in different orders. Keep the
   // observed run mounted through that gap, using the Core's terminal record.
   const observedReplies = useRef<Record<string, string>>({});
@@ -1178,6 +1194,10 @@ export default function App() {
     },
     [narrowWorkspace],
   );
+  const openMessageCanvas = useCallback((canvasId: string) => {
+    workbenchRef.current?.openCanvas(activeId, canvasId);
+    setWorkbenchOpen(true);
+  }, [activeId, setWorkbenchOpen]);
   const dismissWorkspaceOverlay = () => {
     if (workspace.workbenchOpen) setWorkbenchOpen(false);
     else if (workspace.conversationDrawerOpen)
@@ -1310,6 +1330,7 @@ export default function App() {
               )}
             </div>
           )}
+          {core.state === "ready" && (startupDelayed || Boolean(error)) && <StartupRecovery />}
         </section>
       </main></DesignSystemProvider>
     );
@@ -1376,7 +1397,7 @@ export default function App() {
           unread={id => attention.items.filter(item => item.session_id === id).length}
           onToggle={() => void toggleConversationDrawer()} onCreate={() => void createConversation()}
           onQuery={setQuery} onSelect={id => void selectConversation(id)}
-          onManagement={setManagementSection} actions={item => conversationActions(item, {
+          onManagement={openManagement} actions={item => conversationActions(item, {
             pin: item => void togglePinned(item).catch(reason => setError(String(reason))),
             rename: item => void renameConversation(item),
             export: item => void exportConversation(item).catch(reason => setError(String(reason))),
@@ -1399,7 +1420,7 @@ export default function App() {
               <button
                 type="button"
                 className="chat-update-available"
-                onClick={() => setManagementSection("settings_appearance")}
+                onClick={() => openManagement("settings_appearance")}
               >
                 <Icon name="refresh" />
                 עדכון {availableUpdateVersion}
@@ -1450,13 +1471,13 @@ export default function App() {
                       isNew={message.role === "user" && runId === newUserRun}
                       events={
                         message.role === "assistant" && runId
-                          ? eventsForRun(runId)
-                          : []
+                          ? messageEvents.get(runId) || EMPTY_MESSAGE_EVENTS
+                          : EMPTY_MESSAGE_EVENTS
                       }
                       active={messageActive}
                       runStatus={messageActive ? activeRun?.status : undefined}
                       theme={resolved}
-                      onOpenCanvas={(canvasId) => { workbenchRef.current?.openCanvas(activeId, canvasId); setWorkbenchOpen(true); }}
+                      onOpenCanvas={openMessageCanvas}
                     />
                   );
                 })}
@@ -1507,7 +1528,7 @@ export default function App() {
             localFastMode={localFastMode}
             onFavoriteModel={async item => { await selectFavoriteModel(item); }}
             onReasoningEffort={changeReasoning}
-            onManageModels={() => setManagementSection("settings_ai")}
+            onManageModels={trigger => openManagement("settings_ai", trigger)}
             onAutonomyMode={changeAutonomy}
             onLocalFastMode={changeLocalFastMode}
             onAttachments={setAttachments}
@@ -1578,6 +1599,7 @@ export default function App() {
       {managementSection && (
         <ManagementCenter
           initial={managementSection}
+          returnFocus={managementReturnFocus.current}
           onClose={() => setManagementSection(null)}
           onOpenWorkbench={(tab) => {
             setManagementSection(null);

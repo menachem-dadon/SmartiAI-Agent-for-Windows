@@ -27,18 +27,20 @@ export function ManagementCenter({
   onOpenWorkbench,
   setTheme,
   theme,
+  returnFocus,
 }: {
   initial?: ManagementSection;
   onClose: () => void;
   onOpenWorkbench?: (tab: "browser" | "files") => void;
   setTheme: (theme: ThemePreference) => void;
   theme: ResolvedTheme;
+  returnFocus?: HTMLElement | null;
 }) {
   const [section, setSection] = useState<ManagementSection>(initial);
   const [policyOpen, setPolicyOpen] = useState(false);
   const back = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
+    const previous = returnFocus || document.activeElement as HTMLElement | null;
     back.current?.focus();
     return () => { if (previous?.isConnected) previous.focus(); };
   }, []);
@@ -52,7 +54,11 @@ export function ManagementCenter({
   }, [policyOpen, onClose]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || document.querySelector('dialog[open], [role="menu"], [role="listbox"]')) return;
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const childOverlay = [...document.querySelectorAll<HTMLElement>('dialog[open], [role="menu"], [role="listbox"]')].some(node =>
+        !node.closest('[hidden], [inert], [aria-hidden="true"]') &&
+        getComputedStyle(node).display !== "none" && getComputedStyle(node).visibility !== "hidden");
+      if (childOverlay) return;
       event.preventDefault();
       event.stopPropagation();
       goBack();

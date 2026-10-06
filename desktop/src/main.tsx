@@ -1,9 +1,12 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
-import { Point16AVisualFixture } from "./Point16AVisualFixture";
+import { InterfaceLoading, InterfaceRecovery } from "./InterfaceRecovery";
 import { VoiceOverlayWindow } from "./VoiceOverlayWindow";
-import { Point16BVisualFixture } from "./Point16BVisualFixture";
+import "./interfaceRecovery.css";
+
+const App = lazy(() => import("./App"));
+const Point16AVisualFixture = import.meta.env.DEV ? lazy(() => import("./Point16AVisualFixture").then(module => ({ default: module.Point16AVisualFixture }))) : null;
+const Point16BVisualFixture = import.meta.env.DEV ? lazy(() => import("./Point16BVisualFixture").then(module => ({ default: module.Point16BVisualFixture }))) : null;
 
 const voiceOverlay = new URLSearchParams(location.search).get("voice-overlay") === "1";
 const voiceFixture =
@@ -13,9 +16,12 @@ const visualFixture =
   import.meta.env.DEV &&
   new URLSearchParams(location.search).get("visual-fixture") === "point16a";
 const point16BFixture = import.meta.env.DEV ? new URLSearchParams(location.search).get("visual-fixture") : "";
+document.documentElement.classList.toggle("voice-overlay-document", voiceOverlay || voiceFixture);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {voiceOverlay || voiceFixture ? <VoiceOverlayWindow fixture={voiceFixture} /> : visualFixture ? <Point16AVisualFixture /> : point16BFixture === "point16b-management" ? <Point16BVisualFixture /> : point16BFixture === "point16b-legal" ? <Point16BVisualFixture page="legal" /> : <App />}
+    <InterfaceRecovery>{voiceOverlay || voiceFixture ? <VoiceOverlayWindow fixture={voiceFixture} /> : <Suspense fallback={<InterfaceLoading />}>
+    {visualFixture && Point16AVisualFixture ? <Point16AVisualFixture /> : point16BFixture === "point16b-management" && Point16BVisualFixture ? <Point16BVisualFixture /> : point16BFixture === "point16b-legal" && Point16BVisualFixture ? <Point16BVisualFixture page="legal" /> : <App />}
+    </Suspense>}</InterfaceRecovery>
   </React.StrictMode>,
 );

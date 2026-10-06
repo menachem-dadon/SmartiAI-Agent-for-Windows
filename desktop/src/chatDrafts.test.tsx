@@ -1,11 +1,25 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { useChatDrafts, readDrafts } from "./chatDrafts";
+import { useChatDrafts, readDrafts, readActiveConversation, rememberActiveConversation, restoreActiveConversation } from "./chatDrafts";
 import { mergeMessages } from "./chatState";
 beforeEach(() => sessionStorage.clear());
 afterEach(cleanup);
 describe("UX-3 conversation recovery", () => {
+  test("reload retains the selected draft owner when a newer conversation exists, with safe deletion fallback", () => {
+    const view = renderHook(() => useChatDrafts("older", () => {}));
+    act(() => view.result.current.setText("older owned draft"));
+    expect(rememberActiveConversation("older")).toBe(true);
+    view.unmount();
+    const restored = restoreActiveConversation([{ id: "newer" }, { id: "older" }], readActiveConversation());
+    expect(restored).toBe("older");
+    const recovered = renderHook(() => useChatDrafts(restored, () => {}));
+    expect(recovered.result.current.draft.text).toBe("older owned draft");
+    expect(restoreActiveConversation([{ id: "newer" }], restored)).toBe("newer");
+    expect(restoreActiveConversation([], restored)).toBe("");
+    expect(rememberActiveConversation("")).toBe(true);
+    expect(readActiveConversation()).toBe("");
+  });
   test("separates drafts and attachments; a late attachment belongs to its captured conversation", () => {
     const view = renderHook(({ id }) => useChatDrafts(id, () => {}), { initialProps: { id: "a" } });
     const oldAttachments = view.result.current.setAttachments;

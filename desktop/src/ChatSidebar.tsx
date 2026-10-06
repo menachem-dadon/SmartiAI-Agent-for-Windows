@@ -22,7 +22,7 @@ export function ChatSidebar({ open, logo, conversations, activeId, query, loadin
   query: string; loading: boolean; error: string; unread: (id: string) => number;
   onToggle: () => void; onCreate: () => void; onQuery: (query: string) => void;
   onSelect: (id: string) => void; actions: (item: Conversation) => MenuItem[];
-  onManagement: (section: ManagementSection) => void;
+  onManagement: (section: ManagementSection, trigger?: HTMLElement) => void;
 }) {
   return <aside className={`conversation-drawer ${open ? "is-open" : "is-rail"}`} aria-label="שיחות">
     <div className="drawer-brand-row"><button className="drawer-brand" type="button" aria-label={open ? "כיווץ תפריט הצד" : "פתיחת תפריט הצד"} onClick={onToggle}>
@@ -52,8 +52,8 @@ export function ChatSidebar({ open, logo, conversations, activeId, query, loadin
         ["tools", "tools", "כלים וחיבורים"], ["usage", "usage", "שימוש"],
         ["settings_ai", "settings", "הגדרות"],
       ] as const).map(([section, icon, label]) => open
-        ? <button type="button" key={section} onClick={() => onManagement(section)}><Icon name={icon} /><span>{label}</span></button>
-        : <IconButton key={section} icon={icon} label={label} variant="ghost" onClick={() => onManagement(section)} />)}
+        ? <button type="button" key={section} onClick={event => onManagement(section, event.currentTarget)}><Icon name={icon} /><span>{label}</span></button>
+        : <IconButton key={section} icon={icon} label={label} variant="ghost" onClick={event => onManagement(section, event.currentTarget)} />)}
     </nav>
   </aside>;
 }

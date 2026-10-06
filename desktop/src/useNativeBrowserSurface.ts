@@ -114,6 +114,10 @@ export function useNativeBrowserSurface(
       moving = false;
       sync();
     };
+    const preference = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    const reduce = () => {
+      if (preference?.matches) { transitions.clear(); settle(); }
+    };
     const startMotion = () => {
       if (!moving) hide();
       moving = true;
@@ -150,6 +154,7 @@ export function useNativeBrowserSurface(
     window.addEventListener("resize", sync);
     window.visualViewport?.addEventListener("resize", sync);
     window.addEventListener("scroll", sync, true);
+    preference?.addEventListener?.("change", reduce);
     return () => {
       disposed = true;
       cancelAnimationFrame(frame);
@@ -162,6 +167,7 @@ export function useNativeBrowserSurface(
       window.removeEventListener("resize", sync);
       window.visualViewport?.removeEventListener("resize", sync);
       window.removeEventListener("scroll", sync, true);
+      preference?.removeEventListener?.("change", reduce);
     };
   }, [visible, revision, sidePanel, find]);
   return { viewportRef, boundsReady, viewportError };

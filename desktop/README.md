@@ -59,8 +59,20 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 The historical `python ..\scripts\verify_tauri_point16c.py` checks old parity
 ledgers and is not the new redesign acceptance checker. Do not alter historical
-statuses just to make it pass. UX-6 owns adapting acceptance while retaining
-functional/native/package gates; the UX ledger reports current gaps.
+statuses just to make it pass. The accepted redesign/source work closes in UX
+ledger §42; functional/native/package evidence and release follow-ups keep their
+separate scopes. `verify_ux6_acceptance.py --final` remains the strict all-level
+gate, distinct from closing the source/UI project.
+
+Future UI work reads plan §2.1 and `src/design-system/README.md`, reuses shared
+components/tokens, and documents intentional changes to shared rules. Those
+rules are defaults, not immutable constraints. Normal new controls extend the
+accepted language; a task explicitly changing that language can update it.
+
+For repeatable Windows builds from the repository root use
+`pwsh -NoProfile -File .\scripts\build_and_package.ps1`.
+Version, label, output path, compression, offline WebView2, signing and
+prepare-only options are documented in [building Tauri](../docs/building_tauri.md).
 
 The supervisor smoke opens the Tauri WebView hidden, verifies the real Python
 Core readiness handshake and Rust health proxy, creates a deterministic

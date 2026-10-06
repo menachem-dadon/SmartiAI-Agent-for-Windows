@@ -1,0 +1,512 @@
+{
+  "stage_status": "COMPLETE",
+  "base_commit": "6e13caf235d816c243cdbfc843e597d28964c767",
+  "design_decision": "D58",
+  "candidate_source_sha256": "286a2271476983c34064597c04ef2738dddbbc8165e71a8781dc23f4f29ea693",
+  "evidence_boundary": "Prior measurements retain measured source and binary identity. Recovery/voice candidates and the later recipe-only delta remain separate. Any central Composer-only delta has its own reviewed input comparison and focused browser/source evidence; no relabeling of older native or package runs.",
+  "source": {
+    "frontend_full": {
+      "passed": 324,
+      "files": 45,
+      "source_sha256": "0c969c975670165ad16a1d4dc198b9f348e26153f87e3adbae6138b1e0f509ed",
+      "artifact": ".codex-local/ux-6/final/frontend-delivery.json"
+    },
+    "frontend_last_delta": {
+      "passed": 1,
+      "artifact": ".codex-local/ux-6/final/watchdog.log",
+      "scope": "targeted watchdog regression; not a 325-test full-suite result"
+    },
+    "frontend_voice": {
+      "passed": 7,
+      "artifact": ".codex-local/ux-6/voice-composer.log",
+      "scope": "five existing attachment/voice owner/hotkey checks plus two real-text/silence completion regressions; not a new full-suite result"
+    },
+    "frontend_voice_refinement": {
+      "passed": 9,
+      "artifact": ".codex-local/ux-6/voice-refinement-frontend-r2.log",
+      "scope": "focused Composer draft/speech/silence plus direct overlay rendering/button/Escape cancellation; two earlier test setup failures retained and corrected to use the real hotkey when a draft hides the mic button"
+    },
+    "frontend_full_final_attempts": "incomplete, stopped after no completion; logs retained; not acceptance evidence",
+    "python": {
+      "passed": 553,
+      "seconds": 77.533,
+      "artifact": ".codex-local/ux-6/final/python-isolated.log",
+      "command": "python -m unittest discover -s tests -t . -v",
+      "scope": "Full suite before voice-only recognition change; preserved, not relabeled as a current full-suite rerun"
+    },
+    "python_voice_refinement": {
+      "passed": 15,
+      "artifact": ".codex-local/ux-6/voice-refinement-python.log",
+      "command": "python -m unittest tests.test_speech -v",
+      "scope": "13 existing speech tests plus two new recognition regressions: unknown audio is empty completion, real network failure remains an error"
+    },
+    "rust": {
+      "passed": 31,
+      "source_sha256": "c159c81034ff3958ed13379e3fb48ce81012ca885728523883e6813ad8d8a3ab",
+      "artifact": ".codex-local/ux-6/final/rust-delivery.log",
+      "scope": "includes isolated-smoke routing gate, before async voice command; current voice source separately compiled and tested in native QA"
+    },
+    "rust_current": {
+      "passed": 31,
+      "source_sha256": "44717c6c938d74884e1c017c52eda54bec640f60b97c0266700c91aaf75ee360",
+      "artifact": ".codex-local/ux-6/voice-refinement-rust.log",
+      "scope": "voice transparency/async command and blank launch-override correction; complete existing31 Rust contracts. Later change affects only canonical child smoke environment, no Rust inputs changed"
+    },
+    "checker": {
+      "passed": 4,
+      "artifact": ".codex-local/ux-6/final/checker-final.log"
+    },
+    "universal_packaging_checks": {
+      "passed": 11,
+      "seconds": 7.032,
+      "command": "python -m unittest tests.test_tauri_packaging tests.test_ux6_acceptance -v",
+      "artifact": ".codex-local/ux-6/central/universal-packaging-checks.log",
+      "sha256": "a1fcf68253e9966bc4b796b49a8e1bc90b0f086e353e70036b02c767e1a996bf",
+      "scope": "Six isolated version/orchestration tests plus five acceptance-verifier tests. Actual PowerShell PrepareOnly and mock canonical builder emitting text payloads; no compilation, executable launch, installer or real package proof."
+    },
+    "web_build": {
+      "passed": true,
+      "command": "npm.cmd run build",
+      "seconds": 36.63,
+      "scope": "TypeScript and production Vite frontend bundle passed after Composer correction. Existing chunks above500kB remain a warning. No native Core/Rust/NSIS or installer build."
+    }
+  },
+  "windows_history": {
+    "artifact": ".codex-local/ux-6/final/native-current/report.json",
+    "sha256": "a72b874c650f36e175da0b06b412754ead8bb35c7fe6b43370c6ff85893b03bf",
+    "source_sha256": "0c969c975670165ad16a1d4dc198b9f348e26153f87e3adbae6138b1e0f509ed",
+    "scope": "actual built Tauri, WebView2 and source Core; Windows125%; deterministic model; before last recovery/smoke delta",
+    "checks": 16,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": "60DC1A99E706ABBDD95A4F4163835611CC277C40A46A8DC7106F6DF4E0F29A19",
+    "selection": [
+      {
+        "messages": 200,
+        "ms": 258.47869999999966
+      },
+      {
+        "messages": 1000,
+        "ms": 182.76150000000052
+      }
+    ],
+    "history": [
+      {
+        "messages": 200,
+        "pages": 4,
+        "load_all_ms": 1118.0850000000028,
+        "raf_samples": 240,
+        "raf_p95_ms": 8.599999999999909
+      },
+      {
+        "messages": 1000,
+        "pages": 20,
+        "load_all_ms": 5813.2749,
+        "raf_samples": 196,
+        "raf_p95_ms": 16.700000000000728
+      }
+    ],
+    "process_sample": {
+      "kind": "native idle process tree",
+      "scope": "Owned browser/WebView tree and Core; sum of working sets counts shared pages multiple times",
+      "elapsedSeconds": 5.2696319,
+      "privateBytes": 777134080,
+      "workingSetBytes": 1115803648,
+      "logicalProcessors": 12,
+      "cpuPercentOneLogicalCore": 0
+    },
+    "reload_ms": {
+      "n": 10,
+      "median": 1023.3985999999995,
+      "p95": 1106.1296999999995
+    },
+    "geometry_cases": 6
+  },
+  "windows_owners": {
+    "artifact": ".codex-local/ux-6/final/native-workspace-current-r2/report.json",
+    "sha256": "1d4b890ec0b9ec23459a285a94bdc2f5bb7425f23eb09fa6ca80480cb09dd819",
+    "source_sha256": "0c969c975670165ad16a1d4dc198b9f348e26153f87e3adbae6138b1e0f509ed",
+    "scope": "actual native child browser ownership/motion/terminal/files at125%; before last recovery/smoke delta",
+    "checks": 26,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": null,
+    "geometry_cases": 6
+  },
+  "windows_recovery_delta": {
+    "artifact": ".codex-local/ux-6/final/lastchanges.json",
+    "sha256": "86d198b761e295b0d02c6a8d64eecf3a24916926979604de0e1f51827c6cb9a5",
+    "source_sha256": "c159c81034ff3958ed13379e3fb48ce81012ca885728523883e6813ad8d8a3ab",
+    "scope": "actual recovery candidate; ordinary reload with fresh-document marker and retained owner draft/Core. Native fault injection ineffective, excluded; watchdog unit test only",
+    "checks": 2,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": "05088DD82952B5437A7C0A82B01CE018C35764E86EE7871ACCF6F84AF121C1D3"
+  },
+  "windows_voice_delta": {
+    "artifact": ".codex-local/ux-6/voice-native.json",
+    "sha256": "bcd80c168c48d3bbfac3e6b7b9ce0b7663d87ed660a6cf690139cb82c6597beb",
+    "source_sha256": "f8c470578a87e335b0d108d9aa94f0401bafabce3dccf940aba1073b170c70d3",
+    "scope": "actual first asynchronous native overlay creation, existing Core and close; fresh deterministic QA. No microphone capture by automation; user retest required",
+    "checks": 3,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": "8D56484429DC80DDFD51909396A7B61C8958D1A74DB48CBEA4422C9042BBB8EF",
+    "ms": 273.6727000000003
+  },
+  "windows_voice_refinement": {
+    "artifact": ".codex-local/ux-6/voicefinal-native.json",
+    "sha256": "9cbda433df2da8a1a762f05f66dbdc41bf2a6969e2a92d50a3f4cefd17d00d5c",
+    "source_sha256": "44717c6c938d74884e1c017c52eda54bec640f60b97c0266700c91aaf75ee360",
+    "scope": "actual current built Windows overlay creation/close and same Core; rounded transparent native window, direct voice entry, silence handling covered by focused source tests and separately accepted user trial",
+    "checks": 3,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": "387C13792AA1ED9666072702F4EF60FA4182128C0BAAAC6FC6662211BD56D776",
+    "ms": 389.3563999999999
+  },
+  "package_runtime_audit": {
+    "artifact": ".codex-local/ux-6/package-runtime-audit.json",
+    "sha256": "82f7c5f2cbcd7d1fd05e9d0ef0a556940b1fada819b22b663b7b2f5cfe2bec10",
+    "source_sha256": "44717c6c938d74884e1c017c52eda54bec640f60b97c0266700c91aaf75ee360",
+    "scope": "actual private portable Python/Node execution and removed write probes; matching repository/frontend notices and runtime licenses; no installed-machine or exhaustive legal-audit claim",
+    "checks": 5,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": null,
+    "versions": {
+      "python": "3.12.10",
+      "node": "v22.23.2"
+    },
+    "notices": {
+      "repository PolyForm notice": {
+        "sha256": "38c1b1c95559fade1a27071c2cddf34cc67746a6e1ef6bd5d56af1cf3ec7a81d",
+        "bytes": 7537
+      },
+      "Tabler MIT": {
+        "sha256": "b740a1d46122672da62833e97f7e7c8a13fa85cbc7445b584b297cc00dde93db",
+        "bytes": 1073
+      },
+      "Lobe Icons MIT": {
+        "sha256": "add9d7531d1b21646317a8958e38fc727506fa39d24bdecb44154d943c82753a",
+        "bytes": 1064
+      },
+      "private Python license": {
+        "sha256": "e502c6b880ff58d614901495a9009c136539cd0b1e2a2abb8fc00b934c203419",
+        "bytes": 36874
+      },
+      "private Node license": {
+        "sha256": "8cc9bb466b19fc7e7cc99d03e9df1132021fda8b01eea2624c58bb372dbef576",
+        "bytes": 148217
+      }
+    }
+  },
+  "package_zip_audit": {
+    "artifact": ".codex-local/ux-6/package-zip-audit.json",
+    "sha256": "b29a467992f2966c72dff0798905459bcef6c5beb4abc6a8918c761d3866532d",
+    "source_sha256": "914e801a380d87449988a81ffc7320feb6da512ebb592b8e84606fcd19adc1ce",
+    "scope": "actual final ZIP opens and six essential archived payloads match exact tested portable files; no extraction or exhaustive dependency CRC pass",
+    "checks": 6,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": null
+  },
+  "browser_accessibility": {
+    "artifact": ".codex-local/ux-6/final/accessibility-final/report.json",
+    "sha256": "78b4bb9e99a2e350cbfe8f8026782c43b3331ee3de8740ebfcb9515645d9426f",
+    "source_sha256": "c159c81034ff3958ed13379e3fb48ce81012ca885728523883e6813ad8d8a3ab",
+    "scope": "adapted native IPC, actual isolated Core; unchanged frontend since this run, sampled contrast/AX/keyboard, no spoken screen reader",
+    "checks": 57,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": null,
+    "contrast": [
+      {
+        "theme": "light",
+        "width": 360,
+        "samples": 90,
+        "minimum": 3.383537430860954,
+        "failures": 0
+      },
+      {
+        "theme": "light",
+        "width": 1380,
+        "samples": 76,
+        "minimum": 4.7990303764841675,
+        "failures": 0
+      },
+      {
+        "theme": "dark",
+        "width": 360,
+        "samples": 90,
+        "minimum": 5.996157532245956,
+        "failures": 0
+      },
+      {
+        "theme": "dark",
+        "width": 1380,
+        "samples": 76,
+        "minimum": 6.2880201900218395,
+        "failures": 0
+      }
+    ]
+  },
+  "integrations": {
+    "artifact": ".codex-local/ux-6/final/integrations/report.json",
+    "sha256": "2c1567024f4a4169aac5815475a64686096f121a59a6ba817aa46ee431fd6235",
+    "source_sha256": "0c969c975670165ad16a1d4dc198b9f348e26153f87e3adbae6138b1e0f509ed",
+    "scope": "actual unchanged Core custom/Skill install/trust/remove, unpinned MCP rejection, PDF bytes and terminal; not Windows choosers",
+    "checks": 8,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": null
+  },
+  "dev_stability": {
+    "artifact": ".codex-local/ux-6/final/dev-stability/report.json",
+    "sha256": "d9b172a7cdbadb7adc614d6c98dfa7e1a4d5ddbfa4b64b43c5c809b39085fade",
+    "source_sha256": "0c969c975670165ad16a1d4dc198b9f348e26153f87e3adbae6138b1e0f509ed",
+    "scope": "actual dev WebView, ten reloads and CSS/React HMR; original UX5 blank root not reproduced",
+    "checks": 3,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": null
+  },
+  "relaunch_built": {
+    "artifact": ".codex-local/ux-6/final/relaunch-built/report.json",
+    "sha256": "cdebfdcabf1c5ac72bf74406e5a240d695342ed77cbc17cec5a7f43ff4becb33",
+    "source_sha256": "0c969c975670165ad16a1d4dc198b9f348e26153f87e3adbae6138b1e0f509ed",
+    "scope": "three actual owned quit/reopen cycles; observed times include helper/CDP probe overhead",
+    "checks": 9,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": null
+  },
+  "relaunch_dev": {
+    "artifact": ".codex-local/ux-6/final/relaunch-dev/report.json",
+    "sha256": "2b3c5c268a00c9927630b08e8f421cd6459397f5ab5cb03b81f5c5e61fbba53e",
+    "source_sha256": "0c969c975670165ad16a1d4dc198b9f348e26153f87e3adbae6138b1e0f509ed",
+    "scope": "three actual owned quit/reopen cycles",
+    "checks": 9,
+    "failures": 0,
+    "errors": 0,
+    "executable_sha256": null
+  },
+  "known_failures": [
+    "original UX5 blank root not reproduced",
+    "one built startup stall recovered on reload, cause unproved; 20 later reloads passed, invoke trace empty because native invoke is read-only",
+    "native stall injection ineffective and excluded; final watchdog unit test passed",
+    "earlier CSS zoom overflow fixed; final layout-only matrix27 passed",
+    "legacy native management verifier stopped at startup, no management PASS claimed",
+    "first NSIS deep resource path failed; short ASCII snapshot used",
+    "first packaged smoke exited0 without proof while personal instance was running; isolated-smoke routing corrected"
+  ],
+  "isolation_incident": {
+    "excluded_run": "unittest discover -s tests -v, missing -t .",
+    "effect": "derived personal MCP config rewritten with semantically unchanged four fields; test records appended to personal log; retained, no rollback",
+    "settings_and_chat_files": "audit timestamps predate excluded test run; no prior byte-for-byte baseline claim",
+    "audit": ".codex-local/ux-6/isolation-audit.json"
+  },
+  "assisted_trial": {
+    "artifact": "docs/ux6_assisted_acceptance.json",
+    "voice_status": "Initial dictation failure corrected. User accepted all three function checks and all three requested refinements. No further voice retest requested.",
+    "scope": "Voice function/refinements and user-confirmed actual Windows100/150/200%, enlarged text and spoken reader retained at the candidate scopes recorded in the assisted/central receipts. Latest Composer correction is source/browser tested; not yet in a matching package."
+  },
+  "needs_user": [
+    "When a new package is wanted, run scripts/build_and_package.ps1 with optional Version/Label; no actual new package built by this closure",
+    "Review matching package manifest and smokes before package acceptance; keep clean installation/signing/release separate",
+    "External provider/MCP/Office/extra-monitor evidence needs its own defined target; no repeated broad voice/scale trial requested"
+  ],
+  "separate_scope": [
+    "clean Windows install/upgrade/uninstall/VM",
+    "signed production package/update/release",
+    "multi-monitor physical restore"
+  ],
+  "not_performed": [
+    "push",
+    "publish",
+    "personal installer execution",
+    "PyQt removal",
+    "Point17",
+    "new full native/package build during closure",
+    "full product/release acceptance"
+  ],
+  "recipe_only_delta": {
+    "compiled_executable_source_sha256": "44717c6c938d74884e1c017c52eda54bec640f60b97c0266700c91aaf75ee360",
+    "source_sha256": "914e801a380d87449988a81ffc7320feb6da512ebb592b8e84606fcd19adc1ce",
+    "changed_paths": [
+      "scripts/build_tauri_release.ps1"
+    ],
+    "scope": "Only canonical child smoke environment isolation changed; all compiled GUI/Core/assets/config inputs match the previously compiled and user-accepted source. No GUI/Core rebuild or broad retest is warranted.",
+    "artifact": ".codex-local/ux-6/package-recipe-delta.json"
+  },
+  "package": {
+    "source_sha256": "914e801a380d87449988a81ffc7320feb6da512ebb592b8e84606fcd19adc1ce",
+    "compiled_executable_source_sha256": "44717c6c938d74884e1c017c52eda54bec640f60b97c0266700c91aaf75ee360",
+    "artifacts": [
+      {
+        "bytes": 357245939,
+        "sha256": "f951eb43946891e1d47bbfe1b15486850f257110646cc57e1259db687cf3a5a8",
+        "name": "SmartiAI-Agent-for-Windows-0.87.0-Setup.exe"
+      },
+      {
+        "bytes": 514275160,
+        "sha256": "b0b8d44b47f5a854f6d65774532ef96d6af10c02c7fa5c7f7bb6ebaa4b20c11d",
+        "name": "SmartiAI-Agent-for-Windows-0.87.0-win-x64-portable.zip"
+      }
+    ],
+    "updaterSigned": false,
+    "authenticode": "NotSigned",
+    "smokes": {
+      "supervisor": true,
+      "browser": true,
+      "passed": true
+    },
+    "recipe_overrides": [
+      "unsigned local artifacts",
+      "NSIS zlib compression for local QA only; production default unchanged"
+    ],
+    "matches_current_candidate": false,
+    "scope": "unsigned local NSIS/portable; no installation; raw report in owned ASCII build checkout. If source differs, this is retained prior-artifact evidence, not current voice candidate packaging."
+  },
+  "reviewed_source_recipe_delta": {
+    "reviewed_source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+    "source_sha256": "286a2271476983c34064597c04ef2738dddbbc8165e71a8781dc23f4f29ea693",
+    "projected_source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+    "added_paths": [
+      "scripts/build_and_package.ps1",
+      "scripts/prepare_tauri_package.py",
+      "scripts/tauri_source_manifest.py"
+    ],
+    "previous_input_hashes": {
+      "scripts/build_tauri_release.ps1": "c12cf527b3363e2a6e679c0714e002540f8aad915cd100717fda9bb529f6def0"
+    },
+    "scope": "Exact raw-byte projection to the reviewed post-Composer source: only the universal orchestration, version-copy helper, neutral source hasher and canonical compression/download-cache recipe changed. GUI/Core/Rust/assets/config inputs remain those reviewed at7978d6c2. This is source attribution, not a new native/package run."
+  },
+  "central_review": {
+    "stage_status": "ACCEPTANCE_PENDING",
+    "design_decision": "D58",
+    "source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+    "previous_source_sha256": "914e801a380d87449988a81ffc7320feb6da512ebb592b8e84606fcd19adc1ce",
+    "changed_executable_inputs": [
+      "desktop/src/Composer.tsx"
+    ],
+    "product_delta": "Composer height only: ignore placeholder height for empty input, reset before measuring real draft, recompute on width change; observer disconnects on cleanup. Shared CSS minimum64px and maximum150px, tokens, actions and persistence retained.",
+    "frontend_full": {
+      "passed": 329,
+      "files": 47,
+      "command": "npm.cmd run test -- --maxWorkers=1",
+      "seconds": 260.5,
+      "scope": "Run started before the last Composer size edit. Not a frozen post-edit full-suite claim; the final Composer delta has separate focused and rendered-browser evidence."
+    },
+    "frontend_delta": {
+      "passed": 14,
+      "files": 2,
+      "command": "npm.cmd run test -- src/composerModels.test.tsx src/composerAttachments.test.tsx --maxWorkers=1",
+      "seconds": 15.48,
+      "source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644"
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "npm.cmd run typecheck",
+      "source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644"
+    },
+    "python": {
+      "passed": 19,
+      "command": "python -m unittest tests.test_ux6_acceptance tests.test_speech",
+      "seconds": 6.717,
+      "scope": "Isolated tests imported before Smarti; 15 speech plus four acceptance-verifier tests. No fresh full Python suite."
+    },
+    "composer_browser": {
+      "passed_cases": 4,
+      "source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+      "artifact": ".codex-local/ux-6/central/composer-size.json",
+      "sha256": "7d026e2527c468676b056a754915957e1a3e1caf4ddf01c79e15903e9f44f1b7",
+      "scope": "Real Composer in isolated DEV fixture, Edge headless, light/dark and narrow/wide. Initial narrow mount, same-draft width changes, long/cleared input and action containment. No Tauri/Windows DPI/package claim."
+    },
+    "manual_scaling_accessibility": {
+      "status": "PASS",
+      "reported_by": "user in central review",
+      "answer": "כן, בדקתי גם את כולם והם תקינים",
+      "windows_scale_percent": [
+        100,
+        150,
+        200
+      ],
+      "text_enlargement": true,
+      "spoken_screen_reader": true,
+      "candidate_scope": "Earlier UX6 user trial; exact binary/per-scale receipt not supplied. 125% automated native evidence is separate. Not a claim that the newly corrected Composer is already in the earlier executable."
+    },
+    "prior_package_review": {
+      "source_sha256": "914e801a380d87449988a81ffc7320feb6da512ebb592b8e84606fcd19adc1ce",
+      "installer_and_zip_hashes_and_sizes_verified": true,
+      "supervisor_smoke": true,
+      "browser_smoke": true,
+      "matches_current_candidate": false,
+      "scope": "Existing unsigned local artifacts are valid for their own source. No installer execution or new package build by this review."
+    },
+    "build_helper": {
+      "path": "scripts/build_ux6_package.ps1",
+      "invocation": "pwsh -NoProfile -File .\\scripts\\build_ux6_package.ps1 -Fresh",
+      "syntax_checked": true,
+      "executed": false,
+      "scope": "Fresh ASCII snapshot and new private data/work directories; preserve prior manifest/artifacts; canonical installer/ZIP and package smokes. Source identity attached to successful package manifest."
+    },
+    "decision": "Do not create the conditional completion commit: latest requested fix was unfinished, now corrected in source but not yet present in a matching package. Preserve formal coverage gaps and separate release/installation scope; no further broad/manual voice retest requested.",
+    "artifact": "docs/ux6_central_review.json"
+  },
+  "central_closure": {
+    "date": "2026-10-06",
+    "plan": "SMARTI-UI-UX-2026",
+    "decision": "UX-D61",
+    "scope": "source-and-accepted-ui",
+    "result": "PASS",
+    "source_sha256": "286a2271476983c34064597c04ef2738dddbbc8165e71a8781dc23f4f29ea693",
+    "user_authorized_closure": true,
+    "authorization": "Current central-chat request to create completion commit, summarize the project, preserve the mutable design default and provide a reusable self-run build/package script. Earlier instruction that the user runs the actual package build is retained.",
+    "interpretation": "Close the accepted design/source implementation project. Do not claim every product/platform/release evidence level has passed or that the latest source already has a matching package.",
+    "pending_evidence_levels": 118,
+    "release_accepted": false,
+    "reviewed_source_recipe_delta": {
+      "reviewed_source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+      "source_sha256": "286a2271476983c34064597c04ef2738dddbbc8165e71a8781dc23f4f29ea693",
+      "projected_source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+      "added_paths": [
+        "scripts/build_and_package.ps1",
+        "scripts/prepare_tauri_package.py",
+        "scripts/tauri_source_manifest.py"
+      ],
+      "previous_input_hashes": {
+        "scripts/build_tauri_release.ps1": "c12cf527b3363e2a6e679c0714e002540f8aad915cd100717fda9bb529f6def0"
+      },
+      "scope": "Exact raw-byte projection to the reviewed post-Composer source: only the universal orchestration, version-copy helper, neutral source hasher and canonical compression/download-cache recipe changed. GUI/Core/Rust/assets/config inputs remain those reviewed at7978d6c2. This is source attribution, not a new native/package run."
+    },
+    "packaging_checks": {
+      "passed": 11,
+      "seconds": 7.032,
+      "command": "python -m unittest tests.test_tauri_packaging tests.test_ux6_acceptance -v",
+      "artifact": ".codex-local/ux-6/central/universal-packaging-checks.log",
+      "sha256": "a1fcf68253e9966bc4b796b49a8e1bc90b0f086e353e70036b02c767e1a996bf",
+      "scope": "Six isolated version/orchestration tests plus five acceptance-verifier tests. Actual PowerShell PrepareOnly and mock canonical builder emitting text payloads; no compilation, executable launch, installer or real package proof."
+    },
+    "web_build": {
+      "passed": true,
+      "command": "npm.cmd run build",
+      "seconds": 36.63,
+      "scope": "TypeScript and production Vite frontend bundle passed after Composer correction. Existing chunks above500kB remain a warning. No native Core/Rust/NSIS or installer build."
+    },
+    "accepted_user_trial": "Voice function and refinements, Windows100/150/200%, enlarged text and spoken screen reader accepted at their recorded prior trial scopes. No repeated broad voice/scale matrix requested.",
+    "historical_review": "docs/ux6_central_review.json",
+    "pending_package": "Existing unsigned installer/portable ZIP remains valid for914e801a, before final Composer correction. User may build the current frozen source with scripts/build_and_package.ps1; review its exact output hashes and canonical smokes separately.",
+    "separate_scope": [
+      "strict per-action browser/Windows/package evidence map",
+      "unproved original blank-screen cause and earlier recovered startup stall",
+      "defined real-provider/external MCP/SSL/Office/extra-monitor trials",
+      "clean-machine install/upgrade/uninstall",
+      "publisher/updater signing and release",
+      "overall Tauri migration Point17/PyQt removal"
+    ],
+    "design_default": "D58 and plan2.1: shared components/tokens are the ongoing default; a task deliberately changing shared rules may update them centrally with recorded scope/reason. Rules are mutable; unrelated features do not create competing button styles.",
+    "artifact": "docs/ux6_closure.json"
+  },
+  "stage_scope": "source-and-accepted-ui; strict all-level product/release acceptance remains separate"
+}

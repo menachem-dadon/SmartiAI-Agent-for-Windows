@@ -1,0 +1,3059 @@
+{
+  "schema_version": 1,
+  "base_commit": "6e13caf235d816c243cdbfc843e597d28964c767",
+  "design_decision": "D58",
+  "stage_status": "COMPLETE",
+  "capabilities": [
+    {
+      "id": "SHL-001",
+      "action": "One-click GUI launch without console",
+      "authority": "App/WindowTitleBar -> Rust window/Core legal/theme",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SHL-002",
+      "action": "First-run legal agreement and splash",
+      "authority": "App/WindowTitleBar -> Rust window/Core legal/theme",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SHL-003",
+      "action": "Central RTL chat surface",
+      "authority": "App/WindowTitleBar -> Rust window/Core legal/theme",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SHL-004",
+      "action": "Right collapsible conversation drawer",
+      "authority": "App/WindowTitleBar -> Rust window/Core legal/theme",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SHL-005",
+      "action": "Empty-on-start left Workbench",
+      "authority": "App/WindowTitleBar -> Rust window/Core legal/theme",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SHL-006",
+      "action": "Narrow/wide responsive Workspace",
+      "authority": "App/WindowTitleBar -> Rust window/Core legal/theme",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SHL-007",
+      "action": "Light/dark/system theme",
+      "authority": "App/WindowTitleBar -> Rust window/Core legal/theme",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SHL-008",
+      "action": "RTL with LTR technical islands",
+      "authority": "App/WindowTitleBar -> Rust window/Core legal/theme",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SHL-009",
+      "action": "Custom titlebar/window controls",
+      "authority": "App/WindowTitleBar -> Rust window/Core legal/theme",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CHT-001",
+      "action": "New conversation and active title",
+      "authority": "RichMessage/App -> Core messages/events/models",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "chatState, chatUi, MessageTable, speechPlayback frontend tests; test_conversation_runs and test_api_provider_runtime",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CHT-002",
+      "action": "Safe Markdown and links",
+      "authority": "RichMessage/App -> Core messages/events/models",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "chatState, chatUi, MessageTable, speechPlayback frontend tests; test_conversation_runs and test_api_provider_runtime",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CHT-003",
+      "action": "Code copy/download/wrap/scroll",
+      "authority": "RichMessage/App -> Core messages/events/models",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "chatState, chatUi, MessageTable, speechPlayback frontend tests; test_conversation_runs and test_api_provider_runtime",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CHT-004",
+      "action": "Mixed user/assistant RTL alignment",
+      "authority": "RichMessage/App -> Core messages/events/models",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "chatState, chatUi, MessageTable, speechPlayback frontend tests; test_conversation_runs and test_api_provider_runtime",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CHT-005",
+      "action": "Tool/thinking progress groups",
+      "authority": "RichMessage/App -> Core messages/events/models",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "chatState, chatUi, MessageTable, speechPlayback frontend tests; test_conversation_runs and test_api_provider_runtime",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CHT-006",
+      "action": "Message copy/read-aloud/actions",
+      "authority": "RichMessage/App -> Core messages/events/models",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "chatState, chatUi, MessageTable, speechPlayback frontend tests; test_conversation_runs and test_api_provider_runtime",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CHT-007",
+      "action": "Long history paging and virtualization boundary",
+      "authority": "RichMessage/App -> Core messages/events/models",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "chatState, chatUi, MessageTable, speechPlayback frontend tests; test_conversation_runs and test_api_provider_runtime",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CHT-008",
+      "action": "Model/provider selector",
+      "authority": "RichMessage/App -> Core messages/events/models",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "chatState, chatUi, MessageTable, speechPlayback frontend tests; test_conversation_runs and test_api_provider_runtime",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CMP-001",
+      "action": "Multiline composer and keyboard send",
+      "authority": "Composer -> Core runs/cancel/voice",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "composerModels, composerAttachments, chatUi frontend contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CMP-002",
+      "action": "Send/cancel/microphone state",
+      "authority": "Composer -> Core runs/cancel/voice",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "composerModels, composerAttachments, chatUi frontend contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CMP-003",
+      "action": "Plus/action menu",
+      "authority": "Composer -> Core runs/cancel/voice",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "composerModels, composerAttachments, chatUi frontend contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "ATT-001",
+      "action": "File picker, drag/drop, paste",
+      "authority": "Composer -> Rust stage_attachment -> Core attachments",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Real provider/account/hardware/Windows dialog/scale or application selection is required; see user checklist.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_attachments15 and composerAttachments; native picker is separate",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "ATT-002",
+      "action": "Pending previews and per-item removal",
+      "authority": "Composer -> Rust stage_attachment -> Core attachments",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_attachments15 and composerAttachments; native picker is separate",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "ATT-003",
+      "action": "Sent attachment metadata/provider validation",
+      "authority": "Composer -> Rust stage_attachment -> Core attachments",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_attachments15 and composerAttachments; native picker is separate",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "HIS-001",
+      "action": "Conversation list/search",
+      "authority": "ChatSidebar -> Core conversations",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_history_sqlite6, test_conversation_runs and conversationAttention",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "HIS-002",
+      "action": "Rename/delete/pin",
+      "authority": "ChatSidebar -> Core conversations",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_history_sqlite6, test_conversation_runs and conversationAttention",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "HIS-003",
+      "action": "Session/message SQLite migration",
+      "authority": "ChatSidebar -> Core conversations",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_history_sqlite6, test_conversation_runs and conversationAttention",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "RUN-001",
+      "action": "One run at a time per conversation",
+      "authority": "App/chatState -> Core run_manager",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_runs33, test_background_routing6, conversationAttention and agentThinking",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "RUN-002",
+      "action": "Independent conversations run concurrently",
+      "authority": "App/chatState -> Core run_manager",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_runs33, test_background_routing6, conversationAttention and agentThinking",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "RUN-003",
+      "action": "Queue/cancel/interruption/recovery",
+      "authority": "App/chatState -> Core run_manager",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_runs33, test_background_routing6, conversationAttention and agentThinking",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "RUN-004",
+      "action": "Durable ordered events and UI replay",
+      "authority": "App/chatState -> Core run_manager",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_runs33, test_background_routing6, conversationAttention and agentThinking",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "RUN-005",
+      "action": "Run-local provider/model/settings binding",
+      "authority": "App/chatState -> Core run_manager",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_runs33, test_background_routing6, conversationAttention and agentThinking",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "RUN-006",
+      "action": "Durable attention separate from run state",
+      "authority": "App/chatState -> Core run_manager",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_runs33, test_background_routing6, conversationAttention and agentThinking",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "APR-001",
+      "action": "Durable approval request/resolve/deny",
+      "authority": "ConversationApprovals -> Core approvals/secrets",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_approvals8, test_api_provider_runtime33 and conversationApprovals",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "APR-002",
+      "action": "API-key-required interruption",
+      "authority": "ConversationApprovals -> Core approvals/secrets",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_approvals8, test_api_provider_runtime33 and conversationApprovals",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "GAT-001",
+      "action": "Authenticated loopback `/v1` gateway",
+      "authority": "coreApi -> authenticated Rust proxy -> Core",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_runs authenticated/idempotent API and durable event contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "GAT-002",
+      "action": "Idempotent message submission",
+      "authority": "coreApi -> authenticated Rust proxy -> Core",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_runs authenticated/idempotent API and durable event contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "GAT-003",
+      "action": "Sessions/runs/events/cancel/approvals/receipts",
+      "authority": "coreApi -> authenticated Rust proxy -> Core",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_conversation_runs authenticated/idempotent API and durable event contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SET-001",
+      "action": "Searchable settings/navigation",
+      "authority": "SettingsManagement -> Core settings/secrets",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_settings_sync11, test_ssl_trust22, settingsSync, settingsLoading, ProviderPicker and ux5Management",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SET-002",
+      "action": "Autosave/default/migration validation",
+      "authority": "SettingsManagement -> Core settings/secrets",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_settings_sync11, test_ssl_trust22, settingsSync, settingsLoading, ProviderPicker and ux5Management",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SET-003",
+      "action": "Provider/model discovery and validation",
+      "authority": "SettingsManagement -> Core settings/secrets",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Real provider/account/hardware/Windows dialog/scale or application selection is required; see user checklist.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_settings_sync11, test_ssl_trust22, settingsSync, settingsLoading, ProviderPicker and ux5Management",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SET-004",
+      "action": "Masked secret set/paste/delete",
+      "authority": "SettingsManagement -> Core settings/secrets",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Real provider/account/hardware/Windows dialog/scale or application selection is required; see user checklist.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_settings_sync11, test_ssl_trust22, settingsSync, settingsLoading, ProviderPicker and ux5Management",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SET-005",
+      "action": "SSL system/custom/legacy trust modes",
+      "authority": "SettingsManagement -> Core settings/secrets",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_settings_sync11, test_ssl_trust22, settingsSync, settingsLoading, ProviderPicker and ux5Management",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SET-006",
+      "action": "Autonomy/policy/sandbox controls",
+      "authority": "SettingsManagement -> Core settings/secrets",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_settings_sync11, test_ssl_trust22, settingsSync, settingsLoading, ProviderPicker and ux5Management",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "SET-007",
+      "action": "Appearance/voice/notification/update preferences",
+      "authority": "SettingsManagement -> Core settings/secrets",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_settings_sync11, test_ssl_trust22, settingsSync, settingsLoading, ProviderPicker and ux5Management",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "MGT-001",
+      "action": "Management center navigation",
+      "authority": "ManagementCenter -> original page handlers",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "managementFocus, popupDismissal, ux5Management and settingsSync",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "USE-001",
+      "action": "Usage/cost cached first paint and refresh",
+      "authority": "UsageView -> Core usage",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_usage_stats18 and UsageView",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "MEM-001",
+      "action": "Automatic memory capture/retrieval",
+      "authority": "MemoryManagement -> encrypted Core memory store",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_memory_management29, test_memory_profile_policy5 and test_memory_quality_v2_11",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "MEM-002",
+      "action": "Memory CRUD/filter/archive/restore",
+      "authority": "MemoryManagement -> encrypted Core memory store",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_memory_management29, test_memory_profile_policy5 and test_memory_quality_v2_11",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "MEM-003",
+      "action": "Encryption/masking/sensitivity/reveal policy",
+      "authority": "MemoryManagement -> encrypted Core memory store",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_memory_management29, test_memory_profile_policy5 and test_memory_quality_v2_11",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TSK-001",
+      "action": "Task create/edit/pause/resume/delete",
+      "authority": "TasksView -> Core dedicated background tasks",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_background_routing6 and TasksView; recurrence contract tests",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TSK-002",
+      "action": "Current/new/dedicated conversation routing",
+      "authority": "TasksView -> Core dedicated background tasks",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_background_routing6 and TasksView; recurrence contract tests",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TSK-003",
+      "action": "Recurrence, catch-up and recovery",
+      "authority": "TasksView -> Core dedicated background tasks",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_background_routing6 and TasksView; recurrence contract tests",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TOL-001",
+      "action": "Built-in tool catalog and lazy schemas",
+      "authority": "ToolsView -> Core extensions/policy",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_doctor34, test_file_manager25 and actual isolated local integration report; no external package connection claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TOL-002",
+      "action": "Custom Python tools",
+      "authority": "ToolsView -> Core extensions/policy",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_doctor34, test_file_manager25 and actual isolated local integration report; no external package connection claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TOL-003",
+      "action": "MCP config/install/trust/private Node",
+      "authority": "ToolsView -> Core extensions/policy",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_doctor34, test_file_manager25 and actual isolated local integration report; no external package connection claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TOL-004",
+      "action": "Skills registry/load/install/trust",
+      "authority": "ToolsView -> Core extensions/policy",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_doctor34, test_file_manager25 and actual isolated local integration report; no external package connection claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "DIA-001",
+      "action": "Doctor checks and approved repairs",
+      "authority": "Diagnostics/Logs -> Core + Rust",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_doctor34 and test_logging_export_and_windows_ui19",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "DIA-002",
+      "action": "Developer trace and unified logs",
+      "authority": "Diagnostics/Logs -> Core + Rust",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_doctor34 and test_logging_export_and_windows_ui19",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "DIA-003",
+      "action": "Privacy-filtered diagnostic export",
+      "authority": "Diagnostics/Logs -> Core + Rust",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_doctor34 and test_logging_export_and_windows_ui19",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "ABT-001",
+      "action": "About/legal/version/runtime state",
+      "authority": "About/LegalAgreement -> Core legal",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "ux5Management legal text/version and test_settings_sync",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "FIL-001",
+      "action": "Scoped workspace root",
+      "authority": "WorkbenchFiles -> Core scope/read -> Rust pick/save/open",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_workspace18, test_document_manager16, WorkbenchFilesPicker and WorkbenchPanels; no Office GUI claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "FIL-002",
+      "action": "RTL tree right, preview left",
+      "authority": "WorkbenchFiles -> Core scope/read -> Rust pick/save/open",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_workspace18, test_document_manager16, WorkbenchFilesPicker and WorkbenchPanels; no Office GUI claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "FIL-003",
+      "action": "Text/Markdown/image/media previews",
+      "authority": "WorkbenchFiles -> Core scope/read -> Rust pick/save/open",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_workspace18, test_document_manager16, WorkbenchFilesPicker and WorkbenchPanels; no Office GUI claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "FIL-004",
+      "action": "PDF/Office rendered previews",
+      "authority": "WorkbenchFiles -> Core scope/read -> Rust pick/save/open",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Real provider/account/hardware/Windows dialog/scale or application selection is required; see user checklist.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_workspace18, test_document_manager16, WorkbenchFilesPicker and WorkbenchPanels; no Office GUI claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "FIL-005",
+      "action": "Path/reparse/size/MIME safety",
+      "authority": "WorkbenchFiles -> Core scope/read -> Rust pick/save/open",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_workspace18, test_document_manager16, WorkbenchFilesPicker and WorkbenchPanels; no Office GUI claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "ART-001",
+      "action": "Artifact discovery/open/refresh",
+      "authority": "WorkbenchArtifacts -> Core artifacts + Rust",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "WorkbenchArtifacts and test_workspace",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TRM-001",
+      "action": "Multiple PowerShell tabs",
+      "authority": "WorkbenchTerminal -> Core PowerShell process",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_workspace and workbenchLifecycle; actual Core terminal integration",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TRM-002",
+      "action": "Stream/input/restart/cwd/cancel/cleanup",
+      "authority": "WorkbenchTerminal -> Core PowerShell process",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_workspace and workbenchLifecycle; actual Core terminal integration",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CAN-001",
+      "action": "Persisted validated Canvas schema",
+      "authority": "CanvasPanel -> Core source-chat/CSP",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_visual_canvas12 and CanvasPanel",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CAN-002",
+      "action": "HTML/image/button rendering and positions",
+      "authority": "CanvasPanel -> Core source-chat/CSP",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_visual_canvas12 and CanvasPanel",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CAN-003",
+      "action": "Remote-image opt-in and local materialization",
+      "authority": "CanvasPanel -> Core source-chat/CSP",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_visual_canvas12 and CanvasPanel",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "CAN-004",
+      "action": "Repeated Canvas tabs/history/context",
+      "authority": "CanvasPanel -> Core source-chat/CSP",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_visual_canvas12 and CanvasPanel",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "BRW-001",
+      "action": "Integrated visible Chromium/Edge surface",
+      "authority": "BrowserPanel -> Rust BrowserBroker/WebView2",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "browserState, BrowserPanel, browserViewport, useNativeBrowserSurface and Rust browser safety contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "BRW-002",
+      "action": "Visible target equals CDP automation target",
+      "authority": "BrowserPanel -> Rust BrowserBroker/WebView2",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "browserState, BrowserPanel, browserViewport, useNativeBrowserSurface and Rust browser safety contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "BRW-003",
+      "action": "Persistent and Guest profile isolation",
+      "authority": "BrowserPanel -> Rust BrowserBroker/WebView2",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "browserState, BrowserPanel, browserViewport, useNativeBrowserSurface and Rust browser safety contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "BRW-004",
+      "action": "Copy-based profile import; no passwords",
+      "authority": "BrowserPanel -> Rust BrowserBroker/WebView2",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "browserState, BrowserPanel, browserViewport, useNativeBrowserSurface and Rust browser safety contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "BRW-005",
+      "action": "Navigation/address/find/zoom/toolbar",
+      "authority": "BrowserPanel -> Rust BrowserBroker/WebView2",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "browserState, BrowserPanel, browserViewport, useNativeBrowserSurface and Rust browser safety contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "BRW-006",
+      "action": "History/bookmarks/downloads/screenshots",
+      "authority": "BrowserPanel -> Rust BrowserBroker/WebView2",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "browserState, BrowserPanel, browserViewport, useNativeBrowserSurface and Rust browser safety contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "BRW-007",
+      "action": "Device/user-agent/clear/open/preferences",
+      "authority": "BrowserPanel -> Rust BrowserBroker/WebView2",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "browserState, BrowserPanel, browserViewport, useNativeBrowserSurface and Rust browser safety contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "BRW-008",
+      "action": "Repeated Browser tabs and cleanup",
+      "authority": "BrowserPanel -> Rust BrowserBroker/WebView2",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "browserState, BrowserPanel, browserViewport, useNativeBrowserSurface and Rust browser safety contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "BRW-009",
+      "action": "Private-host/network policy",
+      "authority": "BrowserPanel -> Rust BrowserBroker/WebView2",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "browserState, BrowserPanel, browserViewport, useNativeBrowserSurface and Rust browser safety contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "VOC-001",
+      "action": "Voice capture/listening overlay/cancel",
+      "authority": "Composer/VoiceOverlay -> Core audio + Rust shortcut",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Dictation function and refinements already accepted at recorded prior sources. Only Composer sizing changed; no repeated voice trial requested. Matching post-correction native/package candidate remains pending.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "15 speech/recognition tests, nine focused Composer/overlay tests, current native creation and assisted trial; global shortcut is a separate scope",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json",
+        "docs/ux6_assisted_acceptance.json",
+        "docs/ux6_central_review.json"
+      ]
+    },
+    {
+      "id": "VOC-002",
+      "action": "Global voice hotkey",
+      "authority": "Composer/VoiceOverlay -> Core audio + Rust shortcut",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Real provider/account/hardware/Windows dialog/scale or application selection is required; see user checklist.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "15 speech/recognition tests, nine focused Composer/overlay tests, current native creation and assisted trial; global shortcut is a separate scope",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "TTS-001",
+      "action": "TTS voice/volume/play/stop/read-aloud",
+      "authority": "useSpeechPlayback -> Core speech",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Real provider/account/hardware/Windows dialog/scale or application selection is required; see user checklist.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_speech13 and speechPlayback idle/status/owner regressions; actual audio is separate",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "WIN-001",
+      "action": "Single instance and second-launch routing",
+      "authority": "WindowTitleBar -> Rust Windows integration",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_notification_policy12, test_logging_export_and_windows_ui19, WindowTitleBar and Rust31 contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "WIN-002",
+      "action": "Tray, close-to-tray, explicit quit",
+      "authority": "WindowTitleBar -> Rust Windows integration",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_notification_policy12, test_logging_export_and_windows_ui19, WindowTitleBar and Rust31 contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "WIN-003",
+      "action": "Native notifications and activation routing",
+      "authority": "WindowTitleBar -> Rust Windows integration",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Real provider/account/hardware/Windows dialog/scale or application selection is required; see user checklist.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_notification_policy12, test_logging_export_and_windows_ui19, WindowTitleBar and Rust31 contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "WIN-004",
+      "action": "Taskbar unread count/flash/ack semantics",
+      "authority": "WindowTitleBar -> Rust Windows integration",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_notification_policy12, test_logging_export_and_windows_ui19, WindowTitleBar and Rust31 contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "WIN-005",
+      "action": "AUMID/manifest/rounded corners",
+      "authority": "WindowTitleBar -> Rust Windows integration",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_notification_policy12, test_logging_export_and_windows_ui19, WindowTitleBar and Rust31 contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "WIN-006",
+      "action": "DPI/multi-monitor window restore",
+      "authority": "WindowTitleBar -> Rust Windows integration",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Real provider/account/hardware/Windows dialog/scale or application selection is required; see user checklist.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_notification_policy12, test_logging_export_and_windows_ui19, WindowTitleBar and Rust31 contracts",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UPD-001",
+      "action": "GitHub update discovery/version selection",
+      "authority": "UpdateControls -> Core discovery + signed Tauri updater",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_update_discovery9 and updates; no online update download/install",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UPD-002",
+      "action": "Installer/portable asset selection and digest",
+      "authority": "UpdateControls -> Core discovery + signed Tauri updater",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "test_update_discovery9 and updates; no online update download/install",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "PKG-001",
+      "action": "Tauri GUI with Qt-free PyInstaller Core sidecar",
+      "authority": "Canonical scripts/build_tauri_release.ps1 and packaging/smarti-core.spec; personal install not authorized",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "package"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "package": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "baseline_action": "PyInstaller `onedir` GUI application",
+      "source_coverage": "Current source/config review, compiled GUI/Core and canonical smoke child environment; exact artifact/runtime/notices proofs in summary; no clean-machine install claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "PKG-002",
+      "action": "Writable private Python and Node runtimes",
+      "authority": "build_tauri_release -> Core/runtime/NSIS/portable",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "package"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "package": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "Current source/config review, compiled GUI/Core and canonical smoke child environment; exact artifact/runtime/notices proofs in summary; no clean-machine install claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "PKG-003",
+      "action": "Per-user NSIS installer, unsigned local QA artifact only",
+      "authority": "Canonical scripts/build_tauri_release.ps1 and packaging/smarti-core.spec; personal install not authorized",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "package"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "package": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "baseline_action": "Per-user Inno installer",
+      "source_coverage": "Current source/config review, compiled GUI/Core and canonical smoke child environment; exact artifact/runtime/notices proofs in summary; no clean-machine install claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "PKG-004",
+      "action": "Portable ZIP",
+      "authority": "build_tauri_release -> Core/runtime/NSIS/portable",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "package"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "package": {
+          "status": "OPEN",
+          "gap": "Per-action Windows or package proof still required; preserved functional source checks and prior native evidence are not substituted for it.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "Current source/config review, compiled GUI/Core and canonical smoke child environment; exact artifact/runtime/notices proofs in summary; no clean-machine install claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "PKG-005",
+      "action": "Clean-machine/install/upgrade/uninstall smoke",
+      "authority": "build_tauri_release -> Core/runtime/NSIS/portable",
+      "owner": "agent + central review",
+      "required_levels": [
+        "source",
+        "package"
+      ],
+      "results": {
+        "source": {
+          "status": "OUT_OF_SCOPE",
+          "gap": "No clean VM/install/upgrade/uninstall target authorized; personal installation prohibited.",
+          "evidence": []
+        },
+        "package": {
+          "status": "OUT_OF_SCOPE",
+          "gap": "No clean VM/install/upgrade/uninstall target authorized; personal installation prohibited.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "Current source/config review, compiled GUI/Core and canonical smoke child environment; exact artifact/runtime/notices proofs in summary; no clean-machine install claim",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-LOAD",
+      "action": "fresh load/reload/HMR/hidden/relaunch; built frontend stability",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "agent",
+      "required_levels": [
+        "browser",
+        "windows"
+      ],
+      "results": {
+        "browser": {
+          "status": "OPEN",
+          "gap": "Original UX5 blank root and one built startup stall have no proved cause. Prior dev/HMR/relaunch evidence and final deliberate recovery are retained separately.",
+          "evidence": []
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Original UX5 blank root and one built startup stall have no proved cause. Prior dev/HMR/relaunch evidence and final deliberate recovery are retained separately.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-A11Y",
+      "action": "keyboard/focus/Escape/composed contrast/real screen reader",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "agent + user",
+      "required_levels": [
+        "source",
+        "browser",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "browser": {
+          "status": "OPEN",
+          "gap": "User explicitly confirmed spoken screen reader and Windows text enlargement in the earlier UX6 trial. Keep the exact scope in central review; final Composer source/browser correction is not yet in a matching native/package candidate. No broad repeat requested.",
+          "evidence": []
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "User explicitly confirmed spoken screen reader and Windows text enlargement in the earlier UX6 trial. Keep the exact scope in central review; final Composer source/browser correction is not yet in a matching native/package candidate. No broad repeat requested.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json",
+        "docs/ux6_assisted_acceptance.json",
+        "docs/ux6_central_review.json"
+      ]
+    },
+    {
+      "id": "UX6-DPI",
+      "action": "Windows 100/125/150/200% and text scaling",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "user + agent",
+      "required_levels": [
+        "windows"
+      ],
+      "results": {
+        "windows": {
+          "status": "OPEN",
+          "gap": "Actual125% HWND measured; user explicitly confirmed Windows100/150/200% in the earlier trial. Current Composer correction is independently browser tested. Prior scale acceptance is retained, not relabeled as a new native run; extra monitor remains separate scope.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json",
+        "docs/ux6_assisted_acceptance.json",
+        "docs/ux6_central_review.json"
+      ]
+    },
+    {
+      "id": "UX6-PERF",
+      "action": "200/1000 messages; opening/response/scroll/transitions/CPU/RAM/rAF",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "agent",
+      "required_levels": [
+        "browser",
+        "windows"
+      ],
+      "results": {
+        "browser": {
+          "status": "OPEN",
+          "gap": "Prior built-source measurements are in the summary with exact provenance. No further broad performance repeat after final startup-only delta, per user request; real provider latency still unmeasured.",
+          "evidence": []
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Prior built-source measurements are in the summary with exact provenance. No further broad performance repeat after final startup-only delta, per user request; real provider latency still unmeasured.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-OWNERS",
+      "action": "drafts/scroll/approval/697px/session tabs/browser/Canvas/terminal; background while hidden",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "agent",
+      "required_levels": [
+        "source",
+        "browser",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "browser": {
+          "status": "OPEN",
+          "gap": "Prior16/26 native checks retained. Final candidate proves ordinary reload draft/Core retention only; full native approvals and all owner contexts remain acceptance review.",
+          "evidence": []
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Prior16/26 native checks retained. Final candidate proves ordinary reload draft/Core retention only; full native approvals and all owner contexts remain acceptance review.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-MOTION",
+      "action": "cancel/reverse/live reduced-motion/final native bounds",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "agent",
+      "required_levels": [
+        "source",
+        "browser",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "browser": {
+          "status": "OPEN",
+          "gap": "Prior actual native child bounds/reversal/live reduce passed26. Final browser motion passed; final native candidate is not relabeled as that prior binary.",
+          "evidence": []
+        },
+        "windows": {
+          "status": "OPEN",
+          "gap": "Prior actual native child bounds/reversal/live reduce passed26. Final browser motion passed; final native candidate is not relabeled as that prior binary.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-ACCOUNT",
+      "action": "real provider/key/login/quota",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "user",
+      "required_levels": [
+        "windows"
+      ],
+      "results": {
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "User chooses test provider and enters/login themselves in private QA. Real quota and conversation pending.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-AUDIO",
+      "action": "actual microphone/transcription/TTS/global hotkey/tray",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "user + agent",
+      "required_levels": [
+        "windows"
+      ],
+      "results": {
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Dictation failure corrected and all three function checks plus three requested refinements accepted by user. General positive trial retained. Exact global-shortcut/TTS/tray action details remain unspecified; no further voice retest requested.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-SSL",
+      "action": "localhost TLS trusted CA, rejected untrusted, no global insecure mode",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "agent",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Localhost trust/rejection contracts pass in source. Actual Windows system trust/custom CA import pending user; no global insecure setting.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-TOOLS",
+      "action": "actual isolated custom/MCP/Skill install/trust/remove",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "agent",
+      "required_levels": [
+        "source",
+        "windows"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Actual local Python/Skill install/trust/remove and unpinned MCP rejection tested through Core; external pinned MCP install/connection/permissions pending defined test target.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-DOCS",
+      "action": "native PDF/Office/save/file chooser/Open With application selection",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "user + agent",
+      "required_levels": [
+        "windows"
+      ],
+      "results": {
+        "windows": {
+          "status": "NEEDS_USER",
+          "gap": "Real PDF bytes verified. Office display/system file dialogs/save/Open With actual application selection need user.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    },
+    {
+      "id": "UX6-PACKAGE",
+      "action": "current source/built/portable artifact version/hash/signature/licenses",
+      "authority": "SMARTI-UI-UX-2026 §13 + ledger §39; original Core/Rust paths",
+      "owner": "agent",
+      "required_levels": [
+        "source",
+        "package"
+      ],
+      "results": {
+        "source": {
+          "status": "PASS",
+          "evidence": [
+            "source-contract-review"
+          ]
+        },
+        "package": {
+          "status": "OPEN",
+          "gap": "Existing unsigned local installer/ZIP and canonical smoke include accepted voice refinements but precede the final Composer-size correction. Matching corrected package is pending user-run build. Installation/signing/release are separate scope.",
+          "evidence": []
+        }
+      },
+      "source_coverage": "See final delta/source contracts in evidence summary",
+      "partial_evidence": [
+        "docs/ux6_evidence_summary.json"
+      ]
+    }
+  ],
+  "evidence": {
+    "source-contract-review": {
+      "level": "source",
+      "result": "PASS",
+      "source_sha256": "286a2271476983c34064597c04ef2738dddbbc8165e71a8781dc23f4f29ea693",
+      "capabilities": [
+        "SHL-001",
+        "SHL-002",
+        "SHL-003",
+        "SHL-004",
+        "SHL-005",
+        "SHL-006",
+        "SHL-007",
+        "SHL-008",
+        "SHL-009",
+        "CHT-001",
+        "CHT-002",
+        "CHT-003",
+        "CHT-004",
+        "CHT-005",
+        "CHT-006",
+        "CHT-007",
+        "CHT-008",
+        "CMP-001",
+        "CMP-002",
+        "CMP-003",
+        "ATT-001",
+        "ATT-002",
+        "ATT-003",
+        "HIS-001",
+        "HIS-002",
+        "HIS-003",
+        "RUN-001",
+        "RUN-002",
+        "RUN-003",
+        "RUN-004",
+        "RUN-005",
+        "RUN-006",
+        "APR-001",
+        "APR-002",
+        "GAT-001",
+        "GAT-002",
+        "GAT-003",
+        "SET-001",
+        "SET-002",
+        "SET-003",
+        "SET-004",
+        "SET-005",
+        "SET-006",
+        "SET-007",
+        "MGT-001",
+        "USE-001",
+        "MEM-001",
+        "MEM-002",
+        "MEM-003",
+        "TSK-001",
+        "TSK-002",
+        "TSK-003",
+        "TOL-001",
+        "TOL-002",
+        "TOL-003",
+        "TOL-004",
+        "DIA-001",
+        "DIA-002",
+        "DIA-003",
+        "ABT-001",
+        "FIL-001",
+        "FIL-002",
+        "FIL-003",
+        "FIL-004",
+        "FIL-005",
+        "ART-001",
+        "TRM-001",
+        "TRM-002",
+        "CAN-001",
+        "CAN-002",
+        "CAN-003",
+        "CAN-004",
+        "BRW-001",
+        "BRW-002",
+        "BRW-003",
+        "BRW-005",
+        "BRW-008",
+        "BRW-009",
+        "VOC-001",
+        "VOC-002",
+        "TTS-001",
+        "WIN-001",
+        "WIN-002",
+        "WIN-003",
+        "WIN-004",
+        "WIN-005",
+        "WIN-006",
+        "UPD-001",
+        "UPD-002",
+        "PKG-001",
+        "PKG-002",
+        "PKG-003",
+        "PKG-004",
+        "UX6-A11Y",
+        "UX6-OWNERS",
+        "UX6-MOTION",
+        "UX6-SSL",
+        "UX6-TOOLS",
+        "UX6-PACKAGE"
+      ],
+      "artifact": "docs/ux6_evidence_summary.json",
+      "sha256": "ea1fee8e3526d41f7e407683c2ec89de54d00f59fb559ba5d5e19b4e8cb34fa8",
+      "scope": "Current-source contract review plus prior324 frontend, watchdog/voice,31 Rust and553 Python evidence at their recorded sources. Central review records329 frontend checks begun before the last Composer edit,14 focused post-edit Composer tests, typecheck,19 isolated Python checks and four rendered Composer cases. Scoped closure adds a verified recipe-only bridge, a production web build and11 isolated orchestration/checker tests (mock package payloads only). Native/package runs retain prior candidate identity. Per-action selectors are in each row; no external provider, fresh full Python or actual new package claim."
+    }
+  },
+  "candidate_source_sha256": "286a2271476983c34064597c04ef2738dddbbc8165e71a8781dc23f4f29ea693",
+  "central_acceptance": {
+    "artifact": "docs/ux6_closure.json",
+    "sha256": "f8b08226068c17351f27e7ff9e131ea1d1b82c691dd76af7454f22d27e76d0a1"
+  }
+}

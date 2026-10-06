@@ -12,6 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests  # noqa: F401 - intentional pre-import profile/keyring isolation
+# Official account discovery must also stay outside the personal CLI profile.
+os.environ["CODEX_HOME"] = str(Path(os.environ["SMARTI_DATA_DIR"]) / "codex-account")
 from smarti.core_service import SmartiCoreService
 
 service = SmartiCoreService(token=os.environ["UX3_TEST_TOKEN"])
@@ -36,6 +38,11 @@ store.append_message("assistant", "פעילות כלים שמורה", session_id
     ]}})
 other = service.create_session(title="שיחה נוספת")["id"]
 store.append_message("user", "תוכן ראשון", session_id=other)
+stress = None
+if os.environ.get("UX6_STRESS_QA") == "1":
+    stress = service.create_session(title="UX6 1000 messages")["id"]
+    from ux6_stress_fixtures import seed_messages
+    seed_messages(store, stress, 1000)
 
 def generate(text, **_kwargs):
     context = core._execution_context
@@ -75,7 +82,7 @@ workbench = {}
 if os.environ.get("UX4_WORKBENCH_QA") == "1":
     from ux4_qa_fixtures import seed_workbench
     workbench = seed_workbench(service, sample)
-print(json.dumps({**handshake, "sample": sample, "other": other, "workbench": workbench}), flush=True)
+print(json.dumps({**handshake, "sample": sample, "other": other, "stress": stress, "workbench": workbench}), flush=True)
 
 def control():
     try:

@@ -34,6 +34,7 @@ describe("composer model selection", () => {
     expect(onReasoningEffort).toHaveBeenCalledWith("max");
     fireEvent.click(screen.getByRole("menuitem", { name: "הגדרות מודלים ומועדפים" }));
     expect(onManageModels).toHaveBeenCalledOnce();
+    expect(onManageModels).toHaveBeenCalledWith(trigger);
     expect(trigger.closest("details")!.open).toBe(false);
   });
 

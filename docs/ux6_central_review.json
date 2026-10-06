@@ -1,0 +1,71 @@
+{
+  "stage_status": "ACCEPTANCE_PENDING",
+  "design_decision": "D58",
+  "source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+  "previous_source_sha256": "914e801a380d87449988a81ffc7320feb6da512ebb592b8e84606fcd19adc1ce",
+  "changed_executable_inputs": [
+    "desktop/src/Composer.tsx"
+  ],
+  "product_delta": "Composer height only: ignore placeholder height for empty input, reset before measuring real draft, recompute on width change; observer disconnects on cleanup. Shared CSS minimum64px and maximum150px, tokens, actions and persistence retained.",
+  "frontend_full": {
+    "passed": 329,
+    "files": 47,
+    "command": "npm.cmd run test -- --maxWorkers=1",
+    "seconds": 260.5,
+    "scope": "Run started before the last Composer size edit. Not a frozen post-edit full-suite claim; the final Composer delta has separate focused and rendered-browser evidence."
+  },
+  "frontend_delta": {
+    "passed": 14,
+    "files": 2,
+    "command": "npm.cmd run test -- src/composerModels.test.tsx src/composerAttachments.test.tsx --maxWorkers=1",
+    "seconds": 15.48,
+    "source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644"
+  },
+  "typecheck": {
+    "passed": true,
+    "command": "npm.cmd run typecheck",
+    "source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644"
+  },
+  "python": {
+    "passed": 19,
+    "command": "python -m unittest tests.test_ux6_acceptance tests.test_speech",
+    "seconds": 6.717,
+    "scope": "Isolated tests imported before Smarti; 15 speech plus four acceptance-verifier tests. No fresh full Python suite."
+  },
+  "composer_browser": {
+    "passed_cases": 4,
+    "source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+    "artifact": ".codex-local/ux-6/central/composer-size.json",
+    "sha256": "7d026e2527c468676b056a754915957e1a3e1caf4ddf01c79e15903e9f44f1b7",
+    "scope": "Real Composer in isolated DEV fixture, Edge headless, light/dark and narrow/wide. Initial narrow mount, same-draft width changes, long/cleared input and action containment. No Tauri/Windows DPI/package claim."
+  },
+  "manual_scaling_accessibility": {
+    "status": "PASS",
+    "reported_by": "user in central review",
+    "answer": "כן, בדקתי גם את כולם והם תקינים",
+    "windows_scale_percent": [
+      100,
+      150,
+      200
+    ],
+    "text_enlargement": true,
+    "spoken_screen_reader": true,
+    "candidate_scope": "Earlier UX6 user trial; exact binary/per-scale receipt not supplied. 125% automated native evidence is separate. Not a claim that the newly corrected Composer is already in the earlier executable."
+  },
+  "prior_package_review": {
+    "source_sha256": "914e801a380d87449988a81ffc7320feb6da512ebb592b8e84606fcd19adc1ce",
+    "installer_and_zip_hashes_and_sizes_verified": true,
+    "supervisor_smoke": true,
+    "browser_smoke": true,
+    "matches_current_candidate": false,
+    "scope": "Existing unsigned local artifacts are valid for their own source. No installer execution or new package build by this review."
+  },
+  "build_helper": {
+    "path": "scripts/build_ux6_package.ps1",
+    "invocation": "pwsh -NoProfile -File .\\scripts\\build_ux6_package.ps1 -Fresh",
+    "syntax_checked": true,
+    "executed": false,
+    "scope": "Fresh ASCII snapshot and new private data/work directories; preserve prior manifest/artifacts; canonical installer/ZIP and package smokes. Source identity attached to successful package manifest."
+  },
+  "decision": "Do not create the conditional completion commit: latest requested fix was unfinished, now corrected in source but not yet present in a matching package. Preserve formal coverage gaps and separate release/installation scope; no further broad/manual voice retest requested."
+}

@@ -1,0 +1,5 @@
+/* Composition only; accepted semantic values remain the shared source. */
+.interface-recovery { height:100%; background:var(--sds-color-background); color:var(--sds-color-text); }
+.interface-recovery>main { min-height:100%; display:grid; place-content:center; padding:var(--sds-space-6); }
+.interface-recovery .sds-alert { max-width:32rem; }
+.interface-recovery .sds-button { margin-top:var(--sds-space-4); }

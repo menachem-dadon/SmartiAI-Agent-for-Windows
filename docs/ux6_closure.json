@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-06",
+  "plan": "SMARTI-UI-UX-2026",
+  "decision": "UX-D61",
+  "scope": "source-and-accepted-ui",
+  "result": "PASS",
+  "source_sha256": "286a2271476983c34064597c04ef2738dddbbc8165e71a8781dc23f4f29ea693",
+  "user_authorized_closure": true,
+  "authorization": "Current central-chat request to create completion commit, summarize the project, preserve the mutable design default and provide a reusable self-run build/package script. Earlier instruction that the user runs the actual package build is retained.",
+  "interpretation": "Close the accepted design/source implementation project. Do not claim every product/platform/release evidence level has passed or that the latest source already has a matching package.",
+  "pending_evidence_levels": 118,
+  "release_accepted": false,
+  "reviewed_source_recipe_delta": {
+    "reviewed_source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+    "source_sha256": "286a2271476983c34064597c04ef2738dddbbc8165e71a8781dc23f4f29ea693",
+    "projected_source_sha256": "7978d6c2a5b3c87c449c21d258c79bd8b4bc8fa909562a75e60e500076700644",
+    "added_paths": [
+      "scripts/build_and_package.ps1",
+      "scripts/prepare_tauri_package.py",
+      "scripts/tauri_source_manifest.py"
+    ],
+    "previous_input_hashes": {
+      "scripts/build_tauri_release.ps1": "c12cf527b3363e2a6e679c0714e002540f8aad915cd100717fda9bb529f6def0"
+    },
+    "scope": "Exact raw-byte projection to the reviewed post-Composer source: only the universal orchestration, version-copy helper, neutral source hasher and canonical compression/download-cache recipe changed. GUI/Core/Rust/assets/config inputs remain those reviewed at7978d6c2. This is source attribution, not a new native/package run."
+  },
+  "packaging_checks": {
+    "passed": 11,
+    "seconds": 7.032,
+    "command": "python -m unittest tests.test_tauri_packaging tests.test_ux6_acceptance -v",
+    "artifact": ".codex-local/ux-6/central/universal-packaging-checks.log",
+    "sha256": "a1fcf68253e9966bc4b796b49a8e1bc90b0f086e353e70036b02c767e1a996bf",
+    "scope": "Six isolated version/orchestration tests plus five acceptance-verifier tests. Actual PowerShell PrepareOnly and mock canonical builder emitting text payloads; no compilation, executable launch, installer or real package proof."
+  },
+  "web_build": {
+    "passed": true,
+    "command": "npm.cmd run build",
+    "seconds": 36.63,
+    "scope": "TypeScript and production Vite frontend bundle passed after Composer correction. Existing chunks above500kB remain a warning. No native Core/Rust/NSIS or installer build."
+  },
+  "accepted_user_trial": "Voice function and refinements, Windows100/150/200%, enlarged text and spoken screen reader accepted at their recorded prior trial scopes. No repeated broad voice/scale matrix requested.",
+  "historical_review": "docs/ux6_central_review.json",
+  "pending_package": "Existing unsigned installer/portable ZIP remains valid for914e801a, before final Composer correction. User may build the current frozen source with scripts/build_and_package.ps1; review its exact output hashes and canonical smokes separately.",
+  "separate_scope": [
+    "strict per-action browser/Windows/package evidence map",
+    "unproved original blank-screen cause and earlier recovered startup stall",
+    "defined real-provider/external MCP/SSL/Office/extra-monitor trials",
+    "clean-machine install/upgrade/uninstall",
+    "publisher/updater signing and release",
+    "overall Tauri migration Point17/PyQt removal"
+  ],
+  "design_default": "D58 and plan2.1: shared components/tokens are the ongoing default; a task deliberately changing shared rules may update them centrally with recorded scope/reason. Rules are mutable; unrelated features do not create competing button styles."
+}

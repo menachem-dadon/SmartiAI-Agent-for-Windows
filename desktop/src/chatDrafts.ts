@@ -2,6 +2,19 @@ import { useCallback, useRef, useState, type SetStateAction } from "react";
 import type { PendingAttachment } from "./chatTypes";
 
 const storageKey = "smarti.desktop.chat-drafts.v1";
+const activeKey = "smarti.desktop.active-conversation.v1";
+export function readActiveConversation(): string {
+  try { return sessionStorage.getItem(activeKey) || ""; } catch { return ""; }
+}
+export function rememberActiveConversation(id: string): boolean {
+  try {
+    if (id) sessionStorage.setItem(activeKey, id); else sessionStorage.removeItem(activeKey);
+    return true;
+  } catch { return false; }
+}
+export function restoreActiveConversation(conversations: readonly { id: string }[], wanted: string): string {
+  return conversations.some(item => item.id === wanted) ? wanted : conversations[0]?.id || "";
+}
 export type DraftModel = { provider: string; model: string; effort: string };
 export type ChatDraft = { text: string; attachments: PendingAttachment[]; selection?: DraftModel };
 const empty = (): ChatDraft => ({ text: "", attachments: [] });

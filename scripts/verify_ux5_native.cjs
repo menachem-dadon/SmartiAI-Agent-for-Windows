@@ -4,23 +4,25 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
 const {execFileSync}=require('node:child_process'),{randomUUID}=require('node:crypto');
 const {verifyManagementFeedback,verifyFastMode}=require('./ux5_feedback_checks.cjs');
 async function main(){
+ const ux6=process.argv.includes('--ux6');
  const feedbackQA=process.argv.includes('--feedback');
  const output=path.resolve(process.argv[3]||'.codex-local/ux-5/native');await fs.mkdir(output,{recursive:true});
- const launch=JSON.parse(await fs.readFile('.codex-local/ux-5/native-launch.json','utf8'));
+ const launch=JSON.parse(await fs.readFile(ux6?'.codex-local/ux-6/native-built-launch.json':'.codex-local/ux-5/native-launch.json','utf8'));
+ if(ux6)assert.notEqual(launch.deterministic,false,'Refusing automation on the live-provider user trial');
  assert.match(String(launch.pid),/^\d+$/);
  const executable=String(execFileSync('pwsh',['-NoProfile','-Command',`[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); (Get-Process -Id ${launch.pid}).Path`],{windowsHide:true})).trim();
- assert.equal(path.win32.basename(executable).toLowerCase(),'ux5-native.exe');assert.equal(path.resolve(executable),path.resolve(launch.executable));
- const data=path.resolve(launch.data),allowed=path.resolve('.codex-local/ux-5');assert.ok(data.startsWith(allowed+path.sep));
+ assert.equal(path.win32.basename(executable).toLowerCase(),ux6?'ux6-built.exe':'ux5-native.exe');assert.equal(path.resolve(executable),path.resolve(launch.executable));
+ const data=path.resolve(launch.data),allowed=path.resolve(ux6?'.codex-local/ux-6':'.codex-local/ux-5');assert.ok(data.startsWith(allowed+path.sep));
  const browser=await chromium.connectOverCDP(process.argv[2]||'http://127.0.0.1:19457');
- const page=browser.contexts()[0].pages().find(p=>p.url().includes('127.0.0.1:1439'));assert.ok(page,'owned Vite page');
+ const page=browser.contexts()[0].pages().find(p=>p.url().includes(ux6?'tauri.localhost':'127.0.0.1:1439'));assert.ok(page,'owned product page');
  const invoke=(cmd,args={})=>page.evaluate(({cmd,args})=>window.__TAURI_INTERNALS__.invoke(cmd,args),{cmd,args});
- assert.equal(await invoke('plugin:app|identifier'),'ai.smarti.ux5native');
+ assert.equal(await invoke('plugin:app|identifier'),ux6?'ai.smarti.ux6built':'ai.smarti.ux5native');
  const api=async(method,route,body)=>{const r=await invoke('core_api',{request:{method,path:route,body:body??null,idempotencyKey:method==='GET'?null:randomUUID()}});assert.ok(r.status>=200&&r.status<300,route+': '+r.status+' '+r.body.detail);return r.body.data;};
  const checks=[],errors=[],geometry=[];page.on('pageerror',e=>errors.push(e.message));
  const check=(name,ok)=>{assert.ok(ok,name);checks.push(name);console.log(name);};
  const nav=page.getByRole('navigation',{name:'ניווט הגדרות וניהול'});
  const go=async name=>{await nav.getByRole('button',{name,exact:true}).click();await page.waitForTimeout(220);};
- const resize=width=>JSON.parse(String(execFileSync('pwsh',['-NoProfile','-File','scripts/resize_ux5_window.ps1','-ProbeProcessId',String(launch.pid),'-Width',String(width),'-Height','900'],{windowsHide:true})));
+ const resize=width=>JSON.parse(String(execFileSync('pwsh',['-NoProfile','-File',ux6?'scripts/resize_ux6_window.ps1':'scripts/resize_ux5_window.ps1','-ProbeProcessId',String(launch.pid),'-Width',String(width),'-Height','900'],{windowsHide:true})));
  try{
   resize(1380);
   await page.reload();let status;for(let n=0;n<100;n++){status=await invoke('core_status');if(status.state==='ready')break;await page.waitForTimeout(250);}assert.equal(status.state,'ready');

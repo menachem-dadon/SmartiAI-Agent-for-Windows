@@ -156,7 +156,12 @@ def recognize_voice(settings=None, cancel_event=None, status_callback=None):
             return ""
         _play_sound("end", settings)
         status_callback("מתמלל...")
-        text = recognizer.recognize_google(audio, language="he-IL")
+        try:
+            text = recognizer.recognize_google(audio, language="he-IL")
+        except sr.UnknownValueError:
+            # Captured audio without recognizable words is an empty result,
+            # not a failure and never content for the user's draft or chat.
+            return ""
         text = text.replace("סמרטי", "סמארטי").replace("סמארט", "סמארטי")
         return "" if cancel_event.is_set() else text
 

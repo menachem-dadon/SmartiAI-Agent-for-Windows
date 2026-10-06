@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { RichMessage } from "./RichMessage";
 import { SettingsView } from "./SettingsManagement";
 import { Composer } from "./Composer";
+import { useSpeechPlayback } from "./speechPlayback";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 let speech: { protocol_version: number; request_id: string; owner_id: string; is_playing: boolean; error: string };
@@ -45,6 +46,22 @@ beforeEach(() => {
   });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+test("unchanged speech polls keep history idle while ownership and playback errors still update", async () => {
+  vi.useFakeTimers(); let renders = 0;
+  function Probe() { renders++; const value = useSpeechPlayback("run:probe"); return <span>{value.speaking ? "playing" : value.error || "idle"}</span>; }
+  render(<Probe />); await act(async () => {});
+  const before = renders;
+  await act(async () => { await vi.advanceTimersByTimeAsync(2700); });
+  expect(vi.mocked(invoke).mock.calls.filter(([, args]: any) => args?.request?.path === "/v2/audio/tts/status").length).toBeGreaterThanOrEqual(4);
+  expect(renders).toBe(before);
+  speech = { ...speech, owner_id: "run:probe", request_id: "new", is_playing: true };
+  await act(async () => { await vi.advanceTimersByTimeAsync(900); });
+  expect(screen.getByText("playing")).toBeTruthy();
+  speech = { ...speech, is_playing: false, error: "device failed" };
+  await act(async () => { await vi.advanceTimersByTimeAsync(900); });
+  expect(screen.getByText("device failed")).toBeTruthy();
+});
 
 test("manual answer speech starts, replaces another answer, and stops only its own request", async () => {
   render(<>

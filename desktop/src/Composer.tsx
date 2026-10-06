@@ -40,7 +40,7 @@ interface ComposerProps {
     model: string;
   }) => void | Promise<void>;
   onReasoningEffort?: (effort: string) => void | Promise<void>;
-  onManageModels?: () => void;
+  onManageModels?: (trigger?: HTMLElement) => void;
   onAutonomyMode?: (mode: string) => void | Promise<void>;
   onLocalFastMode?: (enabled: boolean) => void | Promise<void>;
   onAttachments: Dispatch<SetStateAction<PendingAttachment[]>>;
@@ -209,8 +209,21 @@ export function Composer({
   useLayoutEffect(() => {
     const node = area.current;
     if (!node) return;
-    node.style.height = "auto";
-    node.style.height = `${Math.min(150, Math.max(38, node.scrollHeight))}px`;
+    const fit = () => {
+      node.style.height = "0px";
+      // A wrapped placeholder is not draft content. It must not leave an
+      // empty composer expanded after an initially narrow layout settles.
+      node.style.height = `${Math.min(150, Math.max(38, node.value ? node.scrollHeight : 38))}px`;
+    };
+    fit();
+    let width = node.clientWidth;
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => {
+      if (node.clientWidth === width) return;
+      width = node.clientWidth;
+      fit();
+    });
+    observer?.observe(node);
+    return () => observer?.disconnect();
   }, [text]);
   useEffect(() => {
     if (provider !== "openai_codex_signin") {
@@ -415,7 +428,7 @@ export function Composer({
         <strong>מודלים מועדפים</strong>
         {onManageModels && <button type="button" role="menuitem" className="model-menu-settings"
           aria-label="הגדרות מודלים ומועדפים"
-          onClick={() => { closeModelMenu(); onManageModels(); }}><Icon name="settings" /></button>}
+          onClick={() => { const trigger = modelMenu.current?.querySelector("summary"); closeModelMenu(); onManageModels(trigger || undefined); }}><Icon name="settings" /></button>}
       </header>
       <div className="model-menu-columns">
         <section className="model-menu-models" aria-label="מודלים של הספק">

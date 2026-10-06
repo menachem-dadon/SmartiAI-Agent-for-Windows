@@ -1,6 +1,6 @@
 /* UX-3 product surfaces. Values come from the accepted shared foundations.
    Workbench/native motion and unconverted management rules remain in App.css. */
-.chat-design { height:100%; --rail-width:72px; --drawer-width:240px; --chat-reading-width:697px; }
+.chat-design { height:100%; --rail-width:72px; --drawer-width:240px; --chat-reading-width:697px; --motion-panel: var(--sds-motion-panel); --ease-premium: var(--sds-motion-ease); }
 .smarti-app { height:100%; display:flex; flex-direction:column; overflow:hidden; background:var(--sds-color-background); color:var(--sds-color-text); }
 .workspace { flex:1; min-height:0; position:relative; display:grid; direction:rtl; overflow:hidden; }
 .conversation-drawer { grid-column:1; grid-row:1; min-width:0; min-height:0; display:flex; flex-direction:column; padding:12px 8px; background:var(--sds-color-background); border-inline-end:1px solid var(--sds-color-border); z-index:65; overflow:hidden; }
@@ -211,14 +211,28 @@
   .quick-pill summary,.autonomy-quick-pill .sds-button { padding:8px 4px; font-size:13px; }
   .autonomy-quick-pill .sds-button .sds-icon { display:none; }
 }
+/* Text/browser enlargement can leave less than one normal control row. Keep
+   every action reachable at its shared target size by flowing vertically. */
+@container (max-width:200px) {
+  .composer { padding:var(--sds-space-1); }
+  .composer-actions { grid-template-columns:minmax(0,1fr); justify-items:start; }
+  .composer-controls { width:100%; }
+  .composer-model-controls { flex-wrap:wrap; max-width:100%; }
+  .composer-tool { justify-self:end; }
+  .local-fast-mode { padding:0; }
+  .autonomy-quick-pill { max-width:100%; }
+  .autonomy-quick-pill .sds-button { white-space:normal; min-width:0; max-width:100%; padding:var(--sds-space-1); overflow-wrap:anywhere; }
+}
 @media (prefers-reduced-motion:reduce) { .splash-progress i { animation:none; width:100%; } .agent-status-text,.conversation-activity { animation:none; } }
 @media (prefers-reduced-motion:reduce),(forced-colors:active) { .agent-status-text.is-shimmering { animation:none; background:none; color:inherit; -webkit-text-fill-color:currentColor; } }
 .sds-root[data-reduced-motion="true"] .agent-status-text.is-shimmering { animation:none; background:none; color:inherit; -webkit-text-fill-color:currentColor; }
 
 .code-frame.is-wrapped pre, .code-frame.is-wrapped code { white-space:pre-wrap; overflow-wrap:anywhere; }
-.voice-design { width:100vw; height:100vh; background:var(--sds-color-surface); color:var(--sds-color-text); }
-.voice-design .voice-listening-overlay { display:flex; align-items:center; gap:12px; height:70px; padding:12px; direction:rtl; }
-.voice-design .voice-listening-overlay div { flex:1; display:grid; gap:2px; min-width:0; }
+.voice-overlay-document,.voice-overlay-document body,.voice-overlay-document #root { background:transparent; }
+.voice-design { width:100vw; height:100vh; padding:var(--sds-space-1); background:transparent; color:var(--sds-color-text); }
+.voice-design main { height:100%; }
+.voice-design .voice-listening-overlay { display:flex; align-items:center; gap:var(--sds-space-3); height:100%; padding:var(--sds-space-2); direction:rtl; }
+.voice-design .voice-listening-overlay div { flex:1; display:grid; gap:0; min-width:0; font-size:var(--sds-font-caption); line-height:1.4; }
 .voice-design .voice-listening-overlay span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--sds-color-text-muted); }
 
 .drawer-expanded-content .sds-search>.sds-icon { top:50%; transform:translateY(-50%); }

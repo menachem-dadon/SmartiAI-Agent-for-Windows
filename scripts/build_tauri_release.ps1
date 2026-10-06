@@ -5,6 +5,7 @@ param(
     [switch]$SkipRuntime,
     [switch]$SkipCoreBuild,
     [switch]$OfflineInstaller,
+    [ValidateSet('lzma','zlib')][string]$InstallerCompression = 'lzma',
     [switch]$AllowUnsignedLocal,
     [switch]$SkipPackageSmoke
 )
@@ -21,6 +22,7 @@ $venv = Join-Path $work ".venv-build"
 $dist = Join-Path $work "dist"
 $pyiWork = Join-Path $work "pyinstaller-work"
 $runtime = Join-Path $work "build\runtime"
+$downloadCache = if ($env:SMARTI_BUILD_DOWNLOAD_CACHE) { [System.IO.Path]::GetFullPath($env:SMARTI_BUILD_DOWNLOAD_CACHE) } else { Join-Path $work "download-cache" }
 $targetTriple = "x86_64-pc-windows-msvc"
 $cargoBin = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".cargo\bin"
 if (Test-Path -LiteralPath (Join-Path $cargoBin "cargo.exe")) {
@@ -60,7 +62,19 @@ function Invoke-PackagedSmoke(
         foreach ($name in @("SMARTI_PROJECT_ROOT", "SMARTI_PYTHON", "SMARTI_CORE_BINARY")) {
             [Environment]::SetEnvironmentVariable($name, $null, "Process")
         }
-        $process = Start-Process -FilePath $AppPath -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru
+        # Remove stale overrides from the child dictionary: on recent .NET,
+        # clearing a process environment value can preserve an empty variable.
+        # Empty smoke flags would start two harnesses and race the app exit.
+        $start = [Diagnostics.ProcessStartInfo]::new($AppPath)
+        $start.WorkingDirectory = $WorkingDirectory
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+        foreach ($name in @("SMARTI_SUPERVISOR_SMOKE_FILE", "SMARTI_BROWSER_SMOKE_FILE", "SMARTI_PROJECT_ROOT", "SMARTI_PYTHON", "SMARTI_CORE_BINARY")) {
+            $start.Environment.Remove($name) | Out-Null
+        }
+        $start.Environment[$SmokeVariable] = $SmokeFile
+        $process = [Diagnostics.Process]::Start($start)
         if (-not $process.WaitForExit($TimeoutMilliseconds)) {
             $process.Kill()
             throw "Packaged smoke timed out: $SmokeVariable"
@@ -127,7 +141,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $coreDist "smarti-core.exe"))) { thr
 Assert-No-Qt $coreDist
 
 if (-not $SkipRuntime) {
-    Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "scripts\prepare_runtime.ps1"), "-RuntimeDir", $runtime, "-CacheDir", (Join-Path $work "download-cache"), "-RequirementsPath", (Join-Path $repo "requirements-core.txt"))
+    Invoke-Checked "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "scripts\prepare_runtime.ps1"), "-RuntimeDir", $runtime, "-CacheDir", $downloadCache, "-RequirementsPath", (Join-Path $repo "requirements-core.txt"))
 } elseif (-not (Test-Path -LiteralPath (Join-Path $runtime "runtime_manifest.json"))) { throw "-SkipRuntime requested but no prepared runtime exists at $runtime" }
 Assert-No-Qt $runtime
 
@@ -145,7 +159,7 @@ $config = [ordered]@{
     bundle = [ordered]@{
         targets = @("nsis")
         createUpdaterArtifacts = (-not $AllowUnsignedLocal)
-        windows = [ordered]@{ webviewInstallMode = [ordered]@{ type = if ($OfflineInstaller) { "offlineInstaller" } else { "embedBootstrapper" } } }
+        windows = [ordered]@{ webviewInstallMode = [ordered]@{ type = if ($OfflineInstaller) { "offlineInstaller" } else { "embedBootstrapper" } }; nsis = [ordered]@{ compression = $InstallerCompression } }
     }
 }
 if (-not $AllowUnsignedLocal) {
@@ -155,7 +169,8 @@ $releaseConfig = Join-Path $cargoDir "tauri.release.conf.json"
 $config | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $releaseConfig -Encoding UTF8
 Invoke-Checked "npm.cmd" @("run", "tauri", "--", "build", "--target", $targetTriple, "--config", $releaseConfig, "--bundles", "nsis") $desktop
 
-$target = Join-Path $cargoDir "target\$targetTriple\release"
+$targetBase = if ($env:CARGO_TARGET_DIR) { [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { Join-Path $cargoDir "target" }
+$target = Join-Path $targetBase "$targetTriple\release"
 $appExe = Join-Path $target "smarti-desktop.exe"
 if (-not (Test-Path -LiteralPath $appExe)) { throw "Tauri executable is missing: $appExe" }
 $installer = Get-ChildItem -LiteralPath (Join-Path $target "bundle\nsis") -Filter "*-setup.exe" | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
@@ -178,18 +193,19 @@ Compress-Archive -Path (Join-Path $portableRoot "*") -DestinationPath $zipOut -C
 if (-not $SkipPackageSmoke) {
     $smokeDir = Join-Path $work "package-smoke"
     New-Item -ItemType Directory -Force -Path $smokeDir | Out-Null
+    $smokeRun = [Guid]::NewGuid().ToString("N")
     $supervisorSmoke = Invoke-PackagedSmoke `
         -AppPath (Join-Path $portableRoot "SmartiAI.exe") `
         -WorkingDirectory $portableRoot `
         -SmokeVariable "SMARTI_SUPERVISOR_SMOKE_FILE" `
-        -SmokeFile (Join-Path $smokeDir "supervisor.json") `
-        -DataDirectory (Join-Path $smokeDir "supervisor-data")
+        -SmokeFile (Join-Path $smokeDir "supervisor-$smokeRun.json") `
+        -DataDirectory (Join-Path $smokeDir "supervisor-$smokeRun-data")
     $browserSmoke = Invoke-PackagedSmoke `
         -AppPath (Join-Path $portableRoot "SmartiAI.exe") `
         -WorkingDirectory $portableRoot `
         -SmokeVariable "SMARTI_BROWSER_SMOKE_FILE" `
-        -SmokeFile (Join-Path $smokeDir "browser.json") `
-        -DataDirectory (Join-Path $smokeDir "browser-data")
+        -SmokeFile (Join-Path $smokeDir "browser-$smokeRun.json") `
+        -DataDirectory (Join-Path $smokeDir "browser-$smokeRun-data")
     $packageSmokeReport = [ordered]@{
         requested = $true
         passed = $true

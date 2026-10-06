@@ -19,6 +19,10 @@ let refreshPromise: Promise<SpeechState> | undefined;
 const listeners = new Set<() => void>();
 const snapshot = () => state;
 function publish(next: SpeechState) {
+  // Idle status polling must not re-render every historical Markdown message.
+  // Preserve all ownership, error and request changes for playback controls.
+  if (next.protocol_version === state.protocol_version && next.request_id === state.request_id &&
+      next.owner_id === state.owner_id && next.is_playing === state.is_playing && next.error === state.error) return;
   state = next;
   for (const listener of listeners) listener();
 }

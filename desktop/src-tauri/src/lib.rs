@@ -104,6 +104,7 @@ struct Handshake {
 impl CoreSupervisor {
     fn new() -> Self {
         let project_root = env::var_os("SMARTI_PROJECT_ROOT")
+            .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -281,14 +282,16 @@ impl CoreSupervisor {
     }
 
     fn command(&self) -> Result<Command, String> {
-        if let Some(binary) = env::var_os("SMARTI_CORE_BINARY") {
+        if let Some(binary) = env::var_os("SMARTI_CORE_BINARY").filter(|value| !value.is_empty()) {
             let path = PathBuf::from(binary);
             if !path.is_file() {
                 return Err(format!("SMARTI_CORE_BINARY not found: {}", path.display()));
             }
             return Ok(Command::new(path));
         }
-        if cfg!(debug_assertions) || env::var_os("SMARTI_PROJECT_ROOT").is_some() {
+        if cfg!(debug_assertions)
+            || env::var_os("SMARTI_PROJECT_ROOT").is_some_and(|value| !value.is_empty())
+        {
             let script = self.project_root.join("smarti_core_service.py");
             if !script.is_file() {
                 return Err(format!(
@@ -297,7 +300,8 @@ impl CoreSupervisor {
                 ));
             }
             let python = env::var_os("SMARTI_PYTHON")
-                .or_else(|| env::var_os("PYTHON"))
+                .filter(|value| !value.is_empty())
+                .or_else(|| env::var_os("PYTHON").filter(|value| !value.is_empty()))
                 .unwrap_or_else(|| "python".into());
             let mut command = Command::new(python);
             command.arg(script);
@@ -1441,15 +1445,25 @@ pub fn run() {
     let supervisor = CoreSupervisor::new();
     let managed = supervisor.clone();
     let setup_supervisor = supervisor.clone();
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(
+    // A packaged smoke must run its own isolated process. Forwarding it to an
+    // already running personal instance exits successfully without any proof.
+    let isolated_smoke = packaged_smoke_is_isolated(
+        env::var_os("SMARTI_SUPERVISOR_SMOKE_FILE").is_some(),
+        env::var_os("SMARTI_BROWSER_SMOKE_FILE").is_some(),
+        env::var_os("SMARTI_DATA_DIR").is_some(),
+    );
+    let mut builder = tauri::Builder::default();
+    if !isolated_smoke {
+        builder = builder.plugin(tauri_plugin_single_instance::init(
             |app, arguments, _cwd| {
                 windows_integration::show_main(
                     app,
                     windows_integration::activation_from_args(arguments),
                 );
             },
-        ))
+        ));
+    }
+    let app = builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1565,9 +1579,20 @@ pub fn run() {
     });
 }
 
+fn packaged_smoke_is_isolated(supervisor: bool, browser: bool, private_data: bool) -> bool {
+    private_data && (supervisor || browser)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn packaged_smoke_bypasses_forwarding_only_with_explicit_private_data() {
+        assert!(!packaged_smoke_is_isolated(false, false, true));
+        assert!(!packaged_smoke_is_isolated(true, true, false));
+        assert!(packaged_smoke_is_isolated(true, false, true));
+        assert!(packaged_smoke_is_isolated(false, true, true));
+    }
     #[test]
     fn update_discovery_does_not_require_a_signed_feed() {
         assert!(!has_signed_update_configuration(None));

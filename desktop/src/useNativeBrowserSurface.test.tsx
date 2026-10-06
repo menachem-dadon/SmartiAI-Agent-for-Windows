@@ -117,3 +117,18 @@ it("applies a newly selected tab's viewport without needing a window resize", as
   view.rerender(<Surface tabId="tab-2" mode="desktop" />); await frame();
   expect(last(metrics())).toMatchObject({ tabId: "tab-2", method: "Emulation.clearDeviceMetricsOverride" });
 });
+
+it("reveals current native bounds immediately when reduced motion is enabled mid-transition", async () => {
+  let change!: () => void;
+  const preference = { matches: false, addEventListener: vi.fn((_name, listener) => { change = listener; }), removeEventListener: vi.fn() };
+  vi.stubGlobal("matchMedia", () => preference);
+  const view = render(<Surface revision="closed" />);
+  await frame(); invoke.mockClear();
+  size(900, 600); view.rerender(<Surface revision="open" />);
+  await frame(); expect(geometry()).toHaveLength(0);
+  act(() => { preference.matches = true; change(); });
+  await frame();
+  expect(last(geometry()).width).toBe(900);
+  expect(last(visibility())).toBe(true);
+  view.unmount(); expect(preference.removeEventListener).toHaveBeenCalledWith("change", change);
+});

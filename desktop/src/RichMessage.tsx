@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
@@ -434,7 +434,7 @@ function CodeFrame({ children, onCopy, onDownload }: { children: React.ReactNode
     <span>{codeDisplayLanguage(language)}</span></div><pre>{children}</pre>{error && <p className="message-link-error" role="alert">{error}</p>}</div>;
 }
 
-export function RichMessage({
+export const RichMessage = memo(function RichMessage({
   message,
   events = [],
   theme = "dark",
@@ -793,4 +793,4 @@ export function RichMessage({
       </MessageFrame>
     </article></DesignSystemProvider>
   );
-}
+});

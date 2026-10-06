@@ -1,10 +1,13 @@
 # Smarti shared design system · UX-2
 
-Authority: `docs/ui_ux_redesign_plan.md`, accepted UX-1 v7 and ledger §21–39.
+Authority: `docs/ui_ux_redesign_plan.md`, accepted UX-1 v7 and ledger §21–42.
 UX-2 is complete within the shared-foundation scope; UX-3 product shell and chat
 are complete within ledger §30 after product feedback D45–48 and closing review.
 UX-4 is complete within ledger §34; UX-5 management/settings is complete within
-§39 after user acceptance and independent review. UX-6 is ready, not started.
+§39 after user acceptance and independent review. UX-6 and the accepted design/source
+project are COMPLETE within ledger §42 / D61. Source/native/assisted evidence keeps
+its original scope in §40–41. Strict product/release acceptance, matching latest
+packages and the overall Tauri migration remain separate; see `docs/ux6_closure.json`.
 Preserve the
 697px reading/composer cap, sticky input, draft/scroll owners, D48, and the real
 workbench lifecycles D50–54. The shared chevron baseline is in §24.
@@ -17,6 +20,19 @@ refinements. Plan §2.1 and ledger §38 apply to every subsequent UI change,
 including maintenance after UX-6. Routine fixes and new controls extend the
 accepted language; changing the overall direction requires an explicit user
 choice. This does not freeze layouts or prevent requested improvements.
+
+Rules are a deliberate default, not immutable law. A task whose purpose includes
+changing a shared rule or the design direction authorizes that change; record
+its scope/reason and update the shared source, with no redundant approval step.
+Ordinary new controls use the existing components and states. Do not invent a
+new button style incidentally while implementing an unrelated feature.
+
+Color roles are intentionally distinct: regular primary `Button` uses `accent`
+(light #365ccd); the conversation send/microphone/stop circle uses `action`
+(#397bfa). The deeper and brighter blues belong to one semantic palette. Dark
+`accent` is #a2baff for contrast, while `action` remains #397bfa. Future controls
+choose a role by function, not an isolated color literal. A requested unification
+updates these shared roles and their consumers deliberately.
 
 Reuse the semantic tokens, typography, spacing, corners, icon families, focus,
 control states and restrained motion. Reuse existing primitives first. Extend
@@ -311,3 +327,72 @@ and relaunch, checks actual Windows icon fonts, and opens management pages in
 wide/narrow light/dark layouts without changing settings in the personal profile.
 It quits QA on completion. Window maximization is kept within the current app
 session; saving geometry preserves the last normal window bounds.
+
+## UX-6 quality and acceptance (source/UI complete; release gate separate)
+
+D58 remains binding. Workspace motion reads `foundations.motion.panel` (260ms)
+and `motion.ease`; legacy chat motion roles alias the same shared variables.
+Live reduced-motion changes cancel painted animation and native bounds settling.
+Management captures its persistent trigger before the chat becomes inert;
+hidden chat menus do not own Escape. Narrow container layout uses shared spacing
+and40px targets. No replacement palette/icon language is introduced.
+
+`InterfaceRecovery` uses shared loading, alert and button components. Module/render
+errors offer explicit interface reload. A ready-Core startup delayed15s offers
+the same action; it never automatically restarts Core. The initial HTML/entry
+script and the original UX5 blank-screen cause are outside this recovery proof.
+Active conversation, drafts and scroll retain WebView-session ownership; new app
+instances still start empty workbench tabs under D50. Identical idle speech status
+must not notify every historical message; owner/error/playback changes still do.
+
+Start with `docs/ux6_acceptance.md`, `docs/ux6_quality_report.md` and the per-action
+JSON map. Raw files live under `.codex-local/ux-6`; the tracked aggregate preserves
+source/binary identity and distinguishes earlier measurements from the final delta.
+Do not relabel a prior native run as a newly tested binary. `--final` intentionally
+fails while human/platform/package gaps remain; it never marks a stage complete.
+
+Core suite: `python -m unittest discover -s tests -t . -v` from repo root.
+The `-t .` is required to import the tests isolation package before runtime.
+See the documented excluded-run incident; never count that run as isolated proof.
+Frontend commands run in `desktop/`. Use focused regressions after a small delta,
+and avoid repeated full matrices after the user asks to perform easier OS checks.
+
+Native built trial: build frontend, then prepare the guarded QA app with
+`pwsh -NoProfile -File scripts/prepare_ux6_native.ps1 -Mode built`.
+For an existing owned profile, use `-ReuseProfile`; close that QA process first.
+After automated UI checks, quit QA and reopen with
+`pwsh -NoProfile -File scripts/restart_ux6_native.ps1 -Mode built -LiveProviders`,
+then `node scripts/show_ux6_trial.cjs`. The marker identifies isolated data.
+Provider keys are ephemeral; account files use private CODEX_HOME. Stop UI
+automation before the user enters credentials. See the user checklist for
+actual DPI/text size, screen reader, mic/audio, account and system chooser tests.
+
+For Vite/native dev diagnostics use a frozen owned source snapshot and unused
+ports, preserving existing1420/1439 processes. Native `invoke` is read-only;
+attempted monkeypatch instrumentation is ineffective, not a product failure or
+fault-injection PASS. Direct CDP leaves the Vite shared worker intact.
+
+Unsigned packaging uses an owned ASCII checkout/data/build directory, the
+canonical build script and explicit local-only allowance. NSIS zlib is an owned
+QA config override, not a production default. Packaged smokes with explicit
+private data bypass single-instance forwarding and create fresh evidence paths.
+No installer execution, personal upgrade/uninstall, signing/release, PyQt removal
+or Point17 follows from UX-6 acceptance work. The central source/UI closing review
+is recorded in §42. Routine future packaging uses `scripts/build_and_package.ps1`
+and `docs/building_tauri.md`, not a one-stage frozen UX-6 build helper.
+
+Voice follow-up: `desktop_show_voice_overlay` must stay async. Tauri2.11.5
+documents Windows deadlock when WebviewWindowBuilder runs in a synchronous
+command. Composer awaits this command before polling voice completion; source
+tests alone do not cover the native first-window creation. Use fresh isolated
+`-Mode voice` QA and `verify_ux6_voice_overlay.cjs` for that bounded check. The
+voice trial uses real mic/transcription with a deterministic model response and
+no account. Keep the live-provider QA profile untouched; request only the three
+speech/silence/cancel checks, not another broad matrix.
+
+Canonical packaged smoke uses a child environment dictionary with other smoke
+flags/source overrides removed. On current .NET, a restored null value can leave
+an empty variable; inherited empty flags previously ran two smoke harnesses and
+raced exit. Preserve recipe-only changes separately from compiled GUI/Core input
+identity. Reuse passing proof only for exact unchanged executable/Core/artifact
+hashes; rerun the failed case only. No GUI rebuild for a child-env recipe-only fix.

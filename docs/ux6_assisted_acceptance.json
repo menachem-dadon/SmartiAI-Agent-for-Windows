@@ -1,0 +1,44 @@
+{
+  "stage_status": "COMPLETE within source-and-accepted-ui scope",
+  "scope": "Human trial reports from the central chat, preserved without reading credentials or inventing provider names, scale-specific measurements or clean-install proof.",
+  "general_trial": {
+    "source_sha256": "c159c81034ff3958ed13379e3fb48ce81012ca885728523883e6813ad8d8a3ab",
+    "reported": "הכול עובד מעולה, למעט ההכתבה",
+    "detail": "Dictation beeped after speech/silence but stuck, sent no chat text and showed no floating overlay. General positive feedback outside dictation is accepted; provider name and per-DPI details were not supplied."
+  },
+  "dictation_function": {
+    "source_sha256": "f8c470578a87e335b0d108d9aa94f0401bafabce3dccf940aba1073b170c70d3",
+    "reported": "עובד מצויין 3 הבדיקות",
+    "checks": [
+      "speech sent once with floating overlay",
+      "silence ends without a message and releases microphone",
+      "cancel closes overlay and releases microphone"
+    ],
+    "status": "PASS"
+  },
+  "dictation_refinement": {
+    "source_sha256": "44717c6c938d74884e1c017c52eda54bec640f60b97c0266700c91aaf75ee360",
+    "executable_sha256": "387C13792AA1ED9666072702F4EF60FA4182128C0BAAAC6FC6662211BD56D776",
+    "reported": "כן, תודה.",
+    "checks": [
+      "rounded shared-system overlay",
+      "direct listening interface without app startup screen",
+      "unrecognized audio produces no input text and leaves draft unchanged"
+    ],
+    "status": "PASS"
+  },
+  "central_stage_acceptance": "Central review performed in§41; current user closure request and explicit source/UI scope accepted in§42/D61. Receipt: docs/ux6_closure.json. Preserve matching package and strict all-level release gaps; no repeated voice/scale trials.",
+  "central_scaling_accessibility_confirmation": {
+    "status": "PASS",
+    "reported_by": "user in central review",
+    "answer": "כן, בדקתי גם את כולם והם תקינים",
+    "windows_scale_percent": [
+      100,
+      150,
+      200
+    ],
+    "text_enlargement": true,
+    "spoken_screen_reader": true,
+    "candidate_scope": "Earlier UX6 user trial; exact binary/per-scale receipt not supplied. 125% automated native evidence is separate. Not a claim that the newly corrected Composer is already in the earlier executable."
+  }
+}

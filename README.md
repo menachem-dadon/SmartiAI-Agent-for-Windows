@@ -125,36 +125,25 @@ pythonw smarti_core.pyw
 
 ## Building a Windows Release
 
-The repeatable release recipe lives in `scripts/` and `packaging/`. Build artifacts, downloaded runtimes, and generated installers are ignored by Git.
-
-For the current release:
+The current Tauri entry point is reusable and builds an isolated source snapshot:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.87.0
+pwsh -NoProfile -File .\scripts\build_and_package.ps1
+pwsh -NoProfile -File .\scripts\build_and_package.ps1 -Version 0.88.0 -Label preview
 ```
 
-The build script:
+It synchronizes the requested version in the snapshot only, builds the Qt-free
+Core/Tauri GUI and private runtimes, creates NSIS/portable ZIP artifacts, runs
+packaged supervisor/browser checks, and writes hashes/source provenance into a
+new folder under `release`. Previous builds and working source are preserved.
+Local unsigned artifacts are the default; signed updater and offline WebView2
+installer options are explicit. See [build options](docs/building_tauri.md).
+`scripts/build_release.ps1` is the historical PyQt recipe.
 
-- verifies that `APP_VERSION` matches the requested release version;
-- creates or updates the build virtual environment;
-- installs `requirements.txt` and `requirements-build.txt`;
-- prepares private Python and Node runtimes and verifies their pinned SHA-256 digests;
-- runs `pip check` for the build environment and private runtime;
-- packages the app with PyInstaller;
-- force-resynchronizes `assets\` into the bundled `_internal\assets` folder and verifies the copied files by SHA-256;
-- validates the release layout and installer path lengths;
-- creates a portable ZIP and, when Inno Setup 6 is installed, a setup EXE.
-
-For a fully clean rebuild:
-
-```powershell
-.\scripts\build_release.ps1 -Version 0.87.0 -Clean -ForceRuntime
-```
-
-Release outputs are written to `release\`:
-
-- `SmartiAI-Agent-for-Windows-0.87.0-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.87.0-win-x64-portable.zip`
+UI changes follow the [accepted design plan](docs/ui_ux_redesign_plan.md#21-שימור-שפת-העיצוב-שאושרה--ux-d58-2026-10-05)
+and shared `desktop/src/design-system` components. They are deliberate defaults;
+requested changes can update them centrally. Current status and acceptance scope
+are in the [UX execution ledger](docs/ui_ux_redesign_execution.md).
 
 ## Automatic Updates
 
@@ -336,36 +325,24 @@ pythonw smarti_core.pyw
 
 ## בניית הפצה ל-Windows
 
-מתכון ההפצה נמצא תחת `scripts/` ו-`packaging/`. תוצרי build, runtimes שהורדו וקבצי התקנה נוצרים מקומית ומוחרגים מ-Git.
-
-לגרסה הנוכחית:
+נקודת הכניסה הקבועה לבניית Tauri ולאריזה:
 
 ```powershell
-.\scripts\build_release.ps1 -Version 0.87.0
+pwsh -NoProfile -File .\scripts\build_and_package.ps1
+pwsh -NoProfile -File .\scripts\build_and_package.ps1 -Version 0.88.0 -Label "ניסוי"
 ```
 
-סקריפט הבנייה:
+ללא פרמטרים נבחרת גרסת המקור הנוכחית. הסקריפט מקפיא עותק מבודד, מסנכרן
+גרסה בעותק בלבד, בונה GUI/Core וסביבות הרצה פרטיות, יוצר מתקין NSIS ו־ZIP
+נייד ומריץ בדיקות חבילה. התוצרים, hashes וזהות המקור נכתבים לתיקייה חדשה
+תחת `release`; המקור והבניות הקודמות נשמרים. ברירת המחדל היא חבילה מקומית
+ללא חתימת updater. [כל האפשרויות ודוגמאות ההפעלה](docs/building_tauri.md).
+`scripts/build_release.ps1` הוא מתכון PyQt ההיסטורי.
 
-- מוודא ש-`APP_VERSION` תואם לגרסת ההפצה;
-- יוצר או מעדכן את סביבת הבנייה;
-- מתקין את `requirements.txt` ואת `requirements-build.txt`;
-- מכין runtimes פרטיים של Python ו-Node ומאמת את חתימות ה-SHA-256 המקובעות שלהם;
-- מריץ `pip check` לסביבת הבנייה ול-runtime הפרטי;
-- אורז את האפליקציה עם PyInstaller;
-- מסנכרן מחדש את `assets\` אל `_internal\assets` בחבילה ומאמת את הקבצים שהועתקו ב-SHA-256;
-- מאמת את מבנה ההפצה ואורכי הנתיבים;
-- יוצר ZIP נייד, ואם Inno Setup 6 מותקן גם קובץ Setup.
-
-לבנייה נקייה לחלוטין:
-
-```powershell
-.\scripts\build_release.ps1 -Version 0.87.0 -Clean -ForceRuntime
-```
-
-התוצרים נכתבים אל `release\`:
-
-- `SmartiAI-Agent-for-Windows-0.87.0-Setup.exe`
-- `SmartiAI-Agent-for-Windows-0.87.0-win-x64-portable.zip`
+שינויי ממשק ממשיכים לפי [תוכנית העיצוב המאושרת](docs/ui_ux_redesign_plan.md)
+והרכיבים המשותפים ב־`desktop/src/design-system`. אלה ברירות מחדל מודעות,
+ומותר לשנותן במכוון כחלק ממטרת המשימה. מצב הביצוע והיקף הקבלה נמצאים
+ב[יומן UX](docs/ui_ux_redesign_execution.md).
 
 ## עדכונים אוטומטיים
 

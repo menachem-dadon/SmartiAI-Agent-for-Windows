@@ -550,7 +550,7 @@ fn voice_overlay_position(main: &Window, width: f64) -> LogicalPosition<f64> {
 }
 
 #[tauri::command]
-pub fn desktop_show_voice_overlay(app: AppHandle) -> Result<(), String> {
+pub async fn desktop_show_voice_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("voice-overlay") {
         window.show().map_err(|error| error.to_string())?;
         return Ok(());
@@ -575,7 +575,7 @@ pub(crate) fn create_voice_overlay(app: &AppHandle, show: bool) -> Result<Webvie
         .max_inner_size(width, 70.0)
         .resizable(false)
         .decorations(false)
-        .transparent(false)
+        .transparent(true)
         .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)

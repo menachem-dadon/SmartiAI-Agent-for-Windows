@@ -124,3 +124,20 @@ test("the voice hotkey obeys the current run and disabled state after rerender",
   expect(coreApi).toHaveBeenCalledWith("POST", "/v2/audio/voice", {}, true);
   expect(invoke).toHaveBeenCalledWith("desktop_show_voice_overlay");
 });
+
+test.each(["שלום בדיקת הכתבה", ""])("voice completion with transcript %j releases listening and submits only speech", async transcript => {
+  const state = {session_id:"voice-finished",active:false,transcript,error:"",cancelled:false};
+  vi.mocked(coreApi).mockImplementation((_method,path) => Promise.resolve(path==="/v2/audio/voice" ? {...state,active:true} : state) as never);
+  vi.mocked(invoke).mockResolvedValue(undefined);
+  const onSend=vi.fn(async()=>{});
+  render(<Composer draft="טיוטה שמורה" conversationId="voice-owner" attachments={[]} onAttachments={vi.fn()} onSend={onSend} onCancel={vi.fn()} />);
+  fireEvent(window,new Event("smarti:voice-hotkey"));
+  await waitFor(()=>expect(vi.mocked(coreApi).mock.calls.some(([,p])=>p==="/v2/audio/voice/status")).toBe(true));
+  await waitFor(()=>expect((screen.getByRole("textbox",{name:"הודעה"}) as HTMLTextAreaElement).disabled).toBe(false));
+  expect(invoke).toHaveBeenCalledWith("desktop_hide_voice_overlay");
+  if(transcript){expect(onSend).toHaveBeenCalledTimes(1);expect(onSend).toHaveBeenCalledWith(transcript,true);}else {
+    expect(onSend).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox",{name:"הודעה"}) as HTMLTextAreaElement).value).toBe("טיוטה שמורה");
+    expect(screen.queryByRole("alert")).toBeNull();
+  }
+});
