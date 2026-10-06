@@ -404,11 +404,13 @@ function SettingRow({
     const optionIcon = (value: string | number) => value === "locked_down" ? "lock" : value === "balanced" ? "shield" : value === "max_autonomy" ? "spark" : value === "light" ? "sun" : value === "dark" ? "moon" : value === "system" ? "screen" : undefined;
     return (
       <SourceSettingField {...sourceProps}>
-        <SegmentedControl className="source-segmented" label={definition.label}>
+        <SegmentedControl className={`source-segmented ${definition.options?.some(option => option.description) ? "source-segmented--described" : ""}`} label={definition.label}>
           {definition.options?.map((option) => (
             <Button
               type="button"
               key={String(option.value)}
+              aria-label={option.description ? option.label : undefined}
+              aria-describedby={option.description ? `${definition.path}-${option.value}-description` : undefined}
               aria-pressed={String(raw ?? "") === String(option.value)}
               className={
                 String(raw ?? "") === String(option.value) ? "active" : ""
@@ -423,7 +425,7 @@ function SettingRow({
               {optionIcon(option.value) && (
                 <Icon name={optionIcon(option.value)!} size={18} />
               )}
-              <span>{option.label}</span>
+              {option.description ? <span className="sds-option-copy"><span>{option.label}</span><span className="sds-option-description" id={`${definition.path}-${option.value}-description`}>{option.description}</span></span> : <span>{option.label}</span>}
             </Button>
           ))}
         </SegmentedControl>

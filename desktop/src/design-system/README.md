@@ -129,7 +129,7 @@ still needs its existing hide/preview/final-bounds/show lifecycle.
 | Field / SearchField / NumberField / Textarea | Native control props, label, unique ID, hint/error associations and optional ref. Textarea defaults to dir=auto for Hebrew/English writing; callers may override it. Numbers stay short; parsing, validation, secrets masking and persistence stay with existing handlers. |
 | RangeField | Controlled numeric value and synchronous onValueChange; native pointer/keyboard behavior, textual output and filled track. Caller supplies min/max/step/formatValue; 0 has no invented meaning. |
 | Switch | Controlled checkbox with switch semantics; Space and disabled remain native. Track 44×26 inside a 44×40 target. Active thumb physically left in RTL, right in LTR. |
-| Menu | Explicit item callbacks/disabled/tone; click toggles, outside interaction, Escape, Home/End, arrows, single-character lookup and Tab. Focus returns for Escape/selection; outside click preserves destination focus. No X. Optional `fitContent` uses intrinsic width and measures the surface for positioning, retaining viewport limits and shared padding. Current/history conversation actions opt in (D62); other menus retain the default width. |
+| Menu | Explicit item callbacks/disabled/tone; click toggles, outside interaction, Escape, Home/End, arrows, single-character lookup and Tab. Focus returns for Escape/selection; outside click preserves destination focus. No X. Optional `description` appears below the label and is linked by `aria-describedby`, retaining a short accessible name. Optional `fitContent` uses intrinsic width and measures the surface for positioning, retaining viewport limits and shared padding. Current/history conversation actions (D62) and safety profiles (D64) opt in; other menus retain the default width. |
 | Dialog / ConfirmDialog | Controlled open/onClose. Native HTML dialog provides modality; explicit Tab/Shift+Tab looping retains focus in the app. Unique title/description IDs; optional initialFocus; previous focus restored. A dialog-owned overlay host keeps tooltips in the top layer. Confirm focuses cancel, caller controls busy/error and closes only on actual success. No action is synthesized. |
 | Tooltip | Keyboard focus/hover, associated description and Escape. Natural content width within the viewport, immediate pointer-leave dismissal, and no focus hint retained after a mouse click. Essential actions remain present on touch. Tooltip text cannot be the sole accessible name. |
 | Tabs | Controlled active/onSelect with explicit panels. RTL-aware arrows, Home/End, roving tab stops, linked panels; hidden panels remain mounted to preserve drafts and state. Caller must give a valid enabled active ID. |
@@ -266,6 +266,14 @@ Additional shared contracts:
 | Popover | Body portal within the design provider, viewport bounds, focus departure/outside-pointer dismissal, Escape returns to trigger. Boundary Tab resumes from trigger. Optional `triggerContent` preserves a separate accessible label; ArrowDown/Up can open. `matchTriggerWidth` opts into the trigger's rendered width, updating on resize with viewport limits; `className` scopes product composition on the popup. Default width stays 380px. Caller keeps options, search and async selection authority. |
 | Dialog | Escape stops propagation to app shortcuts while preserving native cancel/close. Closing an inner dialog retains management and restores its trigger focus. |
 | SegmentedControl | One semantic group and shared frame for existing mutually exclusive buttons. Caller retains values, `aria-pressed`, click handlers and persistence; native Tab/Space/Enter remain available. |
+
+UX-D64 / ledger §45 uses `src/autonomyProfiles.ts` for safety names/descriptions
+in Composer and the settings catalog. The optional shared `sds-option-copy` /
+`sds-option-description` hierarchy keeps descriptions muted and on their own line.
+Safety settings opt into a vertical segmented group with the same copy; theme and
+other segmented controls retain their layout. Intrinsic menu width includes the
+longest description and shared padding only, wrapping within viewport limits.
+Profile IDs, custom mode and authenticated Core persistence remain unchanged.
 
 Settings autosave stays silent on success. Protected email_address uses the
 existing secret route, never a safe-settings PATCH or plaintext readback.

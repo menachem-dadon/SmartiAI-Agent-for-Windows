@@ -44,9 +44,4 @@ export function activityState(item: { runtime_status?: string; is_busy?: boolean
   return "idle";
 }
 
-export const autonomyLabels: Record<string, string> = {
-  locked_down: "בטוח",
-  balanced: "מאוזן",
-  max_autonomy: "אוטונומי",
-  custom: "מותאם אישית",
-};
+export { autonomyLabels } from "./autonomyProfiles";

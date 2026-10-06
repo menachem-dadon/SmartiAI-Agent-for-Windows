@@ -16,7 +16,7 @@ import type { ResolvedTheme } from "./designSystem";
 import { DesignSystemProvider, HoverLabel, Icon, Menu, Switch } from "./design-system";
 import "./chat.css";
 import { DismissibleDetails } from "./popupDismissal";
-import { autonomyLabels } from "./legacyUiParity";
+import { autonomyLabels, autonomyProfiles } from "./autonomyProfiles";
 import { coreApi } from "./coreApi";
 import { useModelMenuPosition } from "./modelMenuPosition";
 
@@ -617,11 +617,10 @@ export function Composer({
               <label className="local-fast-mode" dir="rtl" title="FastMode"><span className="local-fast-mode-caption">FastMode</span><Switch label="FastMode" checked={localFastMode} onCheckedChange={value => void onLocalFastMode(value)} /></label>
             )}
             </div>
-            <span className="autonomy-quick-pill"><Menu label="פרופיל בטיחות" icon="shield" items={[
-              { id: "locked_down", label: "בטוח", icon: "lock", onSelect: () => void onAutonomyMode("locked_down") },
-              { id: "balanced", label: "מאוזן", icon: "shield", onSelect: () => void onAutonomyMode("balanced") },
-              { id: "max_autonomy", label: "אוטונומי", icon: "spark", onSelect: () => void onAutonomyMode("max_autonomy") },
-            ]}><span>{autonomyLabels[autonomyMode] || autonomyLabels.balanced}</span></Menu></span>
+            <span className="autonomy-quick-pill"><Menu label="פרופיל בטיחות" icon="shield" fitContent items={autonomyProfiles.map(profile => ({
+              id: profile.value, label: profile.label, description: profile.description, icon: profile.icon,
+              onSelect: () => void onAutonomyMode(profile.value),
+            }))}><span>{autonomyLabels[autonomyMode] || autonomyLabels.balanced}</span></Menu></span>
           </div>
         </div>
         <button

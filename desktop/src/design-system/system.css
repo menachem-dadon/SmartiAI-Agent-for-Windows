@@ -88,6 +88,8 @@
 .sds-menu button { display:flex; align-items:center; gap:var(--sds-space-2); flex-shrink:0; width:100%; min-height:var(--sds-size-target); border:0; background:transparent; color:var(--sds-color-text); text-align:start; padding:var(--sds-space-2); border-radius:var(--sds-radius-control); cursor:pointer; }
 .sds-menu button:is(:hover,:focus-visible) { background:var(--sds-color-surface-muted); }
 .sds-menu .sds-danger-text { color:var(--sds-color-danger); }
+.sds-option-copy { display:grid; min-width:0; text-align:start; }
+.sds-option-description { color:var(--sds-color-text-muted); font-size:var(--sds-font-caption); line-height:var(--sds-font-line); white-space:normal; overflow-wrap:anywhere; }
 .sds-dialog { width:520px; max-width:calc(100vw - 32px); max-height:calc(100dvh - 32px); margin:auto; overflow:auto; padding:var(--sds-space-6); background:var(--sds-color-surface); color:var(--sds-color-text); border:1px solid var(--sds-color-border); border-radius:var(--sds-radius-dialog); box-shadow:var(--sds-shadow-floating); animation:sds-appear var(--sds-motion-dialog) var(--sds-motion-ease); }
 .sds-dialog::backdrop { background:var(--sds-color-overlay); }
 .sds-dialog>header { display:flex; align-items:center; justify-content:space-between; gap:var(--sds-space-4); margin-bottom:var(--sds-space-3); }

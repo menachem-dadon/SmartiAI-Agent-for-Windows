@@ -1,3 +1,5 @@
+import { autonomyProfiles } from "./autonomyProfiles";
+
 export type ManagementSection =
   | "workspace"
   | "usage"
@@ -16,7 +18,7 @@ export type ManagementSection =
 export type SettingsSection = Extract<ManagementSection, `settings_${string}`>;
 export type SettingControl = "switch" | "segmented" | "text" | "number" | "range" | "select" | "secret" | "directory" | "file";
 
-export type SettingOption = { value: string | number; label: string };
+export type SettingOption = { value: string | number; label: string; description?: string };
 export type SettingDefinition = {
   path: string;
   section: SettingsSection;
@@ -113,7 +115,7 @@ export const settingDefinitions: SettingDefinition[] = [
   field({ path: "local_fast_mode_enabled", section: "settings_ai", group: "ספק ומודל", label: "הפעל FastMode למודלים מקומיים", help: "מצמצם את חוזה המערכת ואת קטלוג הכלים הקבוע, וטוען סכמות רק לפי צורך. כל היכולות נשארות זמינות. המצב אינו מופעל כברירת מחדל.", control: "switch" }),
   field({ path: "tavily_api_key", section: "settings_ai", group: "ספק ומודל", label: "מפתח חיפוש באינטרנט (Tavily)", help: "מאפשר לסמארטי לבצע חיפוש אינטרנט כאשר נדרש מידע עדכני.", control: "secret" }),
 
-  field({ path: "autonomy_mode", section: "settings_security", group: "הרשאות", label: "פרופיל בטיחות", help: "קובע כמה סמארטי יכול לפעול לבד: בטוח מבקש יותר אישורים, מאוזן מתאים לרוב העבודה, ואוטונומי מאפשר יותר רצף פעולה.", control: "segmented", options: [{ value: "locked_down", label: "בטוח" }, { value: "balanced", label: "מאוזן" }, { value: "max_autonomy", label: "אוטונומי" }], info: true }),
+  field({ path: "autonomy_mode", section: "settings_security", group: "הרשאות", label: "פרופיל בטיחות", help: "קובע מתי סמארטי מבקש אישור. ארגז החול והגבלות הפעולות ממשיכים לחול בכל רמה.", control: "segmented", options: autonomyProfiles.map(profile => ({ ...profile })), keywords: autonomyProfiles.map(profile => `${profile.label} ${profile.description}`).join(" "), info: true }),
   field({ path: "custom_permission_profile_enabled", section: "settings_security", group: "הרשאות", label: "התאמה אישית של הרשאות", help: "מאפשר להגדיר הרשאות פרטניות במקום לבחור פרופיל בטיחות כללי.", control: "switch", info: true }),
   field({ path: "sandbox_enabled", section: "settings_security", group: "ארגז חול", label: "הפעל ארגז חול", help: "מגביל את סמארטי לתיקייה אחת. מצב זה מתאים לעבודה בטוחה על פרויקט או תיקייה מוגדרת.", control: "switch", info: true }),
   field({ path: "sandbox_root_dir", section: "settings_security", group: "ארגז חול", label: "תיקיית ארגז החול", help: "בחר את התיקייה שבה סמארטי רשאי לעבוד כאשר ארגז החול פעיל.", control: "directory", info: true }),

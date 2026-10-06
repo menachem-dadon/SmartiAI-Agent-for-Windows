@@ -107,7 +107,7 @@ export function RangeField({ label, value, min, max, step = 1, onValueChange, fo
   return <div className="sds-range-field"><label htmlFor={id}>{label}</label><div><input {...props} id={id} type="range" className="sds-range" disabled={disabled} value={value} min={min} max={max} step={step} aria-valuetext={formatValue(value)} style={{ "--sds-range-fill": `${fill}%`, "--sds-range-direction": dir === "rtl" ? "to left" : "to right" } as CSSProperties} onChange={(event) => onValueChange(event.currentTarget.valueAsNumber)} /><output htmlFor={id}><bdi>{formatValue(value)}</bdi></output></div></div>;
 }
 
-export type MenuItem = { id: string; label: string; icon?: IconName; disabled?: boolean; tone?: "danger"; onSelect: () => void };
+export type MenuItem = { id: string; label: string; description?: string; icon?: IconName; disabled?: boolean; tone?: "danger"; onSelect: () => void };
 export function Popover({ label, triggerContent, className = "", matchTriggerWidth = false, children }: { label: string; triggerContent?: ReactNode; className?: string; matchTriggerWidth?: boolean; children: (close: () => void) => ReactNode }) {
   const trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -157,7 +157,10 @@ export function Menu({ label, icon = "more", items, children, onOpenChange, fitC
         // Menu items are roving; resume the page Tab order from the trigger.
         trigger.current?.focus(); setOpen(false);
       } else if (event.key.length === 1 && !event.ctrlKey && !event.altKey && event.key !== " ") { const matches = [...buttons.slice(index + 1), ...buttons.slice(0, index + 1)]; matches.find((button) => button.textContent?.trim().toLocaleLowerCase().startsWith(event.key.toLocaleLowerCase()))?.focus(); }
-    }}>{items.map((item) => <button key={item.id} type="button" role="menuitem" tabIndex={-1} disabled={item.disabled} className={item.tone === "danger" ? "sds-danger-text" : ""} onClick={() => { dismiss(true); item.onSelect(); }}>{item.icon && <Icon name={item.icon} />}{item.label}</button>)}</div></Overlay>}
+    }}>{items.map((item) => <button key={item.id} type="button" role="menuitem" tabIndex={-1} disabled={item.disabled} aria-label={item.description ? item.label : undefined} aria-describedby={item.description ? `${id}-${item.id}-description` : undefined} className={item.tone === "danger" ? "sds-danger-text" : ""} onClick={() => { dismiss(true); item.onSelect(); }}>
+      {item.icon && <Icon name={item.icon} />}
+      {item.description ? <span className="sds-option-copy"><span>{item.label}</span><span className="sds-option-description" id={`${id}-${item.id}-description`}>{item.description}</span></span> : item.label}
+    </button>)}</div></Overlay>}
   </>;
 }
 
