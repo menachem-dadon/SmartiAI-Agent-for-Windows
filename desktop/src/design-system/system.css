@@ -84,6 +84,7 @@
 .sds-range::-moz-range-thumb { opacity:0; width:24px; height:24px; border:0; }
 .sds-range { transition:--sds-range-fill var(--sds-motion-fast) linear; }
 .sds-menu { position:fixed; z-index:30; width:240px; max-width:calc(100vw - 32px); display:flex; flex-direction:column; padding:var(--sds-space-2); gap:var(--sds-space-1); overflow:auto; border:1px solid var(--sds-color-border); border-radius:var(--sds-radius-dialog); background:var(--sds-color-surface); box-shadow:var(--sds-shadow-floating); animation:sds-appear var(--sds-motion-menu) var(--sds-motion-ease); }
+.sds-root .sds-menu--fit-content { width:max-content; scrollbar-gutter:auto; }
 .sds-menu button { display:flex; align-items:center; gap:var(--sds-space-2); flex-shrink:0; width:100%; min-height:var(--sds-size-target); border:0; background:transparent; color:var(--sds-color-text); text-align:start; padding:var(--sds-space-2); border-radius:var(--sds-radius-control); cursor:pointer; }
 .sds-menu button:is(:hover,:focus-visible) { background:var(--sds-color-surface-muted); }
 .sds-menu .sds-danger-text { color:var(--sds-color-danger); }

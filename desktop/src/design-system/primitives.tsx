@@ -20,14 +20,14 @@ function Overlay({ children }: { children: ReactNode }) {
   if (host?.closest("dialog")) return createPortal(children, host);
   return createPortal(<div className="sds-root sds-floating-layer" data-theme={theme} data-reduced-motion={reduced} dir={dir} style={designTokenStyle(theme)}>{children}</div>, document.body);
 }
-function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean, width: number) {
+function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean, width: number, surface?: RefObject<HTMLElement | null>) {
   const [position, setPosition] = useState({ top: 0, left: 0, maxHeight: 400, transform: "none" });
   useLayoutEffect(() => {
     if (!open) return;
     const update = () => {
       if (!anchor.current) return;
       const rect = anchor.current.getBoundingClientRect();
-      const actualWidth = Math.min(width, window.innerWidth - 32);
+      const actualWidth = Math.min(surface?.current?.offsetWidth ?? width, window.innerWidth - 32);
       const below = window.innerHeight - rect.bottom - 24;
       const above = rect.top - 24;
       const useAbove = below < 180 && above > below;
@@ -37,7 +37,7 @@ function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean, width
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
     return () => { window.removeEventListener("resize", update); window.removeEventListener("scroll", update, true); };
-  }, [anchor, open, width]);
+  }, [anchor, open, width, surface]);
   return position;
 }
 
@@ -129,11 +129,11 @@ export function Popover({ label, triggerContent, children }: { label: string; tr
       if (document.activeElement === controls[event.shiftKey ? 0 : controls.length - 1]) close();
     }}>{children(close)}</div></Overlay>}</>;
 }
-export function Menu({ label, icon = "more", items, children, onOpenChange }: { label: string; icon?: IconName; items: MenuItem[]; children?: ReactNode; onOpenChange?: (open: boolean) => void }) {
+export function Menu({ label, icon = "more", items, children, onOpenChange, fitContent = false }: { label: string; icon?: IconName; items: MenuItem[]; children?: ReactNode; onOpenChange?: (open: boolean) => void; fitContent?: boolean }) {
   const [open, setOpen] = useState(false); const id = useId();
   useEffect(() => { onOpenChange?.(open); return () => onOpenChange?.(false); }, [open, onOpenChange]);
   const trigger = useRef<HTMLButtonElement>(null); const menu = useRef<HTMLDivElement>(null); const openingKey = useRef<"first" | "last">("first");
-  const position = useFloating(trigger, open, 240);
+  const position = useFloating(trigger, open, 240, fitContent ? menu : undefined);
   const dismiss = (restore: boolean) => { setOpen(false); if (restore) trigger.current?.focus(); };
   useLayoutEffect(() => {
     if (open && menu.current) { const buttons = menu.current.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'); buttons[openingKey.current === "last" ? buttons.length - 1 : 0]?.focus(); }
@@ -146,7 +146,7 @@ export function Menu({ label, icon = "more", items, children, onOpenChange }: { 
     return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("focusin", focusOutside); };
   }, [open]);
   return <><button ref={trigger} type="button" className={`sds-button ${children ? "" : "sds-icon-button"}`} aria-label={label} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => { openingKey.current = "first"; setOpen(!open); }} onKeyDown={(event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); openingKey.current = event.key === "ArrowUp" ? "last" : "first"; setOpen(true); } }}>{children}<Icon name={icon} /></button>
-    {open && <Overlay><div ref={menu} id={id} role="menu" aria-label={label} className="sds-menu" style={position} onKeyDown={(event) => {
+    {open && <Overlay><div ref={menu} id={id} role="menu" aria-label={label} className={`sds-menu ${fitContent ? "sds-menu--fit-content" : ""}`} style={position} onKeyDown={(event) => {
       const buttons = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []);
       const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
       if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length; buttons[next]?.focus(); }

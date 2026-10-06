@@ -40,7 +40,7 @@ export function ChatSidebar({ open, logo, conversations, activeId, query, loadin
             <button className="conversation-select" type="button" aria-current={item.id === activeId ? "true" : undefined} onClick={() => onSelect(item.id)}><HoverLabel text={item.title} /></button>
             {item.pinned && <Icon name="pin" />}
             {state !== "idle" && <span role="img" aria-label={title} title={title} className={`conversation-activity ${state}`} />}
-            <span className="history-actions"><Menu icon="more" label={`פעולות עבור ${item.title}`} items={actions(item)} /></span>
+            <span className="history-actions"><Menu fitContent icon="more" label={`פעולות עבור ${item.title}`} items={actions(item)} /></span>
           </div>;
         })}
         {!recentConversations(conversations).length && <p className="drawer-empty">{query ? "לא נמצאו שיחות" : "עדיין אין שיחות"}</p>}

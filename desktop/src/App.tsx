@@ -1406,7 +1406,7 @@ export default function App() {
         <section className="chat-column" ref={chatMotionRef} aria-label="צ׳אט מרכזי" inert={workspace.workbenchOpen && (workbenchExpanded || narrowWorkspace) ? true : undefined}>
           <div className="chat-toolbar">
             <div className="chat-toolbar-controls" dir="rtl">
-              <Menu label="פעולות שיחה" items={activeConversation ? conversationActions(activeConversation, {
+              <Menu fitContent label="פעולות שיחה" items={activeConversation ? conversationActions(activeConversation, {
                 pin: item => void togglePinned(item).catch(reason => setError(String(reason))),
                 rename: item => void renameConversation(item),
                 export: item => void exportConversation(item).catch(reason => setError(String(reason))),
