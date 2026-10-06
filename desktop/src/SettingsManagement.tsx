@@ -1,6 +1,7 @@
 import { Dialog, IconButton, Popover, PageHeader, SegmentedControl, SettingRow as SharedSettingRow, SettingsGroup, Switch, RangeField, LoadingState } from "./design-system";
 import { ManagementFeedback } from "./managementFeedback";
 import { ProviderPicker } from "./ProviderPicker";
+import { useSecretAutosave } from "./useSecretAutosave";
 import { Button, Textarea, Field, Icon, ChoiceField, SelectField, SearchField } from "./design-system";
 import {
   Fragment,
@@ -199,8 +200,13 @@ function SettingRow({
           ? raw.join("; ")
           : (raw ?? "");
   const [draft, setDraft] = useState(String(displayed));
-  const [secret, setSecret] = useState("");
   const [status, setStatus] = useState("");
+  const secretSave = useSecretAutosave({
+    identity: definition.path, delay: 350, deleteOnEmpty: true,
+    persist: value => coreApi(value ? "PUT" : "DELETE", `/v2/settings/secrets/${encodePath(definition.path)}`, value ? { value } : {}, true),
+    onSaved: async () => { setStatus(""); await onSecretChanged(); },
+    onError: reason => setStatus(`השמירה נכשלה: ${String(reason)}`),
+  });
   const saveTimer = useRef<number | null>(null);
   const controlDisabled =
     definition.path === "enable_canvas_remote_images" &&
@@ -280,38 +286,9 @@ function SettingRow({
   if (definition.control === "secret") {
     const state = secrets[definition.path] || { configured: false, masked: "" };
     const help = schema.secret_help[definition.path];
-    const persistSecret = async (next: string) => {
-      setStatus("");
-      try {
-        if (next.trim())
-          await coreApi(
-            "PUT",
-            `/v2/settings/secrets/${encodePath(definition.path)}`,
-            { value: next.trim() },
-            true,
-          );
-        else if (state.configured)
-          await coreApi(
-            "DELETE",
-            `/v2/settings/secrets/${encodePath(definition.path)}`,
-            {},
-            true,
-          );
-        setSecret("");
-        setStatus("");
-        await onSecretChanged();
-      } catch (reason) {
-        setStatus(`השמירה נכשלה: ${String(reason)}`);
-      }
-    };
     const editSecret = (next: string) => {
-      setSecret(next);
       setStatus("");
-      if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(() => {
-        saveTimer.current = null;
-        void persistSecret(next);
-      }, 350);
+      secretSave.edit(next);
     };
     const paste = async () => {
       try {
@@ -332,22 +309,21 @@ function SettingRow({
             type={definition.path === "email_address" ? "email" : "password"}
             dir="ltr"
             autoComplete="new-password"
-            value={secret}
+            value={secretSave.draft}
             onChange={(event) => editSecret(event.target.value)}
-            onBlur={() => {
-              if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; void persistSecret(secret); }
-            }}
+            onBlur={secretSave.flush}
+            inputAction={<IconButton icon="paste" variant="ghost" label="הדבק ערך מלוח ההעתקה" onClick={() => void paste()} />}
             placeholder={
               state.configured
-                ? `מוגדר · ${state.masked || "••••"}`
+                ? state.masked || "••••"
                 : "הדבקת ערך חדש"
             }
           />
-          <IconButton icon="paste" label="הדבק ערך מלוח ההעתקה" type="button" onClick={() => void paste()} />
-          <IconButton icon="trash" label="מחק ערך שמור" type="button" disabled={!secret && !state.configured} onClick={() => editSecret("")} />
+          <IconButton icon="trash" variant="danger" label="מחק ערך שמור" type="button" disabled={!secretSave.draft && !state.configured && !secretSave.busy} onClick={() => { setStatus(""); secretSave.remove(); }} />
           {help?.help_url && (
             <Button
               type="button"
+              icon="key"
               className="secret-help-link"
               onClick={() =>
                 void invoke("open_chat_link", {
@@ -469,21 +445,28 @@ function SettingRow({
     );
   }
   return (
-    <SourceSettingField {...sourceProps}>
+    <SourceSettingField {...sourceProps} className={definition.path === "local_server_url" ? "source-server-url-field" : ""}>
       <div>
         <Field label={definition.label} hiddenLabel
-          dir={definition.control === "number" ? "ltr" : "auto"}
+          dir={definition.control === "number" || definition.path === "local_server_url" ? "ltr" : "auto"}
           type={definition.control === "number" ? "number" : "text"}
           min={definition.min}
           max={definition.max}
           step={definition.step}
           value={draft}
+          inputAction={definition.path === "local_server_url" ? <IconButton icon="paste" variant="ghost" label="הדבק כתובת שרת מלוח ההעתקה" onClick={() => {
+            void navigator.clipboard.readText().then(value => {
+              if (!value.trim()) { setStatus("לוח ההעתקה אינו מכיל טקסט."); return; }
+              queueSave(value.trim());
+            }).catch(reason => setStatus(`ההדבקה נכשלה: ${String(reason)}`));
+          }} /> : undefined}
           onChange={(event) => queueSave(event.target.value)}
           onBlur={() => {
-            if (saveTimer.current !== null)
+            if (saveTimer.current !== null) {
               window.clearTimeout(saveTimer.current);
-            saveTimer.current = null;
-            void saveDraft();
+              saveTimer.current = null;
+              void saveDraft();
+            }
           }}
         />
         {definition.suffix && <i>{definition.suffix}</i>}
@@ -526,6 +509,7 @@ function SearchableModelPicker({ models, selected, loading, favorites, onSelect,
         const favorite = favorites.some(item => item.model === model);
         return <div key={model} className={model === selected ? "selected" : ""}>
           <IconButton icon={favorite ? "starFilled" : "star"} label={`${favorite ? "הסר" : "הוסף"} ${model} ${favorite ? "מהמועדפים" : "למועדפים"}`}
+            variant="ghost" aria-pressed={favorite}
             onClick={() => void onToggleFavorite(model).catch(reason => setError(`שמירת המועדף נכשלה: ${String(reason)}`))} />
           <Button variant="ghost" role="option" aria-selected={model === selected} onClick={() => void onSelect(model).then(close).catch(reason => setError(`בחירת המודל נכשלה: ${String(reason)}`))}><bdi>{model}</bdi></Button>
         </div>;
@@ -555,11 +539,8 @@ export function ProviderWorkflow({
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const modelLoadGeneration = useRef(0);
-  const [keyDraft, setKeyDraft] = useState("");
   const [qwenUrlDraft, setQwenUrlDraft] = useState(String(values.qwen_base_url || ""));
   const [status, setStatus] = useState("");
-  const validationTimer = useRef<number | null>(null);
-  const validationGeneration = useRef(0);
   const favoriteOnLoadProvider = useRef("");
   const [reasoning, setReasoning] = useState<{
     reasoning_effort?: string;
@@ -570,6 +551,19 @@ export function ProviderWorkflow({
   const providerMetadata = schema.providers.find(
     (item) => item.id === provider,
   );
+  const keySave = useSecretAutosave({
+    identity: provider, delay: 900,
+    validate: secret => validateProviderKey({ provider, secret, localUrl: values.local_server_url }),
+    persist: value => coreApi(value ? "PUT" : "DELETE", `/v2/settings/secrets/${encodePath(secretKey)}`, value ? { value } : {}, true),
+    onSaved: async result => {
+      if (result) {
+        setModels(result.models || []);
+        setStatus(`המפתח נבדק ונשמר${result.message ? ` — ${result.message}` : ""}`);
+      } else setStatus("");
+      await reload();
+    },
+    onError: reason => setStatus(`המפתח לא נשמר: ${reason instanceof Error ? reason.message : String(reason)}`),
+  });
   const refreshModels = useCallback(async () => {
     const generation = ++modelLoadGeneration.current;
     setModelsLoading(true);
@@ -645,54 +639,9 @@ export function ProviderWorkflow({
         .then(setReasoning)
         .catch(() => setReasoning({}));
   }, [provider, selectedModel]);
-  useEffect(
-    () => () => {
-      if (validationTimer.current !== null)
-        window.clearTimeout(validationTimer.current);
-    },
-    [],
-  );
-  const validateAndSaveKey = async (supplied = keyDraft) => {
-    if (!secretKey || !supplied.trim()) return;
-    if (validationTimer.current !== null) {
-      window.clearTimeout(validationTimer.current);
-      validationTimer.current = null;
-    }
-    const generation = ++validationGeneration.current;
-    setStatus("בודק את המפתח לפני שמירה…");
-    try {
-      const result = await validateAndPersistProviderKey({
-        provider,
-        secretKey,
-        secret: supplied,
-        localUrl: values.local_server_url,
-      });
-      if (generation !== validationGeneration.current) return;
-      setKeyDraft("");
-      setModels(result.models || []);
-      setStatus(`המפתח נבדק ונשמר: ${secrets[secretKey]?.masked || "••••"}${result.message ? ` — ${result.message}` : ""}`);
-      await reload();
-    } catch (reason) {
-      if (generation === validationGeneration.current)
-        setStatus(
-          `המפתח לא נשמר: ${reason instanceof Error ? reason.message : String(reason)}`,
-        );
-    }
-  };
   const editKey = (next: string) => {
-    setKeyDraft(next);
-    validationGeneration.current += 1;
-    if (validationTimer.current !== null)
-      window.clearTimeout(validationTimer.current);
-    if (!next.trim()) {
-      setStatus("המפתח יימחק בשמירה.");
-      return;
-    }
-    setStatus("המפתח ייבדק לפני שמירה...");
-    validationTimer.current = window.setTimeout(() => {
-      validationTimer.current = null;
-      void validateAndSaveKey(next);
-    }, 900);
+    setStatus("");
+    keySave.edit(next);
   };
   const pasteKey = async () => {
     try {
@@ -704,22 +653,6 @@ export function ProviderWorkflow({
       editKey(value);
     } catch (reason) {
       setStatus(`ההדבקה נכשלה: ${String(reason)}`);
-    }
-  };
-  const removeKey = async () => {
-    validationGeneration.current += 1;
-    if (validationTimer.current !== null)
-      window.clearTimeout(validationTimer.current);
-    setKeyDraft("");
-    if (secretKey && configured?.configured) {
-      await coreApi(
-        "DELETE",
-        `/v2/settings/secrets/${encodePath(secretKey)}`,
-        {},
-        true,
-      );
-      setStatus("המפתח נמחק.");
-      await reload();
     }
   };
   const validateExisting = async () => {
@@ -780,8 +713,7 @@ export function ProviderWorkflow({
           onSelect={async next => {
             if (next === provider) return;
             if (next !== provider) favoriteOnLoadProvider.current = next;
-            validationGeneration.current++; if (validationTimer.current !== null) window.clearTimeout(validationTimer.current);
-            setKeyDraft(""); setStatus("");
+            keySave.edit(""); setStatus("");
             try { await save("api_mode", next); }
             catch (reason) { setStatus(`בחירת הספק נכשלה: ${String(reason)}`); throw reason; }
           }}
@@ -798,20 +730,25 @@ export function ProviderWorkflow({
             <div className="secret-link-row">
               <Field label="מפתח גישה לספק המודל" hiddenLabel
                 type="password"
+                dir="ltr"
                 autoComplete="new-password"
-                value={keyDraft}
+                value={keySave.draft}
                 onChange={(event) => editKey(event.target.value)}
+                onBlur={keySave.flush}
+                aria-busy={keySave.busy || undefined}
+                inputAction={<IconButton icon="paste" variant="ghost" label="הדבק מפתח מלוח ההעתקה" onClick={() => void pasteKey()} />}
                 placeholder={
                   configured?.configured
-                    ? `מוגדר · ${configured.masked}`
+                    ? configured.masked
                     : "הדבקת מפתח API"
                 }
               />
-              <IconButton icon={"paste"} label="הדבק מפתח מלוח ההעתקה" className="icon-control" type="button" onClick={() => void pasteKey()} />
-              <IconButton icon={"trash"} label="מחק מפתח שמור" className="icon-control" type="button" disabled={!keyDraft && !configured?.configured} onClick={() => void removeKey().catch(reason => setStatus(`מחיקת המפתח נכשלה: ${String(reason)}`))} />
+              <IconButton icon="trash" variant="danger" label="מחק מפתח שמור" type="button" disabled={!keySave.draft && !configured?.configured && !keySave.busy} onClick={() => { setStatus(""); keySave.remove(); }} />
+              <Button icon="plug" onClick={() => void validateExisting()} disabled={keySave.busy || Boolean(keySave.draft.trim()) || !configured?.configured}>בדוק חיבור</Button>
               {providerMetadata?.help_url && (
                 <Button
                   type="button"
+                  icon="key"
                   className="secret-help-link"
                   onClick={() =>
                     void invoke("open_chat_link", {
@@ -831,18 +768,6 @@ export function ProviderWorkflow({
               {providerMetadata.key_instructions}
             </p>
           )}
-          <div className="source-field-actions">
-            <Button
-              type="button"
-              disabled={!keyDraft.trim()}
-              onClick={() => void validateAndSaveKey()}
-            >
-              בדיקה ושמירה
-            </Button>
-            <Button type="button" onClick={() => void validateExisting()}>
-              בדיקת החיבור
-            </Button>
-          </div>
         </>
       )}
       {provider === "qwen" && (
@@ -872,9 +797,10 @@ export function ProviderWorkflow({
               type="password"
               disabled
               placeholder="לא נדרש מפתח למודל מקומי"
+              inputAction={<IconButton icon="paste" variant="ghost" label="הדבק מפתח מלוח ההעתקה" disabled />}
             />
-            <IconButton icon={"paste"} label="הדבק מפתח מלוח ההעתקה" className="icon-control" type="button" disabled />
-            <IconButton icon={"trash"} label="מחק מפתח שמור" className="icon-control" type="button" disabled />
+            <IconButton icon="trash" variant="danger" label="מחק מפתח שמור" type="button" disabled />
+            <Button icon="plug" onClick={() => void validateExisting()}>בדוק חיבור</Button>
           </div>
         </SourceSettingField>
       )}
@@ -893,7 +819,7 @@ export function ProviderWorkflow({
               >
                 התחבר עם ChatGPT / Codex
               </Button>
-              <Button type="button" onClick={() => void codexAction("codex_check")}>
+              <Button type="button" icon="plug" onClick={() => void codexAction("codex_check")}>
                 בדוק חיבור
               </Button>
               <Button type="button" onClick={() => void codexAction("codex_logout")}>
@@ -930,7 +856,7 @@ export function ProviderWorkflow({
         >
           <ChoiceField label="עוצמת חשיבה" hiddenLabel
             value={reasoning.reasoning_effort || "auto"}
-            options={reasoning.reasoning_options}
+            options={reasoning.reasoning_options.map(option => option.value === "auto" ? { ...option, label: "אוטומטית" } : option)}
             onValueChange={(next) =>
               void coreApi<typeof reasoning>(
                 "POST",
@@ -1765,7 +1691,7 @@ export function SettingsView({
               <SslWorkflow values={data.values} saveValues={saveValues} />
             )}
             {groups.map(([group, definitions]) => (
-              <SettingsGroup title={group} key={group}>
+              <SettingsGroup title={group} key={group} variant={section === "settings_ai" ? "plain" : "card"}>
                 <div className="management-fields">
                   {definitions
                     .filter((definition) => !definition.providerWorkflow)

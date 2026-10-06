@@ -57,7 +57,7 @@ and reason. A source/build pass alone does not establish visual or native qualit
   preference/storage-key/contrast API and re-exports these values. It has no second palette.
 - `system.css`: component rules consume those properties. Importing the shared
   components loads this stylesheet; it is scoped to `.sds-root` and `sds-*` classes.
-- `icons.tsx`: all 63 semantic roles map to the official Tabler React SVG
+- `icons.tsx`: all 64 semantic roles map to the official Tabler React SVG
   components (`@tabler/icons-react` pinned to 3.48.0). Inline SVG inherits
   currentColor, uses a 24×24 viewBox and stroke 2; filled favorites stay filled.
   Static imports keep unused library icons out of production bundles.
@@ -126,14 +126,14 @@ still needs its existing hide/preview/final-bounds/show lifecycle.
 | Component | Contract / integration responsibility |
 |---|---|
 | Button / IconButton / Icon | Native button props and explicit semantic icon; loading disables activation and exposes aria-busy. Icon actions retain names; tooltip=false removes redundant hints for copy/TTS/close/download. Stop uses the official filled Tabler square; original PNGs remain intact. A round primary IconButton keeps the accepted blue/white action treatment in both themes, separately from text-button accent roles. Caller retains duplicate-send guards and domain cancellation. |
-| Field / SearchField / NumberField / Textarea | Native control props, label, unique ID, hint/error associations and optional ref. Textarea defaults to dir=auto for Hebrew/English writing; callers may override it. Numbers stay short; parsing, validation, secrets masking and persistence stay with existing handlers. |
+| Field / SearchField / NumberField / Textarea | Native control props, label, unique ID, hint/error associations and optional ref. Field.inputAction embeds an optional action on the physical right with reserved input padding; use a ghost IconButton for paste. Textarea defaults to dir=auto for Hebrew/English writing; callers may override it. Numbers stay short; parsing, validation, secrets masking and persistence stay with existing handlers. |
 | RangeField | Controlled numeric value and synchronous onValueChange; native pointer/keyboard behavior, textual output and filled track. Caller supplies min/max/step/formatValue; 0 has no invented meaning. |
 | Switch | Controlled checkbox with switch semantics; Space and disabled remain native. Track 44×26 inside a 44×40 target. Active thumb physically left in RTL, right in LTR. |
 | Menu | Explicit item callbacks/disabled/tone; click toggles, outside interaction, Escape, Home/End, arrows, single-character lookup and Tab. Focus returns for Escape/selection; outside click preserves destination focus. No X. Optional `description` appears below the label and is linked by `aria-describedby`, retaining a short accessible name. Optional `fitContent` uses intrinsic width and measures the surface for positioning, retaining viewport limits and shared padding. Current/history conversation actions (D62) and safety profiles (D64) opt in; other menus retain the default width. |
 | Dialog / ConfirmDialog | Controlled open/onClose. Native HTML dialog provides modality; explicit Tab/Shift+Tab looping retains focus in the app. Unique title/description IDs; optional initialFocus; previous focus restored. A dialog-owned overlay host keeps tooltips in the top layer. Confirm focuses cancel, caller controls busy/error and closes only on actual success. No action is synthesized. |
 | Tooltip | Keyboard focus/hover, associated description and Escape. Natural content width within the viewport, immediate pointer-leave dismissal, and no focus hint retained after a mouse click. Essential actions remain present on touch. Tooltip text cannot be the sole accessible name. |
 | Tabs | Controlled active/onSelect with explicit panels. RTL-aware arrows, Home/End, roving tab stops, linked panels; hidden panels remain mounted to preserve drafts and state. Caller must give a valid enabled active ID. |
-| PageHeader / SettingsGroup / SettingRow / Card | Slots for hierarchy, adjacent descriptions and controls. Wrap based on available container width, not old PyQt constants. |
+| PageHeader / SettingsGroup / SettingRow / Card | Slots for hierarchy, adjacent descriptions and controls. SettingsGroup defaults to variant="card"; variant="plain" retains semantic grouping without a surface, border or padding. Wrap based on available container width, not old PyQt constants. |
 | Alert / Badge / EmptyState / LoadingState | Distinguish actual errors, explicit results, empty content and loading. Errors use role=alert; loading has text and aria-busy. Do not add routine save-success copy. |
 | MessageFrame / UserBubble / HoverLabel | Outputs precede ALL copy/TTS actions by slot order. Bubble physically right even for English; isNew is consumed after 240ms and history does not replay it. Long names move on focus/hover at 72px/s; full title is available, motion reduction is honored. |
 
@@ -415,3 +415,10 @@ an empty variable; inherited empty flags previously ran two smoke harnesses and
 raced exit. Preserve recipe-only changes separately from compiled GUI/Core input
 identity. Reuse passing proof only for exact unchanged executable/Core/artifact
 hashes; rerun the failed case only. No GUI rebuild for a child-env recipe-only fix.
+
+UX-D66 / ledger §47 adds the Tabler `key` role. Original artwork remains
+unchanged: this additional role reuses `lock` in the reversible original family.
+Provider/search secret fields use Field.inputAction with ghost paste, danger
+removal and key help. The local URL gets the same paste affordance. Favorite
+stars use ghost buttons with aria-pressed. Only AI settings groups opt into
+plain; the shared card style and all other consumers remain available.

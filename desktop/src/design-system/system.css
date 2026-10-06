@@ -49,6 +49,10 @@
 .sds-field-group { display:flex; flex-direction:column; gap:var(--sds-space-2); min-width:0; width:100%; }
 .sds-field-group>label,.sds-range-field>label { font-weight:500; }
 .sds-field { width:100%; min-width:0; min-height:var(--sds-size-target); color:var(--sds-color-text); background:var(--sds-color-surface); border:1px solid var(--sds-color-control-border); border-radius:var(--sds-radius-control); padding:var(--sds-space-2) var(--sds-space-3); }
+.sds-field-with-action { position:relative; min-width:0; }
+.sds-field-with-action>.sds-field { padding-right:calc(var(--sds-size-target) + var(--sds-space-2)); }
+.sds-field-action { position:absolute; right:var(--sds-space-1); top:50%; transform:translateY(-50%); display:flex; }
+.sds-field-action .sds-icon-button { width:calc(var(--sds-size-target) - var(--sds-space-2)); height:calc(var(--sds-size-target) - var(--sds-space-2)); min-width:0; min-height:0; }
 .sds-visually-hidden { position:absolute!important; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
 .sds-search:has(.sds-visually-hidden)>.sds-icon { top:10px; }
 .sds-checkbox { width:20px; height:20px; flex:none; accent-color:var(--sds-color-accent); cursor:pointer; }
@@ -114,6 +118,7 @@
 .sds-eyebrow { color:var(--sds-color-text-muted); font-size:var(--sds-font-caption); margin-bottom:var(--sds-space-2)!important; }
 .sds-card,.sds-settings-group { min-width:0; padding:var(--sds-space-6); border:1px solid var(--sds-color-border); border-radius:var(--sds-radius-card); background:var(--sds-color-surface); }
 .sds-settings-group>header { padding-bottom:var(--sds-space-4); }
+.sds-settings-group--plain { padding:0; border:0; border-radius:0; background:transparent; }
 .sds-setting-row { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:var(--sds-space-4); padding-block:var(--sds-space-4); border-top:1px solid var(--sds-color-border); }
 .sds-setting-row>div:first-child { flex:1 1 200px; }
 .sds-setting-control { min-width:0; max-width:100%; }

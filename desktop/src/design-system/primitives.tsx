@@ -78,12 +78,13 @@ export function IconButton({ label, icon, round = false, tooltip = true, ...prop
   return tooltip ? <Tooltip label={label}>{button}</Tooltip> : button;
 }
 
-type FieldProps = InputHTMLAttributes<HTMLInputElement> & { label: string; hiddenLabel?: boolean; hint?: string; error?: string; ref?: RefObject<HTMLInputElement | null> };
-export function Field({ label, hiddenLabel = false, hint, error, className = "", id: suppliedId, ...props }: FieldProps) {
+type FieldProps = InputHTMLAttributes<HTMLInputElement> & { label: string; hiddenLabel?: boolean; hint?: string; error?: string; inputAction?: ReactNode; ref?: RefObject<HTMLInputElement | null> };
+export function Field({ label, hiddenLabel = false, hint, error, inputAction, className = "", id: suppliedId, ...props }: FieldProps) {
   const generatedId = useId();
   const id = suppliedId || generatedId;
   const description = [props["aria-describedby"], hint ? `${id}-hint` : undefined, error ? `${id}-error` : undefined].filter(Boolean).join(" ") || undefined;
-  return <div className={`sds-field-group ${className}`}><label className={hiddenLabel ? "sds-visually-hidden" : undefined} htmlFor={id}>{label}</label><input {...props} id={id} className="sds-field" aria-invalid={error ? true : props["aria-invalid"]} aria-describedby={description} />{hint && <p className="sds-hint" id={`${id}-hint`}>{hint}</p>}{error && <p className="sds-field-error" id={`${id}-error`} role="alert">{error}</p>}</div>;
+  const input = <input {...props} id={id} className="sds-field" aria-invalid={error ? true : props["aria-invalid"]} aria-describedby={description} />;
+  return <div className={`sds-field-group ${className}`}><label className={hiddenLabel ? "sds-visually-hidden" : undefined} htmlFor={id}>{label}</label>{inputAction ? <div className="sds-field-with-action">{input}<span className="sds-field-action">{inputAction}</span></div> : input}{hint && <p className="sds-hint" id={`${id}-hint`}>{hint}</p>}{error && <p className="sds-field-error" id={`${id}-error`} role="alert">{error}</p>}</div>;
 }
 export function SearchField(props: Omit<FieldProps, "type">) { return <div className="sds-search"><Icon name="search" /><Field {...props} type="search" /></div>; }
 export function NumberField(props: Omit<FieldProps, "type">) { return <Field {...props} type="number" className={`sds-number ${props.className || ""}`} />; }
@@ -219,8 +220,8 @@ export function PageHeader({ title, description, eyebrow, actions }: { title: st
 export function SegmentedControl({ label, children, className = "", ...props }: HTMLAttributes<HTMLDivElement> & { label: string }) {
   return <div {...props} className={`sds-segmented ${className}`} role="group" aria-label={label}>{children}</div>;
 }
-export function SettingsGroup({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
-  const id = useId(); return <section className="sds-settings-group" aria-labelledby={id}><header><h2 id={id}>{title}</h2>{description && <p className="sds-hint">{description}</p>}</header>{children}</section>;
+export function SettingsGroup({ title, description, children, variant = "card" }: { title: string; description?: string; children: ReactNode; variant?: "card" | "plain" }) {
+  const id = useId(); return <section className={`sds-settings-group${variant === "plain" ? " sds-settings-group--plain" : ""}`} aria-labelledby={id}><header><h2 id={id}>{title}</h2>{description && <p className="sds-hint">{description}</p>}</header>{children}</section>;
 }
 export function SettingRow({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return <div className="sds-setting-row"><div><strong>{title}</strong>{description && <p className="sds-hint">{description}</p>}</div><div className="sds-setting-control">{children}</div></div>;

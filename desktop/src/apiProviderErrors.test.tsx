@@ -51,7 +51,7 @@ it("shows an independently verified key's model catalog warning after saving", a
     schema={{ providers: [], secret_help: {} }} theme="dark"
   />);
   fireEvent.change(screen.getByPlaceholderText(/מפתח/), { target: { value: "hf-secret" } });
-  fireEvent.click(screen.getByRole("button", { name: "בדיקה ושמירה" }));
+  fireEvent.blur(screen.getByLabelText("מפתח גישה לספק המודל"));
   await waitFor(() => expect(screen.getByText(/המפתח נבדק ונשמר.*רשימת המודלים לא נטענה/)).toBeTruthy());
 });
 

@@ -9,7 +9,7 @@ afterEach(cleanup);
 test("every semantic action has a decorative scalable Tabler SVG", () => {
   const { container } = render(<DesignSystemProvider theme="dark">{iconNames.map(name => <Icon key={name} name={name} size={32} />)}</DesignSystemProvider>);
   const icons = container.querySelectorAll("svg.sds-icon");
-  expect(icons.length).toBe(63);
+  expect(icons.length).toBe(64);
   expect(container.querySelector("img")).toBeNull();
   for (const icon of icons) {
     expect(icon.getAttribute("viewBox")).toBe("0 0 24 24");

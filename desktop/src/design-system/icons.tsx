@@ -5,7 +5,7 @@ import {
   IconBrain, IconBrowser, IconChartBar, IconCheck, IconChecklist, IconChevronDown,
   IconClipboard, IconCode, IconCopy, IconDeviceDesktop, IconDeviceFloppy, IconDots,
   IconDownload, IconExternalLink, IconFile, IconFileExport, IconFolder, IconHistory,
-  IconHome, IconInfoCircle, IconLayersIntersect, IconLayoutBoard, IconLayoutSidebarRight,
+  IconHome, IconInfoCircle, IconKey, IconLayersIntersect, IconLayoutBoard, IconLayoutSidebarRight,
   IconLoader2, IconLock, IconMail, IconMessagePlus, IconMicrophone, IconMoon,
   IconPencil, IconPin, IconPlayerPause, IconPlayerPlay, IconPlayerStopFilled, IconPlug,
   IconPlus, IconRefresh, IconSearch, IconSettings, IconShield, IconSparkles,
@@ -17,7 +17,7 @@ import { foundations, type DesignTheme } from "./tokens";
 export const IconTheme = createContext<DesignTheme>("light");
 export type IconFamily = "tabler" | "original";
 export const IconFamilyContext = createContext<IconFamily>("tabler");
-export const iconNames = ["plus", "send", "mic", "stop", "chevron", "search", "settings", "file", "expand", "shrink", "archive", "close", "check", "sun", "moon", "panel", "arrow", "copy", "download", "shield", "spark", "more", "newChat", "pin", "rename", "trash", "export", "speaker", "memory", "folder", "browser", "terminal", "canvas", "tools", "tasks", "usage", "activity", "refresh", "back", "forward", "external", "lock", "info", "star", "starFilled", "save", "wrap", "play", "pause", "user", "home", "history", "mail", "screen", "code", "globe", "bell", "layers", "plug", "paste", "book", "alert", "loader"] as const;
+export const iconNames = ["plus", "send", "mic", "stop", "chevron", "search", "settings", "file", "expand", "shrink", "archive", "close", "check", "sun", "moon", "panel", "arrow", "copy", "download", "shield", "spark", "more", "newChat", "pin", "rename", "trash", "export", "speaker", "memory", "folder", "browser", "terminal", "canvas", "tools", "tasks", "usage", "activity", "refresh", "back", "forward", "external", "lock", "info", "star", "starFilled", "save", "wrap", "play", "pause", "user", "home", "history", "mail", "screen", "code", "globe", "bell", "layers", "plug", "paste", "book", "alert", "loader", "key"] as const;
 export type IconName = typeof iconNames[number];
 // Static imports keep the published SVG geometry and allow Vite to remove unused icons.
 // Physical arrow directions match the accepted v7 actions; caller-owned transforms stay intact.
@@ -38,10 +38,10 @@ export const tablerIcons = {
   pause: IconPlayerPause, user: IconUser, home: IconHome, history: IconHistory,
   mail: IconMail, screen: IconDeviceDesktop, code: IconCode, globe: IconWorld,
   bell: IconBell, layers: IconLayersIntersect, plug: IconPlug, paste: IconClipboard,
-  book: IconBook, alert: IconAlertTriangle, loader: IconLoader2,
+  book: IconBook, alert: IconAlertTriangle, loader: IconLoader2, key: IconKey,
 };
 const assets = import.meta.glob<string>("./icons/*.png", { eager: true, query: "?url", import: "default" });
-export function rasterIcon(theme: DesignTheme, name: IconName): string { return assets[`./icons/${name}-${theme}.png`]; }
+export function rasterIcon(theme: DesignTheme, name: IconName): string { return assets[`./icons/${name === "key" ? "lock" : name}-${theme}.png`]; }
 export const actionIcons = { create: "plus", edit: "rename", remove: "trash", refresh: "refresh", copy: "copy", speak: "speaker", send: "send", cancel: "stop", appearanceLight: "sun", appearanceDark: "moon", appearanceSystem: "screen", expand: "expand", collapse: "shrink" } satisfies Record<string, IconName>;
 export const toolIcons: Record<string, IconName> = {
   agent_planner: "tasks", background_task_manager: "history", browser_automation_manager: "browser", canvas_manager: "canvas", computer_automation_manager: "screen", context_compaction: "layers", create_python_tool: "code", document_manager: "file", email_manager: "mail", extension_manager: "plug", file_manager: "folder", final_verifier: "check", get_tool_info: "info", mcp: "plug", memory_manager: "memory", notification_manager: "bell", row_status: "check", screen_manager: "screen", search_tools: "search", skill: "book", software_manager: "layers", system_manager: "terminal", web_manager: "globe",

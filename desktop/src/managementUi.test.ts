@@ -379,7 +379,7 @@ describe("Point 16C source-derived settings behavior", () => {
     await waitFor(() =>
       expect(screen.getByDisplayValue("pasted-secret")).toBeTruthy(),
     );
-    fireEvent.click(screen.getByRole("button", { name: "בדיקה ושמירה" }));
+    fireEvent.blur(screen.getByLabelText("מפתח גישה לספק המודל"));
     await waitFor(() => expect(reloads).toBe(1));
     const coreRequests = calls
       .filter((call) => call.command === "core_api")
