@@ -20,24 +20,26 @@ function Overlay({ children }: { children: ReactNode }) {
   if (host?.closest("dialog")) return createPortal(children, host);
   return createPortal(<div className="sds-root sds-floating-layer" data-theme={theme} data-reduced-motion={reduced} dir={dir} style={designTokenStyle(theme)}>{children}</div>, document.body);
 }
-function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean, width: number, surface?: RefObject<HTMLElement | null>) {
-  const [position, setPosition] = useState({ top: 0, left: 0, maxHeight: 400, transform: "none" });
+function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean, width: number, surface?: RefObject<HTMLElement | null>, matchAnchorWidth = false) {
+  const [position, setPosition] = useState<CSSProperties>({ top: 0, left: 0, maxHeight: 400, transform: "none" });
   useLayoutEffect(() => {
     if (!open) return;
     const update = () => {
       if (!anchor.current) return;
       const rect = anchor.current.getBoundingClientRect();
-      const actualWidth = Math.min(surface?.current?.offsetWidth ?? width, window.innerWidth - 32);
+      const actualWidth = Math.min(matchAnchorWidth ? rect.width : surface?.current?.offsetWidth ?? width, window.innerWidth - 32);
       const below = window.innerHeight - rect.bottom - 24;
       const above = rect.top - 24;
       const useAbove = below < 180 && above > below;
-      setPosition({ left: Math.max(16, Math.min(rect.right - actualWidth, window.innerWidth - actualWidth - 16)), top: useAbove ? rect.top - 8 : rect.bottom + 8, maxHeight: Math.max(40, useAbove ? above : below), transform: useAbove ? "translateY(-100%)" : "none" });
+      setPosition({ left: Math.max(16, Math.min(rect.right - actualWidth, window.innerWidth - actualWidth - 16)), top: useAbove ? rect.top - 8 : rect.bottom + 8, maxHeight: Math.max(40, useAbove ? above : below), transform: useAbove ? "translateY(-100%)" : "none", ...(matchAnchorWidth ? { width: actualWidth } : {}) });
     };
     update();
+    const observer = matchAnchorWidth && anchor.current && typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : undefined;
+    if (observer && anchor.current) observer.observe(anchor.current);
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
-    return () => { window.removeEventListener("resize", update); window.removeEventListener("scroll", update, true); };
-  }, [anchor, open, width, surface]);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", update); window.removeEventListener("scroll", update, true); };
+  }, [anchor, open, width, surface, matchAnchorWidth]);
   return position;
 }
 
@@ -106,11 +108,11 @@ export function RangeField({ label, value, min, max, step = 1, onValueChange, fo
 }
 
 export type MenuItem = { id: string; label: string; icon?: IconName; disabled?: boolean; tone?: "danger"; onSelect: () => void };
-export function Popover({ label, triggerContent, children }: { label: string; triggerContent?: ReactNode; children: (close: () => void) => ReactNode }) {
+export function Popover({ label, triggerContent, className = "", matchTriggerWidth = false, children }: { label: string; triggerContent?: ReactNode; className?: string; matchTriggerWidth?: boolean; children: (close: () => void) => ReactNode }) {
   const trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
   const id = useId();
   const [open, setOpen] = useState(false);
-  const position = useFloating(trigger, open, 380);
+  const position = useFloating(trigger, open, 380, undefined, matchTriggerWidth);
   const close = () => { setOpen(false); trigger.current?.focus(); };
   useEffect(() => {
     if (!open) return;
@@ -123,7 +125,7 @@ export function Popover({ label, triggerContent, children }: { label: string; tr
   return <><Button ref={trigger} aria-label={label} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(value => !value)} onKeyDown={event => {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen(true); }
   }}>{triggerContent ?? label}<Icon name="chevron" /></Button>
-    {open && <Overlay><div ref={popup} id={id} className="sds-popover" role="dialog" aria-label={label} style={position} onKeyDown={event => {
+    {open && <Overlay><div ref={popup} id={id} className={`sds-popover ${className}`} role="dialog" aria-label={label} style={position} onKeyDown={event => {
       if (event.key !== "Tab") return;
       const controls = [...(popup.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]') || [])];
       if (document.activeElement === controls[event.shiftKey ? 0 : controls.length - 1]) close();

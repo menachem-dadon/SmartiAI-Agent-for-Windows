@@ -48,15 +48,22 @@
 .source-model-popup [role="listbox"]>div { display:flex; align-items:center; gap:4px; min-width:0; }
 .source-model-popup [role="option"] { flex:1; min-width:0; text-align:start; justify-content:flex-start; overflow-wrap:anywhere; }
 .source-model-popup .selected { background:var(--sds-color-accent-soft); }
-.source-provider-picker { min-width:0; }
-.source-provider-picker>.sds-button { width:100%; justify-content:space-between; }
+.source-settings-control:has(>.source-provider-picker) { grid-template-columns:minmax(0,1fr); }
+.source-provider-picker { min-width:0; width:max-content; max-width:100%; justify-self:start; }
+.source-provider-picker>.sds-button { width:100%; justify-content:space-between; padding-inline:var(--sds-space-4); }
+.source-provider-trigger-content { min-width:0; flex:1; display:grid; }
+.source-provider-trigger-content>span { grid-area:1 / 1; }
+.source-provider-width-labels { min-width:0; display:grid; visibility:hidden; overflow:hidden; padding-inline-start:calc(20px + var(--sds-space-3)); }
+.source-provider-width-labels>bdi { grid-area:1 / 1; white-space:nowrap; }
+.sds-popover.source-provider-popover { padding:var(--sds-space-2); }
 .source-provider-choice { min-width:0; flex:1; display:flex; align-items:center; gap:12px; text-align:right; }
 .source-provider-choice>bdi { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .source-provider-icon { display:block; width:20px; height:20px; flex:none; object-fit:contain; }
 .source-provider-icon--mono { background:currentColor; mask-size:contain; mask-repeat:no-repeat; mask-position:center; }
 .source-provider-popup { display:grid; gap:8px; }
 .source-provider-popup>[role="listbox"] { min-width:0; display:grid; gap:2px; }
-.source-provider-option { width:100%; min-height:44px; justify-content:space-between; border:0; text-align:right; }
+.source-provider-option { width:100%; min-height:44px; justify-content:space-between; border:0; padding-inline:var(--sds-space-2); text-align:right; }
+.source-provider-check-hidden { visibility:hidden; }
 .source-provider-option[aria-selected="true"] { background:var(--sds-color-accent-soft); }
 .settings-footer { display:flex; flex-wrap:wrap; align-items:center; gap:12px; border-top:1px solid var(--sds-color-border); padding-top:24px; margin-top:8px; }
 .source-ssl-card { min-width:0; padding:24px; border:1px solid var(--sds-color-border); border-radius:var(--sds-radius-card); background:var(--sds-color-surface); }

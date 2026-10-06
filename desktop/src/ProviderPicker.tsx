@@ -48,7 +48,15 @@ export function ProviderPicker({ value, onSelect }: { value: string; onSelect: (
   const selected = providerOptions.find(option => option.value === value);
   const label = selected?.label || value;
   return <div className="source-provider-picker" data-provider={value}>
-    <Popover label={`ספק המודל: ${label}`} triggerContent={<ProviderChoice value={value} label={label} />}>
+    <Popover label={`ספק המודל: ${label}`} className="source-provider-popover" matchTriggerWidth triggerContent={
+      <span className="source-provider-trigger-content">
+        {/* Overlaid labels size the trigger with the actual font, regardless of selection. */}
+        <span className="source-provider-width-labels" aria-hidden="true">
+          {providerOptions.map(option => <bdi key={String(option.value)}>{option.label}</bdi>)}
+        </span>
+        <ProviderChoice value={value} label={label} />
+      </span>
+    }>
       {close => <ProviderChoices value={value} onSelect={onSelect} close={close} />}
     </Popover>
   </div>;
@@ -84,7 +92,7 @@ function ProviderChoices({ value, onSelect, close }: { value: string; onSelect: 
         const provider = String(option.value), selected = provider === value;
         return <Button key={provider} role="option" variant="ghost" aria-selected={selected} tabIndex={selected ? 0 : -1} disabled={pending}
           className="source-provider-option" data-provider={provider} onClick={() => void choose(provider)}>
-          <ProviderChoice value={provider} label={option.label} />{selected && <Icon name="check" />}
+          <ProviderChoice value={provider} label={option.label} /><Icon name="check" className={selected ? undefined : "source-provider-check-hidden"} />
         </Button>;
       })}
     </div>

@@ -263,7 +263,7 @@ Additional shared contracts:
 | Field / Textarea / SearchField | Optional `hiddenLabel` hides the real associated label visually; it never removes the accessible name. |
 | SelectField | Native select, associated label and help/error IDs; preserves native keyboard operation and caller values. |
 | Checkbox | Native checkbox for explicit opt-in and bulk selection; toggled preferences use Switch. |
-| Popover | Body portal within the design provider, viewport bounds, focus departure/outside-pointer dismissal, Escape returns to trigger. Boundary Tab resumes from trigger. Optional `triggerContent` preserves a separate accessible label; ArrowDown/Up can open. Caller keeps options, search and async selection authority. |
+| Popover | Body portal within the design provider, viewport bounds, focus departure/outside-pointer dismissal, Escape returns to trigger. Boundary Tab resumes from trigger. Optional `triggerContent` preserves a separate accessible label; ArrowDown/Up can open. `matchTriggerWidth` opts into the trigger's rendered width, updating on resize with viewport limits; `className` scopes product composition on the popup. Default width stays 380px. Caller keeps options, search and async selection authority. |
 | Dialog | Escape stops propagation to app shortcuts while preserving native cancel/close. Closing an inner dialog retains management and restores its trigger focus. |
 | SegmentedControl | One semantic group and shared frame for existing mutually exclusive buttons. Caller retains values, `aria-pressed`, click handlers and persistence; native Tab/Space/Enter remain available. |
 
@@ -298,6 +298,16 @@ and color assets stay unchanged. No icon library or runtime network is added.
 The supplied MIT notice is in `public/licenses/lobe-icons-MIT.txt`; see NOTICE.
 `scripts/verify_ux5_provider_icons.cjs` checks the guarded isolated Windows app,
 asset loading, geometry, keyboard, real provider persistence and reload.
+
+UX-D63 / ledger §44 sizes the provider trigger from all catalog labels overlaid
+in an aria-hidden CSS grid, using the actual font rather than a fixed pixel width
+or character count. The popup opts into `matchTriggerWidth`. Space for the
+selection mark is reserved in every row; 8px popup/row padding and 16px trigger
+padding keep the longest label fully readable at the same compact width.
+Selection, errors and font-size changes preserve the width rule; other Popover
+consumers keep their default sizing. The provider's grid track and hidden sizing
+labels can shrink within the field, so enlarged text in a narrow window does not
+create horizontal scrolling; labels retain the existing ellipsis when space runs out.
 
 Product QA: start an owned Vite server on 1439, then run
 `node scripts/verify_ux5_product.cjs http://127.0.0.1:1439 .codex-local/ux-5/product-review-final-fixed`.
