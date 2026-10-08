@@ -110,6 +110,82 @@ class ChatStreamingTests(unittest.TestCase):
             live.text(char)
         self.assertEqual([call["name"] for call in live.calls.values()], ["file_manager", "web_manager"])
 
+    def test_direct_builtin_method_prepares_before_parameters_without_text_leaks(self):
+        for name in ["get_tool_info", "create_python_tool"]:
+            with self.subTest(name=name):
+                live, batches = self.live()
+                header = '{"method":"' + name + '"'
+                for char in header:
+                    live.text(char)
+                    live.flush()
+                self.assertEqual([call["name"] for call in live.calls.values()], [name])
+                self.assertEqual(live.visible, "")
+                call_id = live.calls["0"]["call_id"]
+                tail = ',"params":{"name":"generated_tool","tool_name":"create_python_tool","code":"' + "x" * 150000 + '"}}'
+                for offset in range(0, len(tail), 19):
+                    live.text(tail[offset:offset + 19])
+                live.finish(has_tools=True)
+                self.assertEqual(live.calls["0"]["name"], name)
+                self.assertEqual(live.calls["0"]["call_id"], call_id)
+                self.assertLessEqual(len(live.calls["0"]["arguments"]), 12000)
+                self.assertFalse(any(event.get("text") for batch in batches for event in batch["events"]))
+
+    def test_protocol_metadata_and_reordered_headers_never_leak_tool_json(self):
+        values = [
+            '{"jsonrpc":"2.0","id":1,"method":"get_tool_info","params":{"tool_name":"file_manager"}}',
+            '{"params":{"name":"canvas_manager","arguments":{"content":"hello"}},"method":"tools/call"}',
+            '{"tool_calls":[{"function":{"name":"canvas_manager","arguments":"{\\"content\\":\\"hello\\"}"}}]}',
+            '{"tool_calls":[{"method":"tools/call","params":{"name":"canvas_manager","arguments":{}}}]}',
+        ]
+        for value in values:
+            with self.subTest(value=value):
+                live, batches = self.live()
+                for char in value:
+                    live.text(char)
+                    live.flush()
+                live.finish(has_tools=True)
+                self.assertEqual([call["name"] for call in live.calls.values()], ["get_tool_info" if '"method":"get_tool_info"' in value else "canvas_manager"])
+                self.assertFalse(any(event.get("text") for batch in batches for event in batch["events"]))
+
+    def test_local_transports_preserve_direct_tool_execution_text_but_hide_live_json(self):
+        payload = '{"method":"get_tool_info","params":{"tool_name":"create_python_tool","action":"full"}}'
+        pieces = [payload[offset:offset + 7] for offset in range(0, len(payload), 7)]
+        for transport in ["compatible", "lmstudio", "llamacpp"]:
+            with self.subTest(transport=transport):
+                core = RequestCore("local")
+                live, batches = self.live()
+                core._current_stream = live
+                if transport == "compatible":
+                    chunks = [NS(choices=[NS(index=0, delta=NS(content=piece), finish_reason=None)], usage=None) for piece in pieces]
+                    chunks.append(NS(choices=[NS(index=0, delta=NS(content=""), finish_reason="stop")], usage=None))
+                    result = core._collect_openai_stream(iter(chunks), "local", "model").choices[0].message.content
+                else:
+                    def capabilities(url, **_kwargs):
+                        data = {"models": [{"type": "llm", "key": "local"}]} if transport == "lmstudio" else ({"default_generation_settings": {}, "chat_template": "template"} if url.endswith("/props") else {})
+                        return NS(status_code=200, json=lambda: data)
+                    core._request_get = capabilities
+                    if transport == "lmstudio":
+                        frames = [{"type": "message.delta", "content": piece} for piece in pieces] + [{"type": "chat.end"}]
+                        core._request_post = Mock(return_value=self.raw_response(frames))
+                    else:
+                        frames = [{"content": piece} for piece in pieces] + [{"stop": True}]
+                        core._request_post = Mock(side_effect=[NS(status_code=200, json=lambda: {"prompt": "history"}), self.raw_response(frames)])
+                    result = local_progress_response(core, "http://localhost:54329/v1" if transport == "lmstudio" else "http://localhost:54330/v1", "model", [], "system", {}, "auto")[0]
+                live.finish(has_tools=bool(live.calls))
+                self.assertEqual(result, payload)
+                self.assertTrue(AgentRuntime(Mock()).extract_tool_calls(result)["is_tool_call_intent"])
+                self.assertEqual([call["name"] for call in live.calls.values()], ["get_tool_info"])
+                self.assertFalse(any(event.get("text") for batch in batches for event in batch["events"]))
+
+    def test_ordinary_json_with_nested_protocol_keys_remains_answer_content(self):
+        value = '{"payload":{"method":"tools/call","params":{"name":"file_manager"}},"kind":"example","progress_report":"data"}'
+        live, _ = self.live()
+        for char in value:
+            live.text(char)
+        live.finish()
+        self.assertFalse(live.calls)
+        self.assertEqual(live.visible, value)
+
     def test_split_thinking_and_memory_do_not_enter_visible_text(self):
         live, batches = self.live()
         for char in "<think>private reasoning</think>שלום %%\u0025private memory%%\u0025 עולם":

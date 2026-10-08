@@ -74,16 +74,28 @@ def generate(text, **_kwargs):
         time.sleep(.6)
         live.status("thinking")
         time.sleep(.6)
-        if text.startswith("stream-tools"):
-            live.text("בודק את קובץ הבדיקה")
-            live.tool(0, "canvas_manager")
-            for _ in range(16):
+        if text.startswith(("stream-tools", "stream-text-tool")):
+            textual = text.startswith("stream-text-tool")
+            tool_name = "create_python_tool" if textual else "canvas_manager"
+            if textual:
+                for char in '{"method":"create_python_tool","params":{"name":"generated_tool","code":"':
+                    live.text(char)
+                live.flush()
+            else:
+                live.text("בודק את קובץ הבדיקה")
+                live.tool(0, tool_name)
+            for _ in range(48 if textual else 16):
                 core._raise_if_cancelled()
-                live.tool(0, arguments="large_parameter_" * 2048)
+                if textual:
+                    live.text("large_parameter_" * 2048)
+                else:
+                    live.tool(0, arguments="large_parameter_" * 2048)
                 time.sleep(.08)
+            if textual:
+                live.text('"}}')
             live.finish(has_tools=True)
             core._emit_agent_process_event("report", text="בודק את קובץ הבדיקה")
-            tool = core._agent_tool_event_item("canvas_manager", {}, event_id=live.calls["0"]["call_id"])
+            tool = core._agent_tool_event_item(tool_name, {}, event_id=live.calls["0"]["call_id"])
             core._emit_agent_process_event("tool_start", tools=[tool])
             accepted = manager.request_approval(run, session, "אישור בדיקת סטרימינג", "אישור מדומה בלבד; אין כתיבה או כלי חיצוני", "low")
             time.sleep(.6)

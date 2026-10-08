@@ -4,6 +4,7 @@ import re
 import time
 import uuid
 from types import SimpleNamespace
+from ..config import BUILTIN_TOOL_SCHEMAS
 
 
 class ToolEnvelopeScanner:
@@ -17,6 +18,18 @@ class ToolEnvelopeScanner:
         self.key_string = False
         self.root = -1
         self.call_index = 0
+        self.intent = False
+        self.first_key = None
+        self.complete = False
+        self.methods = {}
+        self.param_names = {}
+
+    def call_scope(self, path):
+        if len(path) == 1:
+            return self.root * 8, path
+        if len(path) >= 3 and path[0] == "tool_calls" and isinstance(path[1], int):
+            return self.root * 8 + path[1], path[2:]
+        return self.root * 8, path
 
     def feed(self, fragment):
         found = []
@@ -33,13 +46,26 @@ class ToolEnvelopeScanner:
                     if self.key_string:
                         self.stack[-1]["key"] = self.value
                         self.stack[-1]["keys"] = False
+                        if len(self.stack) == 1 and self.first_key is None:
+                            self.first_key = self.value
                     else:
-                        if self.path == ("method",) and self.value == "tools/call":
-                            self.call_index = self.root * 8
-                            found.append((self.call_index, ""))
-                        elif self.path == ("params", "name") or (len(self.path) == 3 and self.path[0] == "tool_calls" and self.path[2] == "name"):
-                            self.call_index = self.root * 8 + (self.path[1] if self.path[0] == "tool_calls" else 0)
-                            found.append((self.call_index, self.value))
+                        index, field = self.call_scope(self.path)
+                        if field == ("method",) and (self.value == "tools/call" or self.path == ("method",) and self.value in BUILTIN_TOOL_SCHEMAS):
+                            self.intent = True
+                            self.call_index = index
+                            self.methods[index] = self.value
+                            found.append((index, self.param_names.get(index, "") if self.value == "tools/call" else self.value))
+                        elif field == ("params", "name"):
+                            self.param_names[index] = self.value
+                            # In a direct builtin call params.name names an
+                            # argument (e.g. a newly created tool), not the call.
+                            if self.methods.get(index) == "tools/call":
+                                self.call_index = index
+                                found.append((index, self.value))
+                        elif self.path[:1] == ("tool_calls",) and field in {("name",), ("tool",), ("action",), ("function", "name")}:
+                            self.intent = True
+                            self.call_index = index
+                            found.append((index, self.value))
                 elif len(self.value) < 128:
                     self.value += char
                 continue
@@ -53,12 +79,18 @@ class ToolEnvelopeScanner:
                 if not self.stack:
                     self.root += 1
                     path = ()
+                    self.first_key = None
+                    self.complete = False
+                if char == "[" and path == ("tool_calls",):
+                    self.intent = True
                 if char == "{" and len(path) == 2 and path[0] == "tool_calls":
                     self.call_index = self.root * 8 + path[1]
                     found.append((self.call_index, ""))
                 self.stack.append({"kind": char, "path": path, "key": None, "keys": char == "{", "index": 0})
             elif char in "}]" and self.stack:
                 self.stack.pop()
+                if not self.stack:
+                    self.complete = True
             elif char == "," and frame:
                 if frame["kind"] == "{":
                     frame.update(key=None, keys=True)
@@ -86,6 +118,9 @@ class LiveResponse:
         self.text_tool = False
         self.tool_header = ""
         self.tool_scanner = ToolEnvelopeScanner()
+        self.tool_candidate = None
+        self.tool_candidate_size = 0
+        self.tool_candidate_headers = []
         self.event("request_start", provider_stage="waiting")
 
     def safe(self, raw, final=False):
@@ -186,13 +221,14 @@ class LiveResponse:
         raw = re.sub(r'<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|\|channel[^>]*)?$', '', raw)
         raw = re.sub(r'%%%.*?(?:%%%|$)', '', raw, flags=re.S)
         raw = re.sub(r'%{1,2}$', '', raw)
-        structured = raw.lstrip().startswith('{')
-        if structured and re.search(r'"(?:kind|final_answer|progress_report)"\s*:', raw):
+        structured = re.match(r'\s*\{\s*"(?:kind|final_answer|progress_report)"\s*:', raw)
+        if structured:
             # Codex's constrained output envelope identifies kind before content.
             value = self._json_string(raw, "final_answer")
             if value is None or re.search(r'"kind"\s*:\s*"tool_calls"', raw):
                 value = self._json_string(raw, "progress_report") or ""
             if re.search(r'"kind"\s*:\s*"tool_calls"', raw) and re.search(r'"tool_calls"\s*:\s*\[', raw):
+                self.tool_scanner = ToolEnvelopeScanner()
                 for index, name in self.tool_scanner.feed(raw):
                     self.tool(index, name)
                 self.text_tool = True
@@ -203,15 +239,20 @@ class LiveResponse:
             match = re.search(r'(?:^|\n)(?:```(?:json)?\s*\n?)?\s*\{', raw)
             if match:
                 tail = raw[match.start():]
-                first_key = re.search(r'\{\s*"([^"\\]+)"\s*:', tail)
-                method = re.search(r'"method"\s*:\s*"([^"\\]*)"', tail)
                 example = bool(re.search(r'(?:example|דוגמ[אה])', raw[:match.start()], re.I))
-                is_call = bool(first_key and (first_key.group(1) == "tool_calls" or first_key.group(1) == "method" and method and method.group(1) == "tools/call") and not example)
-                undecided = not first_key or first_key.group(1) == "method" and not method
+                if self.tool_candidate != match.start():
+                    self.tool_candidate = match.start()
+                    self.tool_candidate_size = 0
+                    self.tool_candidate_headers = []
+                    self.tool_scanner = ToolEnvelopeScanner()
+                self.tool_candidate_headers.extend(self.tool_scanner.feed(tail[self.tool_candidate_size:]))
+                self.tool_candidate_size = len(tail)
+                is_call = self.tool_scanner.intent and not example
+                undecided = not self.tool_scanner.complete and self.tool_scanner.first_key in {None, "method", "params", "jsonrpc", "id", "tool_calls"}
                 if is_call:
-                    if not self.calls:
+                    if not self.calls and not self.tool_candidate_headers:
                         self.tool(0)
-                    for index, name in self.tool_scanner.feed(tail):
+                    for index, name in self.tool_candidate_headers:
                         self.tool(index, name)
                     self.text_tool = True
                     self.tool_header = tail[-4096:]
