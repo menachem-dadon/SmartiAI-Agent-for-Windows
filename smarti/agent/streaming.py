@@ -239,13 +239,20 @@ class LiveResponse:
 
 
 def sse_objects(response, cancelled=lambda: None):
-    """Read actual SSE frames, preserving multi-line data and closing on failure."""
+    """Read UTF-8 SSE frames independently of requests' HTTP charset guess."""
     data = []
+    first_line = True
     try:
-        for line in response.iter_lines(chunk_size=1, decode_unicode=True):
+        # text/event-stream is UTF-8. requests guesses ISO-8859-1 for text/*
+        # without a charset; decoding there corrupts non-ASCII text and may
+        # split frames at Unicode separators inside JSON string values.
+        for line in response.iter_lines(chunk_size=1, decode_unicode=False):
             cancelled()
             if isinstance(line, bytes):
                 line = line.decode("utf-8")
+            if first_line:
+                line = line.removeprefix("\ufeff")
+                first_line = False
             if not line:
                 if data:
                     value = "\n".join(data)

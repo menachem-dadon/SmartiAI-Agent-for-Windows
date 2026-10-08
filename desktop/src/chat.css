@@ -186,10 +186,12 @@
 .agent-tool-row pre { background:var(--sds-color-surface-muted); border-radius:8px; padding:12px; }
 .agent-tool-row pre { min-width:0; max-width:100%; max-height:240px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; scrollbar-gutter:stable; font:13px/1.6 var(--sds-font-mono); }
 .agent-initial-thinking { color:var(--sds-color-text-muted); margin:8px 0; }
-.agent-status-text { display:inline-block; max-width:100%; --chat-shimmer-base:var(--sds-color-text); --chat-shimmer-peak:var(--sds-color-text-muted); }
-.sds-root[data-theme="dark"] .agent-status-text { --chat-shimmer-base:var(--sds-color-text-muted); --chat-shimmer-peak:var(--sds-color-text); }
+.agent-status-text,.stream-reveal { --chat-shimmer-base:var(--sds-color-text); --chat-shimmer-peak:var(--sds-color-action); --chat-shimmer-glow:color-mix(in srgb,var(--sds-color-action) 65%,transparent); }
+.agent-status-text { display:inline-block; max-width:100%; }
+.sds-root[data-theme="dark"] :is(.agent-status-text,.stream-reveal) { --chat-shimmer-peak:var(--sds-color-on-action); --chat-shimmer-glow:color-mix(in srgb,var(--sds-color-accent) 80%,transparent); }
+.sds-root[data-theme="dark"] .agent-status-text { --chat-shimmer-base:var(--sds-color-text-muted); }
 @supports (background-clip:text) or (-webkit-background-clip:text) {
-  .agent-status-text.is-shimmering { color:transparent; background-color:var(--chat-shimmer-base); background-image:linear-gradient(100deg,var(--chat-shimmer-base) 36%,var(--chat-shimmer-peak) 50%,var(--chat-shimmer-base) 64%); background-size:220% 100%; background-repeat:no-repeat; background-clip:text; -webkit-background-clip:text; -webkit-text-fill-color:transparent; animation:chat-text-shimmer .8s linear infinite; animation-delay:-.2s; }
+  .agent-status-text.is-shimmering { color:transparent; background-color:var(--chat-shimmer-base); background-image:linear-gradient(100deg,var(--chat-shimmer-base) 30%,var(--sds-color-accent) 43%,var(--chat-shimmer-peak) 48%,var(--chat-shimmer-peak) 52%,var(--sds-color-accent) 57%,var(--chat-shimmer-base) 70%); background-size:220% 100%; background-repeat:no-repeat; background-clip:text; -webkit-background-clip:text; -webkit-text-fill-color:transparent; filter:drop-shadow(0 0 2px var(--chat-shimmer-glow)); animation:chat-text-shimmer 1.15s linear infinite; animation-delay:-.2s; }
 }
 @keyframes chat-text-shimmer { from { background-position:-20% 0; } to { background-position:120% 0; } }
 .conversation-approvals { flex:none; min-width:0; width:min(var(--chat-reading-width),100%); margin:0 auto 16px; padding:12px; border:1px solid var(--sds-color-control-border); border-radius:16px; background:var(--sds-color-surface); }
@@ -215,11 +217,11 @@
 .chat-new-content:focus-visible { outline:2px solid var(--sds-color-accent); outline-offset:3px; }
 @keyframes chat-dot-hop { 0%,65%,100% { transform:translateY(0); } 30% { transform:translateY(-4px); } }
 .tool-preparation-ring { display:inline-block; width:12px; height:12px; border:2px solid var(--sds-color-border); border-top-color:var(--sds-color-text-muted); border-radius:50%; margin-inline-end:6px; vertical-align:middle; animation:sds-spin .85s linear infinite; }
-.stream-reveal { animation:chat-stream-reveal var(--sds-motion-dialog) var(--sds-motion-ease) both; }
+.stream-reveal { animation:chat-stream-reveal var(--sds-motion-dialog) linear both; }
 @supports (background-clip:text) or (-webkit-background-clip:text) {
-  .stream-reveal { background-image:linear-gradient(100deg,var(--sds-color-text) 35%,var(--sds-color-text-muted) 50%,var(--sds-color-text) 65%); background-size:250% 100%; background-clip:text; -webkit-background-clip:text; }
+  .stream-reveal { background-image:linear-gradient(100deg,var(--chat-shimmer-base) 30%,var(--sds-color-accent) 43%,var(--chat-shimmer-peak) 48%,var(--chat-shimmer-peak) 52%,var(--sds-color-accent) 57%,var(--chat-shimmer-base) 70%); background-size:250% 100%; background-clip:text; -webkit-background-clip:text; }
 }
-@keyframes chat-stream-reveal { from { opacity:.25; color:transparent; background-position:100% 0; } 65% { opacity:1; color:transparent; background-position:0 0; } to { opacity:1; color:inherit; background-position:0 0; } }
+@keyframes chat-stream-reveal { from { opacity:.5; color:transparent; background-position:100% 0; filter:drop-shadow(0 0 2px var(--chat-shimmer-glow)); } 30% { opacity:1; } 65% { opacity:1; color:transparent; background-position:0 0; filter:drop-shadow(0 0 2px var(--chat-shimmer-glow)); } to { opacity:1; color:inherit; background-position:0 0; filter:none; } }
 .sds-dialog.attachment-lightbox { width:100vw; height:100dvh; max-width:100vw; max-height:100dvh; padding:0; border:0; border-radius:0; overflow:hidden; background:transparent; }
 .attachment-lightbox::backdrop { background:#000b; }
 .attachment-lightbox>header { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); }
@@ -229,10 +231,10 @@
 .attachment-lightbox.is-closing::backdrop { animation:chat-lightbox-close 160ms var(--sds-motion-ease) both; }
 @keyframes chat-lightbox-close { to { opacity:0; } }
 @media (prefers-reduced-motion:reduce) {
-  .stream-reveal,.chat-stream-dots i,.tool-preparation-ring,.attachment-lightbox-view { animation:none; }
+  .stream-reveal,.chat-stream-dots i,.tool-preparation-ring,.attachment-lightbox-view { animation:none; filter:none; }
   .message-expand-button .sds-icon { transition:none; }
 }
-@media (forced-colors:active) { .stream-reveal { animation:none; color:CanvasText; background:none; } .chat-new-content { border-color:ButtonText; } }
+@media (forced-colors:active) { .stream-reveal { animation:none; color:CanvasText; background:none; filter:none; } .chat-new-content { border-color:ButtonText; } }
 @keyframes chat-pulse { 50% { opacity:.55; } }
 @media (max-width:1205px) {
   .conversation-drawer.is-open { position:absolute; right:0; top:0; bottom:0; width:min(var(--drawer-width),calc(100% - 40px)); }
@@ -259,8 +261,8 @@
   .autonomy-quick-pill .sds-button { white-space:normal; min-width:0; max-width:100%; padding:var(--sds-space-1); overflow-wrap:anywhere; }
 }
 @media (prefers-reduced-motion:reduce) { .agent-status-text,.conversation-activity { animation:none; } }
-@media (prefers-reduced-motion:reduce),(forced-colors:active) { .agent-status-text.is-shimmering { animation:none; background:none; color:inherit; -webkit-text-fill-color:currentColor; } }
-.sds-root[data-reduced-motion="true"] .agent-status-text.is-shimmering { animation:none; background:none; color:inherit; -webkit-text-fill-color:currentColor; }
+@media (prefers-reduced-motion:reduce),(forced-colors:active) { .agent-status-text.is-shimmering { animation:none; background:none; color:inherit; -webkit-text-fill-color:currentColor; filter:none; } }
+.sds-root[data-reduced-motion="true"] :is(.agent-status-text.is-shimmering,.stream-reveal) { animation:none; background:none; color:inherit; -webkit-text-fill-color:currentColor; filter:none; }
 
 .code-frame.is-wrapped pre, .code-frame.is-wrapped code { white-space:pre-wrap; overflow-wrap:anywhere; }
 .voice-overlay-document,.voice-overlay-document body,.voice-overlay-document #root { background:transparent; }

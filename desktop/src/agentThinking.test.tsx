@@ -24,6 +24,19 @@ beforeEach(() => { sessionStorage.clear(); vi.useFakeTimers(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("agent thinking indicator", () => {
+  test("uses thinking while waiting for cloud tokens and preserves real local prefill", () => {
+    const view = render(run([], { stream: { stage: "waiting", blocks: {} } }));
+    advance(300);
+    expect(thinking()?.classList.contains("is-shimmering")).toBe(true);
+    expect(screen.queryByText("ממתין לתשובה…")).toBeNull();
+    view.rerender(run([], { stream: { stage: "prefill", percent: 37, blocks: {} } }));
+    expect(screen.getByText("מעבד הנחיה: 37%")).toBeTruthy();
+    expect(thinking()).toBeNull();
+    view.rerender(run([], { stream: { stage: "thinking", blocks: {} } }));
+    expect(thinking()).not.toBeNull();
+    expect(view.container.querySelectorAll(".is-shimmering")).toHaveLength(1);
+  });
+
   test("waits 300ms after sending, without restarting for status or thinking events", () => {
     const events: RunEvent[] = [];
     const view = render(run(events));

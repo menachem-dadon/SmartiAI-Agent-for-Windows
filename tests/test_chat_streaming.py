@@ -1,4 +1,5 @@
 """Real provider fragment contracts, persistence and cancellation without charges."""
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -11,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock
+
+import requests
 
 from smarti.agent.streaming import LiveResponse, collect_http_stream, sse_objects
 from smarti.agent.local_streaming import local_progress_response
@@ -43,6 +46,49 @@ class ChatStreamingTests(unittest.TestCase):
         batches = []
         live = LiveResponse(batches.append, **options)
         return live, batches
+
+    def raw_response(self, frames, *, newline="\n", bom=False):
+        # Match requests' actual default for SSE without a charset. Decoded
+        # string fixtures cannot catch corruption before the SSE parser runs.
+        response = requests.Response()
+        response.status_code = 200
+        response.headers["Content-Type"] = "text/event-stream"
+        response.encoding = requests.utils.get_encoding_from_headers(response.headers)
+        body = ("\ufeff" if bom else "") + "".join(
+            "data: " + json.dumps(frame, ensure_ascii=False) + newline * 2
+            for frame in frames
+        )
+        response.raw = io.BytesIO(body.encode("utf-8"))
+        response.close = Mock(wraps=response.close)
+        return response
+
+    def test_raw_http_text_is_utf8_even_when_requests_defaults_to_latin1(self):
+        text = "שלום עולם 🙂 مرحبا 中文\u2028עוד שורה"
+        for provider, frames in [
+            ("gemini", [{"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}]}]),
+            ("anthropic", [
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+                {"type": "message_stop"},
+            ]),
+        ]:
+            with self.subTest(provider=provider):
+                live, _ = self.live()
+                response = self.raw_response(frames)
+                self.assertEqual(response.encoding, "ISO-8859-1")
+                result = collect_http_stream(response, provider, live, lambda: None).json()
+                live.finish()
+                self.assertEqual(live.visible, text)
+                content = (result["candidates"][0]["content"]["parts"][0]["text"]
+                           if provider == "gemini" else result["content"][0]["text"])
+                self.assertEqual(content, text)
+                response.close.assert_called_once()
+
+    def test_raw_sse_bom_and_line_endings_preserve_unicode_tool_arguments(self):
+        frame = {"functionCall": {"name": "canvas_manager", "args": {"content": "עברית 🙂"}}}
+        for newline in ["\n", "\r\n", "\r"]:
+            with self.subTest(newline=repr(newline)):
+                self.assertEqual(list(sse_objects(self.raw_response([frame], newline=newline, bom=True))), [frame])
 
     def test_textual_tool_header_is_visible_before_long_arguments_and_no_json_leaks(self):
         live, batches = self.live()
@@ -154,12 +200,14 @@ class ChatStreamingTests(unittest.TestCase):
         live, batches = self.live()
         core._current_stream = live
         core._request_get = lambda _url, **_kwargs: NS(status_code=200, json=lambda: {"models": [{"type": "llm", "key": "local"}]})
-        response = Response([{ "type": "prompt_processing.progress", "progress": .37 },
-            {"type": "reasoning.delta", "content": "secret thought"}, {"type": "message.delta", "content": "answer"},
-            {"type": "chat.end", "result": {"output": [{"type": "message", "content": "answer"}], "stats": {"input_tokens": 5, "total_output_tokens": 3}}}])
+        answer = "תשובה חיה 🙂"
+        response = self.raw_response([{ "type": "prompt_processing.progress", "progress": .37 },
+            {"type": "reasoning.delta", "content": "secret thought"}, {"type": "message.delta", "content": answer},
+            {"type": "chat.end", "result": {"output": [{"type": "message", "content": answer}], "stats": {"input_tokens": 5, "total_output_tokens": 3}}}])
         core._request_post = Mock(return_value=response)
         result = local_progress_response(core, "http://localhost:54321/v1", "local", [{"role": "assistant", "content": "prior answer"}, {"role": "user", "content": "continue"}], "system", {}, "auto")
-        self.assertEqual(result[0], "answer")
+        self.assertEqual(result[0], answer)
+        self.assertEqual(live.visible, answer)
         payload = core._request_post.call_args.kwargs["json"]
         self.assertFalse(payload["store"])
         self.assertEqual(payload["integrations"], [])

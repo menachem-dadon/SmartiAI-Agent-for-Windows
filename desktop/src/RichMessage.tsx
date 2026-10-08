@@ -811,7 +811,7 @@ export const RichMessage = memo(function RichMessage({
           </div>
         </details>
       )}
-      {canThink && <WaitingIndicator key={agentEvents.filter(event => event.type === "report").slice(-1)[0]?.liveEventId || "initial"} immediate={stream?.stage === "prefill" || stream?.stage === "thinking"} shimmer={!rows.length || processOpen && !ownerRow} label={stream?.stage === "prefill" ? `מעבד הנחיה${stream.percent == null ? "…" : `: ${stream.percent}%`}` : !stream || stream.stage === "thinking" ? "חושב..." : "ממתין לתשובה…"}/>}
+      {canThink && <WaitingIndicator key={agentEvents.filter(event => event.type === "report").slice(-1)[0]?.liveEventId || "initial"} immediate={stream?.stage === "prefill" || stream?.stage === "thinking"} shimmer={!rows.length || processOpen && !ownerRow} label={stream?.stage === "prefill" ? `מעבד הנחיה${stream.percent == null ? "…" : `: ${stream.percent}%`}` : "חושב..."}/>}
       {attachmentStrip}
       {message.role === "user" ? !!message.content && <UserBubble isNew={isNew}>{collapsible && <IconButton icon="chevron" variant="ghost" className="message-expand-button" label={userExpanded ? "כווץ הודעה" : "הרחב הודעה"} aria-expanded={userExpanded} aria-controls={contentId} onClick={event => preserveDisclosure(event.currentTarget, () => { setUserExpanded(!userExpanded); remember("user", !userExpanded); })} />}{content}</UserBubble> : content}
       {message.role === "assistant" && (runStatus || message.metadata?.run_status) === "cancelled" && <p className="agent-initial-thinking">היצירה נעצרה. התשובה שהתקבלה עד העצירה נשמרה.</p>}
