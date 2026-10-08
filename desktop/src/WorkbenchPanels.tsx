@@ -26,6 +26,12 @@ export function WorkbenchSurface({ ref, initial, visible, motionRevision, restor
   const { tabs, active } = snapshot;
   const [error, setError] = useState("");
   const [overlay, setOverlay] = useState(false);
+  const [modal, setModal] = useState(false);
+  useEffect(() => {
+    const update = () => setModal(!!document.querySelector("dialog[open]"));
+    update(); window.addEventListener("smarti:modal-change", update);
+    return () => window.removeEventListener("smarti:modal-change", update);
+  }, []);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const surface = useRef<HTMLDivElement>(null);
   const closing = useRef(new Set<string>());
@@ -100,7 +106,7 @@ export function WorkbenchSurface({ ref, initial, visible, motionRevision, restor
     <div className="workbench-body">
       {!current && <div className="workbench-empty" role="group" aria-label="מה תרצה לפתוח?"><h2>סביבת העבודה</h2><p>פתח כלי לצד השיחה</p>{launcherKinds.map(kind => <Button variant="ghost" icon={icons[kind]} key={kind} onClick={() => add(kind, true)}>{workbenchLabels[kind]}</Button>)}</div>}
       {tabs.some(tab => tab.kind === "browser") && <section className="workbench-panel" role="tabpanel" id={current?.kind === "browser" ? `workbench-panel-${current.id}` : undefined} aria-labelledby={current?.kind === "browser" ? `workbench-tab-${current.id}` : undefined} hidden={current?.kind !== "browser"} aria-label="דפדפן">
-        <BrowserPanel workspaceTabId={current?.kind === "browser" ? current.id : ""} visible={visible && current?.kind === "browser" && !closingIds.has(current.id)} obscured={overlay} geometryRevision={motionRevision} onActivity={reportBrowserActivity} />
+        <BrowserPanel workspaceTabId={current?.kind === "browser" ? current.id : ""} visible={visible && current?.kind === "browser" && !closingIds.has(current.id)} obscured={overlay || modal} geometryRevision={motionRevision} onActivity={reportBrowserActivity} />
       </section>}
       {tabs.filter(tab => tab.kind !== "browser").map(tab => <section className="workbench-panel" role="tabpanel" id={`workbench-panel-${tab.id}`} aria-labelledby={`workbench-tab-${tab.id}`} hidden={tab.id !== active} key={tab.id} aria-label={tab.title}>
         {tab.kind === "files" && <WorkbenchFiles id={tab.id} />}

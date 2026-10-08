@@ -20,7 +20,7 @@ function advance(ms: number) {
 }
 const thinking = () => screen.queryByText("חושב...");
 
-beforeEach(() => { vi.useFakeTimers(); });
+beforeEach(() => { sessionStorage.clear(); vi.useFakeTimers(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("agent thinking indicator", () => {
@@ -111,7 +111,7 @@ describe("agent thinking indicator", () => {
     expect(tools[0].textContent).toContain("הסתיים");
     expect(tools[0].textContent).toContain("first query");
     expect(tools[0].textContent).toContain("first result");
-    expect(tools[1].textContent).toContain("רץ");
+    expect(tools[1].textContent).toContain("מריץ כלי");
     events.push(step(5, { type: "tool_finish", results: [{ action: "search", event_id: "two", status: "error" }] }));
     view.rerender(run([...events]));
     advance(299);
@@ -119,7 +119,7 @@ describe("agent thinking indicator", () => {
     advance(1);
     expect(thinking()).not.toBeNull();
     expect(view.container.querySelectorAll(".agent-tool-row")).toHaveLength(2);
-    expect(screen.getByText("שגיאה · search")).toBeTruthy();
+    expect(screen.getByText("שגיאה search")).toBeTruthy();
   });
 
   test("also waits for individually delivered tool events without call IDs", () => {
@@ -149,7 +149,7 @@ describe("agent thinking indicator", () => {
     expect(thinking()).not.toBeNull();
   });
 
-  test("shimmers the running group and each running tool, then stops each as it finishes", () => {
+  test("transfers exactly one shimmer from group to the first active visible tool", () => {
     const events = [step(1, { type: "tool_start", tools: [
       { action: "search", event_id: "one" },
       { action: "read", event_id: "two" },
@@ -160,15 +160,16 @@ describe("agent thinking indicator", () => {
     expect(groupText().classList.contains("is-shimmering")).toBe(true);
     fireEvent.click(group.querySelector("summary")!);
     expect(group.open).toBe(true);
-    expect(screen.getByText("רץ · search").classList.contains("is-shimmering")).toBe(true);
-    expect(screen.getByText("רץ · read").classList.contains("is-shimmering")).toBe(true);
+    expect(groupText().classList.contains("is-shimmering")).toBe(false);
+    expect(screen.getByText("מריץ כלי search").classList.contains("is-shimmering")).toBe(true);
+    expect(screen.getByText("מריץ כלי read").classList.contains("is-shimmering")).toBe(false);
 
     events.push(step(2, { type: "tool_finish", results: [{ action: "search", event_id: "one" }] }));
     view.rerender(run([...events]));
     expect(group.open).toBe(true);
-    expect(groupText().classList.contains("is-shimmering")).toBe(true);
-    expect(screen.getByText("הסתיים · search").classList.contains("is-shimmering")).toBe(false);
-    expect(screen.getByText("רץ · read").classList.contains("is-shimmering")).toBe(true);
+    expect(groupText().classList.contains("is-shimmering")).toBe(false);
+    expect(screen.getByText("הסתיים search").classList.contains("is-shimmering")).toBe(false);
+    expect(screen.getAllByText("מריץ כלי read").filter(node => node.classList.contains("is-shimmering"))).toHaveLength(1);
 
     events.push(step(3, { type: "tool_finish", results: [{ action: "read", event_id: "two" }] }));
     view.rerender(run([...events]));

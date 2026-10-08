@@ -3655,9 +3655,12 @@ class AgentRuntime:
 
     def extract_tool_calls(self, text):
         text = text or ""
+        fenced = list(re.finditer(r'```[^\n]*\n.*?```', text, re.DOTALL))
         blocks = list(re.finditer(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL | re.IGNORECASE))
         calls = []
         for m in blocks:
+            if re.search(r'(?:\bexample\b|דוגמ[אה])', text[:m.start()], re.IGNORECASE):
+                continue
             raw = m.group(1)
             try:
                 obj = json.loads(raw)
@@ -3683,12 +3686,17 @@ class AgentRuntime:
                 continue
             if ch != "{":
                 continue
+            if any(m.start() <= idx < m.end() for m in fenced):
+                continue
+            if text[text.rfind("\n", 0, idx) + 1:idx].strip() or re.search(r'(?:\bexample\b|דוגמ[אה])', text[:idx], re.IGNORECASE):
+                continue
             try:
                 obj, end = decoder.raw_decode(text[idx:])
             except Exception:
                 continue
             raw = text[idx:idx + end]
             entries = self._tool_call_entries_from_obj(text, idx, idx + end, raw, obj)
+            scan_from = idx + end
             if entries:
                 calls.extend(entries)
                 scan_from = idx + end

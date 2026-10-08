@@ -3,9 +3,9 @@ const {chromium}=require('playwright');
 const {spawn}=require('node:child_process');
 const {randomUUID}=require('node:crypto');
 const assert=require('node:assert/strict');
-async function browserQA() {
+async function browserQA(options={}) {
  const token=randomUUID();
- const host=spawn('python',['scripts/ux3_core_host.py'],{windowsHide:true,env:{...process.env,UX3_TEST_TOKEN:token,UX6_STRESS_QA:'1',UX4_WORKBENCH_QA:'1',PYTHONUTF8:'1'}});
+ const host=spawn('python',['scripts/ux3_core_host.py'],{windowsHide:true,env:{...process.env,UX3_TEST_TOKEN:token,UX6_STRESS_QA:'1',UX4_WORKBENCH_QA:'1',PYTHONUTF8:'1',...options.env}});
  let stderr='';host.stderr.on('data',b=>stderr+=b);
  let handshake;
  try{handshake=await new Promise((resolve,reject)=>{
@@ -33,6 +33,7 @@ async function browserQA() {
   if(cmd==='plugin:window|is_maximized')return false;
   if(cmd==='plugin:event|listen')return calls.length;
   if(['browser_set_visible','browser_set_bounds','plugin:event|unlisten','desktop_finish_startup','desktop_set_close_to_tray','desktop_set_voice_hotkey','desktop_set_unread','desktop_notify'].includes(cmd))return true;
+  if(options.invoke)return options.invoke(cmd,args);
   throw Error('Unadapted native IPC: '+cmd);
  });
  await page.addInitScript(()=>{let id=0;window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main',windowLabel:'main'}},transformCallback:()=>++id,unregisterCallback:()=>{},invoke:(cmd,args)=>window.__qaInvoke(cmd,args)};window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:()=>{}};});

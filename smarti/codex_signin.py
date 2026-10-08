@@ -35,6 +35,7 @@ SMARTI_TURN_OUTPUT_SCHEMA = {
     "additionalProperties": False,
     "properties": {
         "kind": {"type": "string", "enum": ["tool_calls", "final"]},
+        "progress_report": {"type": ["string", "null"]},
         "tool_calls": {
             "type": ["array", "null"],
             "items": {
@@ -52,7 +53,6 @@ SMARTI_TURN_OUTPUT_SCHEMA = {
             },
         },
         "final_answer": {"type": ["string", "null"]},
-        "progress_report": {"type": ["string", "null"]},
     },
     "required": ["kind", "tool_calls", "final_answer", "progress_report"],
 }
@@ -885,6 +885,7 @@ class CodexSignInProvider:
         reasoning_effort: str = "auto",
         cancel_event=None,
         purpose: str = "agent",
+        stream=None,
     ) -> tuple[str, dict]:
         """Run a single response through official, ephemeral ``codex exec``."""
         status = self.connection_status()
@@ -898,6 +899,14 @@ class CodexSignInProvider:
         ):
             selected_reasoning_effort = "auto"
         purpose = str(purpose or "agent").strip().lower()
+        if stream is not None and purpose == "agent":
+            from .codex_stream import complete_stream
+            try:
+                return complete_stream(self, messages, selected_model, timeout, selected_reasoning_effort, cancel_event, stream, SMARTI_TURN_OUTPUT_SCHEMA)
+            except CodexSignInError as error:
+                if error.reason != "stream_unsupported" or stream.visible or stream.calls:
+                    raise
+                stream.status("unsupported")
         instructions_path = self._write_temporary_model_instructions(
             self._build_model_instructions(messages, purpose=purpose)
         )

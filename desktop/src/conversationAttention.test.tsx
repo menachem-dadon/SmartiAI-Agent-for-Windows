@@ -85,7 +85,7 @@ beforeEach(() => {
       chat_models: { providers: [], provider: "local", model: "test" },
     } as any;
     if (path === "/v2/settings") return settings as any;
-    if (path.startsWith("/v2/events/replay")) return { items: [] } as any;
+    if (path.startsWith("/v2/events/live")) return { items: [] } as any;
     if (path === "/v2/runs?limit=100") return { items: structuredClone(runs) } as any;
     if (path === "/v2/approvals") return { items: structuredClone(approvals) } as any;
     if (path.startsWith("/v2/runs/")) return { items: [] } as any;
@@ -178,22 +178,24 @@ describe("conversation read state and reply navigation", () => {
     expect(badge()).toEqual({ count: 2 });
   });
 
-  test("aligns to the answer on recent-list and repeated notification activation, without polling scroll jumps", async () => {
+  test("ordinary selection preserves reading while notifications explicitly align the reply", async () => {
     await start();
     open("b");
     await screen.findByText("answer-b");
     const viewport = document.querySelector<HTMLElement>(".chat-stage")!;
-    await waitFor(() => expect(viewport.scrollTop).toBe(1184));
+    await waitFor(() => expect(viewport.scrollTop).toBe(0));
     // Let the one-frame layout correction settle, then scroll manually.
     await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
     viewport.scrollTop = 250;
+    fireEvent.scroll(viewport);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1300)); });
     expect(viewport.scrollTop).toBe(250);
     await act(async () => native.handlers.get("desktop://activation")!({ payload: { command: "notification", sessionId: "b" } }));
     expect(viewport.scrollTop).toBe(1184);
     viewport.scrollTop = 0;
+    fireEvent.scroll(viewport);
     await act(async () => open("b"));
-    expect(viewport.scrollTop).toBe(1184);
+    expect(viewport.scrollTop).toBe(0);
   });
 
   test("quiet polls discover a completion in the already-open conversation and synchronize its receipt", async () => {

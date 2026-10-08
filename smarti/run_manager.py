@@ -326,6 +326,7 @@ class ConversationRunManager:
             "status_callback": combine("status_callback", "run_status"),
             "print_callback": combine("print_callback", "run_output"),
             "step_callback": combine("step_callback", "run_step"),
+            "stream_callback": combine("stream_callback", "run_stream"),
             "api_key_callback": external.get("api_key_callback") or (
                 lambda secret_key, provider_label, title, message, help_url:
                 self.request_api_key(
@@ -426,7 +427,7 @@ class ConversationRunManager:
         except Exception as exc:
             error = str(exc)
             handle.error = error
-            handle.status = "failed"
+            handle.status = "cancelled" if handle.cancel_event.is_set() else "failed"
             logging.exception("Conversation run %s failed", run_id)
             try:
                 if not str(response or "").strip():
@@ -437,20 +438,19 @@ class ConversationRunManager:
                     display_error = getattr(
                         self.core, "_display_assistant_text_for_history", None
                     )
+                    snapshot = ((self.core.chat_store.run(run_id) or {}).get("metadata") or {}).get("stream") or {}
+                    partial = "\n".join(block.get("text", "") for block in snapshot.get("blocks", {}).values() if block.get("kind") == "text" and block.get("role") != "report")
+                    displayed = (display_error(response) if callable(display_error) else f"שגיאה: {response.replace('ERROR_USER:', '').strip()}")
                     self.core.chat_store.append_message(
                         "assistant",
-                        (
-                            display_error(response)
-                            if callable(display_error)
-                            else f"שגיאה: {response.replace('ERROR_USER:', '').strip()}"
-                        ),
-                        {"run_id": run_id, "run_status": "failed", "is_error": True},
+                        partial if handle.status == "cancelled" and partial else ((partial + "\n\n") if partial else "") + displayed,
+                        {"run_id": run_id, "run_status": handle.status, "is_error": handle.status == "failed"},
                         session_id=session_id,
                     )
                 handle.response = str(response or "")
                 self.core.chat_store.transition_run(
                     run_id,
-                    "failed",
+                    handle.status,
                     response_text=handle.response,
                     error_text=error,
                 )
@@ -461,7 +461,7 @@ class ConversationRunManager:
                 "run_finished",
                 run_id,
                 session_id,
-                {"status": "failed", "error": error, "response": handle.response},
+                {"status": handle.status, "error": error, "response": handle.response},
                 persist=False,
             )
         finally:

@@ -419,6 +419,7 @@ class ChatSessionStore:
         metadata = _json_loads(row["metadata_json"], {})
         result = copy.deepcopy(extra)
         result.update({
+            "message_id": f'{row["session_id"]}:{row["ordinal"]}',
             "role": str(row["role"]),
             "content": str(row["content"] or ""),
             "created_at": str(row["created_at"] or ""),
@@ -1316,9 +1317,35 @@ class ChatSessionStore:
 
     def append_run_event(self, run_id, event_type, payload=None):
         with self._lock, self._connect() as db:
-            if not db.execute("SELECT 1 FROM runs WHERE id=?", (str(run_id or ""),)).fetchone():
+            row = db.execute("SELECT metadata_json FROM runs WHERE id=?", (str(run_id or ""),)).fetchone()
+            if not row:
                 return None
+            if event_type == "run_stream":
+                metadata = _json_loads(row["metadata_json"], {})
+                state = metadata.setdefault("stream", {"blocks": {}, "stage": "waiting"})
+                for event in ((payload or {}).get("value") or {}).get("events", []):
+                    request_id = event.get("request_id", "")
+                    kind = event.get("kind")
+                    if kind == "request_start":
+                        state.update(request_id=request_id, stage="waiting", percent=None)
+                        # Keep earlier reports; discard an abandoned retry draft.
+                        state["blocks"] = {key: block for key, block in state["blocks"].items() if block.get("role") == "report" or block.get("kind") == "tool"}
+                    elif request_id == state.get("request_id"):
+                        if kind == "stage":
+                            state.update(stage=event.get("provider_stage"), percent=event.get("percent"))
+                        elif kind in {"text_delta", "text_replace"}:
+                            block = state["blocks"].setdefault(event["block_id"], {"kind": "text", "text": "", "role": event.get("role", "answer")})
+                            block["text"] = (block["text"] if kind == "text_delta" else "") + event.get("text", "")
+                            state["stage"] = "text"
+                        elif kind == "tool_preparing":
+                            state["blocks"][event["block_id"]] = {**event, "kind": "tool", "status": "preparing"}
+                            state["stage"] = "tool"
+                        elif kind in {"request_end", "text_role"} and event.get("block_id") in state["blocks"]:
+                            state["blocks"][event["block_id"]]["role"] = event.get("role", "answer")
             event_id, sequence = self._append_run_event_locked(db, run_id, event_type, payload)
+            if event_type == "run_stream":
+                state["cursor"] = event_id
+                db.execute("UPDATE runs SET metadata_json=? WHERE id=?", (_json_dumps(metadata), str(run_id)))
             return {"id": event_id, "sequence": sequence}
 
     def transition_run(

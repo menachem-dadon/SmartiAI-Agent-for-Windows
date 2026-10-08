@@ -14,7 +14,7 @@ class LifecycleMixin:
         "_pending_canvas_artifacts", "_current_agent_process_events",
         "_current_agent_process_started_at", "status_callback",
         "print_callback", "ask_user_callback", "api_key_callback",
-        "step_callback",
+        "step_callback", "stream_callback", "_current_stream",
         "_held_resource_locks",
     })
 
@@ -278,6 +278,8 @@ class LifecycleMixin:
             "ask_user_callback": None,
             "api_key_callback": None,
             "step_callback": None,
+            "stream_callback": None,
+            "_current_stream": None,
             "_held_resource_locks": [],
         }
         saved_mode = normalize_provider_name(context.get("mode", ""))
@@ -300,7 +302,7 @@ class LifecycleMixin:
             history.insert(0, {"role": "system", "content": values["system_prompt"]})
             values["universal_history"] = history
         if isinstance(callbacks, dict):
-            for name in ("status_callback", "print_callback", "ask_user_callback", "api_key_callback", "step_callback"):
+            for name in ("status_callback", "print_callback", "ask_user_callback", "api_key_callback", "step_callback", "stream_callback"):
                 if name in callbacks:
                     values[name] = callbacks[name]
         return values

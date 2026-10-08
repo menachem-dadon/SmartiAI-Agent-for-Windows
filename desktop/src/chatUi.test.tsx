@@ -135,7 +135,7 @@ describe("rich daily chat UI", () => {
     expect(html).not.toContain("<script>");
     expect(html).toContain("&lt;script&gt;");
     expect(html).toContain('dir="ltr"');
-    expect(html).toContain("מריץ: search");
+    expect(html).toContain("הפעלת כלי לא הושלמה");
     expect(html).toContain("agent-process");
     expect(html).not.toContain("message-meta");
     expect(html).toContain('aria-label="העתק"');
@@ -165,7 +165,7 @@ describe("rich daily chat UI", () => {
       />,
     );
     expect(html).not.toContain("agent-process");
-    expect(html).not.toContain("מריץ: search");
+    expect(html).not.toContain("מריץ כלי search");
   });
 
   test("restores durable reports, tool loops and elapsed work time", () => {

@@ -189,6 +189,7 @@ OPERATIONS = [
     ("GET", "/v2/runs/{run_id}/events", "replayRunEvents", "שחזור אירועי ריצה", None),
     ("POST", "/v2/runs/{run_id}/api-key", "provideRunApiKey", "מענה להפרעת מפתח API של ריצה", "provideRunApiKey"),
     ("GET", "/v2/events/replay", "replayEventsHttp", "שחזור אירועים עמיד דרך מארח Tauri", None),
+    ("GET", "/v2/events/live", "liveEventsHttp", "זרם אירועים מיידי עם שחזור דרך מארח Tauri", None),
     ("GET", "/v2/approvals", "listApprovals", "אישורים ממתינים", None),
     ("POST", "/v2/approvals/{approval_id}/resolve", "resolveApproval", "אישור או דחייה", "resolveApproval"),
     ("GET", "/v2/settings/schema", "settingsSchema", "סכמת הגדרות בטוחה", None),

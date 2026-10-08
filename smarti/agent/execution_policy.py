@@ -171,10 +171,13 @@ class ExecutionPolicyMixin:
         return result_box.get("result")
 
     def _request_user_approval(self, title, text, *, risk="medium"):
+        tool = getattr(self._execution_context, "current_tool", None)
+        if tool:
+            self._emit_agent_process_event("tool_waiting", tools=[self._agent_tool_event_item(tool[0], tool[1], event_id=tool[2])])
         run_id = str(getattr(self._execution_context, "run_id", "") or "")
         session_id = str(getattr(self._execution_context, "target_session_id", "") or "")
         if run_id and session_id and getattr(self, "run_manager", None):
-            return self.run_manager.request_approval(
+            approved = self.run_manager.request_approval(
                 run_id,
                 session_id,
                 title,
@@ -182,6 +185,10 @@ class ExecutionPolicyMixin:
                 risk_level=risk,
                 callback=self.ask_user_callback,
             )
+            if tool:
+                self._emit_agent_process_event("tool_start" if approved else "tool_finish", **{
+                    "tools" if approved else "results": [self._agent_tool_event_item(tool[0], tool[1], status="running" if approved else "denied", event_id=tool[2])]})
+            return approved
         if self._is_background_context():
             logging.warning(f"Background task attempted a gated action ({risk}): {title}")
             return False
@@ -784,6 +791,11 @@ class ExecutionPolicyMixin:
             if value is not None and str(value).strip():
                 safe_args[key] = self._short_step_value(value, limit=48)
         effective_action, _ = self._effective_tool_action(action, args)
+        live = getattr(self, "_current_stream", None)
+        if live:
+            matching = [call for call in live.calls.values() if call.get("name") in {str(action), str(effective_action)}]
+            if not event_id and len(matching) == 1:
+                event_id = matching[0]["call_id"]
         item = {
             "action": str(action or ""),
             "effective_action": str(effective_action or ""),

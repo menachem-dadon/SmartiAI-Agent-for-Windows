@@ -77,5 +77,5 @@ test("old saved approval status reports are omitted while real tool history rema
   ] } } }} />);
   expect(screen.queryByText(/ממתין לאישור/u)).toBeNull();
   expect(view.container.querySelectorAll(".agent-tool-row")).toHaveLength(1);
-  expect(screen.getByText("הסתיים · search")).toBeDefined();
+  expect(screen.getByText("הסתיים search")).toBeDefined();
 });

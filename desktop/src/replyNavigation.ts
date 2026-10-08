@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 
-export interface ReplyNavigation { sessionId: string; revision: number; runId?: string; }
+export interface ReplyNavigation { sessionId: string; revision: number; runId?: string; alignReply?: boolean; }
 
 /** Align once after the requested conversation has rendered, never on polling. */
 export function useReplyNavigation(
@@ -13,7 +13,7 @@ export function useReplyNavigation(
   useLayoutEffect(() => {
     const container = viewport.current;
     if (!container || !ready || !request || request === applied.current ||
-        request.sessionId !== loadedSessionId) return;
+        request.sessionId !== loadedSessionId || (!request.runId && !request.alignReply)) return;
     applied.current = request;
     const align = () => {
       const replies = container.querySelectorAll<HTMLElement>(".chat-message-row--assistant");

@@ -535,6 +535,34 @@ class SmartiLocalGateway:
         session_id = str(request.query.get("session_id") or "")
         return self._ok(request, {"items": self.core.chat_store.events_after(cursor, session_id or None, self.MAX_WS_BATCH)})
 
+    async def _events_live(self, request):
+        """Authenticated, event-driven long poll; Rust owns the bearer boundary."""
+        cursor = self._query_int(request, "after_event_id", 0, 0, 2_000_000_000)
+        session_id = str(request.query.get("session_id") or "")
+        loop, changed = asyncio.get_running_loop(), asyncio.Event()
+        def wake(event):
+            if not session_id or event.get("session_id") == session_id:
+                if not loop.is_closed():
+                    loop.call_soon_threadsafe(changed.set)
+        subscription = self.core.run_manager.subscribe(wake)
+        try:
+            # Subscribe first, then replay: no lost transition between the two.
+            deadline = loop.time() + 12
+            while True:
+                changed.clear()
+                items = self.core.chat_store.events_after(cursor, session_id or None, self.MAX_WS_BATCH)
+                if items:
+                    return self._ok(request, {"items": items})
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return self._ok(request, {"items": []})
+                try:
+                    await asyncio.wait_for(changed.wait(), remaining)
+                except asyncio.TimeoutError:
+                    return self._ok(request, {"items": []})
+        finally:
+            self.core.run_manager.unsubscribe(subscription)
+
     async def _tts_start(self, request):
         payload = await self._body(request, "startTts")
         text = str(payload.get("text") or "").strip()
@@ -1241,22 +1269,38 @@ class SmartiLocalGateway:
             await ws.close(code=1008)
             return ws
         session_id = str(request.query.get("session_id") or "")
+        loop, changed = asyncio.get_running_loop(), asyncio.Event()
+        def wake(event):
+            if (not session_id or event.get("session_id") == session_id) and not loop.is_closed():
+                loop.call_soon_threadsafe(changed.set)
+        subscription = self.core.run_manager.subscribe(wake)
+        receive = asyncio.create_task(ws.receive())
         try:
             while not ws.closed:
+                changed.clear()
                 items = self.core.chat_store.events_after(cursor, session_id or None, self.MAX_WS_BATCH)
                 for item in items:
                     await asyncio.wait_for(ws.send_json(item), timeout=5)
                     cursor = int(item["event_id"])
-                try:
-                    message = await asyncio.wait_for(ws.receive(), timeout=0.2)
-                except asyncio.TimeoutError:
+                if len(items) == self.MAX_WS_BATCH:
                     continue
+                pending = asyncio.create_task(changed.wait())
+                done, _ = await asyncio.wait({receive, pending}, return_when=asyncio.FIRST_COMPLETED)
+                if pending not in done:
+                    pending.cancel()
+                if receive not in done:
+                    continue
+                message = receive.result()
                 if message.type == WSMsgType.TEXT and message.data == "ping":
                     await ws.send_str("pong")
                 elif message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
                     break
+                receive = asyncio.create_task(ws.receive())
         except (asyncio.TimeoutError, ConnectionError, RuntimeError):
             await ws.close(code=1013, message=b"slow_or_disconnected_client")
+        finally:
+            receive.cancel()
+            self.core.run_manager.unsubscribe(subscription)
         return ws
 
     def _application(self):
@@ -1293,6 +1337,7 @@ class SmartiLocalGateway:
         app.router.add_get("/v2/runs/{run_id}/events", self._run_events)
         app.router.add_post("/v2/runs/{run_id}/api-key", self._provide_run_api_key)
         app.router.add_get("/v2/events/replay", self._events_replay)
+        app.router.add_get("/v2/events/live", self._events_live)
         app.router.add_get("/v2/approvals", self._approvals)
         app.router.add_post("/v2/approvals/{approval_id}/resolve", self._resolve_approval)
         app.router.add_get("/v2/settings/schema", self._settings_schema)

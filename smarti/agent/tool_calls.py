@@ -1545,6 +1545,8 @@ class ToolCallMixin:
         action = call.get("action", "")
         args_dict = call.get("arguments", {}) or {}
         effective_action, _ = self._effective_tool_action(action, args_dict)
+        previous_tool = getattr(self._execution_context, "current_tool", None)
+        self._execution_context.current_tool = (action, args_dict, call.get("_agent_process_event_id"))
         try:
             self._raise_if_cancelled()
             feedback_for_ai, message_for_user = self.execute_tool(action, args_dict)
@@ -1554,6 +1556,8 @@ class ToolCallMixin:
         except Exception as e:
             logging.exception(f"Tool execution recovered after crash: {action}")
             feedback_for_ai, message_for_user = f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(str(e), self.settings)}", None
+        finally:
+            self._execution_context.current_tool = previous_tool
         if action == "get_tool_info" and not str(feedback_for_ai).startswith("ERROR:"):
             info_name = str(args_dict.get("tool_name", "")).strip(" []'\"")
             info_action = str(args_dict.get("action", "") or "full").strip()

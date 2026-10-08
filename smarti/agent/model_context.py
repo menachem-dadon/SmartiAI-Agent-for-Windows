@@ -767,9 +767,17 @@ class ModelContextMixin:
         assistant_text = self._display_assistant_text_for_history(final_response)
         agent_process = self._current_agent_process_metadata()
         is_error = str(final_response or "").startswith("ERROR_USER:")
+        cancel_event = getattr(getattr(self, "_execution_context", None), "cancel_event", None)
+        is_cancelled = bool(cancel_event and cancel_event.is_set())
+        if is_cancelled:
+            is_error = False
+        if is_cancelled or is_error:
+            live = getattr(self, "_current_stream", None)
+            if live and live.visible.strip() and not live.calls:
+                assistant_text = live.visible if is_cancelled else live.visible + "\n\n" + assistant_text
         metadata = {
             "run_id": str(run_id or ""),
-            "run_status": "failed" if is_error else "completed",
+            "run_status": "cancelled" if is_cancelled else "failed" if is_error else "completed",
             "is_error": is_error,
         }
         if agent_process:
@@ -2236,8 +2244,8 @@ CWD: {current_dir}
             if isinstance(arguments, str):
                 try:
                     arguments = json.loads(arguments)
-                except Exception:
-                    arguments = {}
+                except (TypeError, ValueError) as error:
+                    raise ValueError(f"Invalid streamed arguments for tool {name}") from error
             if name and isinstance(arguments, dict):
                 normalized_call = {
                     "method": "tools/call",
@@ -2501,20 +2509,28 @@ CWD: {current_dir}
         raise ApiRequestError(analysis)
 
     def _collect_openai_stream(self, stream, provider, model):
-        """Collect models requiring streaming into the existing agent contract."""
+        """Publish real deltas while retaining the validated full agent contract."""
         text, refusal, calls, usage, finish = [], [], {}, None, ""
+        live = getattr(self, "_current_stream", None)
         try:
             for chunk in stream:
                 self._raise_if_cancelled()
                 data = chunk.model_dump() if callable(getattr(chunk, "model_dump", None)) else getattr(chunk, "model_extra", None)
                 self._raise_for_model_api_error(chunk, model, provider, payload=data)
                 usage = getattr(chunk, "usage", None) or usage
+                progress = (data or {}).get("prompt_progress") if isinstance(data, dict) else None
+                if live and isinstance(progress, dict) and progress.get("total"):
+                    live.status("prefill", 100 * float(progress.get("processed", 0)) / float(progress["total"]))
                 for choice in getattr(chunk, "choices", None) or []:
                     if getattr(choice, "index", 0) != 0:
                         continue
                     finish = getattr(choice, "finish_reason", None) or finish
                     delta = getattr(choice, "delta", None)
                     text.append(str(getattr(delta, "content", "") or ""))
+                    if live:
+                        if getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None):
+                            live.status("thinking")
+                        live.text(getattr(delta, "content", "") or "")
                     refusal.append(str(getattr(delta, "refusal", "") or ""))
                     for call in getattr(delta, "tool_calls", None) or []:
                         item = calls.setdefault(getattr(call, "index", 0), {"id": "", "name": "", "arguments": ""})
@@ -2522,16 +2538,71 @@ CWD: {current_dir}
                         function = getattr(call, "function", None)
                         item["name"] += str(getattr(function, "name", "") or "")
                         item["arguments"] += str(getattr(function, "arguments", "") or "")
+                        if live:
+                            live.tool(getattr(call, "index", 0), str(getattr(function, "name", "") or ""),
+                                      str(getattr(function, "arguments", "") or ""),
+                                      str(getattr(call, "id", "") or ""), name_delta=True)
         finally:
             close = getattr(stream, "close", None)
             if callable(close):
                 close()
+        if not finish:
+            raise RuntimeError("Provider stream disconnected before completion")
         return SimpleNamespace(usage=usage, choices=[SimpleNamespace(
             finish_reason=finish, message=SimpleNamespace(
                 content="".join(text), refusal="".join(refusal),
                 tool_calls=[SimpleNamespace(id=item["id"], function=SimpleNamespace(name=item["name"], arguments=item["arguments"])) for _, item in sorted(calls.items())],
             ),
         )])
+
+    def _redact_stream_text(self, text):
+        # Presentation must preserve requested emails/paths. Log redaction is
+        # deliberately broader and continues to use redact_sensitive_text.
+        safe = str(text or "")
+        for key in SENSITIVE_SETTING_KEYS:
+            secret = str(self.settings.get(key, "") or "")
+            if len(secret) >= 4:
+                safe = safe.replace(secret, f"[REDACTED:{key}]")
+        return re.sub(r'(?i)(api[_-]?key|token|password|secret|authorization)["\':=\s]+[^\s,;"]+', r'\1=[REDACTED]', safe)
+
+    def _collect_responses_stream(self, stream):
+        live = getattr(self, "_current_stream", None)
+        completed = None
+        try:
+            for event in stream:
+                self._raise_if_cancelled()
+                kind = getattr(event, "type", "")
+                if kind == "response.output_text.delta" and live:
+                    live.text(event.delta)
+                elif kind == "response.output_item.added" and getattr(event.item, "type", "") == "function_call" and live:
+                    live.tool(event.output_index, event.item.name, provider_id=event.item.call_id)
+                elif kind == "response.function_call_arguments.delta" and live:
+                    live.tool(event.output_index, arguments=event.delta)
+                elif "reasoning" in kind and kind.endswith(".delta") and live:
+                    live.status("thinking")
+                elif kind in {"response.completed", "response.incomplete", "response.failed"}:
+                    completed = event.response
+                elif kind == "error":
+                    raise RuntimeError(str(getattr(event, "message", "Provider stream failed")))
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
+        if completed is None:
+            raise RuntimeError("Provider stream ended without a response completion event")
+        return completed
+
+    def _provider_http_response(self, url, *, json, headers, timeout):
+        from .streaming import collect_http_stream
+        live = getattr(self, "_current_stream", None)
+        response = self._request_post(url, json=json, headers=headers, timeout=timeout, **({"stream": True} if live else {}))
+        if live and response.status_code in {400, 422} and "eager_input_streaming" in str(getattr(response, "text", "")):
+            compatible = copy.deepcopy(json)
+            for tool in compatible.get("tools", []):
+                tool.pop("eager_input_streaming", None)
+            response.close()
+            response = self._request_post(url, json=compatible, headers=headers, timeout=timeout, stream=True)
+        return collect_http_stream(response, self.mode, live, self._raise_if_cancelled) if live else response
 
     def _api_error_user_response(self, analysis):
         analysis = api_redacted_analysis(analysis, lambda text: redact_sensitive_text(text, self.settings))
@@ -2555,6 +2626,9 @@ CWD: {current_dir}
         if isinstance(result, tuple) and len(result) >= 2:
             response_text = str(result[0] or "")
             usage = result[1] if isinstance(result[1], dict) else {}
+        live = getattr(self, "_current_stream", None)
+        if live and purpose == "agent":
+            live.finish(response_text, has_tools=bool(live.calls))
         duration_ms = int(max(0.0, time.monotonic() - started_at) * 1000)
         logging.info(
             "API SUCCESS | request_id=%s | provider=%s | model=%s | purpose=%s | "
@@ -2630,6 +2704,10 @@ CWD: {current_dir}
             )
         report_status = None if request_options.get("silent") else getattr(self, "status_callback", None)
         request_purpose = str(request_options.get("purpose", "agent") or "agent").strip().lower()
+        stream_contract = "Streaming presentation contract: In textual tool calls, emit method tools/call first, then params.name, then params.arguments. Keep natural progress prose outside tool JSON. Never expose private reasoning or memory blocks in the answer."
+        stream_enabled = request_purpose == "agent" and callable(getattr(self, "stream_callback", None))
+        if stream_enabled:
+            request_system_prompt += "\n" + stream_contract
         native_specs = (
             self._native_tool_specs_for_request()
             if (
@@ -2639,6 +2717,12 @@ CWD: {current_dir}
             )
             else []
         )
+        if request_mode == "gemini" and native_specs and callable(getattr(self, "stream_callback", None)) and request_purpose == "agent":
+            # generateContent buffers native function arguments. Smarti's text
+            # envelope exposes the header immediately without migrating history
+            # to the different Interactions API or transferring tool ownership.
+            request_system_prompt += "\n\n" + self._native_tool_text_fallback_contract(native_specs)
+            native_specs = []
         retries = 0
         immediate_retries = 0
         wait_times = [15, 30, 60] if retry_wait_times is None else list(retry_wait_times)
@@ -2670,9 +2754,16 @@ CWD: {current_dir}
                 if provider_requires_api_key(request_mode) and not self._ensure_secret_loaded(provider_secret_key(request_mode)):
                     raise ApiRequestError(api_error_for_reason(request_mode, current_model, "missing_key"))
                 usage_dict = {}
+                from .streaming import LiveResponse
+                self._current_stream = LiveResponse(
+                    getattr(self, "stream_callback", None),
+                    self._redact_stream_text,
+                    request_id=request_log_id, attempt=attempt_number,
+                    secrets=[self.settings.get(key, "") for key in SENSITIVE_SETTING_KEYS],
+                ) if request_purpose == "agent" and callable(getattr(self, "stream_callback", None)) else None
                 request_messages = self._prepare_messages_for_budget(
                     current_model,
-                    current_messages,
+                    ([{"role": "system", "content": stream_contract}, *current_messages] if stream_enabled and request_mode not in {"gemini", "anthropic"} else current_messages),
                     provider_mode=request_mode,
                     system_prompt=request_system_prompt,
                     include_warning=request_purpose == "agent",
@@ -2705,6 +2796,7 @@ CWD: {current_dir}
                         ),
                         cancel_event=getattr(getattr(self, "_execution_context", None), "cancel_event", None),
                         purpose=request_purpose,
+                        **({"stream": self._current_stream} if self._current_stream else {}),
                     )
                     return self._log_api_request_success(
                         request_log_id, request_mode, current_model, request_purpose,
@@ -2714,6 +2806,8 @@ CWD: {current_dir}
                     api_key = self._ensure_secret_loaded("gemini_api_key")
                     base_url = get_url(URL_GEMINI_GEN)
                     url = f"{base_url}{current_model}:generateContent"
+                    if self._current_stream:
+                        url = f"{base_url}{current_model}:streamGenerateContent?alt=sse"
                     payload = {
                         "systemInstruction": {"parts": [{"text": request_system_prompt}]},
                         "contents": request_messages,
@@ -2741,7 +2835,7 @@ CWD: {current_dir}
                             ]
                         }]
                     response = self._run_cancelable_callable(
-                        lambda: self._request_post(
+                        lambda: self._provider_http_response(
                             url,
                             json=payload,
                             headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
@@ -2760,7 +2854,7 @@ CWD: {current_dir}
                                 + self._native_tool_text_fallback_contract(native_specs)
                             )}]}
                             response = self._run_cancelable_callable(
-                                lambda: self._request_post(
+                                lambda: self._provider_http_response(
                                     url,
                                     json=fallback_payload,
                                     headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
@@ -2806,6 +2900,16 @@ CWD: {current_dir}
                         attempt_number, attempt_started, result,
                     )
                 elif request_mode == "local" or is_openai_compatible_provider(request_mode):
+                    if request_mode == "local" and self._current_stream:
+                        from .local_streaming import local_progress_response
+                        local_options = dict(request_options)
+                        if request_options.get("max_output_tokens") or (self.settings.get("budgets") or {}).get("daily_token_budget"):
+                            local_options["max_output_tokens"] = self._model_output_token_limit(request_mode, current_model, request_messages, request_options)
+                        result = self._run_cancelable_callable(lambda: local_progress_response(
+                            self, provider_base_url("local", self.settings.get("local_server_url", "http://localhost:1234/v1")),
+                            current_model, request_messages, request_system_prompt, local_options, request_reasoning))
+                        if result is not None:
+                            return self._log_api_request_success(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, result)
                     request_client = self._openai_compatible_client_for_request(request_mode)
                     if request_client is None:
                         raise ApiRequestError(api_error_for_reason(request_mode, current_model, "client_dependency"))
@@ -2817,15 +2921,17 @@ CWD: {current_dir}
                             if request_options.get("max_output_tokens") or (self.settings.get("budgets") or {}).get("daily_token_budget") else None,
                         )
                         response_options["timeout"] = self._sdk_transport_timeout(request_mode)
+                        if self._current_stream:
+                            response_options["stream"] = True
                         try:
-                            response = self._run_cancelable_callable(lambda: request_client.responses.create(**response_options))
+                            response = self._run_cancelable_callable(lambda: self._collect_responses_stream(request_client.responses.create(**response_options)) if response_options.get("stream") else request_client.responses.create(**response_options))
                         except Exception as response_error:
                             if not native_specs or not self._native_tools_unsupported(response_error):
                                 raise
                             self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, analyze_api_error(request_mode, current_model, error=response_error), response_error)
                             response_options.pop("tools", None)
                             response_options["input"].insert(0, {"role": "system", "content": self._native_tool_text_fallback_contract(native_specs)})
-                            response = self._run_cancelable_callable(lambda: request_client.responses.create(**response_options))
+                            response = self._run_cancelable_callable(lambda: self._collect_responses_stream(request_client.responses.create(**response_options)) if response_options.get("stream") else request_client.responses.create(**response_options))
                         response_text, native_calls, usage_dict, finish, blocked = openai_responses_result(response, current_model)
                         self._check_generated_response(request_mode, current_model, response_text, native_calls, finish, blocked)
                         result = (self._canonical_native_tool_response(native_calls, response_text) if native_calls else response_text), usage_dict
@@ -2835,6 +2941,8 @@ CWD: {current_dir}
                         "messages": request_messages,
                         "timeout": self._sdk_transport_timeout(request_mode),
                     }
+                    if self._current_stream:
+                        completion_kwargs.update(stream=True, stream_options={"include_usage": True})
                     openai_reasoning_model = (
                         request_mode == "openai"
                         and bool(model_reasoning_contract(request_mode, current_model))
@@ -2914,6 +3022,15 @@ CWD: {current_dir}
                             break
                         except Exception as request_error:
                             compatibility_analysis = analyze_api_error(request_mode, current_model, error=request_error)
+                            if "stream_options" in completion_kwargs and "stream_options" in str(request_error).lower():
+                                completion_kwargs.pop("stream_options", None)
+                                continue
+                            if completion_kwargs.get("stream") and re.search(r'(?:stream(?:ing)?).*(?:unsupported|not supported)|(?:unsupported|not supported).*stream', str(request_error), re.I):
+                                completion_kwargs.pop("stream", None)
+                                completion_kwargs.pop("stream_options", None)
+                                if self._current_stream:
+                                    self._current_stream.status("unsupported")
+                                continue
                             if compatibility_analysis.reason == "stream_required" and not completion_kwargs.get("stream"):
                                 self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, compatibility_analysis, request_error)
                                 completion_kwargs["stream"] = True
@@ -3021,6 +3138,10 @@ CWD: {current_dir}
                             }
                             for item in native_specs
                         ]
+                    if self._current_stream:
+                        payload["stream"] = True
+                        for tool in payload.get("tools", []):
+                            tool["eager_input_streaming"] = True
                     cache_mode = str(
                         self.settings.get("anthropic_prompt_cache_mode", "auto") or "auto"
                     ).strip().lower()
@@ -3052,7 +3173,7 @@ CWD: {current_dir}
                             "cache_control": {"type": "ephemeral"},
                         }]
                     response = self._run_cancelable_callable(
-                        lambda: self._request_post(
+                        lambda: self._provider_http_response(
                             url,
                             json=payload,
                             headers=headers,
@@ -3071,7 +3192,7 @@ CWD: {current_dir}
                                 + self._native_tool_text_fallback_contract(native_specs)
                             )
                             response = self._run_cancelable_callable(
-                                lambda: self._request_post(
+                                lambda: self._provider_http_response(
                                     url,
                                     json=fallback_payload,
                                     headers=headers,
@@ -3203,6 +3324,9 @@ CWD: {current_dir}
                 else:
                     raise self._terminal_api_error(request_log_id, analysis)
             finally:
+                live = getattr(self, "_current_stream", None)
+                if live:
+                    live.flush()
                 if request_client is not None and getattr(request_client, "_smarti_request_owned", False) is True:
                     try:
                         request_client.close()

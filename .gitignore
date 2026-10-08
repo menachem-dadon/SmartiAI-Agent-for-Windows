@@ -11,6 +11,7 @@ scratch/
 tests/
 !tests/
 tests/*
+!tests/test_chat_streaming.py
 !tests/__init__.py
 !tests/README.md
 !tests/test_profile_isolation.py

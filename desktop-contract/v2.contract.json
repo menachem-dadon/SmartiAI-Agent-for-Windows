@@ -927,6 +927,13 @@
     },
     {
       "method": "GET",
+      "path": "/v2/events/live",
+      "operation_id": "liveEventsHttp",
+      "summary_he": "זרם אירועים מיידי עם שחזור דרך מארח Tauri",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
       "path": "/v2/approvals",
       "operation_id": "listApprovals",
       "summary_he": "אישורים ממתינים",

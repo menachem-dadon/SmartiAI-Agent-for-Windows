@@ -170,10 +170,10 @@ export function Menu({ label, icon = "more", items, children, onOpenChange, fitC
   </>;
 }
 
-export function Dialog({ open, title, description, children, onClose, initialFocus, role = "dialog" }: { open: boolean; title: string; description?: string; children: ReactNode; onClose: () => void; initialFocus?: RefObject<HTMLElement | null>; role?: "dialog" | "alertdialog" }) {
-  return open ? <DialogContent title={title} description={description} onClose={onClose} initialFocus={initialFocus} role={role}>{children}</DialogContent> : null;
+export function Dialog({ open, title, description, children, onClose, initialFocus, role = "dialog", className = "" }: { open: boolean; title: string; description?: string; children: ReactNode; onClose: () => void; initialFocus?: RefObject<HTMLElement | null>; role?: "dialog" | "alertdialog"; className?: string }) {
+  return open ? <DialogContent title={title} description={description} onClose={onClose} initialFocus={initialFocus} role={role} className={className}>{children}</DialogContent> : null;
 }
-function DialogContent({ title, description, children, onClose, initialFocus, role }: Omit<Parameters<typeof Dialog>[0], "open">) {
+function DialogContent({ title, description, children, onClose, initialFocus, role, className }: Omit<Parameters<typeof Dialog>[0], "open">) {
   const dialog = useRef<HTMLDialogElement>(null); const titleId = useId(); const descId = useId();
   const design = useContext(DesignContext);
   const [host, setHost] = useState<HTMLDivElement | null>(null);
@@ -181,10 +181,11 @@ function DialogContent({ title, description, children, onClose, initialFocus, ro
     const previous = document.activeElement as HTMLElement | null;
     const node = dialog.current;
     node?.showModal();
+    window.dispatchEvent(new Event("smarti:modal-change"));
     (initialFocus?.current || node)?.focus();
-    return () => { node?.close(); if (previous?.isConnected) previous.focus(); };
+    return () => { node?.close(); window.dispatchEvent(new Event("smarti:modal-change")); if (previous?.isConnected) previous.focus(); };
   }, [initialFocus]);
-  return <DesignContext.Provider value={{ ...design, host }}><dialog ref={dialog} className="sds-dialog" role={role} tabIndex={-1} aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descId : undefined} onCancel={(event) => { event.preventDefault(); onClose(); }} onKeyDown={(event) => {
+  return <DesignContext.Provider value={{ ...design, host }}><dialog ref={dialog} className={`sds-dialog ${className}`} role={role} tabIndex={-1} aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descId : undefined} onCancel={(event) => { event.preventDefault(); onClose(); }} onKeyDown={(event) => {
     if (event.key === "Escape") { event.stopPropagation(); return; }
     if (event.key !== "Tab") return;
     const node = event.currentTarget;

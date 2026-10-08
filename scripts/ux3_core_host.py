@@ -38,6 +38,15 @@ store.append_message("assistant", "פעילות כלים שמורה", session_id
     ]}})
 other = service.create_session(title="שיחה נוספת")["id"]
 store.append_message("user", "תוכן ראשון", session_id=other)
+if os.environ.get("CHAT_STREAM_QA") == "1":
+    import base64
+    qa_attachment = Path(os.environ["SMARTI_DATA_DIR"]) / "qa-attachment.png"
+    qa_attachment.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg=="))
+    handshake["qa_attachment_path"] = str(qa_attachment)
+    attachments = service.create_session(title="בדיקת צירופים")["id"]
+    store.append_message("user", "הודעה ארוכה עם צירופים\n" + "\n".join(f"שורה {n}: טקסט בעברית עם English ועיצוב." for n in range(100)),
+        metadata={"run_id": "qa-long-user", "attachments": [{"kind": "image", "name": f"image-{n}.png", "path": f"C:/isolated/image-{n}.png", "mime_type": "image/png"} for n in range(8)]}, session_id=attachments)
+    store.append_message("assistant", "תשובה קצרה שהושלמה.", metadata={"run_status": "completed"}, session_id=attachments)
 stress = None
 if os.environ.get("UX6_STRESS_QA") == "1":
     stress = service.create_session(title="UX6 1000 messages")["id"]
@@ -49,6 +58,41 @@ def generate(text, **_kwargs):
     run = context.run_id
     session = context.target_session_id
     manager = core.run_manager
+    if os.environ.get("CHAT_STREAM_QA") == "1" and not text and _kwargs.get("attachments"):
+        text = "stream-short"
+    if os.environ.get("CHAT_STREAM_QA") == "1" and text.startswith("stream-"):
+        from smarti.agent.streaming import LiveResponse
+        live = LiveResponse(core.stream_callback)
+        core._current_stream = live
+        live.status("prefill", 37)
+        time.sleep(.6)
+        live.status("thinking")
+        time.sleep(.6)
+        if text.startswith("stream-tools"):
+            live.text("בודק את קובץ הבדיקה")
+            live.tool(0, "canvas_manager")
+            for _ in range(16):
+                core._raise_if_cancelled()
+                live.tool(0, arguments="large_parameter_" * 2048)
+                time.sleep(.08)
+            live.finish(has_tools=True)
+            core._emit_agent_process_event("report", text="בודק את קובץ הבדיקה")
+            tool = core._agent_tool_event_item("canvas_manager", {}, event_id=live.calls["0"]["call_id"])
+            core._emit_agent_process_event("tool_start", tools=[tool])
+            accepted = manager.request_approval(run, session, "אישור בדיקת סטרימינג", "אישור מדומה בלבד; אין כתיבה או כלי חיצוני", "low")
+            time.sleep(.6)
+            core._emit_agent_process_event("tool_finish", results=[{**tool, "status": "ok" if accepted else "cancelled", "output": "בדיקת כלי הסתיימה"}])
+            live = LiveResponse(core.stream_callback)
+            core._current_stream = live
+        pieces = [f"קטע {index}: תשובה חיה בעברית עם English וקישור.\n\n" for index in range(1, 51)] if text.startswith("stream-long") else ["תשובה ", "חיה ", "וסופית."]
+        if text.startswith("stream-long"):
+            pieces += ["| שם | ערך |\n|---|---|\n| עברית | 123 |\n\n", "```python\nprint('stream')\n```\n"]
+        for piece in pieces:
+            core._raise_if_cancelled()
+            live.text(piece)
+            time.sleep(.12)
+        live.finish()
+        return "".join(pieces)
     if text.startswith("visual"):
         time.sleep(1.6)
         manager._emit("run_step", run, session, {"value": {"type": "report", "text": "בודק את פריסת תהליך העבודה"}})

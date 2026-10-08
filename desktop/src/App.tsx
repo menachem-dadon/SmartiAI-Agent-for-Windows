@@ -42,6 +42,7 @@ import { Alert, Button, DesignSystemProvider, Dialog, Field, Icon, IconButton, M
 import { ChatSidebar, conversationActions } from "./ChatSidebar";
 import { useChatDrafts, readActiveConversation, rememberActiveConversation, restoreActiveConversation } from "./chatDrafts";
 import { savedChatPosition, useChatFooterFlow, useChatScroll } from "./chatScroll";
+import { reduceStream, streamAnswer, type StreamState } from "./chatStreaming";
 import { legacyAssets } from "./legacyAssets";
 import {
   clampWorkbenchResize,
@@ -249,6 +250,7 @@ export default function App() {
   }, []);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [events, setEvents] = useState<RunEvent[]>([]);
+  const [streams, setStreams] = useState<Record<string, StreamState>>({});
   const approvalQueue = useApprovalQueue();
   const [query, setQuery] = useState("");
   const queryRef = useRef(query);
@@ -384,9 +386,10 @@ export default function App() {
     // An older toast can refer to a reply outside the newest history page.
     // Include that page before positioning; pending runs are found by their user message.
     const savedCount = Math.max(savedChatPosition(sessionId)?.count || 0, messagesRef.current.length);
+    const savedAnchorRun = savedChatPosition(sessionId)?.anchorRun;
     while (value.has_older && value.next_before_ordinal !== null &&
         ((targetRun && !value.messages.some(message => message.metadata?.run_id === targetRun)) ||
-          value.messages.length < savedCount)) {
+          value.messages.length < savedCount || (savedAnchorRun && !value.messages.some(message => message.metadata?.run_id === savedAnchorRun)))) {
       const older = await coreApi<MessagePage>("GET",
         `/v2/conversations/${encodePath(sessionId)}/messages?limit=48&before=${value.next_before_ordinal}`,
       );
@@ -422,6 +425,7 @@ export default function App() {
       ]);
       if (request === runtimeListRequest.current) {
         setRuns(runData.items);
+        setStreams(current => { const next = { ...current }; for (const run of runData.items) if (run.metadata?.stream && (run.metadata.stream.cursor || 0) > (next[run.id]?.cursor || 0)) next[run.id] = run.metadata.stream; return next; });
         approvalQueue.replace(approvalData.items);
       }
       return conversationData;
@@ -714,7 +718,7 @@ export default function App() {
   );
   const scroll = useChatScroll(chatViewportRef, activeId,
     workspaceWindowReady && !managementSection && page?.session_id === activeId,
-    messages.length, messages);
+    messages.length, messages, newUserRun, activeRunId, foreground);
   useEffect(() => {
     if (!newUserRun || !messages.some(message => message.role === "user" && message.metadata?.run_id === newUserRun)) return;
     const timer = window.setTimeout(() => setNewUserRun(""), 240);
@@ -745,21 +749,30 @@ export default function App() {
     const poll = async () => {
       if (polling || stopped) return;
       polling = true;
+      let delay = 0;
       try {
         const cursor = Number(sessionStorage.getItem(cursorKey) || 0);
         const data = await coreApi<{ items: RunEvent[] }>(
           "GET",
-          `/v2/events/replay?after_event_id=${cursor}`,
+          `/v2/events/live?after_event_id=${cursor}`,
         );
         if (stopped) return;
+        if (!data.items.length) delay = 250;
         let conversationData: ConversationList | null;
         if (data.items.length) {
           sessionStorage.setItem(
             cursorKey,
             String(Math.max(...data.items.map((item) => item.event_id))),
           );
-          setEvents((current) => [...current, ...data.items].slice(-500));
-          conversationData = await refreshLists();
+          const streamEvents = data.items.filter(item => item.event_type === "run_stream");
+          if (streamEvents.length) setStreams(current => {
+            const next = { ...current };
+            for (const event of streamEvents) next[event.run_id] = reduceStream(next[event.run_id], event);
+            return next;
+          });
+          const structural = data.items.filter(item => item.event_type !== "run_stream");
+          if (structural.length) setEvents((current) => [...new Map([...current, ...structural].map(item => [item.event_id, item])).values()].slice(-500));
+          conversationData = structural.length ? await refreshLists() : null;
         } else conversationData = await refreshConversations();
         if (stopped) return;
         // Read receipts have no run event. Refresh the global projection even
@@ -767,22 +780,22 @@ export default function App() {
         const unseenAttention = foreground && conversationData?.attention_items.some((item) =>
           item.session_id === activeId && !loadedAttentionIds.current.has(item.id),
         );
-        if (activeId && (unseenAttention || data.items.some((item) => item.session_id === activeId)))
+        if (activeId && (unseenAttention || data.items.some((item) => item.session_id === activeId && item.event_type !== "run_stream")))
           await loadMessages(activeId);
         setReconnecting(false);
       } catch {
         setReconnecting(true);
+        await new Promise(resolve => window.setTimeout(resolve, 1000));
       } finally {
         polling = false;
+        if (!stopped) timer = window.setTimeout(() => void poll(), delay);
       }
     };
+    let timer = 0;
     void poll();
-    const timer = window.setInterval(() => {
-      if (!stopped) void poll();
-    }, 1200);
     return () => {
       stopped = true;
-      clearInterval(timer);
+      clearTimeout(timer);
     };
   }, [core.generation, core.state, activeId, foreground, refreshConversations, refreshLists, loadMessages]);
   useEffect(() => {
@@ -879,12 +892,12 @@ export default function App() {
       setError(String(reason));
     }
   };
-  const selectConversation = async (id: string, runId?: string) => {
+  const selectConversation = async (id: string, runId?: string, alignReply = false) => {
     if (!restoringModel && provider && model) drafts.setSelection({ provider, model, effort: reasoningEffort });
     setManagementSection(null);
     setManagementOpen(false);
     navigationTarget.current = runId || "";
-    setNavigation({ sessionId: id, revision: ++navigationRevision.current, runId });
+    setNavigation({ sessionId: id, revision: ++navigationRevision.current, runId, alignReply });
     setActiveId(id);
     if (narrowWorkspaceRef.current)
       dispatch({ type: "set-conversations", open: false });
@@ -981,7 +994,7 @@ export default function App() {
       );
       handles.push(data.attachment.handle);
     }
-    const submitted = await coreApi<{ run: RunRecord }>(
+    const submitted = await coreApi<{ run_id: string }>(
       "POST",
       `/v2/conversations/${encodePath(sessionId)}/runs`,
       {
@@ -994,7 +1007,7 @@ export default function App() {
       },
       true,
     );
-    setNewUserRun(submitted.run?.id || "");
+    setNewUserRun(submitted.run_id || "");
     setAttachments((current) => current.filter(item => !submittedAttachments.includes(item)));
     if (!activeId) { drafts.transfer("", sessionId); setActiveId(sessionId); }
     // A refresh failure must not restore a draft whose run was already accepted.
@@ -1277,7 +1290,7 @@ export default function App() {
       "desktop://activation",
       ({ payload }) => {
         if (!alive) return;
-        if (payload.sessionId) void selectConversation(payload.sessionId, payload.runId);
+        if (payload.sessionId) void selectConversation(payload.sessionId, payload.runId, payload.command === "notification");
         if (payload.command === "new-chat") void createConversation();
         if (payload.command === "voice")
           window.dispatchEvent(new Event("smarti:voice-hotkey"));
@@ -1427,7 +1440,7 @@ export default function App() {
               </div>
             ) : (
               <div className="message-list">
-                {[...messages, ...(displayRun && !activeAssistantRecorded ? [{ role: "assistant" as const, content: displayRun.response_text || "", metadata: { run_id: displayRun.id, is_error: displayRun.status === "failed" } }] : [])].map((message, index) => {
+                {[...messages, ...(displayRun && !activeAssistantRecorded ? [{ role: "assistant" as const, content: streamAnswer(streams[displayRun.id] || displayRun.metadata?.stream) || displayRun.response_text || "", metadata: { run_id: displayRun.id, is_error: displayRun.status === "failed" } }] : [])].map((message, index) => {
                   const runId = String(message.metadata?.run_id || "");
                   const messageActive = Boolean(
                     message.role === "assistant" &&
@@ -1445,7 +1458,9 @@ export default function App() {
                           : EMPTY_MESSAGE_EVENTS
                       }
                       active={messageActive}
-                      runStatus={messageActive ? activeRun?.status : undefined}
+                      runStatus={runs.find(run => run.id === runId)?.status}
+                      stream={streams[runId] || runs.find(run => run.id === runId)?.metadata?.stream}
+                      viewportHeight={scroll.height}
                       theme={resolved}
                       onOpenCanvas={openMessageCanvas}
                     />
@@ -1454,6 +1469,7 @@ export default function App() {
 
               </div>
             )}
+          <div className="chat-turn-space" aria-hidden="true" />
           </div>
           <div ref={chatFooterRef} className={`chat-input-panel ${flowingFooter ? "is-flowing" : ""}`}>
           <ConversationApprovals
@@ -1482,7 +1498,7 @@ export default function App() {
             </form>
           </Dialog>
           <div className="chat-composer-panel">
-          {scroll.hasNewContent && <Button className="chat-new-content" variant="ghost" onClick={scroll.follow}>לתוכן החדש <Icon name="chevron" /></Button>}
+          {scroll.hasNewContent && <button type="button" className={`chat-new-content ${activeRun ? "is-generating" : ""}`} aria-label="גלילה לסוף התשובה" onClick={scroll.follow}><span className="chat-down-arrow"><Icon name="arrow" /></span>{activeRun && <span className="chat-stream-dots" aria-hidden="true"><i/><i/><i/></span>}</button>}
           <Composer
             theme={resolved}
             conversationId={activeId} draft={drafts.draft.text} onDraftChange={drafts.setText}

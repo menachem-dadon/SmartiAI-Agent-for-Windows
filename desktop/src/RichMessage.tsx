@@ -7,13 +7,18 @@ import type { ChatMessage, RunEvent } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
 import { DesignSystemProvider, Icon, IconButton, MessageFrame, UserBubble, toolIcons } from "./design-system";
 import "./chat.css";
-import { legacyUi } from "./legacyUiParity";
 import { MessageTable } from "./MessageTable";
 import { useSpeechPlayback } from "./speechPlayback";
+import { AttachmentLightbox } from "./AttachmentLightbox";
+import { preserveDisclosure } from "./chatScroll";
+import type { StreamState } from "./chatStreaming";
+import { streamReveal, type RevealRange } from "./streamReveal";
 import {
   agentToolIconName,
   type AgentToolIconName,
 } from "./agentToolIcons";
+
+function contentIdentity(text: string) { let hash = 0; for (const character of text) hash = (hash * 31 + character.charCodeAt(0)) | 0; return String(hash); }
 
 const copy = async (text: string) => navigator.clipboard.writeText(text);
 const WINDOWS_PATH = /^[A-Za-z]:[\\/]/;
@@ -159,7 +164,11 @@ function SentImage({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [mimeType, path]);
-  return source ? <img src={source} alt={name} /> : <span>IMG</span>;
+  const [enlarged, setEnlarged] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return <><button type="button" className="sent-image-button" disabled={!source || failed} aria-label={`הגדל תמונה: ${name}`} onClick={() => setEnlarged(true)}>
+    {source && !failed ? <img src={source} alt={name} onError={() => setFailed(true)} /> : <span>{failed ? "לא ניתן להציג תמונה" : "טוען תמונה…"}</span>}
+  </button>{enlarged && <AttachmentLightbox source={source} name={name} onClose={() => setEnlarged(false)} />}</>;
 }
 
 type AgentEvent = {
@@ -174,7 +183,7 @@ type ToolView = {
   key: string;
   name: string;
   icon: AgentToolIconName;
-  status: "running" | "finished" | "error";
+  status: "preparing" | "waiting" | "running" | "finished" | "error";
   query: string;
   output: string;
 };
@@ -190,6 +199,17 @@ type ProcessRow =
       running: boolean;
     };
 type AgentProcessMetadata = { elapsed_seconds?: number; events?: AgentEvent[] };
+function StreamingReport({ text, active }: { text: string; active: boolean }) {
+  // A remounted snapshot is already visible content, not a newly arrived chunk.
+  const revealed = useRef<{ text: string; ranges: RevealRange[] }>({ text, ranges: [] });
+  if (active && text !== revealed.current.text) {
+    const previous = revealed.current.text;
+    revealed.current = { text, ranges: text.startsWith(previous)
+      ? [...revealed.current.ranges, { start: previous.length, end: text.length, started: Date.now() }].slice(-48)
+      : [{ start: 0, end: text.length, started: Date.now() }] };
+  }
+  return <ReactMarkdown rehypePlugins={active ? [[streamReveal, { ranges: revealed.current.ranges }]] : []}>{text}</ReactMarkdown>;
+}
 
 const payloadText = (value: unknown) =>
   typeof value === "string"
@@ -278,7 +298,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
       if (/^ממתין לאישור(?: משתמש)?\.{0,3}$/u.test(text)) continue;
       if (text) rows.push({ kind: "report", key: `report-${index}`, text });
       current = null;
-    } else if (event.type === "tool_start") {
+    } else if (["tool_start", "tool_preparing", "tool_waiting"].includes(event.type)) {
       if (!current || current.standalone) {
         current = {
           kind: "tools",
@@ -291,8 +311,11 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
         };
         rows.push(current);
       }
-      for (const [toolIndex, tool] of (event.tools || []).entries())
-        current.tools.push(toolFrom(tool, "running", `${index}-${toolIndex}`));
+      for (const [toolIndex, tool] of (event.tools || []).entries()) {
+        const next = toolFrom(tool, event.type === "tool_preparing" ? "preparing" : event.type === "tool_waiting" ? "waiting" : "running", `${index}-${toolIndex}`);
+        const existing = rows.flatMap(row => row.kind === "tools" ? row.tools : []).find(item => item.key === next.key);
+        if (existing) Object.assign(existing, next); else current.tools.push(next);
+      }
     } else if (event.type === "tool_finish") {
       for (const [resultIndex, result] of (event.results || []).entries()) {
         const record =
@@ -302,7 +325,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
         const status = String(record.status || "").toLowerCase();
         const failed =
           Boolean(record.error) ||
-          ["error", "failed", "crashed", "cancelled"].includes(status);
+          ["error", "failed", "crashed", "cancelled", "denied", "expired"].includes(status);
         const finished = toolFrom(
           result,
           failed ? "error" : "finished",
@@ -385,11 +408,11 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
   }
   for (const row of rows) {
     if (row.kind !== "tools" || row.standalone) continue;
-    const running = row.tools.filter((tool) => tool.status === "running");
+    const running = row.tools.filter((tool) => ["running", "preparing", "waiting"].includes(tool.status));
     row.running = running.length > 0;
     row.label = running.length
       ? running.length === 1
-        ? `מריץ: ${running[0].name}`
+        ? `${running[0].status === "preparing" ? "מכין כלי" : running[0].status === "waiting" ? "ממתין לאישור הפעלת כלי" : "מריץ כלי"} ${running[0].name}`
         : `מריץ ${running.length} כלים במקביל`
       : row.tools.length === 1 ? "הורץ כלי 1" : `הורצו ${row.tools.length} כלים`;
   }
@@ -400,15 +423,10 @@ function AgentStatusText({ active, children }: { active: boolean; children: Reac
   return <span className={`agent-status-text${active ? " is-shimmering" : ""}`}>{children}</span>;
 }
 
-function DelayedThinking() {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setVisible(true), 300);
-    return () => window.clearTimeout(timer);
-  }, []);
-  return visible
-    ? <p className="agent-initial-thinking"><AgentStatusText active>חושב...</AgentStatusText></p>
-    : null;
+function WaitingIndicator({ label, shimmer, immediate }: { label: string; shimmer: boolean; immediate: boolean }) {
+  const [visible, setVisible] = useState(immediate);
+  useEffect(() => { if (immediate) { setVisible(true); return; } const timer = setTimeout(() => setVisible(true), 300); return () => clearTimeout(timer); }, [immediate]);
+  return visible ? <p className="agent-initial-thinking"><AgentStatusText active={shimmer}>{label}</AgentStatusText></p> : null;
 }
 
 export function formatAgentDuration(seconds: number): string {
@@ -442,6 +460,8 @@ export const RichMessage = memo(function RichMessage({
   runStatus,
   onOpenCanvas,
   isNew = false,
+  viewportHeight = 0,
+  stream,
 }: {
   message: ChatMessage;
   events?: RunEvent[];
@@ -450,29 +470,44 @@ export const RichMessage = memo(function RichMessage({
   runStatus?: string;
   onOpenCanvas?: (canvasId: string) => void;
   isNew?: boolean;
+  viewportHeight?: number;
+  stream?: StreamState;
 }) {
-  const [processOpen, setProcessOpen] = useState(active);
+  const messageId = `${message.role}:${message.metadata?.run_id || message.message_id || `${message.created_at || ""}:${contentIdentity(message.content)}`}`;
+  const preferencesKey = `smarti.chat.disclosures:${messageId}`;
+  const storedPreferences = () => { try { return JSON.parse(sessionStorage.getItem(preferencesKey) || "{}"); } catch { return {}; } };
+  const [preferences, setPreferences] = useState<Record<string, boolean>>(storedPreferences);
+  const processManual = useRef(typeof preferences.process === "boolean");
+  const [processOpen, setProcessOpen] = useState(preferences.process ?? active);
+  const remember = (key: string, value: boolean) => setPreferences(current => {
+    const next = { ...current, [key]: value }; try { sessionStorage.setItem(preferencesKey, JSON.stringify(next)); } catch { /* UI preference is optional. */ } return next;
+  });
   const speechOwner = useId();
   const speech = useSpeechPlayback(message.metadata?.run_id
     ? `run:${message.metadata.run_id}` : `message:${speechOwner}`);
   const { speaking } = speech;
-  const [userExpanded, setUserExpanded] = useState(false);
+  const [userExpanded, setUserExpanded] = useState(preferences.user ?? false);
   const [userContentHeight, setUserContentHeight] = useState(0);
   const contentId = useId();
   const [, setElapsedTick] = useState(0);
   const [collapsible, setCollapsible] = useState(false);
   const [linkError, setLinkError] = useState("");
   const contentRef = useRef<HTMLDivElement>(null);
+  const markdown = prepareMessageMarkdown(message.content);
+  const revealed = useRef<{ text: string; ranges: RevealRange[] }>({ text: markdown, ranges: [] });
+  if (active && markdown !== revealed.current.text) {
+    const previous = revealed.current.text;
+    revealed.current = { text: markdown, ranges: markdown.startsWith(previous)
+      ? [...revealed.current.ranges, { start: previous.length, end: markdown.length, started: Date.now() }].slice(-48)
+      : [{ start: 0, end: markdown.length, started: Date.now() }] };
+  }
   // Keep each table mounted while streamed content and elapsed time update.
   const renderTable = useMemo(() =>
     (props: ComponentProps<typeof MessageTable>) => <MessageTable {...props} theme={theme} />,
   [theme]);
   useEffect(() => {
-    if (!active) {
-      setProcessOpen(false);
-      return;
-    }
-    setProcessOpen(true);
+    if (!processManual.current) setProcessOpen(active);
+    if (!active) return;
     const timer = window.setInterval(
       () => setElapsedTick((value) => value + 1),
       1000,
@@ -494,19 +529,31 @@ export const RichMessage = memo(function RichMessage({
       .map(eventFromRun)
       .filter((item): item is AgentEvent => Boolean(item));
   }, [events, message.role, storedProcess]);
-  const rows = useMemo(() => processRows(agentEvents), [agentEvents]);
+  const rows = useMemo(() => {
+    const pending: AgentEvent[] = [];
+    const reports = Object.values(stream?.blocks || {}).filter(block => block.kind === "text" && block.role === "report" && block.text?.trim());
+    const normalized = (text: string) => text.replace(/\s+/g, " ").replace(/\.\.\.$/, "").trim();
+    const renderedEvents = agentEvents.map(event => event.type === "report"
+      ? { ...event, text: reports.find(block => normalized(block.text || "").startsWith(normalized(event.text || "")))?.text || event.text } : event);
+    const existingIds = new Set(agentEvents.flatMap(event => [...event.tools || [], ...event.results || []]).map(item => toolKey(item as Record<string, unknown>, "")));
+    for (const [id, block] of Object.entries(stream?.blocks || {})) {
+      if (block.kind === "tool" && !existingIds.has(block.call_id || id)) pending.push({ type: "tool_preparing", tools: [{ call_id: block.call_id || id, name: block.name, arguments_text: block.arguments_text }] });
+      if (block.kind === "text" && block.role === "report" && block.text?.trim() && !agentEvents.some(event => event.type === "report" && normalized(block.text || "").startsWith(normalized(event.text || "")))) pending.push({ type: "report", text: block.text });
+    }
+    const result = processRows([...renderedEvents, ...pending]);
+    if (runStatus === "waiting_for_approval" && !agentEvents.some(event => event.type === "tool_waiting")) for (const row of result) if (row.kind === "tools") { for (const tool of row.tools) if (tool.status === "running") tool.status = "waiting"; const waiting = row.tools.find(tool => tool.status === "waiting"); if (waiting) row.label = `ממתין לאישור הפעלת כלי ${waiting.name}`; }
+    if (!active) for (const row of result) if (row.kind === "tools" && row.tools.some(tool => ["preparing", "running", "waiting"].includes(tool.status))) {
+      for (const tool of row.tools) if (["preparing", "running", "waiting"].includes(tool.status)) tool.status = "error";
+      row.running = false; row.label = runStatus === "cancelled" ? "הפעלת כלי נעצרה" : "הפעלת כלי לא הושלמה";
+    }
+    return result;
+  }, [agentEvents, stream, runStatus, active]);
+  const activeRows = rows.filter(row => row.kind === "tools" && row.running);
+  const ownerRow = activeRows.find(row => row.kind === "tools" && preferences[row.key]) || activeRows[0];
+  const ownerTool = ownerRow?.kind === "tools" && preferences[ownerRow.key] ? ownerRow.tools.find(tool => ["running", "preparing", "waiting"].includes(tool.status))?.key : undefined;
   const canThink = active && message.role === "assistant" && !message.content &&
     (!runStatus || runStatus === "queued" || runStatus === "running") &&
     !rows.some((row) => row.kind === "tools" && row.running);
-  // Reset the short pause when visible process content changes. Repeated
-  // thinking/status events and ordinary rerenders must not postpone it.
-  let lastActivityIndex = agentEvents.length - 1;
-  while (lastActivityIndex >= 0 && ![
-    "report", "tool_start", "tool_finish", "tool_group_start", "tool_group_finish",
-  ].includes(agentEvents[lastActivityIndex].type)) lastActivityIndex -= 1;
-  const thinkingKey = `${String(message.metadata?.run_id || "")}:${
-    agentEvents[lastActivityIndex]?.liveEventId ?? lastActivityIndex
-  }`;
   const firstLiveAt = events
     .map((event) => Date.parse(event.created_at))
     .filter(Number.isFinite)
@@ -523,21 +570,18 @@ export const RichMessage = memo(function RichMessage({
       return;
     }
     const measure = () => {
-      const line = Number.parseFloat(getComputedStyle(node).lineHeight) || 23;
       // Measure the unclipped content so both directions have a real height
       // target, including after wrapping, fonts or embedded content change.
       const height = node.scrollHeight;
       setUserContentHeight(height);
-      setCollapsible(
-        message.content.split("\n").length > legacyUi.userCollapsedLines ||
-          height > line * legacyUi.userCollapsedLines + 2,
-      );
+      const available = viewportHeight || node.closest<HTMLElement>(".chat-stage")?.clientHeight || window.innerHeight;
+      setCollapsible(height + 28 > available * .8);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [message.content, message.role]);
+  }, [message.content, message.role, viewportHeight]);
   const isError =
     Boolean(message.metadata?.error || message.metadata?.is_error) ||
     /^שגיאה\s*:/u.test(message.content);
@@ -556,7 +600,8 @@ export const RichMessage = memo(function RichMessage({
         )
       : [];
   const actionsAvailable =
-    !active && Boolean(message.content.trim() || message.attachments?.length);
+    !active && Boolean(message.content.trim()) &&
+    (message.role !== "assistant" || (!isError && (!(runStatus || message.metadata?.run_status) || (runStatus || message.metadata?.run_status) === "completed")));
   const openLink = async (href: string) => {
     setLinkError("");
     try {
@@ -569,52 +614,35 @@ export const RichMessage = memo(function RichMessage({
       setLinkError(`לא ניתן לפתוח את הקישור: ${String(reason)}`);
     }
   };
+  const attachmentStrip = !!message.attachments?.length && <div className="sent-attachments" dir="rtl">
+    {message.attachments.map((item, index) => item.kind === "image" && item.path
+      ? <span className="sent-image" key={`${item.name}-${index}`}><SentImage path={item.path} name={item.name} mimeType={item.mime_type} /></span>
+      : <button type="button" className="attachment-tile" key={`${item.name}-${index}`} onClick={() => item.path && void invoke("open_chat_link", { target: item.path, local: true }).catch(reason => setLinkError(String(reason)))}><i><Icon name="file" size={24}/></i><b>{item.name}</b><small>{item.size ? `${Math.max(1, Math.round(item.size / 1024))} KB` : "File"}</small></button>)}
+  </div>;
   const content = (<div
         className={`chat-message chat-message--${message.role} ${isError ? "is-error" : ""} ${backgroundTask ? "is-background-task" : ""}`}
       >
         {backgroundTask && (
           <strong className="background-task-badge">⚡ משימת רקע</strong>
         )}
-        {!!message.attachments?.length && (
-          <div className="sent-attachments">
-            {message.attachments.map((item, index) =>
-              item.kind === "image" && item.path ? (
-                <span className="sent-image" key={`${item.name}-${index}`}>
-                  <SentImage
-                    path={item.path}
-                    name={item.name}
-                    mimeType={item.mime_type}
-                  />
-                </span>
-              ) : (
-                <span className="attachment-tile" key={`${item.name}-${index}`}>
-                  <i>
-                    <Icon name="file" size={24} />
-                  </i>
-                  <b>{item.name}</b>
-                  <small>
-                    File
-                    {item.size
-                      ? ` · ${Math.max(1, Math.round(item.size / 1024))} KB`
-                      : ""}
-                  </small>
-                </span>
-              ),
-            )}
-          </div>
-        )}
         {!!message.content && (
           <div
             id={contentId}
             className={`message-content ${collapsible ? "is-collapsible" : ""} ${collapsible && !userExpanded ? "is-collapsed" : ""}`}
-            style={collapsible ? { maxHeight: userExpanded ? userContentHeight : 146 } : undefined}
+            style={collapsible ? { maxHeight: userExpanded ? userContentHeight : Math.max(1, viewportHeight * .7 - 28) } : undefined}
           >
             <div ref={contentRef} className="message-content-body">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
+                rehypePlugins={active ? [[streamReveal, { ranges: revealed.current.ranges }]] : []}
                 urlTransform={safeChatHref}
                 components={{
                   table: renderTable,
+                  p: ({ node, ...props }) => <p {...props} data-reading-block={node?.position?.start.offset}/>,
+                  li: ({ node, ...props }) => <li {...props} data-reading-block={node?.position?.start.offset}/>,
+                  h1: ({ node, ...props }) => <h1 {...props} data-reading-block={node?.position?.start.offset}/>,
+                  h2: ({ node, ...props }) => <h2 {...props} data-reading-block={node?.position?.start.offset}/>,
+                  h3: ({ node, ...props }) => <h3 {...props} data-reading-block={node?.position?.start.offset}/>,
                   a: ({ href = "", node: _node, ...props }) => (
                     <a
                       {...props}
@@ -633,7 +661,7 @@ export const RichMessage = memo(function RichMessage({
                   pre: ({ children }) => <CodeFrame onCopy={copy} onDownload={downloadCode}>{children}</CodeFrame>,
                 }}
               >
-                {prepareMessageMarkdown(message.content)}
+                {markdown}
               </ReactMarkdown>
             </div>
           </div>
@@ -650,6 +678,8 @@ export const RichMessage = memo(function RichMessage({
     <DesignSystemProvider theme={theme} className="message-design"><article
       className={`chat-message-row chat-message-row--${message.role} ${backgroundTask ? "is-background-task" : ""}`}
       data-run-id={String(message.metadata?.run_id || "") || undefined}
+      data-message-id={messageId}
+      data-message-ordinal={message.message_id?.split(":").slice(-1)[0]}
       dir="auto"
     >
       <MessageFrame outputs={!!canvases.length && (
@@ -704,26 +734,16 @@ export const RichMessage = memo(function RichMessage({
               הזיכרון עודכן
             </span>
           )}
-          {collapsible && (
-            <IconButton
-              icon="chevron" variant="ghost" className="message-expand-button"
-              label={userExpanded ? "כווץ הודעה" : "הרחב הודעה"}
-              aria-expanded={userExpanded}
-              aria-controls={contentId}
-              onClick={() => setUserExpanded((value) => !value)}
-            />
-          )}
         </div>
       )}>
       {!!rows.length && (
         <details
           className="agent-process"
           open={processOpen}
-          onToggle={(event) => setProcessOpen(event.currentTarget.open)}
         >
-          <summary>
+          <summary onClick={event => { event.preventDefault(); processManual.current = true; preserveDisclosure(event.currentTarget, () => { setProcessOpen(!processOpen); remember("process", !processOpen); }); }}>
             <Icon name="chevron" size={16} className="process-chevron" />
-            <AgentStatusText active={active}>
+            <AgentStatusText active={active && !processOpen}>
               {active ? "סמארטי עובד" : "סמארטי עבד"}{" "}
               {formatAgentDuration(elapsed)}
             </AgentStatusText>
@@ -732,22 +752,23 @@ export const RichMessage = memo(function RichMessage({
           <div className="agent-process-details">
             {rows.map((row) =>
               row.kind === "report" ? (
-                <p className="agent-report" key={row.key}>
-                  {row.text}
-                </p>
+                <div className="agent-report" key={row.key}>
+                  <StreamingReport text={row.text} active={active}/>
+                </div>
               ) : row.standalone ? (
                 <p
                   className="agent-standalone"
                   key={row.key}
                 >
                   <Icon name={toolIcons[row.icon] || "tools"} />
-                  <AgentStatusText active={active && row.running}>{row.label}</AgentStatusText>
+                  <AgentStatusText active={active && processOpen && ownerRow?.key === row.key}>{row.label}</AgentStatusText>
                 </p>
               ) : (
-                <details className="agent-tool-group" key={row.key}>
-                  <summary>
+                <details className="agent-tool-group" key={row.key} open={!!preferences[row.key]}>
+                  <summary onClick={event => { event.preventDefault(); preserveDisclosure(event.currentTarget, () => remember(row.key, !preferences[row.key])); }}>
                     <Icon name="chevron" size={16} className="process-chevron" />
-                    <AgentStatusText active={active && row.running}>
+                    <AgentStatusText active={active && processOpen && ownerRow?.key === row.key && !preferences[row.key]}>
+                      {row.tools.some(tool => tool.status === "preparing") && <span className="tool-preparation-ring" aria-hidden="true"/>}
                       {row.label}
                     </AgentStatusText>
                     <Icon name={row.running && row.tools.filter(tool => tool.status === "running").length === 1
@@ -755,23 +776,26 @@ export const RichMessage = memo(function RichMessage({
                   </summary>
                   <div>
                     {row.tools.map((tool) => (
-                      <details className="agent-tool-row" key={tool.key}>
-                        <summary>
+                      <details className="agent-tool-row" key={tool.key} open={!!preferences[tool.key]}>
+                        <summary onClick={event => { event.preventDefault(); preserveDisclosure(event.currentTarget, () => remember(tool.key, !preferences[tool.key])); }}>
                           <Icon name="chevron" size={16} className="process-chevron" />
-                          <AgentStatusText active={active && tool.status === "running"}>
+                          <AgentStatusText active={active && processOpen && ownerTool === tool.key}>
+                            {tool.status === "preparing" ? <span className="tool-preparation-ring" aria-hidden="true"/> : null}
                             {tool.status === "running"
-                              ? "רץ"
+                              ? "מריץ כלי"
+                              : tool.status === "preparing" ? "מכין כלי"
+                              : tool.status === "waiting" ? "ממתין לאישור הפעלת כלי"
                               : tool.status === "error"
                                 ? "שגיאה"
                                 : "הסתיים"}{" "}
-                            · {tool.name}
+                            {tool.name}
                           </AgentStatusText>
                           <Icon name={toolIcons[tool.icon] || "tools"} />
                         </summary>
                         <div>
                           <strong>קלט ופרמטרי הפעלה</strong>
                           <pre dir="ltr">{tool.query || "אין קלט."}</pre>
-                          {tool.status !== "running" && (
+                          {["finished", "error"].includes(tool.status) && (
                             <>
                               <strong>פלט הכלי</strong>
                               <pre dir="ltr">{tool.output || "אין פלט."}</pre>
@@ -787,8 +811,10 @@ export const RichMessage = memo(function RichMessage({
           </div>
         </details>
       )}
-      {canThink && <DelayedThinking key={thinkingKey} />}
-      {message.role === "user" ? <UserBubble isNew={isNew}>{content}</UserBubble> : content}
+      {canThink && <WaitingIndicator key={agentEvents.filter(event => event.type === "report").slice(-1)[0]?.liveEventId || "initial"} immediate={stream?.stage === "prefill" || stream?.stage === "thinking"} shimmer={!rows.length || processOpen && !ownerRow} label={stream?.stage === "prefill" ? `מעבד הנחיה${stream.percent == null ? "…" : `: ${stream.percent}%`}` : !stream || stream.stage === "thinking" ? "חושב..." : "ממתין לתשובה…"}/>}
+      {attachmentStrip}
+      {message.role === "user" ? !!message.content && <UserBubble isNew={isNew}>{collapsible && <IconButton icon="chevron" variant="ghost" className="message-expand-button" label={userExpanded ? "כווץ הודעה" : "הרחב הודעה"} aria-expanded={userExpanded} aria-controls={contentId} onClick={event => preserveDisclosure(event.currentTarget, () => { setUserExpanded(!userExpanded); remember("user", !userExpanded); })} />}{content}</UserBubble> : content}
+      {message.role === "assistant" && (runStatus || message.metadata?.run_status) === "cancelled" && <p className="agent-initial-thinking">היצירה נעצרה. התשובה שהתקבלה עד העצירה נשמרה.</p>}
 
       </MessageFrame>
     </article></DesignSystemProvider>

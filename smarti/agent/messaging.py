@@ -664,7 +664,7 @@ class MessagingMixin:
                     ai_response_text = ai_response_text.replace("%%%", "")
 
                 parsed_tool = self.agent_runtime.extract_tool_calls(ai_response_text) if getattr(self, "agent_runtime", None) else {}
-                pre_text = parsed_tool.get("pre_text", "").replace("##", "").strip()
+                pre_text = parsed_tool.get("pre_text", "").strip()
                 is_tool_call_intent = parsed_tool.get("is_tool_call_intent", False)
                 tool_turn_text = parsed_tool.get("tool_turn_text", ai_response_text)
                 raw_tool_calls = parsed_tool.get("tool_calls", []) or []
@@ -809,8 +809,10 @@ class MessagingMixin:
                         continue
                     tool_call_counts = candidate_tool_call_counts
                     similar_tool_signatures = candidate_similar_tool_signatures
-                    for call in selected_calls:
-                        call["_agent_process_event_id"] = str(call.get("_agent_process_event_id") or uuid.uuid4().hex)
+                    live_calls = list(getattr(getattr(self, "_current_stream", None), "calls", {}).values())
+                    for call_index, call in enumerate(selected_calls):
+                        streamed_id = live_calls[call_index]["call_id"] if call_index < len(live_calls) and live_calls[call_index].get("name") == call.get("action") else ""
+                        call["_agent_process_event_id"] = str(call.get("_agent_process_event_id") or streamed_id or uuid.uuid4().hex)
 
                     emit_tool_process_report(pre_text, selected_calls, source="model")
                     self._emit_agent_process_event(
@@ -904,7 +906,7 @@ class MessagingMixin:
                         internal_artifact_replies += 1
                         cleaned = self._strip_internal_artifacts(ai_response_text)
                         if cleaned and len(cleaned) >= 12 and not self._looks_like_internal_artifact(cleaned):
-                            final_response = cleaned.replace("##", "").strip()
+                            final_response = cleaned.strip()
                             logging.info("נוקה פלט פנימי מתוך תשובה סופית.")
                             break
                         if internal_artifact_replies >= 2:
@@ -924,7 +926,7 @@ class MessagingMixin:
                         )
                         checkpoint("internal_artifact_feedback")
                         continue
-                    final_response = ai_response_text.replace("##", "").strip()
+                    final_response = ai_response_text.strip()
                     logging.info("לא זוהה אובייקט JSON תקין לקריאת כלי, מסיים לולאה (טקסט חופשי).")
                     break
 
