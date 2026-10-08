@@ -47,6 +47,11 @@ if os.environ.get("CHAT_STREAM_QA") == "1":
     store.append_message("user", "הודעה ארוכה עם צירופים\n" + "\n".join(f"שורה {n}: טקסט בעברית עם English ועיצוב." for n in range(100)),
         metadata={"run_id": "qa-long-user", "attachments": [{"kind": "image", "name": f"image-{n}.png", "path": f"C:/isolated/image-{n}.png", "mime_type": "image/png"} for n in range(8)]}, session_id=attachments)
     store.append_message("assistant", "תשובה קצרה שהושלמה.", metadata={"run_status": "completed"}, session_id=attachments)
+    links = service.create_session(title="בדיקת קישורים")["id"]
+    store.append_message("user", "פתח את הקובץ שנוצר", session_id=links)
+    store.append_message("assistant", "\n\n".join(f"פסקה {n}: תוכן ארוך לבדיקת שמירת מקום הקריאה." for n in range(35)) +
+        "\n\n[קישור פגום](file:///C:/Users/%D7%99%D7%ห/Desktop/elad_weather.txt)" +
+        "\n\n[קישור תקין](file:///C:/Users/%D7%99%D7%94%D7%95%D7%93%D7%99%D7%AA%20User/Desktop/elad_weather.txt)", session_id=links)
 stress = None
 if os.environ.get("UX6_STRESS_QA") == "1":
     stress = service.create_session(title="UX6 1000 messages")["id"]
@@ -64,6 +69,7 @@ def generate(text, **_kwargs):
         from smarti.agent.streaming import LiveResponse
         live = LiveResponse(core.stream_callback)
         core._current_stream = live
+        time.sleep(.6)  # Local server has not reported prefill/reasoning yet.
         live.status("prefill", 37)
         time.sleep(.6)
         live.status("thinking")

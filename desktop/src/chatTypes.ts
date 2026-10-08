@@ -7,7 +7,7 @@ export interface ChatMessage { role: "user" | "assistant" | "system"; content: s
 export interface AttentionItem { id: string; session_id: string; run_id?: string; kind: string; title: string; }
 export interface ConversationList { items: Conversation[]; attention_items: AttentionItem[]; }
 export interface MessagePage { session_id: string; messages: ChatMessage[]; total_count: number; has_older: boolean; older_count: number; next_before_ordinal: number | null; unread_attention_ids?: string[]; }
-export interface RunRecord { id: string; session_id: string; status: string; user_text: string; response_text?: string; error_text?: string; updated_at?: string; metadata?: { stream?: import("./chatStreaming").StreamState }; }
+export interface RunRecord { id: string; session_id: string; status: string; user_text: string; response_text?: string; error_text?: string; updated_at?: string; metadata?: { provider_mode?: string; stream?: import("./chatStreaming").StreamState }; }
 export interface RunEvent { event_id: number; sequence: number; event_type: string; session_id: string; run_id: string; payload: Record<string, unknown>; created_at: string; }
 export interface Approval { id: string; run_id: string; session_id: string; title: string; prompt: string; risk_level: string; created_at: string; }
 export interface ReasoningOption { value: string; label: string; }

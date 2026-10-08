@@ -1,7 +1,7 @@
-import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage, RunEvent } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
@@ -26,7 +26,10 @@ function localHref(value: string): string {
   const normalized = WINDOWS_PATH.test(value)
     ? `file:///${value.replace(/\\/g, "/")}`
     : value;
-  return encodeURI(normalized).replace(/#/g, "%23");
+  const encoded = encodeURI(normalized);
+  // URLs already contain escaped UTF-8. A literal percent in a Windows
+  // filename, however, must remain escaped rather than becoming URL syntax.
+  return (WINDOWS_PATH.test(value) ? encoded : encoded.replace(/%25([\da-f]{2})/gi, "%$1")).replace(/#/g, "%23");
 }
 export function prepareMessageMarkdown(value: string): string {
   return value
@@ -54,7 +57,9 @@ export function safeChatHref(value: string): string {
 }
 function localPathFromHref(href: string): string {
   const url = new URL(href);
-  const pathname = decodeURIComponent(url.pathname).replace(/\//g, "\\");
+  let pathname: string;
+  try { pathname = decodeURIComponent(url.pathname).replace(/\//g, "\\"); }
+  catch { throw new Error("הקישור לקובץ מכיל קידוד לא תקין."); }
   if (url.hostname) return `\\\\${url.hostname}${pathname}`;
   return /^\\[A-Za-z]:/.test(pathname) ? pathname.slice(1) : pathname;
 }
@@ -458,6 +463,7 @@ export const RichMessage = memo(function RichMessage({
   theme = "dark",
   active = false,
   runStatus,
+  providerMode,
   onOpenCanvas,
   isNew = false,
   viewportHeight = 0,
@@ -468,6 +474,7 @@ export const RichMessage = memo(function RichMessage({
   theme?: ResolvedTheme;
   active?: boolean;
   runStatus?: string;
+  providerMode?: string;
   onOpenCanvas?: (canvasId: string) => void;
   isNew?: boolean;
   viewportHeight?: number;
@@ -552,6 +559,7 @@ export const RichMessage = memo(function RichMessage({
   const ownerRow = activeRows.find(row => row.kind === "tools" && preferences[row.key]) || activeRows[0];
   const ownerTool = ownerRow?.kind === "tools" && preferences[ownerRow.key] ? ownerRow.tools.find(tool => ["running", "preparing", "waiting"].includes(tool.status))?.key : undefined;
   const canThink = active && message.role === "assistant" && !message.content &&
+    (providerMode !== "local" || stream?.stage === "prefill" || stream?.stage === "thinking") &&
     (!runStatus || runStatus === "queued" || runStatus === "running") &&
     !rows.some((row) => row.kind === "tools" && row.running);
   const firstLiveAt = events
@@ -602,7 +610,7 @@ export const RichMessage = memo(function RichMessage({
   const actionsAvailable =
     !active && Boolean(message.content.trim()) &&
     (message.role !== "assistant" || (!isError && (!(runStatus || message.metadata?.run_status) || (runStatus || message.metadata?.run_status) === "completed")));
-  const openLink = async (href: string) => {
+  const openLink = useCallback(async (href: string) => {
     setLinkError("");
     try {
       const local = href.toLowerCase().startsWith("file:");
@@ -613,7 +621,23 @@ export const RichMessage = memo(function RichMessage({
     } catch (reason) {
       setLinkError(`לא ניתן לפתוח את הקישור: ${String(reason)}`);
     }
-  };
+  }, []);
+  // Stable renderers keep the focused link and reading blocks mounted when
+  // an asynchronous opening error (or an elapsed-time tick) updates this row.
+  const markdownComponents = useMemo<Components>(() => ({
+    table: renderTable,
+    p: ({ node, ...props }) => <p {...props} data-reading-block={node?.position?.start.offset}/>,
+    li: ({ node, ...props }) => <li {...props} data-reading-block={node?.position?.start.offset}/>,
+    h1: ({ node, ...props }) => <h1 {...props} data-reading-block={node?.position?.start.offset}/>,
+    h2: ({ node, ...props }) => <h2 {...props} data-reading-block={node?.position?.start.offset}/>,
+    h3: ({ node, ...props }) => <h3 {...props} data-reading-block={node?.position?.start.offset}/>,
+    a: ({ href = "", node: _node, ...props }) => <a {...props} href={href} onClick={event => {
+      event.preventDefault();
+      if (href) void openLink(href);
+    }}/>,
+    code: ({ children, className, ...props }) => <code {...props} className={className} dir="ltr">{children}</code>,
+    pre: ({ children }) => <CodeFrame onCopy={copy} onDownload={downloadCode}>{children}</CodeFrame>,
+  }), [renderTable, openLink]);
   const attachmentStrip = !!message.attachments?.length && <div className="sent-attachments" dir="rtl">
     {message.attachments.map((item, index) => item.kind === "image" && item.path
       ? <span className="sent-image" key={`${item.name}-${index}`}><SentImage path={item.path} name={item.name} mimeType={item.mime_type} /></span>
@@ -629,37 +653,14 @@ export const RichMessage = memo(function RichMessage({
           <div
             id={contentId}
             className={`message-content ${collapsible ? "is-collapsible" : ""} ${collapsible && !userExpanded ? "is-collapsed" : ""}`}
-            style={collapsible ? { maxHeight: userExpanded ? userContentHeight : Math.max(1, viewportHeight * .7 - 28) } : undefined}
+            style={collapsible ? { maxHeight: userExpanded ? userContentHeight + 40 : Math.max(1, viewportHeight * .7 - 28) } : undefined}
           >
             <div ref={contentRef} className="message-content-body">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={active ? [[streamReveal, { ranges: revealed.current.ranges }]] : []}
                 urlTransform={safeChatHref}
-                components={{
-                  table: renderTable,
-                  p: ({ node, ...props }) => <p {...props} data-reading-block={node?.position?.start.offset}/>,
-                  li: ({ node, ...props }) => <li {...props} data-reading-block={node?.position?.start.offset}/>,
-                  h1: ({ node, ...props }) => <h1 {...props} data-reading-block={node?.position?.start.offset}/>,
-                  h2: ({ node, ...props }) => <h2 {...props} data-reading-block={node?.position?.start.offset}/>,
-                  h3: ({ node, ...props }) => <h3 {...props} data-reading-block={node?.position?.start.offset}/>,
-                  a: ({ href = "", node: _node, ...props }) => (
-                    <a
-                      {...props}
-                      href={href}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        if (href) void openLink(href);
-                      }}
-                    />
-                  ),
-                  code: ({ children, className, ...props }) => (
-                    <code {...props} className={className} dir="ltr">
-                      {children}
-                    </code>
-                  ),
-                  pre: ({ children }) => <CodeFrame onCopy={copy} onDownload={downloadCode}>{children}</CodeFrame>,
-                }}
+                components={markdownComponents}
               >
                 {markdown}
               </ReactMarkdown>

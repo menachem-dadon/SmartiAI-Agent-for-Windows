@@ -1466,6 +1466,7 @@ export default function App() {
                       }
                       active={messageActive}
                       runStatus={runs.find(run => run.id === runId)?.status}
+                      providerMode={runs.find(run => run.id === runId)?.metadata?.provider_mode}
                       stream={streams[runId] || runs.find(run => run.id === runId)?.metadata?.stream}
                       viewportHeight={scroll.height}
                       theme={resolved}

@@ -1,5 +1,13 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 const key = "smarti.desktop.chat-scroll.v2";
+const disclosurePins = new WeakMap<HTMLElement, { control: HTMLElement; top: number; cancel: () => void }>();
+function pinDisclosure(stage: HTMLElement) {
+  const pin = disclosurePins.get(stage);
+  if (!pin) return false;
+  if (!pin.control.isConnected) { pin.cancel(); return false; }
+  stage.scrollTop += pin.control.getBoundingClientRect().top - pin.top;
+  return true;
+}
 type Position = { top: number; following: boolean; count: number; anchor?: string; offset?: number; block?: string; ordinal?: number; runId?: string; pending?: boolean; readComplete?: boolean; anchorRun?: string };
 function userAnchor(user: HTMLElement) {
   const bubble = user.querySelector<HTMLElement>(".sds-user-bubble");
@@ -105,13 +113,13 @@ export function useChatScroll(viewport: RefObject<HTMLDivElement | null>, sessio
       measure();
       // The browser can clamp scrollTop on resize before ResizeObserver runs.
       // That synthetic scroll must not overwrite the reader's logical anchor.
-      if (changedLayout && !animation.current) restore({ ...saved, readComplete: false, pending: false });
+      if (changedLayout && !animation.current && !pinDisclosure(node)) restore({ ...saved, readComplete: false, pending: false });
       capture(); save();
     };
     const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
       const saved = position.current;
       measure();
-      if (!animation.current) { restore({ ...saved, readComplete: false, pending: false }); capture(); }
+      if (!animation.current) { if (!pinDisclosure(node)) restore({ ...saved, readComplete: false, pending: false }); capture(); }
     });
     resize?.observe(node);
     const list = node.querySelector(".message-list");
@@ -122,7 +130,7 @@ export function useChatScroll(viewport: RefObject<HTMLDivElement | null>, sessio
     node.addEventListener("scroll", scroll, { passive: true });
     node.addEventListener("wheel", cancel, { passive: true }); node.addEventListener("touchstart", cancel, { passive: true }); node.addEventListener("pointerdown", cancel);
     window.addEventListener("pagehide", save);
-    return () => { save(); cancel(); resize?.disconnect(); node.removeEventListener("scroll", scroll); node.removeEventListener("wheel", cancel); node.removeEventListener("touchstart", cancel); node.removeEventListener("pointerdown", cancel); window.removeEventListener("pagehide", save); };
+    return () => { save(); cancel(); disclosurePins.get(node)?.cancel(); resize?.disconnect(); node.removeEventListener("scroll", scroll); node.removeEventListener("wheel", cancel); node.removeEventListener("touchstart", cancel); node.removeEventListener("pointerdown", cancel); window.removeEventListener("pagehide", save); };
   }, [viewport, sessionId, ready]);
   useLayoutEffect(() => {
     const node = viewport.current;
@@ -146,14 +154,31 @@ export function useChatScroll(viewport: RefObject<HTMLDivElement | null>, sessio
 export function preserveDisclosure(control: HTMLElement, action?: () => void) {
   const stage = control.closest<HTMLElement>(".chat-stage");
   if (!stage) { action?.(); return; }
+  disclosurePins.get(stage)?.cancel();
   const top = control.getBoundingClientRect().top;
   const reserve = stage.querySelector<HTMLElement>(".chat-turn-space");
   if (reserve) reserve.style.minHeight = `${Math.max(0, stage.scrollTop + stage.clientHeight - (stage.scrollHeight - reserve.offsetHeight))}px`;
+  // A bottom handle moves throughout the height transition. Keep it pinned
+  // for that whole transition, yielding immediately to a new user gesture.
+  const content = control.closest(".sds-user-bubble")?.querySelector(".is-collapsible");
+  const duration = content ? Math.max(...getComputedStyle(content).transitionDuration.split(",").map(value => parseFloat(value) * (value.trim().endsWith("ms") ? 1 : 1000))) : 0;
+  const until = performance.now() + duration + 32;
+  let frame = 0;
+  const cancel = () => {
+    cancelAnimationFrame(frame); disclosurePins.delete(stage);
+    stage.removeEventListener("wheel", cancel); stage.removeEventListener("touchstart", cancel);
+    stage.removeEventListener("pointerdown", cancel); stage.removeEventListener("keydown", cancel);
+  };
+  disclosurePins.set(stage, { control, top, cancel });
+  stage.addEventListener("wheel", cancel, { passive: true }); stage.addEventListener("touchstart", cancel, { passive: true });
+  stage.addEventListener("pointerdown", cancel); stage.addEventListener("keydown", cancel);
   action?.();
-  requestAnimationFrame(() => {
-    stage.scrollTop += control.getBoundingClientRect().top - top;
+  const update = () => {
+    if (!pinDisclosure(stage)) return;
     stage.dispatchEvent(new Event("scroll"));
-  });
+    if (performance.now() < until) frame = requestAnimationFrame(update); else cancel();
+  };
+  frame = requestAnimationFrame(update);
 }
 
 // Keep ordinary approvals beside the composer. If a queue or a short window

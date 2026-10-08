@@ -5,10 +5,11 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
 const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==';
 async function main(){
- const q=await browserQA({env:{CHAT_STREAM_QA:'1'},invoke:async(cmd)=>{
+ const openedLinks=[];
+ const q=await browserQA({env:{CHAT_STREAM_QA:'1'},invoke:async(cmd,args)=>{
   if(cmd==='stage_attachment')return q.handshake.qa_attachment_path;
   if(cmd==='read_attachment_preview')return [...Buffer.from(png,'base64')];
-  if(cmd==='open_chat_link')return true;
+  if(cmd==='open_chat_link'){openedLinks.push(args);throw Error('QA file is missing');}
   throw Error('Unadapted chat QA IPC: '+cmd);
  }}),{page}=q;
  const checks=[],errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -26,7 +27,10 @@ async function main(){
   await page.goto(process.argv[2]||'http://127.0.0.1:1453');await page.locator('.chat-welcome').waitFor();
   await select('מחקר לקראת המפגש');
   await page.locator('.chat-stage').evaluate(node=>node.scrollTop=0);await frame();
-  await send('stream-long');await page.getByText('מעבד הנחיה: 37%',{exact:true}).waitFor();
+  await send('stream-long');await page.waitForTimeout(350);
+  assert.equal(await page.locator('.chat-message-row--assistant').last().getByText('חושב...',{exact:true}).count(),0);
+  checks.push('local run metadata suppresses generic thinking before the first real server stage');
+  await page.getByText('מעבד הנחיה: 37%',{exact:true}).waitFor();
   await page.waitForTimeout(240);let before=await geometry();assert.ok(Math.abs(before.bubble-16)<3,JSON.stringify(before));checks.push('send from older history anchors the latest user bubble at 16px');
   await page.getByText('קטע 1: תשובה חיה בעברית עם English וקישור.',{exact:true}).waitFor();
   assert.equal(await page.locator('.chat-message-row--assistant').last().getByRole('button',{name:'העתק',exact:true}).count(),0);checks.push('real partial text is visible before completion; final copy is absent');
@@ -43,10 +47,29 @@ async function main(){
   await collapse.scrollIntoViewIfNeeded();await frame();
   const dimension=await page.locator('.message-content.is-collapsed').evaluate(node=>({height:node.getBoundingClientRect().height,available:parseFloat(node.closest('.chat-stage').style.getPropertyValue('--chat-available-height'))}));
   assert.ok(Math.abs(dimension.height+28-dimension.available*.7)<3,JSON.stringify(dimension));checks.push('long user text collapses to 70% of available chat height');
-  const handle=await collapse.boundingBox();await collapse.click();await page.waitForTimeout(240);const expanded=await page.getByRole('button',{name:'כווץ הודעה',exact:true}).boundingBox();assert.ok(Math.abs(handle.y-expanded.y)<3,JSON.stringify({handle,expanded}));await page.getByRole('button',{name:'כווץ הודעה',exact:true}).click();await page.waitForTimeout(240);assert.ok(Math.abs(handle.y-(await collapse.boundingBox()).y)<3);checks.push('user expand and collapse preserve the handle coordinate');
+  const handle=await collapse.boundingBox(),bubble=await page.locator('.sds-user-bubble').boundingBox();
+  assert.ok(Math.abs(handle.x-bubble.x-2)<3 && Math.abs(handle.y+handle.height-bubble.y-bubble.height+2)<3,JSON.stringify({handle,bubble}));
+  const toggleAndSample=async button=>{
+   // ResizeObserver samples after the chat's layout compensation, before
+   // painting. An earlier rAF can see the unpainted transition geometry.
+   await page.evaluate(()=>{const handle=document.querySelector('.message-expand-button');window.__disclosureFrames=[handle.getBoundingClientRect().top];window.__disclosureObserver=new ResizeObserver(()=>window.__disclosureFrames.push(handle.getBoundingClientRect().top));window.__disclosureObserver.observe(handle.closest('.sds-user-bubble'));});
+   await button.click();await page.waitForTimeout(320);
+   const ys=await page.evaluate(()=>{window.__disclosureObserver.disconnect();window.__disclosureFrames.push(document.querySelector('.message-expand-button').getBoundingClientRect().top);return window.__disclosureFrames;});assert.ok(ys.length>3);assert.ok(ys.every(y=>Math.abs(y-handle.y)<3),JSON.stringify({expected:handle.y,ys}));
+  };
+  await toggleAndSample(collapse);await toggleAndSample(page.getByRole('button',{name:'כווץ הודעה',exact:true}));
+  checks.push('bottom-left user disclosure handle stays pinned throughout expansion and collapse');
   await page.locator('.chat-stage').evaluate(node=>node.scrollTop=0);const strip=await page.locator('.sent-attachments').evaluate(node=>({scroll:node.scrollWidth,width:node.clientWidth,right:node.firstElementChild.getBoundingClientRect().right,last:node.lastElementChild.getBoundingClientRect().right}));assert.ok(strip.scroll>strip.width);assert.ok(strip.right>strip.last);checks.push('images form one horizontal RTL attachment row above the bubble');
   const thumbnail=page.getByRole('button',{name:'הגדל תמונה: image-0.png',exact:true});await thumbnail.click();const modal=page.getByRole('dialog',{name:'image-0.png',exact:true});await modal.waitFor();await modal.locator('img').click();await page.waitForTimeout(200);assert.equal(await modal.count(),1);await modal.locator('img').evaluate(node=>node.dispatchEvent(new WheelEvent('wheel',{deltaY:-400,bubbles:true,cancelable:true})));assert.ok(await modal.locator('img').evaluate(node=>getComputedStyle(node).transform!=='matrix(1, 0, 0, 1, 0, 0)'));await page.keyboard.press('Escape');await modal.waitFor({state:'detached'});assert.ok(await thumbnail.evaluate(node=>node===document.activeElement));await thumbnail.click();await modal.waitFor();await modal.locator('.attachment-lightbox-view').click({position:{x:10,y:10}});await modal.waitFor({state:'detached'});checks.push('image modal keeps image clicks open, zooms without toolbar, closes outside/Escape and restores thumbnail focus');
   await page.screenshot({path:output+'/attachments.png'});
+  await select('בדיקת קישורים');await page.getByRole('link',{name:'קישור פגום',exact:true}).waitFor();
+  for(const name of ['קישור פגום','קישור תקין']){
+   const link=page.getByRole('link',{name,exact:true});await link.scrollIntoViewIfNeeded();await frame();const beforeLink=await geometry();
+   await link.evaluate(node=>window.__clickedLink=node);await link.click();await page.locator('.message-link-error').waitFor();await page.waitForTimeout(100);const afterLink=await geometry();
+   assert.ok(Math.abs(beforeLink.top-afterLink.top)<3,JSON.stringify({name,beforeLink,afterLink}));
+   assert.ok(await link.evaluate(node=>node===window.__clickedLink && node===document.activeElement));
+  }
+  assert.equal(openedLinks.length,1);assert.deepEqual(openedLinks[0],{target:'C:\\Users\\יהודית User\\Desktop\\elad_weather.txt',local:true});
+  checks.push('malformed file URL and native opening failure keep scroll/focus; valid UTF-8 URL opens a decoded path exactly once');
   await select('שיחה נוספת');await send('stream-tools');await page.locator('.agent-status-text:visible').filter({hasText:/^מכין כלי canvas_manager$/}).waitFor();
   const processPanel=page.locator('.agent-process').last();const summary=processPanel.locator(':scope > summary');let start=await summary.boundingBox();await summary.click();await frame();assert.ok(Math.abs(start.y-(await summary.boundingBox()).y)<3);assert.equal(await processPanel.locator('.is-shimmering').count(),1);await summary.click();await processPanel.locator('.agent-tool-group > summary').last().click();await frame();assert.equal(await processPanel.locator('.is-shimmering').count(),1);checks.push('process disclosure stays stationary and transfers one status shimmer down the hierarchy');
   await page.locator('.agent-status-text:visible').filter({hasText:/^ממתין לאישור הפעלת כלי canvas_manager$/}).first().waitFor();await page.getByRole('button',{name:'אשר',exact:true}).last().click();await page.locator('.agent-status-text:visible').filter({hasText:/^מריץ כלי canvas_manager$/}).first().waitFor();await page.locator('.chat-message-row--assistant').last().getByRole('button',{name:'העתק',exact:true}).waitFor();checks.push('preparing -> durable approval -> running -> completed shares the same tool identity');

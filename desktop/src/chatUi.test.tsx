@@ -276,6 +276,12 @@ describe("rich daily chat UI", () => {
     expect(safeChatHref("javascript:alert(1)")).toBe("");
   });
 
+  test("preserves encoded file URLs and literal percent signs in raw paths", () => {
+    const url = "file:///C:/Users/%D7%99%D7%94%D7%95%D7%93%D7%99%D7%AA%20User/report.pdf";
+    expect(prepareMessageMarkdown(`[קובץ](${url})`)).toBe(`[קובץ](${url})`);
+    expect(prepareMessageMarkdown("[קובץ](C:\\reports\\literal%20name.txt)")).toContain("file:///C:/reports/literal%2520name.txt");
+  });
+
   test("renders active-run composer with Hebrew attachment preview and cancellation", () => {
     const html = renderToStaticMarkup(
       <Composer

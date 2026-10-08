@@ -24,6 +24,20 @@ beforeEach(() => { sessionStorage.clear(); vi.useFakeTimers(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("agent thinking indicator", () => {
+  test("local runs stay quiet until real prefill or reasoning arrives", () => {
+    const view = render(run([], { providerMode: "local", stream: { stage: "waiting", blocks: {} } }));
+    advance(1200);
+    expect(thinking()).toBeNull();
+    expect(screen.queryByText(/מעבד הנחיה/)).toBeNull();
+    view.rerender(run([], { providerMode: "local", stream: { stage: "prefill", percent: 37, blocks: {} } }));
+    expect(screen.getByText("מעבד הנחיה: 37%")).toBeTruthy();
+    expect(thinking()).toBeNull();
+    view.rerender(run([], { providerMode: "local", stream: { stage: "thinking", blocks: {} } }));
+    expect(thinking()).not.toBeNull();
+    view.rerender(run([], { providerMode: "local", stream: { stage: "waiting", blocks: {} } }));
+    advance(1200);
+    expect(thinking()).toBeNull();
+  });
   test("uses thinking while waiting for cloud tokens and preserves real local prefill", () => {
     const view = render(run([], { stream: { stage: "waiting", blocks: {} } }));
     advance(300);
