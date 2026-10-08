@@ -20,6 +20,7 @@ vi.mock("./Composer", () => ({ Composer: (props: any) => <div>
     conversationId: props.conversationId, draft: props.draft,
     provider: props.provider, model: props.model, reasoning: props.reasoningEffort,
     autonomy: props.autonomyMode, fast: props.localFastMode, favorites: props.favoriteModels,
+    disabled: props.disabled,
   })}</output>
   <button onClick={props.onManageModels}>manage-models</button>
   <button onClick={() => props.onFavoriteModel({ provider: "openai", model: "openai-b" })}>chat-model</button>
@@ -135,6 +136,39 @@ test("a fresh launch opens a blank chat while retaining existing history and its
   expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) =>
     command === "core_api" && args.request.path.startsWith("/v2/conversations/previous/messages"))).toBe(false);
   expect(JSON.parse(sessionStorage.getItem("smarti.desktop.chat-drafts.v1")!).previous.text).toBe("Previous draft");
+});
+
+test.each([404, 405])("a Core without the live route (%s) uses replay and leaves the composer available", async (status) => {
+  const baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+    if (command === "core_api" && args.request.path.startsWith("/v2/events/live"))
+      return { status, body: { detail: "live route unavailable" } } as any;
+    return baseInvoke(command, args);
+  });
+  await start();
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) =>
+    command === "core_api" && args.request.path.startsWith("/v2/events/replay"))).toBe(true));
+  expect(composer().disabled).toBe(false);
+  await act(async () => { await new Promise(resolve => window.setTimeout(resolve, 1250)); });
+  expect(vi.mocked(invoke).mock.calls.filter(([command, args]: any) =>
+    command === "core_api" && args.request.path.startsWith("/v2/events/live")).length).toBe(1);
+  expect(composer().disabled).toBe(false);
+});
+
+test("a real live transport failure keeps its reconnect state and recovers through the live route", async () => {
+  let failing = true;
+  const baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+    if (failing && command === "core_api" && args.request.path.startsWith("/v2/events/live"))
+      return { status: 503, body: { detail: "transport unavailable" } } as any;
+    return baseInvoke(command, args);
+  });
+  await start();
+  await waitFor(() => expect(composer().disabled).toBe(true));
+  expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) =>
+    command === "core_api" && args.request.path.startsWith("/v2/events/replay"))).toBe(false);
+  failing = false;
+  await waitFor(() => expect(composer().disabled).toBe(false), { timeout: 2500 });
 });
 
 describe("settings synchronization through the real API client", () => {

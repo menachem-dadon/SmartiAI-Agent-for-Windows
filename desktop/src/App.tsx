@@ -29,7 +29,7 @@ import type {
   RunRecord,
 } from "./chatTypes";
 import { Composer } from "./Composer";
-import { coreApi, encodePath } from "./coreApi";
+import { CoreApiError, coreApi, encodePath } from "./coreApi";
 import { type CoreSnapshot } from "./coreState";
 import {
   parseThemePreference,
@@ -746,18 +746,25 @@ export default function App() {
     if (core.state !== "ready") return;
     let stopped = false;
     let polling = false;
+    let liveEvents = true;
     const poll = async () => {
       if (polling || stopped) return;
       polling = true;
       let delay = 0;
       try {
         const cursor = Number(sessionStorage.getItem(cursorKey) || 0);
-        const data = await coreApi<{ items: RunEvent[] }>(
-          "GET",
-          `/v2/events/live?after_event_id=${cursor}`,
-        );
+        let data: { items: RunEvent[] };
+        try {
+          data = await coreApi("GET", `/v2/events/${liveEvents ? "live" : "replay"}?after_event_id=${cursor}`);
+        } catch (reason) {
+          // Vite can update React while the supervised Python process still
+          // runs the previous API. Missing live support is not a disconnection.
+          if (!liveEvents || !(reason instanceof CoreApiError) || ![404, 405].includes(reason.status)) throw reason;
+          liveEvents = false;
+          data = await coreApi("GET", `/v2/events/replay?after_event_id=${cursor}`);
+        }
         if (stopped) return;
-        if (!data.items.length) delay = 250;
+        delay = liveEvents ? (data.items.length ? 0 : 250) : 1200;
         let conversationData: ConversationList | null;
         if (data.items.length) {
           sessionStorage.setItem(
