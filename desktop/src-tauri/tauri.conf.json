@@ -15,15 +15,16 @@
         "label": "main",
         "title": "SmartiAI",
         "dragDropEnabled": false,
-        "width": 500,
-        "height": 310,
-        "minWidth": 500,
-        "minHeight": 310,
+        "width": 1180,
+        "height": 760,
+        "minWidth": 360,
+        "minHeight": 320,
         "center": true,
-        "resizable": false,
+        "resizable": true,
         "decorations": false,
-        "transparent": true,
-        "shadow": false
+        "transparent": false,
+        "shadow": true,
+        "visible": false
       }
     ],
     "security": {

@@ -15,7 +15,7 @@ describe("UX-3 conversation recovery", () => {
     expect(restored).toBe("older");
     const recovered = renderHook(() => useChatDrafts(restored, () => {}));
     expect(recovered.result.current.draft.text).toBe("older owned draft");
-    expect(restoreActiveConversation([{ id: "newer" }], restored)).toBe("newer");
+    expect(restoreActiveConversation([{ id: "newer" }], restored)).toBe("");
     expect(restoreActiveConversation([], restored)).toBe("");
     expect(rememberActiveConversation("")).toBe(true);
     expect(readActiveConversation()).toBe("");

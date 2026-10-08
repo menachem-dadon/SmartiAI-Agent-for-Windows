@@ -17,6 +17,7 @@ vi.mock("./WorkbenchPanels", () => ({ WorkbenchSurface: () => null }));
 vi.mock("./workspaceMotion", () => ({ useChatLayoutMotion: () => ({ current: null }) }));
 vi.mock("./Composer", () => ({ Composer: (props: any) => <div>
   <output data-testid="composer">{JSON.stringify({
+    conversationId: props.conversationId, draft: props.draft,
     provider: props.provider, model: props.model, reasoning: props.reasoningEffort,
     autonomy: props.autonomyMode, fast: props.localFastMode, favorites: props.favoriteModels,
   })}</output>
@@ -107,6 +108,34 @@ async function start() {
 async function patch(next: Record<string, unknown>) {
   await act(async () => { await coreApi("PATCH", "/v2/settings", { values: next }, true); });
 }
+
+test("a fresh launch opens a blank chat while retaining existing history and its drafts", async () => {
+  const previous = { id: "previous", title: "Previous conversation", message_count: 2 };
+  sessionStorage.setItem("smarti.desktop.chat-drafts.v1", JSON.stringify({
+    previous: { text: "Previous draft", attachments: [] },
+  }));
+  const baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+    const response = await baseInvoke(command, args) as any;
+    if (command === "core_api") {
+      const path = args.request.path;
+      if (path === "/v2/bootstrap") response.body.data.conversations = [previous];
+      if (path.startsWith("/v2/conversations?"))
+        response.body.data = { items: [previous], attention_items: [] };
+      if (path.startsWith("/v2/conversations/previous/messages"))
+        response.body.data = { session_id: "previous", messages: [], total_count: 2, has_older: false };
+    }
+    return response;
+  });
+
+  await start();
+  expect(composer()).toMatchObject({ conversationId: "", draft: "" });
+  expect(screen.getByRole("heading", { name: "שיחה חדשה" })).toBeTruthy();
+  expect(screen.getByText("Previous conversation")).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) =>
+    command === "core_api" && args.request.path.startsWith("/v2/conversations/previous/messages"))).toBe(false);
+  expect(JSON.parse(sessionStorage.getItem("smarti.desktop.chat-drafts.v1")!).previous.text).toBe("Previous draft");
+});
 
 describe("settings synchronization through the real API client", () => {
   test("automatic update discovery records success and displays the available version", async () => {

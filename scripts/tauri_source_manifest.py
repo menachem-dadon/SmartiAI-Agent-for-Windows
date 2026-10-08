@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def source_inputs(root: Path = ROOT) -> dict[str, str]:
     files = []
-    for base in ("desktop/src", "desktop/src-tauri/src", "desktop/src-tauri/capabilities", "smarti", "packaging"):
+    for base in ("desktop/src", "desktop/public", "desktop/src-tauri/src", "desktop/src-tauri/capabilities", "smarti", "packaging"):
         files.extend(p for p in (root / base).rglob("*") if p.is_file()
                      and p.suffix in {".ts", ".tsx", ".css", ".json", ".rs", ".py", ".spec", ".svg", ".png", ".gif"}
                      and ".test." not in p.name and "__pycache__" not in p.parts)

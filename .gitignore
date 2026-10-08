@@ -40,6 +40,8 @@ tests/*
 !tests/test_settings_sync.py
 !tests/test_ux6_acceptance.py
 !tests/test_tauri_packaging.py
+!tests/test_core_parent_control.py
+!tests/test_startup_source_manifest.py
 !tests/test_workspace.py
 !tests/test_usage_stats.py
 

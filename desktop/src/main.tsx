@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { InterfaceLoading, InterfaceRecovery } from "./InterfaceRecovery";
 import { VoiceOverlayWindow } from "./VoiceOverlayWindow";
 import "./interfaceRecovery.css";
+import { setStartupVisible } from "./startup";
 
 const App = lazy(() => import("./App"));
 const Point16AVisualFixture = import.meta.env.DEV ? lazy(() => import("./Point16AVisualFixture").then(module => ({ default: module.Point16AVisualFixture }))) : null;
@@ -17,6 +18,7 @@ const visualFixture =
   new URLSearchParams(location.search).get("visual-fixture") === "point16a";
 const point16BFixture = import.meta.env.DEV ? new URLSearchParams(location.search).get("visual-fixture") : "";
 document.documentElement.classList.toggle("voice-overlay-document", voiceOverlay || voiceFixture);
+if (voiceOverlay || voiceFixture || visualFixture || point16BFixture) setStartupVisible(false);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

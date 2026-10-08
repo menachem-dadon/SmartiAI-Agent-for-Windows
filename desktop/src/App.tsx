@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -30,7 +30,7 @@ import type {
 } from "./chatTypes";
 import { Composer } from "./Composer";
 import { coreApi, encodePath } from "./coreApi";
-import { copyForState, type CoreSnapshot } from "./coreState";
+import { type CoreSnapshot } from "./coreState";
 import {
   parseThemePreference,
   resolveTheme,
@@ -63,7 +63,8 @@ import { settingsRevision, subscribeSettingsChanges } from "./settingsChanges";
 import { ConversationApprovals, useApprovalQueue } from "./conversationApprovals";
 import { useReplyNavigation, type ReplyNavigation } from "./replyNavigation";
 import { WindowTitleBar } from "./WindowTitleBar";
-import { StartupRecovery, useStartupWatchdog } from "./InterfaceRecovery";
+import { StartupFailure, useStartupWatchdog } from "./InterfaceRecovery";
+import { setStartupVisible, updateStartupTheme } from "./startup";
 
 const initialCore: CoreSnapshot = {
   state: "starting",
@@ -200,8 +201,8 @@ function useTheme() {
 
 export default function App() {
   const [core, setCore] = useState<CoreSnapshot>(initialCore);
-  const [busy, setBusy] = useState(false);
-  const [, setHealthOkay] = useState(false);
+  const [healthOkay, setHealthOkay] = useState(false);
+  const [startupError, setStartupError] = useState(false);
   const [workspace, dispatch] = useReducer(
     workspaceReducer,
     initialWorkspaceState,
@@ -491,6 +492,7 @@ export default function App() {
     return () => { disposed = true; unsubscribe(); };
   }, [core.state, core.generation, syncSettings]);
   const bootstrap = useCallback(async () => {
+    setBootstrapReady(false);
     setReconnecting(false);
     const revision = settingsRevision();
     const data = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
@@ -539,6 +541,8 @@ export default function App() {
     let alive = true;
     if (core.state !== "ready") {
       setHealthOkay(false);
+      setBootstrapReady(false);
+      setStartupError(false);
       setWorkspaceWindowReady(false);
       setLegalChecked(false);
       setLegalStatus(null);
@@ -548,22 +552,21 @@ export default function App() {
     }
     void (async () => {
       try {
-        await invoke("desktop_finish_startup");
         const health = await invoke<{ ready: boolean }>("core_health");
         if (!alive) return;
-        setHealthOkay(Boolean(health.ready));
+        if (!health.ready) throw new Error("Core is not ready");
+        setHealthOkay(true);
         const legal = await coreApi<LegalStatus>("GET", "/v2/management/legal");
         if (!alive) return;
         setLegalStatus(legal);
         setLegalChecked(true);
         if (legal.accepted) await bootstrap();
+        if (alive) setWorkspaceWindowReady(true);
       } catch (reason) {
         if (alive) {
-          setHealthOkay(false);
+          setStartupError(true);
           setError(String(reason));
         }
-      } finally {
-        if (alive) setWorkspaceWindowReady(true);
       }
     })();
     return () => {
@@ -1173,14 +1176,6 @@ export default function App() {
       setError(`לא ניתן לעדכן FastMode: ${String(reason)}`);
     }
   };
-  const retryCore = async () => {
-    setBusy(true);
-    try {
-      setCore(await invoke<CoreSnapshot>("core_restart"));
-    } finally {
-      setBusy(false);
-    }
-  };
   const setWorkbenchOpen = useCallback(
     (open: boolean, tab: WorkbenchTab | null = null) => {
       if (!open) requestAnimationFrame(() => workbenchTrigger.current?.focus());
@@ -1295,46 +1290,14 @@ export default function App() {
     };
   }, []);
 
-  if (core.state !== "ready" || !workspaceWindowReady || !legalChecked) {
-    const copy = copyForState(core.state, core.lastError);
-    const failed = ["crashed", "fatal", "repair"].includes(core.state);
-    return (
-      <DesignSystemProvider theme={resolved} className="chat-design"><main
-        className={`startup-shell theme-${resolved}`}
-        dir="rtl"
-        data-state={core.state}
-      >
-        <section className="status-card" aria-live="polite">
-          <div className="splash-brand">
-            <img src={legacyAssets(resolved).logo} alt="" />
-            <div>
-              <h1>SmartiAI</h1>
-              <p>סוכן AI חכם ל-Windows</p>
-              <small>גרסה 0.87.0</small>
-            </div>
-          </div>
-          <div className="splash-spacer" />
-          <p className="splash-status">
-            {failed ? copy.status : copy.description}
-          </p>
-          <div className="splash-progress" role="progressbar" aria-label="פותח את סמארטי">
-            <i />
-          </div>
-          {failed && (
-            <div className="recovery">
-              <Button variant="primary" onClick={retryCore} disabled={busy}>
-                {busy ? "מנסה שוב…" : "הפעל מחדש"}
-              </Button>
-              {core.stderrTail.length > 0 && (
-                <pre dir="ltr">{core.stderrTail.slice(-3).join("\n")}</pre>
-              )}
-            </div>
-          )}
-          {core.state === "ready" && (startupDelayed || Boolean(error)) && <StartupRecovery />}
-        </section>
-      </main></DesignSystemProvider>
-    );
-  }
+  const startupPending = core.state !== "ready" || !healthOkay || !workspaceWindowReady || !legalChecked || Boolean(legalStatus?.accepted && !bootstrapReady);
+  const startupRecovery = core.state === "ready" && (startupError || startupDelayed);
+  useLayoutEffect(() => {
+    updateStartupTheme(resolved);
+    setStartupVisible(startupPending && !startupRecovery);
+    if (!startupPending) void invoke("desktop_finish_startup").catch(() => setStartupError(true));
+  }, [resolved, startupPending, startupRecovery]);
+  if (startupPending) return startupRecovery ? <StartupFailure theme={resolved} failed={startupError} /> : null;
 
   if (legalStatus && !legalStatus.accepted) {
     return (
@@ -1349,7 +1312,14 @@ export default function App() {
             true,
           );
           setLegalStatus({ ...legalStatus, accepted: true });
-          await bootstrap();
+          setWorkspaceWindowReady(false);
+          try {
+            await bootstrap();
+            setWorkspaceWindowReady(true);
+          } catch (reason) {
+            setStartupError(true);
+            setError(String(reason));
+          }
         }}
       />
     );

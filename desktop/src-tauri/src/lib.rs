@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, RunEvent};
 
 mod browser;
+mod core_process_job;
 mod taskbar_badge;
 mod windows_integration;
 
@@ -87,6 +88,7 @@ struct CoreSupervisor {
     inner: Arc<Mutex<Inner>>,
     project_root: PathBuf,
     browser_bridge: Arc<Mutex<Option<(u16, String)>>>,
+    parent_job: Result<Arc<core_process_job::CoreProcessJob>, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,6 +125,7 @@ impl CoreSupervisor {
             })),
             project_root,
             browser_bridge: Arc::new(Mutex::new(None)),
+            parent_job: core_process_job::CoreProcessJob::new().map(Arc::new),
         }
     }
 
@@ -149,7 +152,7 @@ impl CoreSupervisor {
         let generation;
         {
             let mut inner = self.inner.lock().expect("Core supervisor mutex poisoned");
-            if child_is_running(&mut inner.child) {
+            if inner.stopping || matches!(inner.snapshot.state, CoreState::Starting | CoreState::Connecting) || child_is_running(&mut inner.child) {
                 return inner.snapshot.clone();
             }
             inner.snapshot.generation += 1;
@@ -208,6 +211,12 @@ impl CoreSupervisor {
             }
         };
         let pid = child.id();
+        if let Err(error) = self.parent_job.as_ref().map_err(Clone::clone).and_then(|job| job.attach(&child)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            self.fail(&app, generation, CoreState::Fatal, error);
+            return;
+        }
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("piped Core stdout missing");
         let stderr = child.stderr.take().expect("piped Core stderr missing");
@@ -227,8 +236,9 @@ impl CoreSupervisor {
         self.capture_stderr(stderr, generation, app.clone());
         {
             let mut inner = self.inner.lock().expect("Core supervisor mutex poisoned");
-            if inner.snapshot.generation != generation {
+            if inner.snapshot.generation != generation || inner.stopping || inner.snapshot.state != CoreState::Starting {
                 let _ = child.kill();
+                let _ = child.wait();
                 return;
             }
             inner.child = Some(child);
@@ -266,7 +276,7 @@ impl CoreSupervisor {
         }
         {
             let mut inner = self.inner.lock().expect("Core supervisor mutex poisoned");
-            if inner.snapshot.generation != generation {
+            if inner.snapshot.generation != generation || inner.stopping || inner.snapshot.state != CoreState::Connecting {
                 return;
             }
             inner.snapshot.state = CoreState::Ready;
@@ -382,6 +392,7 @@ impl CoreSupervisor {
                     .inner
                     .lock()
                     .expect("Core supervisor mutex poisoned");
+                if inner.snapshot.generation != generation || inner.child.is_none() { return; }
                 inner.child = None;
                 inner.stdin = None;
                 inner.token = None;
@@ -397,6 +408,7 @@ impl CoreSupervisor {
                 }
                 drop(inner);
                 supervisor.emit(&app);
+                if !stopping { windows_integration::lifecycle_failure(&app, &exit_message(code)); }
                 return;
             }
         });
@@ -404,7 +416,7 @@ impl CoreSupervisor {
 
     fn fail(&self, app: &AppHandle, generation: u64, state: CoreState, error: String) {
         let mut inner = self.inner.lock().expect("Core supervisor mutex poisoned");
-        if inner.snapshot.generation != generation {
+        if inner.snapshot.generation != generation || inner.stopping || inner.snapshot.state == CoreState::Stopped {
             return;
         }
         inner.snapshot.state = state;
@@ -416,6 +428,7 @@ impl CoreSupervisor {
         inner.token = None;
         drop(inner);
         self.emit(app);
+        windows_integration::lifecycle_failure(app, &error);
     }
 
     fn terminate_generation(&self, generation: u64) {
@@ -434,6 +447,10 @@ impl CoreSupervisor {
         let (mut child, mut stdin) = {
             let mut inner = self.inner.lock().expect("Core supervisor mutex poisoned");
             inner.stopping = true;
+            inner.snapshot.state = CoreState::Stopped;
+            inner.snapshot.pid = None;
+            inner.snapshot.port = None;
+            inner.token = None;
             (inner.child.take(), inner.stdin.take())
         };
         if let Some(input) = stdin.as_mut() {
@@ -481,21 +498,6 @@ impl CoreSupervisor {
         health_request(port, &token)
     }
 
-    fn terminate_for_smoke(&self) -> Result<(), String> {
-        if env::var_os("SMARTI_SUPERVISOR_SMOKE_FILE").is_none() {
-            return Err("smoke termination is disabled".into());
-        }
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| "Core supervisor mutex poisoned".to_string())?;
-        inner
-            .child
-            .as_mut()
-            .ok_or("Core process is not running")?
-            .kill()
-            .map_err(|error| error.to_string())
-    }
 }
 
 fn child_is_running(child: &mut Option<Child>) -> bool {
@@ -1350,8 +1352,9 @@ fn run_supervisor_smoke(
         }
         assert_chat_smoke_persisted(&supervisor, &chat_session_id)?;
 
-        supervisor.terminate_for_smoke()?;
-        let crashed = wait_for_state(&supervisor, CoreState::Crashed, Duration::from_secs(10))?;
+        // A deliberate restart preserves this desktop. An unexpected Core exit
+        // now exits the entire app and is verified by the external native probe.
+        supervisor.stop(Some(&app));
         let restarting = supervisor.begin_start(app.clone());
         let second = wait_for_state(&supervisor, CoreState::Ready, Duration::from_secs(45))?;
         let second_pid = second.pid.ok_or("restarted Core PID missing")?;
@@ -1374,7 +1377,7 @@ fn run_supervisor_smoke(
             "chat_survived_core_restart": true,
             "chat_session_id": chat_session_id,
             "chat_run_id": chat_run_id,
-            "crash_detected": crashed.state == CoreState::Crashed,
+            "intentional_restart": true,
             "restart_ready": true,
             "graceful_stop": stopped.state == CoreState::Stopped,
             "initial_shell": initial_shell,
@@ -1485,6 +1488,7 @@ pub fn run() {
             desktop_diagnostic_snapshot,
             open_chat_link,
             windows_integration::desktop_finish_startup,
+            windows_integration::desktop_present_startup,
             windows_integration::desktop_show_voice_overlay,
             windows_integration::desktop_hide_voice_overlay,
             windows_integration::desktop_focus_main,

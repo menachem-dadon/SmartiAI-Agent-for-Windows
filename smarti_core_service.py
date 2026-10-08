@@ -68,8 +68,34 @@ async def _v2_websocket_replay(handshake, token, after_event_id, expected_count)
             return [await socket.receive_json(timeout=5) for _ in range(expected_count)]
 
 
+class _ParentControl:
+    """Watch ownership before importing/initializing Core, not only after ready."""
+    def __init__(self):
+        self.stopping = threading.Event()
+        self.service = None
+
+    def request_shutdown(self):
+        self.stopping.set()
+        if self.service is not None:
+            self.service.request_shutdown()
+
+    def bind(self, service):
+        self.service = service
+        if self.stopping.is_set():
+            service.request_shutdown()
+
+    def parent_disconnected(self):
+        self.request_shutdown()
+        # Also covers a parent disappearing inside a blocked Core constructor,
+        # and the small spawn-to-Job assignment interval in the Windows host.
+        timer = threading.Timer(8, lambda: os._exit(1))
+        timer.daemon = True
+        timer.start()
+
+
 def _monitor_stdin(service):
     """Accept a narrow parent-process shutdown command over the inherited pipe."""
+    explicit_shutdown = False
     try:
         for line in sys.stdin:
             text = str(line or "").strip()
@@ -81,16 +107,22 @@ def _monitor_stdin(service):
                 payload = text
             command = payload.get("command") if isinstance(payload, dict) else payload
             if str(command or "").strip().lower() == "shutdown":
+                explicit_shutdown = True
                 service.request_shutdown()
                 return
     finally:
         # A closed supervisor pipe means there is no trusted desktop parent left
         # to own this user-session sidecar.
         service.request_shutdown()
+        if not explicit_shutdown and isinstance(service, _ParentControl):
+            service.parent_disconnected()
 
 
 def main(argv=None):
     args = _parse_args(argv)
+    parent = _ParentControl()
+    if not args.smoke:
+        threading.Thread(target=_monitor_stdin, args=(parent,), daemon=True, name="smarti-core-stdin-control").start()
     temporary_data = None
     if args.data_dir:
         os.environ["SMARTI_DATA_DIR"] = os.path.abspath(args.data_dir)
@@ -102,6 +134,7 @@ def main(argv=None):
 
     token = str(args.token or os.environ.get("SMARTI_CORE_LAUNCH_TOKEN") or "")
     service = SmartiCoreService(token=token or None, port=args.port)
+    parent.bind(service)
     token = service._token
 
     def stop_handler(_signum, _frame):
@@ -116,7 +149,11 @@ def main(argv=None):
                 pass
 
     try:
+        if parent.stopping.is_set():
+            service.shutdown()
+            return 0
         handshake = service.start()
+        parent.bind(service)  # start() clears its stop event; retain early shutdown.
         deterministic_product_smoke = (
             args.smoke
             or os.environ.get("SMARTI_DETERMINISTIC_PRODUCT_SMOKE", "").strip() == "1"
@@ -201,12 +238,6 @@ def main(argv=None):
                 "final_state": service.state,
             })
             return 0
-        threading.Thread(
-            target=_monitor_stdin,
-            args=(service,),
-            daemon=True,
-            name="smarti-core-stdin-control",
-        ).start()
         service.wait()
         service.shutdown()
         _write_message({

@@ -13,7 +13,9 @@ export function rememberActiveConversation(id: string): boolean {
   } catch { return false; }
 }
 export function restoreActiveConversation(conversations: readonly { id: string }[], wanted: string): string {
-  return conversations.some(item => item.id === wanted) ? wanted : conversations[0]?.id || "";
+  // Only recover a selection made in this WebView session. A fresh launch (or
+  // a deleted selection) starts with a blank chat, regardless of saved history.
+  return conversations.some(item => item.id === wanted) ? wanted : "";
 }
 export type DraftModel = { provider: string; model: string; effort: string };
 export type ChatDraft = { text: string; attachments: PendingAttachment[]; selection?: DraftModel };

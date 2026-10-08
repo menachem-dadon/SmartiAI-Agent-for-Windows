@@ -5,6 +5,7 @@ import App from "./App";
 import { coreApi } from "./coreApi";
 import { invoke } from "@tauri-apps/api/core";
 import { useConversationAttention } from "./conversationAttention";
+import { rememberActiveConversation } from "./chatDrafts";
 import type { AttentionItem, Approval, ChatMessage, Conversation, RunRecord } from "./chatTypes";
 
 const native = vi.hoisted(() => ({
@@ -122,6 +123,8 @@ const row = (session: string) => screen.getByText(`chat-${session}`, { selector:
 const open = (session: string) => fireEvent.click(row(session).querySelector("button")!);
 const badge = () => vi.mocked(invoke).mock.calls.filter(([name]) => name === "desktop_set_unread").slice(-1)[0]?.[1];
 async function start() {
+  // Read/notification scenarios begin with an explicitly selected conversation.
+  rememberActiveConversation("a");
   render(<App />);
   await screen.findByText("answer-a");
   await waitFor(() => expect(badge()).toEqual({ count: attention.length }));

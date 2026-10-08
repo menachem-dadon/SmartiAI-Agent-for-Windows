@@ -1,0 +1,8 @@
+html, body, #root { width:100%; height:100%; margin:0; }
+html, body { background:var(--sds-color-background,Canvas); color:var(--sds-color-text,CanvasText); }
+.startup-screen { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; background:var(--sds-color-background); }
+.startup-screen[hidden] { display:none; }
+.startup-screen>img { width:72px; height:72px; object-fit:contain; }
+.startup-failure { height:100%; box-sizing:border-box; display:grid; place-content:center; padding:var(--sds-space-6); font-family:var(--sds-font-family); }
+.startup-failure .sds-alert { max-width:32rem; }
+.startup-failure .sds-actions { margin-top:var(--sds-space-6); }

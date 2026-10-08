@@ -1,9 +1,9 @@
-import { Alert, Button, Checkbox, DesignSystemProvider } from "./design-system";
+import { Alert, Button, Checkbox, DesignSystemProvider, Dialog } from "./design-system";
 import "./management.css";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ResolvedTheme } from "./designSystem";
-import { legacyAssets } from "./legacyAssets";
+import { WindowTitleBar } from "./WindowTitleBar";
 
 export type LegalStatus = { accepted: boolean; version: string; effective_date: string; title: string };
 
@@ -71,6 +71,23 @@ export function LegalAgreement({ status, theme, onAccepted }: { status: LegalSta
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const accept = async () => { if (busy || !confirmed) return; setBusy(true); setError(""); try { await onAccepted(); } catch (reason) { setError(String(reason)); setBusy(false); } };
-  return <DesignSystemProvider theme={theme}><main className="legal-gate" dir="rtl"><section className="legal-surface" role="dialog" aria-modal="true" aria-labelledby="legal-title"><header><img src={legacyAssets(theme).logo} alt="" /><div><h1 id="legal-title">מדיניות פרטיות ותנאי שימוש</h1><p>SmartiAI • גרסת מסמך {status.version}</p></div></header><p className="legal-intro">לפני הכניסה הראשונה לצ׳אט נדרש אישור מפורש. בלי אישור, סמארטי ייסגר ולא ימשיך להפעלה.</p><pre tabIndex={0}>{status.title}{`\nתאריך תחילה: ${status.effective_date}\nגרסת מסמך: ${status.version}\n\n`}{LEGAL_AGREEMENT_TEXT.replace(/^.*?\n/, "")}</pre><label className="legal-confirm"><Checkbox label="קראתי את המסמך ואני מסכים/ה לכל תנאיו" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> קראתי את המסמך ואני מאשר/ת שאני מסכים/ה לכל תנאיו</label>{error && <Alert title="שמירת ההסכמה נכשלה" tone="danger">{error}</Alert>}<footer><Button type="button" onClick={() => void invoke("desktop_quit")}>לא מסכים - סגור</Button><Button type="button" variant="primary" loading={busy} disabled={!confirmed} onClick={() => void accept()}>{busy ? "שומר אישור…" : "אני מסכים"}</Button></footer></section></main></DesignSystemProvider>;
+  const document = useRef<HTMLPreElement>(null);
+  const submitting = useRef(false);
+  const quit = () => { if (!submitting.current) void invoke("desktop_quit"); };
+  const accept = async () => {
+    if (submitting.current || !confirmed) return;
+    submitting.current = true; setBusy(true); setError("");
+    try { await onAccepted(); }
+    catch { setError("לא ניתן לשמור את ההסכמה. אפשר לנסות שוב."); submitting.current = false; setBusy(false); }
+  };
+  return <DesignSystemProvider theme={theme} className="legal-design"><main className="legal-gate" dir="rtl">
+    <WindowTitleBar />
+    <Dialog open title="מדיניות פרטיות ותנאי שימוש" description="לפני שמתחילים, יש לקרוא את המסמך ולאשר את התנאים." initialFocus={document} onClose={quit}>
+      <p className="legal-version"><bdi>SmartiAI</bdi> · גרסת מסמך <bdi>{status.version}</bdi> · <bdi>{status.effective_date}</bdi></p>
+      <pre className="legal-document" ref={document} tabIndex={0} aria-label="מסמך מדיניות פרטיות ותנאי שימוש">{status.title}{`\nתאריך תחילה: ${status.effective_date}\nגרסת מסמך: ${status.version}\n\n`}{LEGAL_AGREEMENT_TEXT.replace(/^.*?\n/, "")}</pre>
+      <label className="legal-confirm"><Checkbox label="קראתי את המסמך ואני מסכים/ה לכל תנאיו" checked={confirmed} disabled={busy} onChange={(event) => setConfirmed(event.target.checked)} /><span>קראתי את המסמך ואני מסכים/ה לכל תנאיו</span></label>
+      {error && <Alert title="שמירת ההסכמה נכשלה" tone="danger">{error}</Alert>}
+      <footer className="sds-actions"><Button type="button" disabled={busy} onClick={quit}>לא מסכים — סגירה</Button><Button type="button" variant="primary" loading={busy} disabled={!confirmed} onClick={() => void accept()}>אני מסכים</Button></footer>
+    </Dialog>
+  </main></DesignSystemProvider>;
 }

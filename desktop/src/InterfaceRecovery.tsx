@@ -1,13 +1,16 @@
-import { Component, useEffect, useState, type ReactNode } from "react";
-import { Alert, Button, DesignSystemProvider, LoadingState } from "./design-system";
-import { resolveTheme } from "./designSystem";
+import { Component, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { Alert, Button, DesignSystemProvider } from "./design-system";
+import { type ResolvedTheme } from "./designSystem";
+import { setStartupVisible, startupTheme } from "./startup";
 
-function Surface({ children }: { children: ReactNode }) {
-  return <DesignSystemProvider theme={resolveTheme("system", window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false)} className="interface-recovery"><main dir="rtl">{children}</main></DesignSystemProvider>;
+function Surface({ children, theme = startupTheme() }: { children: ReactNode; theme?: ResolvedTheme }) {
+  useLayoutEffect(() => { setStartupVisible(false); }, []);
+  return <DesignSystemProvider theme={theme} className="interface-recovery"><main dir="rtl">{children}</main></DesignSystemProvider>;
 }
 
 export function InterfaceLoading() {
-  return <Surface><LoadingState label="פותח את סמארטי" /></Surface>;
+  const delayed = useStartupWatchdog(true);
+  return delayed ? <Surface><StartupRecovery /></Surface> : null;
 }
 
 export function useStartupWatchdog(pending: boolean) {
@@ -21,8 +24,12 @@ export function useStartupWatchdog(pending: boolean) {
   return pending && delayed;
 }
 
-export function StartupRecovery() {
-  return <Alert tone="warning" title="טעינת הממשק מתעכבת"><p>מנוע העבודה מחובר. אפשר לטעון את הממשק מחדש בלי להפעיל את המנוע מחדש.</p><Button onClick={() => window.location.reload()}>טעינת הממשק מחדש</Button></Alert>;
+export function StartupRecovery({ failed = false }: { failed?: boolean }) {
+  return <Alert tone={failed ? "danger" : "warning"} title={failed ? "הממשק לא נטען" : "טעינת הממשק מתעכבת"}><p>אפשר לטעון את הממשק מחדש בלי להפעיל את מנוע העבודה מחדש.</p><Button onClick={() => window.location.reload()}>טעינת הממשק מחדש</Button></Alert>;
+}
+
+export function StartupFailure({ theme, failed }: { theme: ResolvedTheme; failed: boolean }) {
+  return <Surface theme={theme}><StartupRecovery failed={failed} /></Surface>;
 }
 
 // Covers module-load and React render failures. Core and its background owners

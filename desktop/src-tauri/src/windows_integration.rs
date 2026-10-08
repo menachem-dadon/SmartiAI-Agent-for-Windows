@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -15,6 +16,9 @@ pub struct DesktopState {
     quitting: AtomicBool,
     close_to_tray: AtomicBool,
     workspace_ready: AtomicBool,
+    startup_presented: AtomicBool,
+    hidden_to_tray: AtomicBool,
+    pending_activation: Mutex<Option<DesktopActivation>>,
     unread_count: AtomicU32,
 }
 
@@ -24,6 +28,9 @@ impl Default for DesktopState {
             quitting: AtomicBool::new(false),
             close_to_tray: AtomicBool::new(true),
             workspace_ready: AtomicBool::new(false),
+            startup_presented: AtomicBool::new(false),
+            hidden_to_tray: AtomicBool::new(false),
+            pending_activation: Mutex::new(None),
             unread_count: AtomicU32::new(u32::MAX),
         }
     }
@@ -193,6 +200,11 @@ pub fn desktop_popup_rtl_menu(
 }
 
 pub fn show_main(app: &AppHandle, activation: DesktopActivation) {
+    if !app.state::<DesktopState>().startup_presented.load(Ordering::Acquire) {
+        *app.state::<DesktopState>().pending_activation.lock().expect("activation mutex poisoned") = Some(activation);
+        return;
+    }
+    app.state::<DesktopState>().hidden_to_tray.store(false, Ordering::Release);
     if let Some(window) = app.get_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -380,6 +392,7 @@ fn apply_windows_identity(_window: &Window) {}
 pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let window = app.get_window("main").ok_or("main window missing")?;
     apply_windows_identity(&window);
+    prepare_main_window(app)?;
     let app_for_window = app.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
@@ -404,11 +417,17 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     .load(Ordering::Acquire) =>
         {
             api.prevent_close();
+            app_for_window.state::<DesktopState>().hidden_to_tray.store(true, Ordering::Release);
             if let Some(window) = app_for_window.get_window("main") {
                 let _ = window.hide();
             }
             let _ = app_for_window.emit("desktop://hidden-to-tray", ());
         }
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            request_quit(&app_for_window, 0);
+        }
+        WindowEvent::Destroyed => request_quit(&app_for_window, 0),
         _ => {}
     });
 
@@ -428,10 +447,7 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "quit" => {
-                app.state::<DesktopState>()
-                    .quitting
-                    .store(true, Ordering::Release);
-                app.exit(0);
+                request_quit(app, 0);
             }
             "new-chat" | "voice" | "show" => show_main(
                 app,
@@ -468,11 +484,43 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .build(app)?;
+    let guarded = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let state = guarded.state::<DesktopState>();
+        if !state.startup_presented.load(Ordering::Acquire) && !state.quitting.load(Ordering::Acquire) {
+            lifecycle_failure(&guarded, "Initial interface document did not become available");
+        }
+    });
     Ok(())
 }
 
 #[tauri::command]
 pub fn desktop_finish_startup(app: AppHandle) -> Result<(), String> {
+    // The main window already has its final geometry before the first paint.
+    app.get_window("main").ok_or("main window missing")?;
+    let activation = app.state::<DesktopState>().pending_activation.lock().expect("activation mutex poisoned").take();
+    if let Some(activation) = activation { show_main(&app, activation); }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_present_startup(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<DesktopState>();
+    if state.quitting.load(Ordering::Acquire) || state.hidden_to_tray.load(Ordering::Acquire) {
+        state.startup_presented.store(true, Ordering::Release);
+        return Ok(());
+    }
+    if !state.startup_presented.load(Ordering::Acquire) {
+        let window = app.get_window("main").ok_or("main window missing")?;
+        window.show().map_err(|error| error.to_string())?;
+        state.startup_presented.store(true, Ordering::Release);
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+fn prepare_main_window(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<DesktopState>();
     if state.workspace_ready.load(Ordering::Acquire) {
         return Ok(());
@@ -497,7 +545,7 @@ pub fn desktop_finish_startup(app: AppHandle) -> Result<(), String> {
     window
         .set_resizable(true)
         .map_err(|error| error.to_string())?;
-    if !restore_placement(&app, &window) {
+    if !restore_placement(app, &window) {
         window.unmaximize().map_err(|error| error.to_string())?;
         window
             .set_size(LogicalSize::new(width, height))
@@ -518,7 +566,7 @@ pub fn desktop_finish_startup(app: AppHandle) -> Result<(), String> {
         }
     }
     state.workspace_ready.store(true, Ordering::Release);
-    save_placement(&app, &window);
+    save_placement(app, &window);
     Ok(())
 }
 
@@ -612,6 +660,7 @@ pub fn desktop_focus_main(app: AppHandle) -> Result<(), String> {
     // Browser children turn the shell into a multi-WebView window. Tauri's
     // get_webview_window excludes that host; window actions still use "main".
     let main = app.get_window("main").ok_or("main window missing")?;
+    app.state::<DesktopState>().hidden_to_tray.store(false, Ordering::Release);
     main.show().map_err(|error| error.to_string())?;
     main.unminimize().map_err(|error| error.to_string())?;
     main.set_focus().map_err(|error| error.to_string())
@@ -755,10 +804,27 @@ pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
 
 #[tauri::command]
 pub fn desktop_quit(app: AppHandle) {
-    app.state::<DesktopState>()
-        .quitting
-        .store(true, Ordering::Release);
-    app.exit(0);
+    request_quit(&app, 0);
+}
+
+pub fn request_quit(app: &AppHandle, code: i32) {
+    if app.state::<DesktopState>().quitting.swap(true, Ordering::AcqRel) { return; }
+    for window in app.windows().values() { let _ = window.hide(); }
+    app.exit(code);
+}
+
+pub fn lifecycle_failure(app: &AppHandle, error: &str) {
+    if app.state::<DesktopState>().quitting.load(Ordering::Acquire) { return; }
+    if let Some(path) = placement_path(app).and_then(|path| path.parent().map(|parent| parent.join("desktop-lifecycle.log"))) {
+        use std::io::Write;
+        if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+            let time = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+            let diagnostic = crate::redact_diagnostic(error).replace(['\r', '\n'], " ");
+            let _ = writeln!(file, "{time} {diagnostic}");
+        }
+    }
+    request_quit(app, 1);
 }
 
 #[cfg(test)]
