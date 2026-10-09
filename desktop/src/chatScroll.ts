@@ -5,7 +5,13 @@ function pinDisclosure(stage: HTMLElement) {
   const pin = disclosurePins.get(stage);
   if (!pin) return false;
   if (!pin.control.isConnected) { pin.cancel(); return false; }
-  stage.scrollTop += pin.control.getBoundingClientRect().top - pin.top;
+  const target = stage.scrollTop + pin.control.getBoundingClientRect().top - pin.top;
+  const limit = stage.scrollHeight - stage.clientHeight;
+  // Closing content can reduce the scroll limit before this observer runs.
+  // Retain enough space below it to preserve the supplied top edge too.
+  const reserve = stage.querySelector<HTMLElement>(".chat-turn-space");
+  if (reserve && target > limit) reserve.style.minHeight = `${Math.ceil(reserve.offsetHeight + target - limit)}px`;
+  stage.scrollTop = target;
   return true;
 }
 type Position = { top: number; following: boolean; count: number; anchor?: string; offset?: number; block?: string; ordinal?: number; runId?: string; pending?: boolean; readComplete?: boolean; anchorRun?: string };
@@ -32,14 +38,15 @@ export function useChatScroll(viewport: RefObject<HTMLDivElement | null>, sessio
   const sent = useRef("");
   const current = useRef({ count, activeRun, foreground }); current.current = { count, activeRun, foreground };
   const cancel = () => { cancelAnimationFrame(animation.current); animation.current = 0; };
-  const animate = (target: number) => {
+  const animate = (target: number | (() => number)) => {
     const node = viewport.current; if (!node) return;
     cancel();
     const from = node.scrollTop, start = performance.now();
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { node.scrollTop = target; return; }
+    const destination = () => typeof target === "function" ? target() : target;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { node.scrollTop = destination(); return; }
     const frame = (now: number) => {
       const progress = Math.min(1, (now - start) / 180);
-      node.scrollTop = from + (target - from) * (1 - Math.pow(1 - progress, 3));
+      node.scrollTop = from + (destination() - from) * (1 - Math.pow(1 - progress, 3));
       if (progress < 1) animation.current = requestAnimationFrame(frame); else animation.current = 0;
     };
     animation.current = requestAnimationFrame(frame);
@@ -138,7 +145,9 @@ export function useChatScroll(viewport: RefObject<HTMLDivElement | null>, sessio
     const user = Array.from(node.querySelectorAll<HTMLElement>("[data-message-id]")).find(item => item.dataset.messageId === `user:${newRun}`);
     if (user) {
       sent.current = newRun;
-      animate(node.scrollTop + userAnchor(user) - node.getBoundingClientRect().top);
+      // A pending history page may prepend content during this one send
+      // animation. Its destination is the user bubble, not an old pixel count.
+      animate(() => node.scrollTop + userAnchor(user) - node.getBoundingClientRect().top);
     }
   }, [newRun, revision, height]);
   const follow = () => {
@@ -149,8 +158,8 @@ export function useChatScroll(viewport: RefObject<HTMLDivElement | null>, sessio
   return { hasNewContent, follow, height };
 }
 
-// Disclosure controls stay at their exact screen coordinate even at the old
-// scrollbar limit. The reserve is ignored when deciding if there is new text.
+// Keep the supplied anchor at its screen coordinate, even at the old scrollbar
+// limit. Tool disclosures use their handle; user bubbles use their top edge.
 export function preserveDisclosure(control: HTMLElement, action?: () => void) {
   const stage = control.closest<HTMLElement>(".chat-stage");
   if (!stage) { action?.(); return; }
@@ -158,8 +167,7 @@ export function preserveDisclosure(control: HTMLElement, action?: () => void) {
   const top = control.getBoundingClientRect().top;
   const reserve = stage.querySelector<HTMLElement>(".chat-turn-space");
   if (reserve) reserve.style.minHeight = `${Math.max(0, stage.scrollTop + stage.clientHeight - (stage.scrollHeight - reserve.offsetHeight))}px`;
-  // A bottom handle moves throughout the height transition. Keep it pinned
-  // for that whole transition, yielding immediately to a new user gesture.
+  // Compensate the whole height transition, yielding to a new user gesture.
   const content = control.closest(".sds-user-bubble")?.querySelector(".is-collapsible");
   const duration = content ? Math.max(...getComputedStyle(content).transitionDuration.split(",").map(value => parseFloat(value) * (value.trim().endsWith("ms") ? 1 : 1000))) : 0;
   const until = performance.now() + duration + 32;
@@ -176,7 +184,10 @@ export function preserveDisclosure(control: HTMLElement, action?: () => void) {
   const update = () => {
     if (!pinDisclosure(stage)) return;
     stage.dispatchEvent(new Event("scroll"));
-    if (performance.now() < until) frame = requestAnimationFrame(update); else cancel();
+    // React can commit the height change a frame after the click. Follow the
+    // actual transition as well as the initial window, including its last frame.
+    const transitioning = content?.getAnimations().some(item => item.playState === "running");
+    if (transitioning || performance.now() < until) frame = requestAnimationFrame(update); else cancel();
   };
   frame = requestAnimationFrame(update);
 }

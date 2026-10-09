@@ -20,6 +20,15 @@ describe("durable chat state", () => {
     expect(mergeMessages(older, current).map((item) => item.content)).toEqual(["ישן", "חדש"]);
   });
 
+  test("late history pages keep Core message order while updating the same streamed reply", () => {
+    const older = { role: "user" as const, content: "older page", message_id: "session:47", created_at: "same" };
+    const user = { role: "user" as const, content: "latest question", message_id: "session:100", created_at: "same" };
+    const partial = { role: "assistant" as const, content: "partial", message_id: "session:101", metadata: { run_id: "reply" } };
+    const final = { ...partial, content: "final" };
+    expect(mergeMessages([user, partial], [older, user, final])).toEqual([older, user, final]);
+    expect(mergeMessages([older, user, final], [user, final])).toEqual([older, user, final]);
+  });
+
   test("keeps a new conversation out of recents until its first message is stored", () => {
     const empty = { id: "empty", title: "שיחה חדשה", message_count: 0 };
     const started = { id: "started", title: "שלום", message_count: 1 };

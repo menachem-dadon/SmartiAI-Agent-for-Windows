@@ -194,6 +194,64 @@ class ChatStreamingTests(unittest.TestCase):
         self.assertEqual(live.visible, "שלום  עולם")
         self.assertNotIn("private", "".join(event.get("text", "") for batch in batches for event in batch["events"]))
 
+    def test_current_memory_envelope_is_hidden_from_its_first_byte_in_answers_and_reports(self):
+        answer = "תשובה רגילה\n"
+        block = '<smarti_memory>\n{"operations":[{"action":"add","content":"private_memory"}]}\n</smarti_memory>'
+        for transport in ["text", "report", "structured", "escaped_structured"]:
+            for tag_case in [block, block.replace("smarti_memory", "SMARTI_MEMORY")]:
+                with self.subTest(transport=transport, tags=tag_case[:15]):
+                    live, batches = self.live()
+                    source = answer + tag_case
+                    if "structured" in transport:
+                        source = json.dumps({"kind": "final", "final_answer": source}, ensure_ascii=False)
+                        if transport == "escaped_structured":
+                            source = source.replace("<", "\\u003c").replace(">", "\\u003e")
+                    for char in source:
+                        if transport == "report":
+                            live.report(char, "commentary")
+                        else:
+                            live.text(char)
+                        live.flush()
+                    live.finish()
+                    emitted = "".join(event.get("text", "") for batch in batches for event in batch["events"])
+                    self.assertNotIn("<", emitted)
+                    self.assertNotIn("private_memory", emitted)
+                    self.assertNotIn("operations", emitted)
+                    self.assertEqual(live.report_visible["commentary"] if transport == "report" else live.visible, answer)
+                    self.assertFalse(live.calls)
+                    if transport != "report":
+                        self.assertEqual(live.raw, source)
+
+    def test_hidden_memory_json_is_not_a_tool_and_real_tool_arguments_stay_intact(self):
+        live, _ = self.live()
+        hidden = '<smarti_memory>\n{"method":"get_tool_info","params":{"tool_name":"file_manager"}}\n</smarti_memory>'
+        for char in "תשובה\n" + hidden + "\nהמשך":
+            live.text(char)
+        live.finish()
+        self.assertFalse(live.calls)
+        self.assertEqual(live.visible, "תשובה\n\nהמשך")
+        live, _ = self.live()
+        tool = json.dumps({"method": "create_python_tool", "params": {"name": "sample", "code": "<smarti_memory>literal code</smarti_memory>"}})
+        live.text(tool)
+        live.finish(has_tools=True)
+        self.assertEqual(live.calls["0"]["arguments"], tool)
+        self.assertEqual(live.visible, "")
+
+    def test_truncated_memory_and_partial_tags_stay_hidden_but_other_angle_text_returns(self):
+        for tail in ["<", "<s", "<smarti_mem", '<smarti_memory>{"operations":[{"content":"private_memory', "</smarti_mem"]:
+            with self.subTest(tail=tail):
+                live, _ = self.live()
+                for char in "תשובה" + tail:
+                    live.text(char)
+                live.finish()
+                self.assertEqual(live.visible, "תשובה")
+        live, _ = self.live()
+        ordinary = "ערך <small>רגיל</small> וגם 2 < 5"
+        for char in ordinary:
+            live.text(char)
+        live.finish()
+        self.assertEqual(live.visible, ordinary)
+
     def test_known_secret_prefix_is_withheld_across_token_boundaries(self):
         live, batches = self.live(secrets=["super-secret-value"], redact=lambda text: text.replace("super-secret-value", "[REDACTED]"))
         for char in "answer: super-secret-value done":

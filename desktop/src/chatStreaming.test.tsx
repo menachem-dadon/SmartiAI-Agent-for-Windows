@@ -1,21 +1,55 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { reduceStream, streamAnswer, type StreamState } from "./chatStreaming";
 import type { RunEvent } from "./chatTypes";
 import { RichMessage } from "./RichMessage";
 
 const event = (id: number, values: Record<string, unknown>[]): RunEvent => ({ event_id: id, sequence: id, run_id: "r", session_id: "s", event_type: "run_stream", created_at: "", payload: { value: { events: values.map(value => ({ request_id: "request", ...value })) } } });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 describe("live chat contracts", () => {
+  test("append updates preserve existing reveal nodes and their elapsed fade time", () => {
+    vi.useFakeTimers();vi.setSystemTime(1000);
+    const message = { role: "assistant" as const, content: "תוכן קיים", metadata: { run_id: "fade" } };
+    const view = render(<RichMessage message={message} active/>);
+    view.rerender(<RichMessage message={{ ...message, content: message.content + " חדש" }} active/>);
+    const first = view.container.querySelector<HTMLElement>(".stream-reveal")!;
+    expect(first.textContent).toBe(" ");
+    const initialDelay = parseFloat(first.style.animationDelay);
+    vi.setSystemTime(1200);
+    view.rerender(<RichMessage message={{ ...message, content: message.content + " חדש נוסף" }} active/>);
+    const spans = view.container.querySelectorAll<HTMLElement>(".stream-reveal");
+    expect(spans[0]).toBe(first);
+    expect(parseFloat(spans[0].style.animationDelay)).toBeCloseTo(initialDelay);
+    expect(parseFloat(spans[spans.length - 1].style.animationDelay)).toBeCloseTo(0);
+    expect(view.container.querySelector(".message-content-body")?.textContent).toBe("תוכן קיים חדש נוסף");
+  });
+  test("letters fade continuously across chunk boundaries, including complete Unicode graphemes", () => {
+    vi.useFakeTimers();vi.setSystemTime(1000);
+    const message = { role: "assistant" as const, content: "", metadata: { run_id: "letters" } };
+    const view = render(<RichMessage message={message} active/>);
+    view.rerender(<RichMessage message={{ ...message, content: "אב גד" }} active/>);
+    vi.setSystemTime(1120);
+    view.rerender(<RichMessage message={{ ...message, content: "אב גד הו זח" }} active/>);
+    const starts = [...view.container.querySelectorAll<HTMLElement>(".stream-reveal")].map(node => Number(node.dataset.revealStarted));
+    expect(starts.every((started, index) => !index || started > starts[index - 1])).toBe(true);
+    expect(starts[starts.length - 1]).toBe(1120);
+    vi.setSystemTime(1240);
+    view.rerender(<RichMessage message={{ ...message, content: "אב גד הו זח שָ 👩‍💻" }} active/>);
+    const letters = [...view.container.querySelectorAll(".stream-reveal")].map(node => node.textContent);
+    expect(letters).toContain("שָ");expect(letters).toContain("👩‍💻");
+    vi.setSystemTime(2241);
+    view.rerender(<RichMessage message={{ ...message, content: "אב גד הו זח שָ 👩‍💻!" }} active/>);
+    expect([...view.container.querySelectorAll(".stream-reveal")].map(node => node.textContent)).toEqual(["!"]);
+  });
   test("returning to a streamed snapshot reveals only subsequent answer and report chunks", () => {
     const message = { role: "assistant" as const, content: "תוכן שכבר נראה `C:\\qa\\קובץ.txt`", metadata: { run_id: "reveal" } };
     const report = (text: string): StreamState => ({ stage: "text", blocks: { report: { kind: "text", role: "report", text } } });
     const view = render(<RichMessage message={message} active stream={report("דיווח קיים")}/>);
     expect(view.container.querySelector(".stream-reveal")).toBeNull();
     view.rerender(<RichMessage message={{ ...message, content: message.content + " חדש" }} active stream={report("דיווח קיים נוסף")}/>);
-    expect([...view.container.querySelectorAll(".stream-reveal")].map(node => node.textContent)).toEqual([" נוסף", " חדש"]);
+    expect([...view.container.querySelectorAll(".stream-reveal")].map(node => node.textContent).join("")).toBe(" נוסף חדש");
     view.unmount();
     const restored = render(<RichMessage message={{ ...message, content: message.content + " חדש" }} active stream={report("דיווח קיים נוסף")}/>);
     expect(restored.container.querySelector(".stream-reveal")).toBeNull();

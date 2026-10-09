@@ -67,11 +67,12 @@ def generate(text, **_kwargs):
         text = "stream-short"
     if os.environ.get("CHAT_STREAM_QA") == "1" and text.startswith("stream-"):
         from smarti.agent.streaming import LiveResponse
+        core._last_memory_update_result = {"changed": False, "memory_ids": []}
         live = LiveResponse(core.stream_callback)
         core._current_stream = live
         time.sleep(.6)  # Local server has not reported prefill/reasoning yet.
         live.status("prefill", 37)
-        time.sleep(.6)
+        time.sleep(1.6)  # Keep prefill observable while QA restores paginated history.
         live.status("thinking")
         time.sleep(.6)
         if text.startswith(("stream-tools", "stream-text-tool")):
@@ -103,12 +104,38 @@ def generate(text, **_kwargs):
             live = LiveResponse(core.stream_callback)
             core._current_stream = live
         pieces = [f"קטע {index}: תשובה חיה בעברית עם English וקישור.\n\n" for index in range(1, 51)] if text.startswith("stream-long") else ["תשובה ", "חיה ", "וסופית."]
+        if text.startswith("stream-reveal"):
+            pieces = [word + " " for word in ("בכל לילה היה אורי האופה, משאיר לחתול את הלחם ליד הדלת. הטקסט החדש מופיע בהדרגה, והטקסט שכבר הגיע נשאר יציב. זו תשובה בעברית עם English וגם **טקסט מודגש** שקצב הגעתו נשמר.").split()]
         if text.startswith("stream-long"):
             pieces += ["| שם | ערך |\n|---|---|\n| עברית | 123 |\n\n", "```python\nprint('stream')\n```\n"]
         for piece in pieces:
             core._raise_if_cancelled()
             live.text(piece)
             time.sleep(.12)
+        if text.startswith("stream-memory"):
+            from datetime import datetime
+            now = datetime.now().replace(microsecond=0).isoformat()
+            payload = json.dumps({"operations": [{
+                "action": "add", "content": "private_memory: isolated stream QA",
+                "subject": "Streaming QA", "category": "work", "scope": "global",
+                "memory_type": "long_term", "importance": 3, "confidence": .9,
+                "source_type": "tool", "created_at": now, "updated_at": now,
+                "expires_at": None, "volatile": False, "tags": ["qa"],
+                "why_saved": "Isolated streaming regression fixture",
+                "validity_basis": "Deterministic QA fixture",
+                "evidence": [{"type": "tool", "reference": "isolated_qa"}],
+            }]})
+            # Split both tag and JSON body; no memory byte may be shown first.
+            for piece in ["\n", *"<smarti_memory>", *[payload[n:n + 24] for n in range(0, len(payload), 24)], *"</smarti_memory>"]:
+                core._raise_if_cancelled()
+                live.text(piece)
+                live.flush()
+                time.sleep(.04)
+            time.sleep(.5)
+            cleaned, operations = core.memory_manager.extract_model_memory_decision(live.raw)
+            core._last_memory_update_result = core.memory_manager.apply_model_memory_operations(operations, session_id=session)
+            live.finish()
+            return cleaned
         live.finish()
         return "".join(pieces)
     if text.startswith("visual"):

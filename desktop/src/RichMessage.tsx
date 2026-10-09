@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ChatMessage, RunEvent } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
@@ -12,7 +12,7 @@ import { useSpeechPlayback } from "./speechPlayback";
 import { AttachmentLightbox } from "./AttachmentLightbox";
 import { preserveDisclosure } from "./chatScroll";
 import type { StreamState } from "./chatStreaming";
-import { streamReveal, type RevealRange } from "./streamReveal";
+import { revealRange, streamReveal, type RevealRange } from "./streamReveal";
 import {
   agentToolIconName,
   type AgentToolIconName,
@@ -204,16 +204,24 @@ type ProcessRow =
       running: boolean;
     };
 type AgentProcessMetadata = { elapsed_seconds?: number; events?: AgentEvent[] };
+function StreamLetter({ node, ...props }: ComponentProps<"span"> & ExtraProps) {
+  const started = Number(node?.properties?.["data-reveal-started"]);
+  // Set the elapsed offset once per glyph. Updating it again on every token
+  // would add elapsed time to an animation that is already progressing.
+  const delay = useMemo(() => Number.isFinite(started) ? `-${Math.max(0, Date.now() - started)}ms` : undefined, [started]);
+  return <span key={`${node?.properties?.["data-reveal-offset"]}:${started}`} {...props} style={{ ...props.style, animationDelay: delay }}/>;
+}
+const reportComponents: Components = { span: StreamLetter };
 function StreamingReport({ text, active }: { text: string; active: boolean }) {
   // A remounted snapshot is already visible content, not a newly arrived chunk.
   const revealed = useRef<{ text: string; ranges: RevealRange[] }>({ text, ranges: [] });
   if (active && text !== revealed.current.text) {
     const previous = revealed.current.text;
     revealed.current = { text, ranges: text.startsWith(previous)
-      ? [...revealed.current.ranges, { start: previous.length, end: text.length, started: Date.now() }].slice(-48)
-      : [{ start: 0, end: text.length, started: Date.now() }] };
+      ? [...revealed.current.ranges, revealRange(previous.length, text.length, revealed.current.ranges.slice(-1)[0])].slice(-48)
+      : [revealRange(0, text.length)] };
   }
-  return <ReactMarkdown rehypePlugins={active ? [[streamReveal, { ranges: revealed.current.ranges }]] : []}>{text}</ReactMarkdown>;
+  return <ReactMarkdown components={reportComponents} rehypePlugins={active ? [[streamReveal, { ranges: revealed.current.ranges }]] : []}>{text}</ReactMarkdown>;
 }
 
 const payloadText = (value: unknown) =>
@@ -505,8 +513,8 @@ export const RichMessage = memo(function RichMessage({
   if (active && markdown !== revealed.current.text) {
     const previous = revealed.current.text;
     revealed.current = { text: markdown, ranges: markdown.startsWith(previous)
-      ? [...revealed.current.ranges, { start: previous.length, end: markdown.length, started: Date.now() }].slice(-48)
-      : [{ start: 0, end: markdown.length, started: Date.now() }] };
+      ? [...revealed.current.ranges, revealRange(previous.length, markdown.length, revealed.current.ranges.slice(-1)[0])].slice(-48)
+      : [revealRange(0, markdown.length)] };
   }
   // Keep each table mounted while streamed content and elapsed time update.
   const renderTable = useMemo(() =>
@@ -626,6 +634,7 @@ export const RichMessage = memo(function RichMessage({
   // an asynchronous opening error (or an elapsed-time tick) updates this row.
   const markdownComponents = useMemo<Components>(() => ({
     table: renderTable,
+    span: StreamLetter,
     p: ({ node, ...props }) => <p {...props} data-reading-block={node?.position?.start.offset}/>,
     li: ({ node, ...props }) => <li {...props} data-reading-block={node?.position?.start.offset}/>,
     h1: ({ node, ...props }) => <h1 {...props} data-reading-block={node?.position?.start.offset}/>,
@@ -653,7 +662,7 @@ export const RichMessage = memo(function RichMessage({
           <div
             id={contentId}
             className={`message-content ${collapsible ? "is-collapsible" : ""} ${collapsible && !userExpanded ? "is-collapsed" : ""}`}
-            style={collapsible ? { maxHeight: userExpanded ? userContentHeight + 40 : Math.max(1, viewportHeight * .7 - 28) } : undefined}
+            style={collapsible ? { maxHeight: userExpanded ? userContentHeight : `max(1px, calc(${viewportHeight * .7 - 28}px - var(--sds-size-target) - 8px))` } : undefined}
           >
             <div ref={contentRef} className="message-content-body">
               <ReactMarkdown
@@ -814,7 +823,10 @@ export const RichMessage = memo(function RichMessage({
       )}
       {canThink && <WaitingIndicator key={agentEvents.filter(event => event.type === "report").slice(-1)[0]?.liveEventId || "initial"} immediate={stream?.stage === "prefill" || stream?.stage === "thinking"} shimmer={!rows.length || processOpen && !ownerRow} label={stream?.stage === "prefill" ? `מעבד הנחיה${stream.percent == null ? "…" : `: ${stream.percent}%`}` : "חושב..."}/>}
       {attachmentStrip}
-      {message.role === "user" ? !!message.content && <UserBubble isNew={isNew}>{collapsible && <IconButton icon="chevron" variant="ghost" className="message-expand-button" label={userExpanded ? "כווץ הודעה" : "הרחב הודעה"} aria-expanded={userExpanded} aria-controls={contentId} onClick={event => preserveDisclosure(event.currentTarget, () => { setUserExpanded(!userExpanded); remember("user", !userExpanded); })} />}{content}</UserBubble> : content}
+      {message.role === "user" ? !!message.content && <UserBubble isNew={isNew}>
+        {content}
+        {collapsible && <div className="message-user-disclosure"><IconButton tooltip={false} icon="chevron" variant="ghost" className="message-expand-button" label={userExpanded ? "כווץ הודעה" : "הרחב הודעה"} aria-expanded={userExpanded} aria-controls={contentId} onClick={event => preserveDisclosure(event.currentTarget.closest<HTMLElement>(".sds-user-bubble") || event.currentTarget, () => { setUserExpanded(!userExpanded); remember("user", !userExpanded); })} /></div>}
+      </UserBubble> : content}
       {message.role === "assistant" && (runStatus || message.metadata?.run_status) === "cancelled" && <p className="agent-initial-thinking">היצירה נעצרה. התשובה שהתקבלה עד העצירה נשמרה.</p>}
 
       </MessageFrame>

@@ -31,7 +31,9 @@ async function main(){
   assert.equal(await page.locator('.chat-message-row--assistant').last().getByText('חושב...',{exact:true}).count(),0);
   checks.push('local run metadata suppresses generic thinking before the first real server stage');
   await page.getByText('מעבד הנחיה: 37%',{exact:true}).waitFor();
-  await page.waitForTimeout(240);let before=await geometry();assert.ok(Math.abs(before.bubble-16)<3,JSON.stringify(before));checks.push('send from older history anchors the latest user bubble at 16px');
+  // Core events and the persisted user row may mount in different frames.
+  // Wait for the actual send animation to arrive, then assert it stays put.
+  await page.waitForFunction(()=>{const stage=document.querySelector('.chat-stage'),bubble=[...stage.querySelectorAll('.sds-user-bubble')].at(-1);return bubble?.textContent==='stream-long' && Math.abs(bubble.getBoundingClientRect().top-stage.getBoundingClientRect().top-16)<3;});let before=await geometry();assert.ok(Math.abs(before.bubble-16)<3,JSON.stringify(before));checks.push('send from older history anchors the latest user bubble at 16px');
   await page.getByText('קטע 1: תשובה חיה בעברית עם English וקישור.',{exact:true}).waitFor();
   assert.equal(await page.locator('.chat-message-row--assistant').last().getByRole('button',{name:'העתק',exact:true}).count(),0);checks.push('real partial text is visible before completion; final copy is absent');
   await page.waitForTimeout(2200);let growing=await geometry();assert.ok(Math.abs(growing.top-before.top)<3);await page.locator('.chat-new-content.is-generating').waitFor();checks.push('long streaming reply keeps its start and shows the animated down control');
@@ -41,23 +43,25 @@ async function main(){
   await page.locator('.chat-message-row--assistant').last().getByRole('button',{name:'העתק',exact:true}).waitFor();
   await page.setViewportSize({width:640,height:750});await page.waitForTimeout(320);let resized=await geometry();assert.equal(resized.anchor,returned.anchor,JSON.stringify({resized,returned}));assert.equal(resized.block,returned.block,JSON.stringify({resized,returned}));assert.ok(Math.abs(resized.offset-returned.offset)<4,JSON.stringify({resized,returned}));await page.setViewportSize({width:1380,height:900});await page.waitForTimeout(320);checks.push('responsive resizing preserves the paragraph and intra-block reading offset');
   await page.screenshot({path:output+'/long-reply.png'});
-  await page.locator('.chat-stage').evaluate(node=>node.scrollTop=0);await send('stream-short');await page.getByText('מעבד הנחיה: 37%',{exact:true}).waitFor();await select('שיחה נוספת');await page.waitForTimeout(2400);await select('מחקר לקראת המפגש');await page.locator('.chat-message-row--user').last().getByText('stream-short',{exact:true}).waitFor();await frame();let pending=await geometry();assert.ok(Math.abs(pending.bubble-16)<4,JSON.stringify(pending));checks.push('leaving before answer starts restores its user/start anchor after completion');
+  await page.locator('.chat-stage').evaluate(node=>node.scrollTop=0);await send('stream-short');await page.getByText('מעבד הנחיה: 37%',{exact:true}).waitFor();await select('שיחה נוספת');await page.waitForTimeout(3600);await select('מחקר לקראת המפגש');await page.locator('.chat-message-row--user').last().getByText('stream-short',{exact:true}).waitFor();await frame();let pending=await geometry();assert.ok(Math.abs(pending.bubble-16)<4,JSON.stringify(pending));checks.push('leaving before answer starts restores its user/start anchor after completion');
   await select('בדיקת צירופים');await page.getByRole('button',{name:'הרחב הודעה',exact:true}).waitFor();
   const collapse=page.getByRole('button',{name:'הרחב הודעה',exact:true});
   await collapse.scrollIntoViewIfNeeded();await frame();
-  const dimension=await page.locator('.message-content.is-collapsed').evaluate(node=>({height:node.getBoundingClientRect().height,available:parseFloat(node.closest('.chat-stage').style.getPropertyValue('--chat-available-height'))}));
-  assert.ok(Math.abs(dimension.height+28-dimension.available*.7)<3,JSON.stringify(dimension));checks.push('long user text collapses to 70% of available chat height');
+  const dimension=await page.locator('.sds-user-bubble').evaluate(node=>({height:node.getBoundingClientRect().height,available:parseFloat(node.closest('.chat-stage').style.getPropertyValue('--chat-available-height')),topPadding:node.querySelector('.message-content-body').getBoundingClientRect().top-node.getBoundingClientRect().top,bottomPadding:node.getBoundingClientRect().bottom-node.querySelector('.message-user-disclosure').getBoundingClientRect().bottom}));
+  assert.ok(Math.abs(dimension.height-dimension.available*.7)<3,JSON.stringify(dimension));assert.ok(Math.abs(dimension.topPadding-14)<1 && Math.abs(dimension.bottomPadding-14)<1,JSON.stringify(dimension));checks.push('long user bubble including its footer collapses to 70%, with balanced 14px vertical padding');
   const handle=await collapse.boundingBox(),bubble=await page.locator('.sds-user-bubble').boundingBox();
-  assert.ok(Math.abs(handle.x-bubble.x-2)<3 && Math.abs(handle.y+handle.height-bubble.y-bubble.height+2)<3,JSON.stringify({handle,bubble}));
+  assert.ok(Math.abs(handle.x-bubble.x-18)<3 && Math.abs(handle.y+handle.height-bubble.y-bubble.height+14)<3,JSON.stringify({handle,bubble}));
+  await collapse.hover();await page.waitForTimeout(700);assert.equal(await page.getByRole('tooltip').count(),0);checks.push('user disclosure has no hover tooltip and retains its accessible name');
   const toggleAndSample=async button=>{
    // ResizeObserver samples after the chat's layout compensation, before
    // painting. An earlier rAF can see the unpainted transition geometry.
-   await page.evaluate(()=>{const handle=document.querySelector('.message-expand-button');window.__disclosureFrames=[handle.getBoundingClientRect().top];window.__disclosureObserver=new ResizeObserver(()=>window.__disclosureFrames.push(handle.getBoundingClientRect().top));window.__disclosureObserver.observe(handle.closest('.sds-user-bubble'));});
+   await button.scrollIntoViewIfNeeded();await frame();const top=(await page.locator('.sds-user-bubble').boundingBox()).y;
+   await page.evaluate(()=>{const bubble=document.querySelector('.sds-user-bubble');window.__disclosureFrames=[bubble.getBoundingClientRect().top];window.__disclosureObserver=new ResizeObserver(()=>window.__disclosureFrames.push(bubble.getBoundingClientRect().top));window.__disclosureObserver.observe(bubble);});
    await button.click();await page.waitForTimeout(320);
-   const ys=await page.evaluate(()=>{window.__disclosureObserver.disconnect();window.__disclosureFrames.push(document.querySelector('.message-expand-button').getBoundingClientRect().top);return window.__disclosureFrames;});assert.ok(ys.length>3);assert.ok(ys.every(y=>Math.abs(y-handle.y)<3),JSON.stringify({expected:handle.y,ys}));
+   const ys=await page.evaluate(()=>{window.__disclosureObserver.disconnect();window.__disclosureFrames.push(document.querySelector('.sds-user-bubble').getBoundingClientRect().top);return window.__disclosureFrames;});assert.ok(ys.length>3);assert.ok(ys.every(y=>Math.abs(y-top)<3),JSON.stringify({expected:top,ys}));
   };
   await toggleAndSample(collapse);await toggleAndSample(page.getByRole('button',{name:'כווץ הודעה',exact:true}));
-  checks.push('bottom-left user disclosure handle stays pinned throughout expansion and collapse');
+  checks.push('user bubble top stays pinned throughout expansion/collapse while its bottom-left handle moves with the content');
   await page.locator('.chat-stage').evaluate(node=>node.scrollTop=0);const strip=await page.locator('.sent-attachments').evaluate(node=>({scroll:node.scrollWidth,width:node.clientWidth,right:node.firstElementChild.getBoundingClientRect().right,last:node.lastElementChild.getBoundingClientRect().right}));assert.ok(strip.scroll>strip.width);assert.ok(strip.right>strip.last);checks.push('images form one horizontal RTL attachment row above the bubble');
   const thumbnail=page.getByRole('button',{name:'הגדל תמונה: image-0.png',exact:true});await thumbnail.click();const modal=page.getByRole('dialog',{name:'image-0.png',exact:true});await modal.waitFor();await modal.locator('img').click();await page.waitForTimeout(200);assert.equal(await modal.count(),1);await modal.locator('img').evaluate(node=>node.dispatchEvent(new WheelEvent('wheel',{deltaY:-400,bubbles:true,cancelable:true})));assert.ok(await modal.locator('img').evaluate(node=>getComputedStyle(node).transform!=='matrix(1, 0, 0, 1, 0, 0)'));await page.keyboard.press('Escape');await modal.waitFor({state:'detached'});assert.ok(await thumbnail.evaluate(node=>node===document.activeElement));await thumbnail.click();await modal.waitFor();await modal.locator('.attachment-lightbox-view').click({position:{x:10,y:10}});await modal.waitFor({state:'detached'});checks.push('image modal keeps image clicks open, zooms without toolbar, closes outside/Escape and restores thumbnail focus');
   await page.screenshot({path:output+'/attachments.png'});
@@ -88,6 +92,23 @@ async function main(){
   await attach();await send('stream-short with image');await page.getByText('מעבד הנחיה: 37%',{exact:true}).waitFor();await page.waitForTimeout(240);const attached=await page.locator('.chat-message-row--user').last().evaluate(node=>({bubble:node.querySelector('.sds-user-bubble').getBoundingClientRect().top-node.closest('.chat-stage').getBoundingClientRect().top,strip:node.querySelector('.sent-attachments').getBoundingClientRect().bottom-node.closest('.chat-stage').getBoundingClientRect().top}));assert.ok(Math.abs(attached.bubble-16)<3,JSON.stringify(attached));assert.ok(attached.strip>0 && attached.strip<16,JSON.stringify(attached));await page.locator('.chat-message-row--assistant').last().getByRole('button',{name:'העתק',exact:true}).waitFor();checks.push('sending a real isolated image keeps the text bubble at the top and clips the attachment to a sliver');
   await attach();await page.getByRole('button',{name:'שליחה',exact:true}).click();await page.getByText('מעבד הנחיה: 37%',{exact:true}).waitFor();await page.waitForTimeout(240);const only=await page.locator('.chat-message-row--user').last().evaluate(node=>({bubbles:node.querySelectorAll('.sds-user-bubble').length,bottom:node.querySelector('.sent-attachments').getBoundingClientRect().bottom-node.closest('.chat-stage').getBoundingClientRect().top}));assert.equal(only.bubbles,0);assert.ok(Math.abs(only.bottom-8)<3,JSON.stringify(only));await page.locator('.chat-message-row--assistant').last().getByRole('button',{name:'העתק',exact:true}).waitFor();checks.push('attachment-only send anchors the strip bottom without an empty text bubble');
   await page.emulateMedia({reducedMotion:'reduce'});await send('stream-long cancel');await page.getByText('קטע 1: תשובה חיה בעברית עם English וקישור.',{exact:true}).last().waitFor();await page.getByRole('button',{name:'עצירה',exact:true}).click();await page.getByText('היצירה נעצרה. התשובה שהתקבלה עד העצירה נשמרה.',{exact:true}).waitFor();assert.ok(await page.locator('.chat-message-row--assistant').last().textContent().then(text=>text.includes('קטע 1:')));assert.equal(await page.locator('.chat-message-row--assistant').last().getByRole('button',{name:'העתק',exact:true}).count(),0);checks.push('reduced motion remains functional; cancellation retains the real partial answer without final actions');
+  await send('stream-memory');await page.getByText('מעבד הנחיה: 37%',{exact:true}).waitFor();
+  await page.evaluate(()=>{
+   window.__memoryLeak=[];
+   const inspect=()=>{const row=[...document.querySelectorAll('.chat-message-row--assistant')].at(-1),text=row?.textContent||'';if(/smarti_memory|private_memory|operations|<s(?:m(?:a(?:r(?:t(?:i)?)?)?)?)?/.test(text))window.__memoryLeak.push(text);};
+   window.__memoryObserver=new MutationObserver(inspect);window.__memoryObserver.observe(document.querySelector('.message-list'),{subtree:true,childList:true,characterData:true});inspect();
+  });
+  const memoryReply=page.locator('.chat-message-row--assistant').last();
+  await memoryReply.locator('.message-content-body').filter({hasText:'תשובה חיה וסופית.'}).waitFor();
+  await page.waitForTimeout(900);
+  assert.equal(await memoryReply.getByRole('button',{name:'העתק',exact:true}).count(),0);
+  assert.equal(await memoryReply.locator('.memory-updated').count(),0);
+  assert.equal(await memoryReply.locator('.agent-tool-group').count(),0);
+  await memoryReply.locator('.memory-updated').filter({hasText:'הזיכרון עודכן'}).waitFor();
+  await memoryReply.getByRole('button',{name:'העתק',exact:true}).waitFor();
+  const leaked=await page.evaluate(()=>{window.__memoryObserver.disconnect();return window.__memoryLeak;});assert.deepEqual(leaked,[]);
+  assert.equal((await memoryReply.locator('.message-content-body').textContent()).trim(),'תשובה חיה וסופית.');
+  checks.push('split internal memory tags/JSON never appear in the live answer or reports; final text stays clean and memory-updated appears only after a real isolated write');
   assert.deepEqual(errors,[]);checks.push('no browser runtime errors');
   await fs.writeFile(output+'/report.json',JSON.stringify({checks,scope:'Edge browser with isolated real Core/auth/replay and deterministic model/native IPC; no live provider, native Tauri or release evidence'},null,2));
   console.log(checks.join('\n'));

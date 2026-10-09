@@ -313,6 +313,22 @@ class MemoryQualityV2Tests(unittest.TestCase):
             self.assertTrue(deleted["changed"])
             self.assertIsNone(manager.get_entry(memory_id))
 
+    def test_incomplete_memory_is_hidden_without_executing_its_operations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _core, manager = self._manager(directory)
+            before = copy.deepcopy(manager.data["entries"])
+            for tail in ["<", "<smarti_mem", "</smarti_mem", '<smarti_memory>{"operations":[{"action":"add","content":"private_memory"}]}']:
+                with self.subTest(tail=tail):
+                    cleaned, operations = manager.extract_model_memory_decision("Visible answer.\n" + tail)
+                    self.assertEqual(cleaned, "Visible answer.")
+                    self.assertEqual(operations, [])
+                    self.assertEqual(manager.data["entries"], before)
+            completed = '<SMARTI_MEMORY>{"operations":[{"action":"add","content":"complete"}]}</SMARTI_MEMORY>'
+            cleaned, operations = manager.extract_model_memory_decision("Visible answer.\n" + completed + "\n<smarti_memory>unfinished")
+            self.assertEqual(cleaned, "Visible answer.")
+            self.assertEqual([operation["content"] for operation in operations], ["complete"])
+            self.assertEqual(manager.data["entries"], before)
+
     def test_volatile_model_memory_requires_model_supplied_expiry(self):
         with tempfile.TemporaryDirectory() as directory:
             _core, manager = self._manager(directory)

@@ -5,6 +5,7 @@ import time
 import uuid
 from types import SimpleNamespace
 from ..config import BUILTIN_TOOL_SCHEMAS
+from ..memory_protocol import MEMORY_ENVELOPE_RE, strip_memory_envelopes
 
 
 class ToolEnvelopeScanner:
@@ -181,7 +182,7 @@ class LiveResponse:
         self.reports[block_id] = raw
         raw = re.sub(r'<think>.*?(?:</think>|$)|%%%.*?(?:%%%|$)', '', raw, flags=re.S)
         raw = re.sub(r'<(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$|%{1,2}$', '', raw)
-        safe, previous = self.safe(raw), self.report_visible.get(block_id, "")
+        safe, previous = self.safe(strip_memory_envelopes(raw)), self.report_visible.get(block_id, "")
         if safe != previous:
             self.event("text_delta" if safe.startswith(previous) else "text_replace", block_id=block_id,
                        text=safe[len(previous):] if safe.startswith(previous) else safe, role="report")
@@ -236,7 +237,11 @@ class LiveResponse:
         else:
             # A tool envelope must start at a line boundary. Code examples remain
             # ordinary Markdown unless the entire fenced response is a tool call.
-            match = re.search(r'(?:^|\n)(?:```(?:json)?\s*\n?)?\s*\{', raw)
+            # Internal memory JSON is never a tool candidate. Keep raw tool
+            # arguments intact, including literal memory tags in their content.
+            memory_spans = list(MEMORY_ENVELOPE_RE.finditer(raw))
+            match = next((candidate for candidate in re.finditer(r'(?:^|\n)(?:```(?:json)?\s*\n?)?\s*\{', raw)
+                          if not any(span.start() <= candidate.end() - 1 < span.end() for span in memory_spans)), None)
             if match:
                 tail = raw[match.start():]
                 example = bool(re.search(r'(?:example|דוגמ[אה])', raw[:match.start()], re.I))
@@ -263,7 +268,8 @@ class LiveResponse:
                     raw = raw[:match.start()]
             elif not final:
                 raw = re.sub(r'(?:^|\n)\s*`{1,3}(?:j(?:s(?:o(?:n)?)?)?)?\s*$', '', raw)
-        safe = self.safe(raw, final)
+        # Filter decoded structured answers too, including JSON-escaped tags.
+        safe = self.safe(strip_memory_envelopes(raw), final)
         if safe != self.visible:
             if safe.startswith(self.visible):
                 self.event("text_delta", block_id=self.request_id, text=safe[len(self.visible):])

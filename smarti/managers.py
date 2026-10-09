@@ -3,6 +3,7 @@ import math
 from .common import *
 from .config import *
 from .memory_store import MemorySQLiteStore
+from .memory_protocol import MODEL_MEMORY_BLOCK_RE as MEMORY_BLOCK_RE, strip_memory_envelopes
 
 class SettingsManager:
     """Schema-v2 settings migration with a clean reset of dangerous trust state."""
@@ -309,10 +310,7 @@ class SmartiMemoryManager:
         "user_information": "",
         "profile": "",
     }
-    MODEL_MEMORY_BLOCK_RE = re.compile(
-        r"<smarti_memory>\s*(.*?)\s*</smarti_memory>",
-        flags=re.IGNORECASE | re.DOTALL,
-    )
+    MODEL_MEMORY_BLOCK_RE = MEMORY_BLOCK_RE
     SENSITIVE_CATEGORIES = {"address", "phone", "email", "health"}
     NEVER_STORE_CATEGORIES = {"authentication_secret", "financial_secret"}
     RETRIEVER_NAME = "encrypted-scope-rerank-v4"
@@ -2982,7 +2980,7 @@ class SmartiMemoryManager:
         """Remove hidden memory envelopes and return their validated operation objects."""
         raw_text = str(text or "")
         blocks = self.MODEL_MEMORY_BLOCK_RE.findall(raw_text)
-        cleaned = self.MODEL_MEMORY_BLOCK_RE.sub("", raw_text).strip()
+        cleaned = strip_memory_envelopes(raw_text).strip()
         operations = []
         for raw_block in blocks:
             payload_text = str(raw_block or "").strip()

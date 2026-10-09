@@ -19,7 +19,17 @@ export function mergeMessages(older: ChatMessage[], current: ChatMessage[]) {
       ? `${message.role}:${message.created_at}:${message.content}` : `${message.role}:${message.content}`;
     messages.set(identity, message);
   }
-  return [...messages.values()];
+  const merged = [...messages.values()];
+  // A refreshed page can include history earlier than the already mounted
+  // page. Arrival order must not move those messages after the latest turn.
+  const ordered = merged.map(message => {
+    const id = message.message_id?.match(/^(.*):(\d+)$/);
+    return { message, session: id?.[1], ordinal: id ? Number(id[2]) : NaN };
+  });
+  if (ordered.every(item => item.session && item.session === ordered[0]?.session && Number.isSafeInteger(item.ordinal))) {
+    return ordered.sort((left, right) => left.ordinal - right.ordinal).map(item => item.message);
+  }
+  return merged;
 }
 
 export function recentConversations(conversations: Conversation[]) {
