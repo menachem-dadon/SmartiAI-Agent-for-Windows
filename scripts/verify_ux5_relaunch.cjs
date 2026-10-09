@@ -25,12 +25,13 @@ async function main(){
  const before=await api('GET','/v2/settings'),consent=await api('GET','/v2/management/legal'),artifacts=await api('GET','/v2/workbench/artifacts');
  const disk=JSON.parse(await fs.readFile(path.join(launch.data,'smarti_settings.json'),'utf8'));
  check('native saved value is present on QA disk',disk.email_from_name==='UX-5 native sender');
+ const maximizedBefore=await invoke('plugin:window|is_maximized');
  await invoke('desktop_quit').catch(()=>{});await browser.close().catch(()=>{});
  execFileSync('pwsh',['-NoProfile','-File','scripts/restart_ux5_native.ps1'],{windowsHide:true,stdio:'ignore'});
  for(let n=0;n<40;n++){try{({page,invoke}=await connect());break;}catch(error){await browser?.close().catch(()=>{});if(n===39)throw error;await new Promise(resolve=>setTimeout(resolve,250));}}
  await page.locator('.chat-column').waitFor();const after=await api('GET','/v2/settings');
  check('setting and advanced mode survive actual process restart',after.values.email_from_name===before.values.email_from_name&&after.values.ui_preferences.settings_show_advanced===true);
- check('historical maximization preference is retained without startup maximize',after.values.ui_preferences.workspace_start_maximized===true&&!(await invoke('plugin:window|is_maximized')));
+ check('historical preference is retained; native launch follows the last window mode',after.values.ui_preferences.workspace_start_maximized===true&&(await invoke('plugin:window|is_maximized'))===maximizedBefore);
  check('agreement remains accepted after process restart',(await api('GET','/v2/management/legal')).accepted===consent.accepted);
  const session=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('smarti-workbench-session-v2')));check('new session starts with empty workbench and no browser targets',session.snapshot.tabs.length===0&&(await invoke('browser_status')).tabs.length===0);
  check('Core artifacts survive process restart',JSON.stringify((await api('GET','/v2/workbench/artifacts')).items)===JSON.stringify(artifacts.items));

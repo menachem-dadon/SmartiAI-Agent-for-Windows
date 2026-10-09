@@ -45,26 +45,10 @@ pub struct DesktopActivation {
     pub arguments: Vec<String>,
 }
 
-const WINDOW_LAYOUT_VERSION: u32 = 1;
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct WindowPlacement {
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct WindowLaunchState {
     #[serde(default)]
-    layout_version: u32,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
     maximized: bool,
-}
-
-impl WindowPlacement {
-    fn can_restore(&self) -> bool {
-        self.layout_version == WINDOW_LAYOUT_VERSION
-            && !self.maximized
-            && (1..=8192).contains(&self.width)
-            && (1..=8192).contains(&self.height)
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -289,82 +273,33 @@ fn placement_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|path| path.join("window-placement.json"))
 }
 
-fn save_placement(app: &AppHandle, window: &Window) {
+fn save_launch_state(app: &AppHandle, window: &Window) {
+    // Minimizing must not replace the last normal/maximized choice.
     if window.is_minimized().unwrap_or(false) {
         return;
     }
-    let (Ok(position), Ok(size), Ok(maximized)) = (
-        window.outer_position(),
-        window.outer_size(),
-        window.is_maximized(),
-    ) else {
+    let Ok(maximized) = window.is_maximized() else {
         return;
     };
-    // Maximized bounds cover the work area and are not the user's normal size.
-    // Keep the last normal placement so a new app session starts restored.
-    if maximized {
-        return;
-    }
-    let placement = WindowPlacement {
-        layout_version: WINDOW_LAYOUT_VERSION,
-        x: position.x,
-        y: position.y,
-        width: size.width,
-        height: size.height,
-        maximized,
-    };
+    let launch_state = WindowLaunchState { maximized };
     let Some(path) = placement_path(app) else {
         return;
     };
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Ok(encoded) = serde_json::to_vec(&placement) {
+    if let Ok(encoded) = serde_json::to_vec(&launch_state) {
         let _ = fs::write(path, encoded);
     }
 }
 
-fn restore_placement(app: &AppHandle, window: &Window) -> bool {
-    let Some(path) = placement_path(app) else {
-        return false;
-    };
-    let Ok(data) = fs::read(path) else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_slice::<WindowPlacement>(&data) else {
-        return false;
-    };
-    // Old maximized records stored the entire screen as the normal bounds.
-    // Ignore those once; later normal resizes retain their saved placement.
-    if !value.can_restore() {
-        return false;
-    }
-    let visible = window.available_monitors().ok().is_some_and(|monitors| {
-        monitors.iter().any(|monitor| {
-            let area = monitor.work_area();
-            let p = area.position;
-            let s = area.size;
-            (value.x as i64) < p.x as i64 + s.width as i64
-                && (value.y as i64) < p.y as i64 + s.height as i64
-                && value.x as i64 + 120 > p.x as i64
-                && value.y as i64 + 80 > p.y as i64
-        })
-    });
-    if !visible {
-        // A disconnected monitor must use the full default-size path, rather
-        // than merely centering the still-small startup shell.
-        return false;
-    }
-    if window
-        .set_position(PhysicalPosition::new(value.x, value.y))
-        .is_err()
-        || window
-            .set_size(PhysicalSize::new(value.width, value.height))
-            .is_err()
-    {
-        return false;
-    }
-    true
+fn read_launch_state(app: &AppHandle) -> WindowLaunchState {
+    // Serde ignores legacy coordinates and dimensions, including bounds that
+    // grew when outer_size was restored through the inner-size setter.
+    placement_path(app)
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|data| serde_json::from_slice(&data).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(windows)]
@@ -395,14 +330,14 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     prepare_main_window(app)?;
     let app_for_window = app.clone();
     window.on_window_event(move |event| match event {
-        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+        WindowEvent::Resized(_) => {
             if app_for_window
                 .state::<DesktopState>()
                 .workspace_ready
                 .load(Ordering::Acquire)
             {
                 if let Some(window) = app_for_window.get_window("main") {
-                    save_placement(&app_for_window, &window);
+                    save_launch_state(&app_for_window, &window);
                 }
             }
         }
@@ -419,6 +354,7 @@ pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             api.prevent_close();
             app_for_window.state::<DesktopState>().hidden_to_tray.store(true, Ordering::Release);
             if let Some(window) = app_for_window.get_window("main") {
+                save_launch_state(&app_for_window, &window);
                 let _ = window.hide();
             }
             let _ = app_for_window.emit("desktop://hidden-to-tray", ());
@@ -526,6 +462,7 @@ fn prepare_main_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let window = app.get_window("main").ok_or("main window missing")?;
+    let launch_state = read_launch_state(app);
     let monitor = window
         .current_monitor()
         .ok()
@@ -545,29 +482,38 @@ fn prepare_main_window(app: &AppHandle) -> Result<(), String> {
     window
         .set_resizable(true)
         .map_err(|error| error.to_string())?;
-    if !restore_placement(app, &window) {
-        window.unmaximize().map_err(|error| error.to_string())?;
+    // Always prepare centered default restore bounds, including when the last
+    // session was maximized. Manual resizing/dragging applies to this session.
+    window.unmaximize().map_err(|error| error.to_string())?;
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    if let Some(monitor) = monitor {
+        let area = monitor.work_area();
+        let outer_size = window.outer_size().map_err(|error| error.to_string())?;
         window
-            .set_size(LogicalSize::new(width, height))
+            .set_position(workspace_centered_position(area.position, area.size, outer_size))
             .map_err(|error| error.to_string())?;
-        if let Some(monitor) = monitor {
-            let area = monitor.work_area();
-            let scale = monitor.scale_factor().max(0.5);
-            window
-                .set_position(PhysicalPosition::new(
-                    area.position.x
-                        + ((area.size.width as f64 - width * scale) / 2.0).round() as i32,
-                    area.position.y
-                        + ((area.size.height as f64 - height * scale) / 2.0).round() as i32,
-                ))
-                .map_err(|error| error.to_string())?;
-        } else {
-            window.center().map_err(|error| error.to_string())?;
-        }
+    } else {
+        window.center().map_err(|error| error.to_string())?;
+    }
+    if launch_state.maximized {
+        window.maximize().map_err(|error| error.to_string())?;
     }
     state.workspace_ready.store(true, Ordering::Release);
-    save_placement(app, &window);
+    save_launch_state(app, &window);
     Ok(())
+}
+
+fn workspace_centered_position(
+    work_position: PhysicalPosition<i32>,
+    work_size: PhysicalSize<u32>,
+    window_size: PhysicalSize<u32>,
+) -> PhysicalPosition<i32> {
+    PhysicalPosition::new(
+        work_position.x + ((work_size.width as f64 - window_size.width as f64) / 2.0).round() as i32,
+        work_position.y + ((work_size.height as f64 - window_size.height as f64) / 2.0).round() as i32,
+    )
 }
 
 fn workspace_default_size(available_width: f64, available_height: f64) -> (f64, f64) {
@@ -809,6 +755,9 @@ pub fn desktop_quit(app: AppHandle) {
 
 pub fn request_quit(app: &AppHandle, code: i32) {
     if app.state::<DesktopState>().quitting.swap(true, Ordering::AcqRel) { return; }
+    if let Some(window) = app.get_window("main") {
+        save_launch_state(app, &window);
+    }
     for window in app.windows().values() { let _ = window.hide(); }
     app.exit(code);
 }
@@ -865,34 +814,38 @@ mod tests {
     }
 
     #[test]
-    fn old_placements_reset_once_and_new_user_sizes_remain_restorable() {
-        let mut placement: WindowPlacement =
-            serde_json::from_str(r#"{"x":100,"y":100,"width":720,"height":560,"maximized":false}"#)
-                .unwrap();
-        assert!(!placement.can_restore());
-        placement.layout_version = WINDOW_LAYOUT_VERSION;
-        let saved = serde_json::to_vec(&placement).unwrap();
-        let restored: WindowPlacement = serde_json::from_slice(&saved).unwrap();
-        assert!(restored.can_restore());
-        assert_eq!((restored.width, restored.height), (720, 560));
+    fn legacy_placement_retains_only_the_last_normal_or_maximized_mode() {
+        for maximized in [false, true] {
+            let legacy = serde_json::json!({
+                "layout_version": 1, "x": -5000, "y": 100,
+                "width": 1793, "height": 916, "maximized": maximized,
+            });
+            let state: WindowLaunchState = serde_json::from_value(legacy).unwrap();
+            assert_eq!(state.maximized, maximized);
+            let saved = serde_json::to_value(&state).unwrap();
+            assert_eq!(saved, serde_json::json!({"maximized": maximized}));
+            let restored: WindowLaunchState = serde_json::from_value(saved).unwrap();
+            assert_eq!(restored.maximized, maximized);
+        }
     }
 
     #[test]
-    fn saved_maximized_bounds_do_not_replace_the_normal_startup_size() {
-        let placement: WindowPlacement = serde_json::from_str(
-            r#"{"layout_version":1,"x":-9,"y":-9,"width":1938,"height":1038,"maximized":true}"#,
-        )
-        .unwrap();
-        assert!(!placement.can_restore());
-        let normal = WindowPlacement {
-            maximized: false,
-            x: 150,
-            y: 100,
-            width: 1280,
-            height: 780,
-            ..placement
-        };
-        assert!(normal.can_restore());
+    fn absent_window_mode_defaults_to_normal() {
+        assert!(!WindowLaunchState::default().maximized);
+        let state: WindowLaunchState = serde_json::from_str(r#"{"width":1938,"height":1038}"#).unwrap();
+        assert!(!state.maximized);
+    }
+
+    #[test]
+    fn default_position_centers_the_entire_window_on_offset_monitors() {
+        assert_eq!(
+            workspace_centered_position(
+                PhysicalPosition::new(-1920, 40),
+                PhysicalSize::new(1920, 1020),
+                PhysicalSize::new(1631, 826),
+            ),
+            PhysicalPosition::new(-1775, 137),
+        );
     }
 
     #[test]

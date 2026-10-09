@@ -17,20 +17,22 @@ The Tauri/Rust host now owns Windows application behavior. Qt is not involved.
   count (capped visually at 99), title text and `FlashWindowEx` attention when
   Smarti is not focused.
 - the Rust host sets `SmartiAI.Desktop` AUMID, Windows 11 rounded-corner
-  preference, restores size/position only when it intersects a current monitor,
+  preference, prepares the centered default on a current monitor,
   and keeps the custom 36 px Tauri title/drag surface.
 - The default Workspace is centered at 84% of the width and 80% of the height of
   the current monitor's available work area, matching the supplied Codex screenshot
-  proportions with DPI scaling and taskbar space accounted for. It opens in normal
-  window mode; the title-bar maximize/restore button remains available. The
+  proportions with DPI scaling and taskbar space accounted for. It opens in the
+  last normal/maximized mode; the title-bar maximize/restore button sets that
+  choice. Normal restore bounds are prepared before maximizing on startup. The
   720x560 minimum is reduced only when necessary to fit a smaller work area.
-- On the first launch with this sizing policy, older saved placements are reset
-  to the wide default. Later user size/position choices are retained. Missing,
-  invalid or disconnected-monitor placements also fall back to the wide default;
-  minimized windows do not overwrite the saved placement. The 500x310 loading
-  splash retains its separate startup size.
+- Only `maximized` is saved in `window-placement.json`; manual size/position
+  changes apply to the current session. Legacy coordinates and dimensions are
+  ignored while their normal/maximized choice is retained. Missing or invalid
+  state defaults to normal; minimizing does not overwrite the last choice.
+  The same hidden main window is prepared at its final size before presenting
+  the centered startup icon; there is no separate splash window.
 
 The notification provider and some window effects still depend on the user's
 Windows notification/privacy policy. Multi-monitor and DPI automation cannot
-substitute for the physical user matrix; the saved placement is guarded so a
-removed monitor cannot strand the window off-screen.
+substitute for the physical user matrix; launch bounds are recalculated from a
+current monitor so a removed monitor cannot strand the window off-screen.
