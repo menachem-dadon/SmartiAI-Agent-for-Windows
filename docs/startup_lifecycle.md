@@ -13,15 +13,23 @@ The handoff changes content without replacing or resizing the native window.
 
 ## Optional loading artwork
 
-Place your minimalist icon at **`desktop/public/loading-icon.png`**.
+The loading artwork follows the resolved startup theme, including System mode:
+
+- Light: **`desktop/public/loading-icon.png`**.
+- Dark: **`desktop/public/loading-icon-dark.png`**.
+
 Use a square PNG with a transparent background, preferably 256×256 or 512×512.
-Keep the artwork centered with modest transparent margins. It is displayed at
-72×72 logical pixels with its aspect ratio preserved, without motion or effects.
-It must remain readable against both the light and dark Smarti backgrounds.
+Keep the artwork centered with modest transparent margins. The visible symbol
+is approximately 72×72 logical pixels, without motion or effects. The current
+supplied dark image is an unchanged white-on-black PNG with broad margins;
+its 118×118 display box and CSS screen blending keep the visible symbol close
+to the light icon's size and merge the black margins into the shared background.
+That sizing is specific to this artwork's margins.
 
 There is no configuration change: a valid file is selected automatically before
 the native window's first paint, without briefly displaying the original first.
-If it is absent or cannot be decoded, `assets/logo.png` remains visible. The
+If the selected theme's artwork is absent or cannot be decoded,
+`assets/logo.png` remains visible with its original size and rendering. The
 original artwork is preserved. Vite copies public artwork into the Web output;
 add the PNG before your next build/package run. Existing installed packages
 need rebuilding to include new artwork or these source changes. The packaging

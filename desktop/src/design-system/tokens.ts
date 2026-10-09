@@ -20,6 +20,11 @@ export const palettes = {
   },
 } as const;
 
+// Integration identity colors stay separate from Smarti's semantic palettes.
+export const brandColors = {
+  buyMeACoffee: { background: "#FFDD00", foreground: "#000000" },
+} as const;
+
 export const foundations = {
   font: { family: '"Segoe UI", Arial, sans-serif', mono: 'Consolas, "Courier New", monospace', caption: "13px", control: "14px", body: "16px", heading: "20px", display: "32px", line: "1.6", readingLine: "1.85" },
   space: { "1": "4px", "2": "8px", "3": "12px", "4": "16px", "6": "24px", "8": "32px", "12": "48px" },
@@ -35,6 +40,9 @@ const kebab = (key: string) => key.replace(/[A-Z]/g, (letter) => `-${letter.toLo
 export function designTokenStyle(theme: DesignTheme): CSSProperties {
   const values: Record<string, string> = {};
   for (const [role, value] of Object.entries(palettes[theme])) values[`--sds-color-${kebab(role)}`] = value;
+  for (const [brand, roles] of Object.entries(brandColors)) {
+    for (const [role, value] of Object.entries(roles)) values[`--sds-brand-${kebab(brand)}-${kebab(role)}`] = value;
+  }
   for (const [family, roles] of Object.entries(foundations)) {
     for (const [role, value] of Object.entries(roles)) values[`--sds-${family}-${kebab(role)}`] = value;
   }

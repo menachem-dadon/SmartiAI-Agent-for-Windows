@@ -171,6 +171,11 @@
 .about-feature-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; text-align:start; }
 .about-feature-grid>article,.about-examples,.about-privacy { padding:20px; border:1px solid var(--sds-color-border); border-radius:var(--sds-radius-card); background:var(--sds-color-surface); }
 .about-page>section>.sds-button { justify-self:center; }
+/* Requested brand colors; shape, typography, focus and motion stay in Button. */
+.about-page .about-support-button { max-width:100%; background:var(--sds-brand-buy-me-a-coffee-background); color:var(--sds-brand-buy-me-a-coffee-foreground); border-color:transparent; }
+.about-page .about-support-button:hover:not(:disabled) { background:color-mix(in srgb,var(--sds-brand-buy-me-a-coffee-background),var(--sds-brand-buy-me-a-coffee-foreground) 6%); }
+.about-page .about-support-button:active:not(:disabled) { background:color-mix(in srgb,var(--sds-brand-buy-me-a-coffee-background),var(--sds-brand-buy-me-a-coffee-foreground) 12%); }
+.about-page .about-support-logo { flex:none; width:auto; height:var(--sds-size-icon-large); }
 .about-page footer { color:var(--sds-color-text-muted); }
 .legal-design { height:100%; }
 .legal-gate { position:fixed; inset:0; color:var(--sds-color-text); background:var(--sds-color-background); }

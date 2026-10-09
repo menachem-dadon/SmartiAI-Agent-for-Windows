@@ -800,6 +800,20 @@ export function AboutView({ theme }: { theme: ResolvedTheme }) {
           Python {String(data.python || "")} · Control Plane{" "}
           {String(data.contract_version || "")}
         </small>
+        <Button
+          className="about-support-button"
+          dir="rtl"
+          aria-label="קנה לי קפה! — תמיכה בפיתוח סמארטי דרך Buy Me a Coffee (נפתח בדפדפן)"
+          onClick={() =>
+            void invoke("open_chat_link", {
+              target: "https://www.buymeacoffee.com/EMD.Dev",
+              local: false,
+            }).catch(reason => setError(`פתיחת עמוד התמיכה נכשלה: ${String(reason)}`))
+          }
+        >
+          <img className="about-support-logo" src="/brands/buy-me-a-coffee.svg" alt="" aria-hidden="true" />
+          <span>קנה לי קפה!</span>
+        </Button>
         <Button type="button"
           onClick={() =>
             void invoke("open_chat_link", {

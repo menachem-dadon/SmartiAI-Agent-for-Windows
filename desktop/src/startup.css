@@ -3,6 +3,9 @@ html, body { background:var(--sds-color-background,Canvas); color:var(--sds-colo
 .startup-screen { position:fixed; inset:0; z-index:1000; display:grid; place-items:center; background:var(--sds-color-background); }
 .startup-screen[hidden] { display:none; }
 .startup-screen>img { width:72px; height:72px; object-fit:contain; }
+/* Supplied dark artwork has black margins: screen blends them into the shared
+   background, while 118px keeps the visible white symbol close to 72px. */
+.startup-screen>img[data-startup-artwork="dark"] { width:118px; height:118px; mix-blend-mode:screen; }
 .startup-failure { height:100%; box-sizing:border-box; display:grid; place-content:center; padding:var(--sds-space-6); font-family:var(--sds-font-family); }
 .startup-failure .sds-alert { max-width:32rem; }
 .startup-failure .sds-actions { margin-top:var(--sds-space-6); }

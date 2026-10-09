@@ -2,6 +2,7 @@ import { designTokenStyle, parseThemePreference, resolveTheme, THEME_STORAGE_KEY
 import originalLogo from "../../assets/logo.png";
 
 export const STARTUP_ICON_URL = `${import.meta.env.BASE_URL}loading-icon.png`;
+export const DARK_STARTUP_ICON_URL = `${import.meta.env.BASE_URL}loading-icon-dark.png`;
 export const ORIGINAL_STARTUP_ICON = originalLogo;
 
 export function startupTheme(): ResolvedTheme {
@@ -24,12 +25,16 @@ export function setStartupVisible(visible: boolean) {
 
 // Resolve the artwork before presenting the hidden native window, so valid
 // custom artwork appears on its first paint. Missing/corrupt files use the original.
-export async function prepareStartupIcon(target: HTMLImageElement) {
+export async function prepareStartupIcon(target: HTMLImageElement, theme: ResolvedTheme = startupTheme()) {
   target.src = originalLogo;
+  target.dataset.startupArtwork = "original";
   const custom = new Image();
-  custom.src = STARTUP_ICON_URL;
+  custom.src = theme === "dark" ? DARK_STARTUP_ICON_URL : STARTUP_ICON_URL;
   await custom.decode().then(() => {
-    if (custom.naturalWidth > 0) target.src = custom.src;
+    if (custom.naturalWidth > 0) {
+      target.src = custom.src;
+      target.dataset.startupArtwork = theme;
+    }
   }).catch(() => {});
   await target.decode().catch(() => {});
 }

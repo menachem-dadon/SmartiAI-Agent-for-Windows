@@ -5,13 +5,26 @@ import { palettes, THEME_STORAGE_KEY } from "./designSystem";
 beforeAll(() => { HTMLImageElement.prototype.decode = () => Promise.resolve(); });
 afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); document.body.replaceChildren(); });
 
-it.each(["missing", "corrupt"])("keeps the original icon when custom artwork is %s", async () => {
+it.each(["light", "dark"] as const)("keeps the original icon when %s artwork is missing or corrupt", async (theme) => {
   const target = document.createElement("img");
   vi.spyOn(HTMLImageElement.prototype, "decode").mockImplementation(function(this: HTMLImageElement) {
     return this === target ? Promise.resolve() : Promise.reject(new Error("unavailable"));
   });
-  await prepareStartupIcon(target);
+  await prepareStartupIcon(target, theme);
   expect(target.getAttribute("src")).toBe(ORIGINAL_STARTUP_ICON);
+  expect(target.dataset.startupArtwork).toBe("original");
+});
+
+it.each(["light", "dark"] as const)("decodes the artwork for the saved %s theme before presentation", async (theme) => {
+  localStorage.setItem(THEME_STORAGE_KEY, theme);
+  const target = document.createElement("img");
+  vi.spyOn(HTMLImageElement.prototype, "decode").mockImplementation(function(this: HTMLImageElement) {
+    if (this !== target) Object.defineProperty(this, "naturalWidth", { value: 256 });
+    return Promise.resolve();
+  });
+  await prepareStartupIcon(target);
+  expect(target.src).toMatch(theme === "dark" ? /loading-icon-dark\.png$/ : /loading-icon\.png$/);
+  expect(target.dataset.startupArtwork).toBe(theme);
 });
 
 it("waits for the optional icon to decode before allowing the first native paint", async () => {

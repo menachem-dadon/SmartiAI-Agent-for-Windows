@@ -34,6 +34,12 @@ Color roles are intentionally distinct: regular primary `Button` uses `accent`
 choose a role by function, not an isolated color literal. A requested unification
 updates these shared roles and their consumers deliberately.
 
+UX-D82 / ledger §66 adds theme-independent `brandColors` in `tokens.ts` for
+Buy Me a Coffee's requested yellow/black identity. Only the About support button
+consumes these brand variables. It remains the shared `Button`, retaining its
+shape, typography, spacing, focus and motion; other controls keep their semantic
+color roles. The official cup SVG is bundled locally; provenance is in NOTICE.md.
+
 Reuse the semantic tokens, typography, spacing, corners, icon families, focus,
 control states and restrained motion. Reuse existing primitives first. Extend
 the shared foundation for a shared need; keep local composition CSS scoped and

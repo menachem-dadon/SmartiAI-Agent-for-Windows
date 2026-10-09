@@ -35,3 +35,15 @@ family stays Tabler and the original Smarti PNG family stays preserved.
 
 Segoe UI, Arial, Consolas and Courier New are CSS system fallbacks only. Smarti
 does not redistribute their font files through this design system.
+
+## Buy Me a Coffee identification artwork
+
+`desktop/public/brands/buy-me-a-coffee.svg` contains the official cup geometry
+from https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js, the button embed
+supplied by the user. The coffee fill is white, matching the supplied
+`data-coffee-color="#ffffff"` option; the outline geometry and color are preserved.
+Brand kit: https://buymeacoffee.com/brand
+The logo and Buy Me a Coffee name belong to their respective owner and identify
+the user's support link. The repository license does not replace rights in
+these marks. Vite bundles the static SVG; no third-party script, font or runtime
+image request is used by the support button.

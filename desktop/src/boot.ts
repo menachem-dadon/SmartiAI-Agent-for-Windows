@@ -5,11 +5,12 @@ import "./design-system/system.css";
 
 async function boot() {
   const overlay = new URLSearchParams(location.search).get("voice-overlay") === "1";
-  updateStartupTheme(startupTheme());
+  const theme = startupTheme();
+  updateStartupTheme(theme);
   if (overlay) setStartupVisible(false);
   else {
     const icon = document.getElementById("smarti-startup-icon") as HTMLImageElement;
-    await prepareStartupIcon(icon);
+    await prepareStartupIcon(icon, theme);
     await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     if (isTauri()) await invoke("desktop_present_startup");
   }
