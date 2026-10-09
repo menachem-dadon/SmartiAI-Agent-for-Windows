@@ -13,8 +13,8 @@ async function main(){
  const placement=path.join(launch.data,'tauri-desktop/data/window-placement.json');
  await fs.mkdir(path.dirname(placement),{recursive:true});
  await fs.copyFile(placement,path.join(output,'qa-placement-before.json')).catch(error=>{if(error.code!=='ENOENT')throw error;});
- // Reproduce the legacy maximized record from the report using QA data only.
- await fs.writeFile(placement,JSON.stringify({layout_version:1,x:-9,y:-9,width:1938,height:1038,maximized:true}));
+ // Legacy manual bounds must no longer affect the centered normal default.
+ await fs.writeFile(placement,JSON.stringify({layout_version:1,x:-9,y:-9,width:1938,height:1038,maximized:false}));
  const results=[],geometry=[],errors=[];let browser,page,qaVerified=false;
  const check=(name,condition)=>{assert.ok(condition,name);results.push(name);console.log(name);};
  const restart=()=>execFileSync('pwsh',['-NoProfile','-File','scripts/restart_ux4_native.ps1'],{windowsHide:true,stdio:'ignore'});
@@ -39,17 +39,17 @@ async function main(){
  const quit=async()=>{if(qaVerified&&page&&!page.isClosed())await invoke('desktop_quit').catch(()=>{});if(browser)await browser.close().catch(()=>{});browser=null;qaVerified=false;};
  const windowState=()=>page.evaluate(async()=>{
   const i=(c)=>window.__TAURI_INTERNALS__.invoke('plugin:window|'+c,{label:'main'});
-  return {maximized:await i('is_maximized'),minimized:await i('is_minimized'),size:await i('outer_size'),monitor:await i('current_monitor'),scale:devicePixelRatio};
+  return {maximized:await i('is_maximized'),minimized:await i('is_minimized'),size:await i('outer_size'),inner:await i('inner_size'),monitor:await i('current_monitor'),scale:devicePixelRatio};
  });
  try{
   restart();await connect();const initial=await windowState();
   const area=initial.monitor.workArea.size,scale=initial.monitor.scaleFactor;
   const defaultDimension=(available,fraction,min)=>Math.min(Math.max(Math.round(available*fraction),min),Math.max(available-32,1));
   const expected={width:defaultDimension(area.width/scale,.84,720)*scale,height:defaultDimension(area.height/scale,.8,560)*scale};
-  check('legacy maximized record starts in the normal default window',!initial.maximized&&Math.abs(initial.size.width-expected.width)<=2&&Math.abs(initial.size.height-expected.height)<=2);
+  check('legacy manual bounds start in the normal default window',!initial.maximized&&Math.abs(initial.inner.width-expected.width)<=2&&Math.abs(initial.inner.height-expected.height)<=2);
   geometry.push({phase:'startup',...initial,expected});
   const normal=JSON.parse(await fs.readFile(placement,'utf8'));
-  check('startup replaces legacy maximized placement with normal bounds',!normal.maximized&&normal.width===initial.size.width&&normal.height===initial.size.height);
+  check('startup persists only the normal window mode',JSON.stringify(normal)===JSON.stringify({maximized:false}));
   const session=await page.context().newCDPSession(page);await session.send('DOM.enable');await session.send('CSS.enable');
   const {root:document}=await session.send('DOM.getDocument');
   const {nodeIds}=await session.send('DOM.querySelectorAll',{nodeId:document.nodeId,selector:'.window-caption-icon'});
@@ -62,12 +62,14 @@ async function main(){
   check('focus restores the minimized window',!(await windowState()).minimized);
   await page.getByRole('button',{name:'הגדל',exact:true}).click();await page.getByRole('button',{name:'שחזר',exact:true}).waitFor();await page.waitForTimeout(300);
   check('actual caption maximize button changes the native window',(await windowState()).maximized);
-  check('maximizing preserves the saved normal window bounds',JSON.stringify(JSON.parse(await fs.readFile(placement,'utf8')))===JSON.stringify(normal));
+  check('maximizing persists only the maximized window mode',JSON.stringify(JSON.parse(await fs.readFile(placement,'utf8')))===JSON.stringify({maximized:true}));
   await page.getByRole('button',{name:'שחזר',exact:true}).click();await page.getByRole('button',{name:'הגדל',exact:true}).waitFor();await page.waitForTimeout(300);
   const restored=await windowState();check('actual restore button returns to normal bounds',!restored.maximized&&restored.size.width===initial.size.width&&restored.size.height===initial.size.height);
   await page.getByRole('button',{name:'הגדל',exact:true}).click();await page.getByRole('button',{name:'שחזר',exact:true}).waitFor();await quit();
   restart();await connect();const relaunched=await windowState();
-  check('app quit while maximized still relaunches in the normal size',!relaunched.maximized&&relaunched.size.width===initial.size.width&&relaunched.size.height===initial.size.height);
+  check('app quit while maximized relaunches maximized',relaunched.maximized);
+  await page.getByRole('button',{name:'שחזר',exact:true}).click();await page.getByRole('button',{name:'הגדל',exact:true}).waitFor();await page.waitForTimeout(300);
+  const defaultAgain=await windowState();check('restore after relaunch returns to default bounds',defaultAgain.size.width===initial.size.width&&defaultAgain.size.height===initial.size.height);
   const draft=page.getByRole('textbox',{name:'הודעה',exact:true});await draft.fill('QA draft preserved through management');
   for(const theme of ['light','dark'])for(const width of [500,1380]){
    const patch=await invoke('core_api',{request:{method:'PATCH',path:'/v2/settings',body:{values:{ui_preferences:{theme_mode:theme}}},idempotencyKey:randomUUID()}});assert.equal(patch.status,200);

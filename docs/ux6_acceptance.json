@@ -28,7 +28,8 @@
       },
       "source_coverage": "workspaceState, legacyUiParity, coreState, WindowTitleBar and ux5Management frontend tests; Rust placement/activation contracts",
       "partial_evidence": [
-        "docs/ux6_evidence_summary.json"
+        "docs/ux6_evidence_summary.json",
+        "docs/ui_ux_redesign_execution.md"
       ]
     },
     {
@@ -2430,7 +2431,8 @@
       },
       "source_coverage": "test_notification_policy12, test_logging_export_and_windows_ui19, WindowTitleBar and Rust31 contracts",
       "partial_evidence": [
-        "docs/ux6_evidence_summary.json"
+        "docs/ux6_evidence_summary.json",
+        "docs/ui_ux_redesign_execution.md"
       ]
     },
     {

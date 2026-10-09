@@ -34,7 +34,7 @@ export function WorkspaceView({ onOpenWorkbench }: { onOpenWorkbench?: (tab: "br
   return <div className="workspace-preferences">
     <PageHeader title="סביבת עבודה ודפדפן" description="כלים לצד השיחה, עם ההעדפות והקבצים שלך." actions={<IconButton icon="refresh" label="רענן" disabled={busy} onClick={() => void load()} />} />
     {error && <Alert title="לא ניתן לעדכן את סביבת העבודה" tone="danger">{error}</Alert>}
-    <SettingsGroup title="פתיחה וסרגל צד" description="גודל החלון ומיקומו נשמרים אוטומטית. אפשר להגדיל אותו מכפתור ההגדלה בכותרת.">
+    <SettingsGroup title="פתיחה וסרגל צד" description="בפתיחה חוזרים לחלון רגיל וממורכז או לחלון מוגדל, לפי המצב האחרון. שינוי ידני בגודל ובמיקום תקף להפעלה הנוכחית בלבד.">
       <SettingRow title="סרגל השיחות פתוח בכניסה" description="מציג את רשימת השיחות המלאה במקום מצב אייקונים."><Switch label="סרגל השיחות פתוח בכניסה" disabled={busy} checked={!Boolean(prefs.workspace_sidebar_collapsed)} onCheckedChange={value => void save({ workspace_sidebar_collapsed: !value })} /></SettingRow>
     </SettingsGroup>
     <SettingsGroup title="קבצי העבודה" description="כאן נשמרים הקבצים והתוצרים של סמארטי.">

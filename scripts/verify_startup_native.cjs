@@ -28,18 +28,20 @@ async function connect(port, identifier) {
 
 async function main() {
   await fs.mkdir(output,{recursive:true});
+  const windowModeOnly=process.argv.includes('--window-mode');
+  const reportName=windowModeOnly?'window-mode-report.json':'native-report.json';
   const build=JSON.parse((await fs.readFile(path.join(output,'native-build.json'),'utf8')).replace(/^\uFEFF/,''));
   assert.equal(build.identifier,'ai.smarti.startupqa');
   assert.equal(path.basename(build.executable),'smarti-startup-qa.exe');
   const cases=[],owned=[];
-  async function launch(name,{delay=0,missing=false,theme='light'}={}) {
-    const data=path.join(output,'data-'+name+'-'+Date.now()),project=path.join(data,'project'),isolation=path.join(data,'python');
+  async function launch(name,{delay=0,missing=false,theme='light',data:reuseData,placement:seedPlacement}={}) {
+    const data=reuseData||path.join(output,'data-'+name+'-'+Date.now()),project=path.join(data,'project'),isolation=path.join(data,'python');
     await fs.mkdir(project,{recursive:true}); await fs.mkdir(isolation,{recursive:true});
     await fs.writeFile(path.join(isolation,'sitecustomize.py'),`import keyring\nfrom keyring.backend import KeyringBackend\nclass IsolatedKeyring(KeyringBackend):\n    priority=1\n    def get_password(self,*args): return None\n    def set_password(self,*args): pass\n    def delete_password(self,*args): pass\nkeyring.set_keyring(IsolatedKeyring())\n`);
     await fs.writeFile(path.join(project,'smarti_core_service.py'),`import time,runpy,sys\ntime.sleep(${delay})\nsys.path.insert(0,${JSON.stringify(root)})\nrunpy.run_path(${JSON.stringify(path.join(root,'smarti_core_service.py'))},run_name='__main__')\n`);
     await fs.writeFile(path.join(data,'smarti_settings.json'),JSON.stringify({api_mode:'local',selected_local_model:'startup-qa',updates_auto_check:false,ui_preferences:{theme_mode:theme}}));
     const placement=path.join(data,'tauri-desktop/data');await fs.mkdir(placement,{recursive:true});
-    await fs.writeFile(path.join(placement,'window-placement.json'),JSON.stringify({layout_version:1,x:120,y:100,width:1000,height:740,maximized:false}));
+    if(!reuseData)await fs.writeFile(path.join(placement,'window-placement.json'),JSON.stringify(seedPlacement||{layout_version:1,x:120,y:100,width:1000,height:740,maximized:false}));
     const port=await freePort(),env={...process.env,SMARTI_PROJECT_ROOT:project,SMARTI_PYTHON:build.python,SMARTI_DATA_DIR:data,SMARTI_DETERMINISTIC_PRODUCT_SMOKE:'1',PYTHONPATH:isolation,PYTHONUTF8:'1',CODEX_HOME:path.join(data,'codex-account'),WEBVIEW2_USER_DATA_FOLDER:path.join(data,'webview'),WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`};
     for(const key of Object.keys(env))if(/^(OPENAI_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|GROQ_API_KEY|DEEPSEEK_API_KEY|MISTRAL_API_KEY|XAI_API_KEY|HF_TOKEN|CODEX_API_KEY|CODEX_ACCESS_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|SMARTI_CORE_BINARY|SMARTI_SUPERVISOR_SMOKE_FILE|SMARTI_BROWSER_SMOKE_FILE)$/.test(key))delete env[key];
     if(missing)env.SMARTI_CORE_BINARY=path.join(data,'missing-core.exe');
@@ -66,14 +68,98 @@ async function main() {
     const text=execFileSync('pwsh',['-NoProfile','-Command',`[Console]::OutputEncoding=[Text.UTF8Encoding]::new();$p=Get-Process -Id ${entry.child.pid};@{path=$p.Path;hwnd=$p.MainWindowHandle.ToInt64()}|ConvertTo-Json -Compress`],{windowsHide:true,encoding:'utf8'});
     const info=JSON.parse(text);assert.equal(path.resolve(info.path),path.resolve(build.executable));return info;
   }
-  async function resizeOwned(entry,q,width,height) {
+  async function resizeOwned(entry,q,width,height,position) {
     const info=windowInfo(entry);assert.ok(info.hwnd);
     const scale=await q.invoke('plugin:window|scale_factor',{label:'main'});
     // Product IPC deliberately grants no set-size capability. Resize the
     // verified QA HWND through Win32 instead of broadening product privileges.
-    execFileSync('pwsh',['-NoProfile','-Command',`Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class StartupResize {[DllImport("user32.dll",SetLastError=true)]public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int height,uint flags);}';if(-not [StartupResize]::SetWindowPos([IntPtr]${info.hwnd},[IntPtr]::Zero,0,0,${Math.round(width*scale)},${Math.round(height*scale)},22)){throw 'Owned window resize failed'}`],{windowsHide:true,encoding:'utf8'});
+    execFileSync('pwsh',['-NoProfile','-Command',`Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class StartupResize {[DllImport("user32.dll",SetLastError=true)]public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int height,uint flags);}';if(-not [StartupResize]::SetWindowPos([IntPtr]${info.hwnd},[IntPtr]::Zero,${position?.x||0},${position?.y||0},${Math.round(width*scale)},${Math.round(height*scale)},${position?20:22})){throw 'Owned window resize failed'}`],{windowsHide:true,encoding:'utf8'});
   }
   try {
+    if(windowModeOnly) {
+      const geometry=[];
+      const state=async q=>{
+        const invoke=command=>q.invoke('plugin:window|'+command,{label:'main'});
+        return {inner:await invoke('inner_size'),outer:await invoke('outer_size'),position:await invoke('outer_position'),monitor:await invoke('current_monitor'),maximized:await invoke('is_maximized')};
+      };
+      const saved=entry=>fs.readFile(path.join(entry.data,'tauri-desktop/data/window-placement.json'),'utf8').then(JSON.parse);
+      const stop=async(entry,q)=>{await q.invoke('desktop_quit').catch(()=>{});await gone(entry);};
+      const start=async(name,options={})=>{
+        const entry=await launch(name,options),q=await attach(entry);
+        entry.corePid=(await ready(q)).pid;
+        if(await q.evaluate(`!!document.querySelector('dialog[open]')`)) {
+          await q.evaluate(`document.querySelector('.legal-confirm input').click(); Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='אני מסכים').click()`);
+        }
+        await q.wait(`!!document.querySelector('.chat-column')`);
+        return {entry,q};
+      };
+      let {entry,q}=await start('window-mode',{placement:{layout_version:1,x:104,y:82,width:1793,height:916,maximized:false}});
+      const baseline=await state(q),area=baseline.monitor.workArea,scale=baseline.monitor.scaleFactor;
+      const dimension=(available,fraction,min)=>Math.min(Math.max(Math.round(available*fraction),min),Math.max(available-32,1));
+      assert.equal(baseline.maximized,false);
+      assert.ok(Math.abs(baseline.inner.width-dimension(area.size.width/scale,.84,720)*scale)<=1);
+      assert.ok(Math.abs(baseline.inner.height-dimension(area.size.height/scale,.8,560)*scale)<=1);
+      assert.ok(Math.abs(baseline.position.x+baseline.outer.width/2-area.position.x-area.size.width/2)<=1);
+      assert.ok(Math.abs(baseline.position.y+baseline.outer.height/2-area.position.y-area.size.height/2)<=1);
+      assert.deepEqual(await saved(entry),{maximized:false});
+      geometry.push({phase:'legacy normal launch',...baseline});
+      cases.push({name:'legacy dimensions discarded; default normal size centered',ok:true});
+      await q.screenshot('window-mode-normal.png');
+      const data=entry.data;
+      await resizeOwned(entry,q,620,480,{x:50,y:60});
+      await until(async()=>{const s=await state(q);return s.inner.width!==baseline.inner.width&&s.position.x!==baseline.position.x;});
+      assert.deepEqual(await saved(entry),{maximized:false});
+      await stop(entry,q);
+      for(let index=0;index<3;index++) {
+        ({entry,q}=await start('normal-relaunch',{data}));
+        const s=await state(q);
+        assert.equal(s.maximized,false);assert.deepEqual(s.inner,baseline.inner);assert.deepEqual(s.position,baseline.position);
+        geometry.push({phase:'normal relaunch '+(index+1),...s});
+        if(index<2)await stop(entry,q);
+      }
+      cases.push({name:'manual size/position reset; three relaunches retain identical defaults',ok:true});
+      await q.evaluate(`document.querySelector('button[aria-label="הגדל"]').click()`);
+      await until(()=>q.invoke('plugin:window|is_maximized',{label:'main'}));
+      await until(async()=> (await saved(entry)).maximized===true);
+      await stop(entry,q);
+      ({entry,q}=await start('maximized-relaunch',{data}));
+      assert.equal((await state(q)).maximized,true);assert.deepEqual(await saved(entry),{maximized:true});
+      geometry.push({phase:'maximized relaunch',...await state(q)});
+      await q.screenshot('window-mode-maximized.png');
+      cases.push({name:'caption maximize persists across full quit/relaunch',ok:true});
+      await q.evaluate(`document.querySelector('button[aria-label="שחזר"]').click()`);
+      await until(async()=>!(await q.invoke('plugin:window|is_maximized',{label:'main'})));
+      assert.deepEqual((await state(q)).inner,baseline.inner);assert.deepEqual((await state(q)).position,baseline.position);
+      cases.push({name:'restore after maximized launch returns to centered default bounds',ok:true});
+      await q.evaluate(`document.querySelector('button[aria-label="הגדל"]').click()`);
+      await until(()=>q.invoke('plugin:window|is_maximized',{label:'main'}));
+      await until(async()=> (await saved(entry)).maximized===true);
+      await q.invoke('plugin:window|minimize',{label:'main'});
+      await until(()=>q.invoke('plugin:window|is_minimized',{label:'main'}));
+      await stop(entry,q);
+      assert.deepEqual(await saved(entry),{maximized:true});
+      ({entry,q}=await start('minimized-quit-relaunch',{data}));
+      assert.equal((await state(q)).maximized,true);
+      cases.push({name:'quitting while minimized preserves the preceding maximized choice',ok:true});
+      await q.evaluate(`document.querySelector('button[aria-label="שחזר"]').click()`);
+      await until(async()=>!(await q.invoke('plugin:window|is_maximized',{label:'main'})));
+      await stop(entry,q);
+      ({entry,q}=await start('restored-relaunch',{data}));
+      assert.equal((await state(q)).maximized,false);assert.deepEqual((await state(q)).inner,baseline.inner);assert.deepEqual((await state(q)).position,baseline.position);
+      assert.deepEqual(await saved(entry),{maximized:false});
+      cases.push({name:'caption restore persists normal mode for the following launch',ok:true});
+      await stop(entry,q);
+      ({entry,q}=await start('legacy-maximized',{placement:{layout_version:1,x:-5000,y:-5000,width:8192,height:8192,maximized:true}}));
+      assert.equal((await state(q)).maximized,true);assert.deepEqual(await saved(entry),{maximized:true});
+      await q.evaluate(`document.querySelector('button[aria-label="שחזר"]').click()`);
+      await until(async()=>!(await q.invoke('plugin:window|is_maximized',{label:'main'})));
+      assert.deepEqual((await state(q)).inner,baseline.inner);assert.deepEqual((await state(q)).position,baseline.position);
+      cases.push({name:'legacy maximized choice retained without stale/offscreen restore bounds',ok:true});
+      await stop(entry,q);
+      await fs.writeFile(path.join(output,reportName),JSON.stringify({ok:true,cases,geometry,scope:'Fresh isolated Tauri/Core and WebView2 at measured monitor DPI; no personal data, model calls or package.'},null,2));
+      console.log(JSON.stringify({ok:true,cases,default:baseline},null,2));
+      return;
+    }
     const first=await launch('consent',{delay:8}),q=await attach(first);
     await q.wait(`!document.getElementById('smarti-startup').hidden && document.getElementById('smarti-startup-icon').naturalWidth>0`);
     await until(()=>q.invoke('plugin:window|is_visible',{label:'main'}));
@@ -125,10 +211,10 @@ async function main() {
     const failure=await launch('missing',{missing:true});await gone(failure);
     const log=await fs.readFile(path.join(failure.data,'tauri-desktop/data/desktop-lifecycle.log'),'utf8');assert.ok(log.includes('SMARTI_CORE_BINARY not found'));
     cases.push({name:'Core launch failure exits and records diagnostic',ok:true});
-    await fs.writeFile(path.join(output,'native-report.json'),JSON.stringify({ok:true,cases,scope:'Fresh source Tauri QA executable, embedded production Web, real isolated source Core and Windows ownership; not installer/package evidence.'},null,2));
+    await fs.writeFile(path.join(output,reportName),JSON.stringify({ok:true,cases,scope:'Fresh source Tauri QA executable, embedded production Web, real isolated source Core and Windows ownership; not installer/package evidence.'},null,2));
     console.log(JSON.stringify({ok:true,cases},null,2));
   } catch(error) {
-    await fs.writeFile(path.join(output,'native-report.json'),JSON.stringify({ok:false,cases,error:String(error)},null,2));throw error;
+    await fs.writeFile(path.join(output,reportName),JSON.stringify({ok:false,cases,error:String(error)},null,2));throw error;
   } finally {
     for(const entry of owned){entry.connection?.close();if(alive(entry.child.pid)){entry.child.kill();await until(()=>!alive(entry.child.pid),15000).catch(()=>{});}if(entry.corePid&&alive(entry.corePid))process.kill(entry.corePid);}
   }

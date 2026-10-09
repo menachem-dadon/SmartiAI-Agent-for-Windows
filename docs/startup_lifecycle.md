@@ -1,8 +1,12 @@
 # Smarti startup and desktop ownership
 
-The existing Tauri `main` window is created hidden. Rust restores its normal
-placement (or the monitor-based default) before showing it. The lightweight
-HTML/boot entry paints one static centered icon against the shared theme
+The existing Tauri `main` window is created hidden. Rust prepares its centered,
+monitor-based default size before showing it, then maximizes it if the last
+session was maximized. Only this normal/maximized choice is persisted in
+`window-placement.json`; manual sizes and positions are session-only. Legacy
+coordinates and dimensions are ignored. Minimizing does not replace the last
+choice, and restoring a maximized launch returns to the centered default size.
+The lightweight HTML/boot entry paints one static centered icon against the shared theme
 background before importing React. React keeps that surface until the Core
 health check, legal state and required first-screen bootstrap have succeeded.
 The handoff changes content without replacing or resizing the native window.
@@ -56,3 +60,8 @@ executable from current source and runs `verify_startup_native.cjs`. Its fresh
 data, keyring/account isolation, evidence and screenshots live under
 `.codex-local/startup/`. It does not control a personal instance or build an
 installer. Native source QA and installer/portable acceptance stay separate.
+
+For focused window-mode regression checks, run the build with `-BuildOnly`,
+then `node scripts/verify_startup_native.cjs --window-mode`. This verifies
+legacy-state migration, centered defaults, repeated launches without growth,
+manual resizing, maximize/restore, and quitting while minimized in QA data only.
