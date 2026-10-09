@@ -6,6 +6,7 @@ import tempfile
 import queue
 import threading
 import time
+import tomllib
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
@@ -24,7 +25,7 @@ from tests.test_conversation_runs import _FakeCore
 from smarti.run_manager import ConversationRunManager
 from smarti.local_gateway import SmartiLocalGateway
 from smarti.managers import AgentRuntime
-from smarti.codex_stream import _read_turn, isolated_overrides
+from smarti.codex_stream import _read_turn, _toml_override, isolated_overrides
 
 
 class Response:
@@ -447,13 +448,25 @@ class ChatStreamingTests(unittest.TestCase):
     def test_codex_overrides_disable_account_tools_without_writing_config(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"
-            original = '[mcp_servers.personal]\ncommand="server"\n[plugins."example@source"]\nenabled=true\n'
+            original = '[mcp_servers.personal]\ncommand="server"\n[mcp_servers.openaiDeveloperDocs]\nurl="https://developers.openai.com/mcp"\n[mcp_servers."local.docs"]\ncommand="server"\n[plugins."example@source"]\nenabled=true\n'
             path.write_text(original, encoding="utf-8")
             config = isolated_overrides({"CODEX_HOME": directory})
-            self.assertFalse(config['mcp_servers."personal".enabled'])
-            self.assertFalse(config['plugins."example@source".enabled'])
+            self.assertEqual(config["mcp_servers"], {name: {"enabled": False} for name in ["personal", "openaiDeveloperDocs", "local.docs"]})
+            self.assertEqual(config["plugins"], {"example@source": {"enabled": False}})
+            self.assertFalse(any(name.startswith(("mcp_servers.", "plugins.")) for name in config))
             self.assertFalse(config["features.shell_tool"])
             self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_codex_policy_tables_encode_literal_names_without_transport_credentials(self):
+        names = ['docs', 'local.docs', 'plugin@source', 'quote"slash\\', 'עברית']
+        policy = {name: {"enabled": False} for name in names}
+        self.assertEqual(tomllib.loads("mcp_servers=" + _toml_override(policy))["mcp_servers"], policy)
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "config.toml").write_text('[mcp_servers.docs]\nurl="https://example.com/mcp?token=private"\nhttp_headers={Authorization="secret"}\n', encoding="utf-8")
+            encoded = _toml_override(isolated_overrides({"CODEX_HOME": directory})["mcp_servers"])
+            self.assertEqual(encoded, '{"docs"={"enabled"=false}}')
+            self.assertNotIn("private", encoded)
+            self.assertNotIn("secret", encoded)
 
     def test_llama_progress_preserves_server_chat_template_and_cached_usage(self):
         core = RequestCore("local")

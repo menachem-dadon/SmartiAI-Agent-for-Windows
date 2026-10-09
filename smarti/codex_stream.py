@@ -24,10 +24,21 @@ def isolated_overrides(environment):
                 config = tomllib.load(handle)
             for group in ("mcp_servers", "plugins"):
                 for name in (config.get(group) or {}):
-                    overrides[f'{group}."{name}".enabled'] = False
+                    # CLI dotted overrides split on periods without parsing
+                    # quoted segments. Keep literal names in the TOML value so
+                    # quotes/dots cannot create phantom transportless servers.
+                    overrides.setdefault(group, {})[name] = {"enabled": False}
         except (OSError, ValueError):
             continue
     return overrides
+
+
+def _toml_override(value):
+    """Encode inline policy tables without including user transport secrets."""
+    if isinstance(value, dict):
+        return "{" + ",".join(json.dumps(name, ensure_ascii=False) + "=" + _toml_override(item)
+                              for name, item in value.items()) + "}"
+    return json.dumps(value, ensure_ascii=False)
 
 
 def complete_stream(provider, messages, model, timeout, effort, cancel_event, live, schema):
@@ -37,8 +48,9 @@ def complete_stream(provider, messages, model, timeout, effort, cancel_event, li
     environment = provider._environment()
     command = [provider._find_executable(), "app-server", "--stdio"]
     for name, value in isolated_overrides(environment).items():
-        # TOML scalars; empty tables are explicit model-only defaults.
-        encoded = "{}" if isinstance(value, dict) else json.dumps(value)
+        # Nested policy values merge with existing valid transports; {} alone
+        # does not disable inherited servers in the CLI config merger.
+        encoded = _toml_override(value)
         command.extend(("--config", f"{name}={encoded}"))
     provider.workspace_dir.mkdir(parents=True, exist_ok=True)
     process = subprocess.Popen(command, cwd=str(provider.workspace_dir), env=environment,
