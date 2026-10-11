@@ -11,8 +11,8 @@ from smarti.config import BUILTIN_TOOL_SCHEMAS
 from smarti.codex_signin import CodexProtocolError, CodexSignInProvider
 from smarti.api_errors import ApiRequestError, api_error_for_reason
 from smarti.history import ChatSessionStore
-from smarti.prompt_language import model_error_text
-from smarti.user_language import conversation_language, user_description
+from smarti.prompt_language import LANGUAGE_POLICY, model_error_text
+from smarti.user_language import conversation_language, user_description, user_text
 from tests.test_context_efficiency import _prompt_core
 from tests.test_prompt_language import without_annotations
 
@@ -86,7 +86,7 @@ class EnglishToolLayerTests(unittest.TestCase):
         self.assertEqual(core._static_code_safety_check("while True:\n    pass", "computer_control")[0], False)
         self.assertEnglish(core._static_code_safety_check("while True:\n    pass", "computer_control")[1])
 
-    def test_builtin_skill_results_and_progress_use_separate_languages(self):
+    def test_builtin_skill_results_are_english_and_progress_uses_hebrew_ui(self):
         with tempfile.TemporaryDirectory(prefix="smarti-english-") as directory:
             Path(directory, "sample.txt").write_text("source data", encoding="utf-8")
             for language in ("he", "en"):
@@ -99,8 +99,7 @@ class EnglishToolLayerTests(unittest.TestCase):
                 self.assertIn("Choose key files to read or run tests/build as needed.", result)
                 self.assertTrue(steps)
                 for step in steps:
-                    if language == "he": self.assertRegex(step, r"[\u0590-\u05ff]")
-                    else: self.assertEnglish(step)
+                    self.assertRegex(step, r"[\u0590-\u05ff]")
 
     def test_generated_automation_success_text_and_stdout_are_english(self):
         core = self.core()
@@ -124,10 +123,11 @@ class EnglishToolLayerTests(unittest.TestCase):
         analysis = api_error_for_reason("openai", "model", "rate_limit")
         error = ApiRequestError(analysis)
         self.assertEnglish(model_error_text(error))
-        self.assertRegex(core._api_error_user_response(analysis), r"[\u0590-\u05ff]")
+        hebrew_response = core._api_error_user_response(analysis)
+        self.assertRegex(hebrew_response, r"[\u0590-\u05ff]")
         core._current_user_language = "en"
-        self.assertEnglish(core._api_error_user_response(analysis))
-        self.assertTrue(core._display_assistant_text_for_history("ERROR_USER: Request failed.").startswith("Error: "))
+        self.assertEqual(core._api_error_user_response(analysis), hebrew_response)
+        self.assertEqual(core._display_assistant_text_for_history("ERROR_USER: Request failed."), "שגיאה: Request failed.")
         dynamic = ValueError("שגיאה חיצונית")
         self.assertEqual(model_error_text(dynamic), str(dynamic))
 
@@ -146,8 +146,22 @@ class EnglishToolLayerTests(unittest.TestCase):
         self.assertRegex(core._fallback_step_for_tool("web_manager", {"action": "open"}), r"[\u0590-\u05ff]")
         self.assertRegex(core._fallback_agent_report_for_tools([]), r"[\u0590-\u05ff]")
         core._current_user_language = "en"
-        self.assertEnglish(core._fallback_step_for_tool("web_manager", {"action": "open"}))
-        self.assertEnglish(core._fallback_agent_report_for_tools([]))
+        self.assertRegex(core._fallback_step_for_tool("web_manager", {"action": "open"}), r"[\u0590-\u05ff]")
+        self.assertRegex(core._fallback_agent_report_for_tools([]), r"[\u0590-\u05ff]")
+
+    def test_fixed_ui_text_ignores_conversation_language_and_model_reports_stay_exact(self):
+        self.assertEnglish(LANGUAGE_POLICY)
+        self.assertIn("interface language independently of the conversation language", LANGUAGE_POLICY)
+        report = "I am checking the current page."
+        for language in ("he", "en"):
+            core = self.core(language)
+            self.assertEqual(user_text(core, "חושב...", "Thinking..."), "חושב...")
+            self.assertRegex(core._budget_exception_user_message("DAILY_COST_BUDGET"), r"[\u0590-\u05ff]")
+            analysis = api_error_for_reason("openai", "model", "rate_limit")
+            self.assertRegex(core._api_retry_user_status(analysis, 2, 1), r"[\u0590-\u05ff]")
+            chosen, source = core._select_agent_report_for_tool_turn(
+                report, [{"action": "web_manager", "arguments": {}}])
+            self.assertEqual((chosen, source), (report, "model"))
 
     def test_audit_log_and_retained_context_keep_the_real_english_result(self):
         core = self.core()

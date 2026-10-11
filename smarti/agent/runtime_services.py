@@ -343,7 +343,7 @@ class RuntimeServicesMixin:
         if not action:
             return ""
 
-        if getattr(self, "_current_user_language", "he") == "en":
+        if UI_LANGUAGE == "en":
             name = args.get("tool_name") or args.get("name") or action
             if schema_check or action == "get_tool_info":
                 return f"Checking schema for {self._short_step_value(name)}"

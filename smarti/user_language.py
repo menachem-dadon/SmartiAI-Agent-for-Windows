@@ -1,9 +1,14 @@
-"""Presentation-only language helpers; never translate model/tool payloads."""
+"""Keep application UI language separate from conversation/model content."""
 import re
 
 
+# The application currently has a Hebrew interface. A user's conversation
+# language is metadata about their content, not an interface language setting.
+UI_LANGUAGE = "he"
+
+
 def conversation_language(messages=(), text="", default="he"):
-    """Select presentation language from user messages only; never alter content.
+    """Select conversation content language from user messages; never alter it.
 
     Code, quoted material, paths and terse technical replies do not change the
     established conversation language.
@@ -43,7 +48,8 @@ def presentation_text(hebrew, english, language="he"):
 
 
 def user_text(core, hebrew, english):
-    return presentation_text(hebrew, english, getattr(core, "_current_user_language", "he"))
+    """Select fixed application text using UI language, never message language."""
+    return presentation_text(hebrew, english, UI_LANGUAGE)
 
 
 USER_DESCRIPTIONS = {

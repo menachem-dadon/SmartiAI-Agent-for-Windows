@@ -1223,7 +1223,7 @@ class ModelContextMixin(RequestBudgetMixin):
         return any(marker in str(error or "") for marker in ("DAILY_TOKEN_BUDGET", "DAILY_COST_BUDGET"))
 
     def _budget_exception_user_message(self, error):
-        if getattr(self, "_current_user_language", "he") == "en":
+        if UI_LANGUAGE == "en":
             if "DAILY_COST_BUDGET" in str(error):
                 return "ERROR_USER: The estimated daily cost reached the configured budget. I stopped before another counted model request. This is an estimate, not a commitment to actual cost."
             return "ERROR_USER: The estimated daily token usage reached the configured limit. I stopped before another counted model request. This is an estimate, not a commitment to actual tokens or cost. The limit resets automatically at the start of a new day."
@@ -2432,7 +2432,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
 
     def _api_error_user_response(self, analysis):
         analysis = api_redacted_analysis(analysis, lambda text: redact_sensitive_text(text, self.settings))
-        if getattr(self, "_current_user_language", "he") == "en":
+        if UI_LANGUAGE == "en":
             result = "ERROR_USER: The model request failed.\nTechnical details:\n" + api_technical_details(analysis)
             if analysis.raw_message:
                 result += "\nProvider explanation: " + analysis.raw_message

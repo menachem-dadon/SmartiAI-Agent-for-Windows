@@ -205,6 +205,8 @@ type ProcessRow =
       running: boolean;
     };
 type ProcessLanguage = "he" | "en";
+// Fixed captions follow the application's Hebrew UI, not conversation metadata.
+const INTERFACE_LANGUAGE: ProcessLanguage = "he";
 type AgentProcessMetadata = { elapsed_seconds?: number; events?: AgentEvent[]; user_language?: ProcessLanguage };
 const processCaption = (language: ProcessLanguage, hebrew: string, english: string) => language === "en" ? english : hebrew;
 function StreamLetter({ node, ...props }: ComponentProps<"span"> & ExtraProps) {
@@ -303,7 +305,7 @@ function eventFromRun(event: RunEvent): AgentEvent | null {
     return { type: "api_key_wait", liveEventId: event.event_id };
   return null;
 }
-export function processRows(agentEvents: AgentEvent[], language: ProcessLanguage = "he"): ProcessRow[] {
+export function processRows(agentEvents: AgentEvent[], language: ProcessLanguage = INTERFACE_LANGUAGE): ProcessRow[] {
   const text = (he: string, en: string) => processCaption(language, he, en);
   const rows: ProcessRow[] = [];
   let current: Extract<ProcessRow, { kind: "tools" }> | null = null;
@@ -449,7 +451,7 @@ function WaitingIndicator({ label, shimmer, immediate }: { label: string; shimme
   return visible ? <p className="agent-initial-thinking"><AgentStatusText active={shimmer}>{label}</AgentStatusText></p> : null;
 }
 
-export function formatAgentDuration(seconds: number, language: ProcessLanguage = "he"): string {
+export function formatAgentDuration(seconds: number, language: ProcessLanguage = INTERFACE_LANGUAGE): string {
   const safe = Math.max(0, Math.floor(seconds || 0));
   const hours = Math.floor(safe / 3600);
   const minutes = Math.floor((safe % 3600) / 60);
@@ -553,12 +555,7 @@ export const RichMessage = memo(function RichMessage({
       .map(eventFromRun)
       .filter((item): item is AgentEvent => Boolean(item));
   }, [events, message.role, storedProcess]);
-  // Only new process metadata selects English. Legacy history keeps its captions.
-  const processLanguage: ProcessLanguage = storedProcess?.user_language
-    || (message.metadata?.user_language === "en" ? "en" : undefined)
-    || [...agentEvents].reverse().find(event => event.user_language)?.user_language
-    || (events.some(event => event.event_type === "run_started" && event.payload?.user_language === "en") ? "en" : "he");
-  const processText = (he: string, en: string) => processCaption(processLanguage, he, en);
+  const processText = (he: string, en: string) => processCaption(INTERFACE_LANGUAGE, he, en);
   const rows = useMemo(() => {
     const pending: AgentEvent[] = [];
     const reports = Object.values(stream?.blocks || {}).filter(block => block.kind === "text" && block.role === "report" && block.text?.trim());
@@ -570,14 +567,14 @@ export const RichMessage = memo(function RichMessage({
       if (block.kind === "tool" && !existingIds.has(block.call_id || id)) pending.push({ type: "tool_preparing", tools: [{ call_id: block.call_id || id, name: block.name, arguments_text: block.arguments_text }] });
       if (block.kind === "text" && block.role === "report" && block.text?.trim() && !agentEvents.some(event => event.type === "report" && normalized(block.text || "").startsWith(normalized(event.text || "")))) pending.push({ type: "report", text: block.text });
     }
-    const result = processRows([...renderedEvents, ...pending], processLanguage);
+    const result = processRows([...renderedEvents, ...pending]);
     if (runStatus === "waiting_for_approval" && !agentEvents.some(event => event.type === "tool_waiting")) for (const row of result) if (row.kind === "tools") { for (const tool of row.tools) if (tool.status === "running") tool.status = "waiting"; const waiting = row.tools.find(tool => tool.status === "waiting"); if (waiting) row.label = processText(`ממתין לאישור הפעלת כלי ${waiting.name}`, `Waiting for tool approval ${waiting.name}`); }
     if (!active) for (const row of result) if (row.kind === "tools" && row.tools.some(tool => ["preparing", "running", "waiting"].includes(tool.status))) {
       for (const tool of row.tools) if (["preparing", "running", "waiting"].includes(tool.status)) tool.status = "error";
       row.running = false; row.label = runStatus === "cancelled" ? processText("הפעלת כלי נעצרה", "Tool execution stopped") : processText("הפעלת כלי לא הושלמה", "Tool execution did not finish");
     }
     return result;
-  }, [agentEvents, stream, runStatus, active, processLanguage]);
+  }, [agentEvents, stream, runStatus, active]);
   const activeRows = rows.filter(row => row.kind === "tools" && row.running);
   const ownerRow = activeRows.find(row => row.kind === "tools" && preferences[row.key]) || activeRows[0];
   const ownerTool = ownerRow?.kind === "tools" && preferences[ownerRow.key] ? ownerRow.tools.find(tool => ["running", "preparing", "waiting"].includes(tool.status))?.key : undefined;
@@ -764,14 +761,14 @@ export const RichMessage = memo(function RichMessage({
       {!!rows.length && (
         <details
           className="agent-process"
-          dir={processLanguage === "en" ? "ltr" : "rtl"}
+          dir="rtl"
           open={processOpen}
         >
           <summary onClick={event => { event.preventDefault(); processManual.current = true; preserveDisclosure(event.currentTarget, () => { setProcessOpen(!processOpen); remember("process", !processOpen); }); }}>
             <Icon name="chevron" size={16} className="process-chevron" />
             <AgentStatusText active={active && !processOpen}>
               {active ? processText("סמארטי עובד", "Smarti is working") : processText("סמארטי עבד", "Smarti worked")}{" "}
-              {formatAgentDuration(elapsed, processLanguage)}
+              {formatAgentDuration(elapsed)}
             </AgentStatusText>
             <Icon name="activity" size={20} />
           </summary>
