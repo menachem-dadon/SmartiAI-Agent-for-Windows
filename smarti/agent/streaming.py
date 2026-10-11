@@ -110,6 +110,7 @@ class LiveResponse:
         self.attempt = attempt
         self.raw = ""
         self.visible = ""
+        self.role = "answer"
         self.calls = {}
         self.reports = {}
         self.report_visible = {}
@@ -173,6 +174,7 @@ class LiveResponse:
         self.event("tool_preparing", block_id=call["call_id"], call_id=call["call_id"],
                    name=call["name"], arguments_length=call["arguments_length"])
         if first:
+            self.role = "report"
             self.event("text_role", block_id=self.request_id, role="report")
             self.flush()
 
@@ -222,11 +224,35 @@ class LiveResponse:
         raw = re.sub(r'<(?:t(?:h(?:i(?:n(?:k)?)?)?)?|\|channel[^>]*)?$', '', raw)
         raw = re.sub(r'%%%.*?(?:%%%|$)', '', raw, flags=re.S)
         raw = re.sub(r'%{1,2}$', '', raw)
+        # Text-only/native adapters use an explicit leading report marker.
+        # Withhold a split marker from its first byte; code examples and actual
+        # tool arguments never enter this branch as report framing.
+        report_tag = "<smarti_report>"
+        candidate = raw.lstrip()
+        if candidate and report_tag.startswith(candidate.lower()) and not final:
+            raw = ""
+        elif candidate.lower().startswith(report_tag):
+            self.role = "report"
+            raw = candidate[len(report_tag):]
+            closing_tag = "</smarti_report>"
+            closing = re.search(re.escape(closing_tag), raw, flags=re.I)
+            if closing:
+                # Remove framing only. A literal marker in the following tool
+                # arguments must remain byte-for-byte intact.
+                raw = raw[:closing.start()] + raw[closing.end():]
+            else:
+                for length in range(len(closing_tag) - 1, 0, -1):
+                    if raw.lower().endswith(closing_tag[:length]):
+                        raw = raw[:-length]
+                        break
         structured = re.match(r'\s*\{\s*"(?:kind|final_answer|progress_report)"\s*:', raw)
         if structured:
             # Codex's constrained output envelope identifies kind before content.
+            kind = self._json_string(raw, "kind")
+            is_report = kind == "tool_calls" or (kind is None and re.match(r'\s*\{\s*"progress_report"\s*:', raw))
+            self.role = "report" if is_report else "answer"
             value = self._json_string(raw, "final_answer")
-            if value is None or re.search(r'"kind"\s*:\s*"tool_calls"', raw):
+            if is_report:
                 value = self._json_string(raw, "progress_report") or ""
             if re.search(r'"kind"\s*:\s*"tool_calls"', raw) and re.search(r'"tool_calls"\s*:\s*\[', raw):
                 self.tool_scanner = ToolEnvelopeScanner()
@@ -253,7 +279,7 @@ class LiveResponse:
                 self.tool_candidate_headers.extend(self.tool_scanner.feed(tail[self.tool_candidate_size:]))
                 self.tool_candidate_size = len(tail)
                 is_call = self.tool_scanner.intent and not example
-                undecided = not self.tool_scanner.complete and self.tool_scanner.first_key in {None, "method", "params", "jsonrpc", "id", "tool_calls"}
+                undecided = not self.tool_scanner.complete and self.tool_scanner.first_key in {None, "method", "params", "jsonrpc", "id", "tool_calls", "kind", "final_answer", "progress_report"}
                 if is_call:
                     if not self.calls and not self.tool_candidate_headers:
                         self.tool(0)
@@ -272,16 +298,16 @@ class LiveResponse:
         safe = self.safe(strip_memory_envelopes(raw), final)
         if safe != self.visible:
             if safe.startswith(self.visible):
-                self.event("text_delta", block_id=self.request_id, text=safe[len(self.visible):])
+                self.event("text_delta", block_id=self.request_id, text=safe[len(self.visible):], role=self.role)
             else:
-                self.event("text_replace", block_id=self.request_id, text=safe)
+                self.event("text_replace", block_id=self.request_id, text=safe, role=self.role)
             self.visible = safe
             if self.calls:
                 self.event("text_role", block_id=self.request_id, role="report")
 
     def finish(self, text="", has_tools=False):
         self.text("", final=True)
-        self.event("request_end", block_id=self.request_id, role="report" if has_tools else "answer")
+        self.event("request_end", block_id=self.request_id, role="report" if has_tools else self.role)
         self.flush()
 
 

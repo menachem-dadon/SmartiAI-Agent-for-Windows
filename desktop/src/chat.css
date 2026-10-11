@@ -215,7 +215,9 @@
 .chat-new-content.is-generating:is(:hover,:focus-visible) .chat-stream-dots { display:none; }
 .chat-new-content:focus-visible { outline:2px solid var(--sds-color-accent); outline-offset:3px; }
 @keyframes chat-dot-hop { 0%,65%,100% { transform:translateY(0); } 30% { transform:translateY(-4px); } }
-.tool-preparation-ring { display:inline-block; width:12px; height:12px; border:2px solid var(--sds-color-border); border-top-color:var(--sds-color-text-muted); border-radius:50%; margin-inline-end:6px; vertical-align:middle; animation:sds-spin .85s linear infinite; }
+.tool-state-indicator { display:inline-flex; align-items:center; justify-content:center; flex:none; width:16px; height:16px; }
+.tool-state-indicator.is-error { color:var(--sds-color-danger); }
+.tool-preparation-ring { display:inline-block; width:12px; height:12px; border:2px solid var(--sds-color-border); border-top-color:var(--sds-color-text-muted); border-radius:50%; vertical-align:middle; animation:sds-spin .85s linear infinite; }
 .stream-reveal { animation:chat-stream-reveal 450ms linear both; }
 @keyframes chat-stream-reveal { from { opacity:.12; } to { opacity:1; } }
 .sds-dialog.attachment-lightbox { width:100vw; height:100dvh; max-width:100vw; max-height:100dvh; padding:0; border:0; border-radius:0; overflow:hidden; background:transparent; }

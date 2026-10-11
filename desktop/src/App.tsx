@@ -1436,7 +1436,7 @@ export default function App() {
                       active={messageActive}
                       runStatus={runs.find(run => run.id === runId)?.status}
                       providerMode={runs.find(run => run.id === runId)?.metadata?.provider_mode}
-                      stream={streams[runId] || runs.find(run => run.id === runId)?.metadata?.stream}
+                      stream={message.role === "assistant" ? streams[runId] || runs.find(run => run.id === runId)?.metadata?.stream : undefined}
                       viewportHeight={scroll.height}
                       theme={resolved}
                       onOpenCanvas={openMessageCanvas}

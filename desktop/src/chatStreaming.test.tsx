@@ -9,6 +9,59 @@ import { RichMessage } from "./RichMessage";
 const event = (id: number, values: Record<string, unknown>[]): RunEvent => ({ event_id: id, sequence: id, run_id: "r", session_id: "s", event_type: "run_stream", created_at: "", payload: { value: { events: values.map(value => ({ request_id: "request", ...value })) } } });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 describe("live chat contracts", () => {
+  test("streamed activity belongs only to the assistant, including a restored user run ID", () => {
+    const stream: StreamState = { stage: "tool", blocks: {
+      report: { kind: "text", role: "report", text: "בודק מקורות" },
+      call: { kind: "tool", call_id: "call", name: "web_manager" },
+    } };
+    const html = renderToStaticMarkup(<RichMessage message={{ role: "user", content: "בקשה", metadata: { run_id: "same-run" } }} stream={stream}/>);
+    expect(html).not.toContain("agent-process");
+    expect(html).not.toContain("בודק מקורות");
+    expect(html).not.toContain("לא הושלמה");
+  });
+
+  test("reports are typed from the first chunk and retry preparation never becomes execution history", () => {
+    let state = reduceStream(undefined, event(1, [{ kind: "request_start" }, { kind: "text_delta", block_id: "request", text: "בודק", role: "report" }, { kind: "tool_preparing", block_id: "request:0", call_id: "request:0", name: "canvas_manager" }]));
+    expect(streamAnswer(state)).toBe("");
+    state = reduceStream(state, event(2, [{ kind: "request_start", request_id: "retry" }, { kind: "text_delta", request_id: "retry", block_id: "retry", text: "תשובה", role: "answer" }]));
+    expect(Object.values(state.blocks).filter(block => block.kind === "tool")).toHaveLength(0);
+    expect(state.blocks.request.text).toBe("בודק");
+    expect(streamAnswer(state)).toBe("תשובה");
+  });
+
+  test("a saved process ignores unexecuted preparations while merging the complete streamed report once", () => {
+    const html = renderToStaticMarkup(<RichMessage message={{ role: "assistant", content: "נוצר קנבס", metadata: { run_id: "saved", agent_process: { events: [
+      { type: "report", text: "בודק מקורות" },
+      { type: "tool_start", tools: [{ action: "web_manager", event_id: "executed" }] },
+      { type: "tool_finish", results: [{ action: "web_manager", event_id: "executed", status: "ok", output_text: "SUCCESS" }] },
+    ] } } }} runStatus="completed" stream={{ stage: "text", blocks: {
+      old: { kind: "tool", call_id: "unexecuted", name: "canvas_manager" },
+      report: { kind: "text", role: "report", text: "בודק מקורות עם טקסט חי נוסף" },
+    } }}/>);
+    expect(html.match(/class="agent-tool-row"/g)).toHaveLength(1);
+    expect(html.match(/class="agent-report"/g)).toHaveLength(1);
+    expect(html).not.toContain("לא הושלמה");
+    expect(html).toContain("טקסט חי נוסף");
+  });
+
+  test("tool identity icons survive failure while X and preparation indicators precede the RTL text", () => {
+    const view = render(<RichMessage message={{ role: "assistant", content: "", metadata: { run_id: "icons" } }} active stream={{ stage: "tool", blocks: { call: { kind: "tool", call_id: "call", name: "web_manager" } } }}/>);
+    const preparation = view.container.querySelector(".agent-tool-row > summary")!;
+    expect(preparation.lastElementChild?.getAttribute("data-icon")).toBe("globe");
+    expect(preparation.children[1].querySelector(".tool-preparation-ring")).not.toBeNull();
+    const events: RunEvent[] = [
+      { event_id: 1, sequence: 1, event_type: "tool_started", run_id: "icons", session_id: "s", created_at: "", payload: { call_id: "call", tool: "web_manager" } },
+      { event_id: 2, sequence: 2, event_type: "tool_finished", run_id: "icons", session_id: "s", created_at: "", payload: { call_id: "call", tool: "web_manager", status: "error", output: "ERROR: 429" } },
+    ];
+    view.rerender(<RichMessage message={{ role: "assistant", content: "", metadata: { run_id: "icons" } }} events={events} runStatus="completed"/>);
+    const failed = view.container.querySelector(".agent-tool-row > summary")!;
+    expect(failed.lastElementChild?.getAttribute("data-icon")).toBe("globe");
+    expect(failed.children[1].querySelector('[data-icon="close"]')).not.toBeNull();
+    expect(failed.querySelector('[data-icon="check"]')).toBeNull();
+    expect(failed.textContent).toContain("שגיאה web_manager");
+    expect(view.container.textContent).toContain("ERROR: 429");
+  });
+
   test("append updates preserve existing reveal nodes and their elapsed fade time", () => {
     vi.useFakeTimers();vi.setSystemTime(1000);
     const message = { role: "assistant" as const, content: "תוכן קיים", metadata: { run_id: "fade" } };

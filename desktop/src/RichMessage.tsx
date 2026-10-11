@@ -370,6 +370,7 @@ export function processRows(agentEvents: AgentEvent[], language: ProcessLanguage
           Object.assign(existing, finished, {
             key: existing.key,
             query: finished.query || existing.query,
+            icon: finished.icon === "row_status" ? existing.icon : finished.icon,
           });
         } else {
           if (!current || current.standalone) {
@@ -444,6 +445,14 @@ export function processRows(agentEvents: AgentEvent[], language: ProcessLanguage
 function AgentStatusText({ active, children }: { active: boolean; children: ReactNode }) {
   return <span className={`agent-status-text${active ? " is-shimmering" : ""}`}>{children}</span>;
 }
+
+function ToolStatusIndicator({ status }: { status?: ToolView["status"] }) {
+  if (status === "preparing") return <i className="tool-state-indicator"><span className="tool-preparation-ring" aria-hidden="true" /></i>;
+  if (status === "error" || status === "finished") return <i className={`tool-state-indicator${status === "error" ? " is-error" : ""}`}><Icon name={status === "error" ? "close" : "check"} size={16} /></i>;
+  return null;
+}
+
+const toolTypeIcon = (icon: AgentToolIconName) => icon === "row_status" ? "tools" as const : toolIcons[icon] || "tools" as const;
 
 function WaitingIndicator({ label, shimmer, immediate }: { label: string; shimmer: boolean; immediate: boolean }) {
   const [visible, setVisible] = useState(immediate);
@@ -557,6 +566,11 @@ export const RichMessage = memo(function RichMessage({
   }, [events, message.role, storedProcess]);
   const processText = (he: string, en: string) => processCaption(INTERFACE_LANGUAGE, he, en);
   const rows = useMemo(() => {
+    // A user's message shares the run ID but never owns its activity. Saved
+    // execution is authoritative; stream preparation includes unexecuted calls
+    // from rejected attempts or batches that Core deliberately did not admit.
+    if (message.role !== "assistant") return [];
+    const recordedExecution = Boolean(storedProcess?.events?.length);
     const pending: AgentEvent[] = [];
     const reports = Object.values(stream?.blocks || {}).filter(block => block.kind === "text" && block.role === "report" && block.text?.trim());
     const normalized = (text: string) => text.replace(/\s+/g, " ").replace(/\.\.\.$/, "").trim();
@@ -564,7 +578,7 @@ export const RichMessage = memo(function RichMessage({
       ? { ...event, text: reports.find(block => normalized(block.text || "").startsWith(normalized(event.text || "")))?.text || event.text } : event);
     const existingIds = new Set(agentEvents.flatMap(event => [...event.tools || [], ...event.results || []]).map(item => toolKey(item as Record<string, unknown>, "")));
     for (const [id, block] of Object.entries(stream?.blocks || {})) {
-      if (block.kind === "tool" && !existingIds.has(block.call_id || id)) pending.push({ type: "tool_preparing", tools: [{ call_id: block.call_id || id, name: block.name, arguments_text: block.arguments_text }] });
+      if (block.kind === "tool" && !recordedExecution && (!stream?.request_id || (block.call_id || id).startsWith(`${stream.request_id}:`)) && !existingIds.has(block.call_id || id)) pending.push({ type: "tool_preparing", tools: [{ call_id: block.call_id || id, action: block.name, arguments_text: block.arguments_text }] });
       if (block.kind === "text" && block.role === "report" && block.text?.trim() && !agentEvents.some(event => event.type === "report" && normalized(block.text || "").startsWith(normalized(event.text || "")))) pending.push({ type: "report", text: block.text });
     }
     const result = processRows([...renderedEvents, ...pending]);
@@ -574,7 +588,7 @@ export const RichMessage = memo(function RichMessage({
       row.running = false; row.label = runStatus === "cancelled" ? processText("הפעלת כלי נעצרה", "Tool execution stopped") : processText("הפעלת כלי לא הושלמה", "Tool execution did not finish");
     }
     return result;
-  }, [agentEvents, stream, runStatus, active]);
+  }, [agentEvents, stream, runStatus, active, message.role, storedProcess]);
   const activeRows = rows.filter(row => row.kind === "tools" && row.running);
   const ownerRow = activeRows.find(row => row.kind === "tools" && preferences[row.key]) || activeRows[0];
   const ownerTool = ownerRow?.kind === "tools" && preferences[ownerRow.key] ? ownerRow.tools.find(tool => ["running", "preparing", "waiting"].includes(tool.status))?.key : undefined;
@@ -790,20 +804,19 @@ export const RichMessage = memo(function RichMessage({
                 <details className="agent-tool-group" key={row.key} open={!!preferences[row.key]}>
                   <summary onClick={event => { event.preventDefault(); preserveDisclosure(event.currentTarget, () => remember(row.key, !preferences[row.key])); }}>
                     <Icon name="chevron" size={16} className="process-chevron" />
+                    <ToolStatusIndicator status={row.tools.some(tool => tool.status === "preparing") ? "preparing" : row.tools.some(tool => tool.status === "error") ? "error" : undefined} />
                     <AgentStatusText active={active && processOpen && ownerRow?.key === row.key && !preferences[row.key]}>
-                      {row.tools.some(tool => tool.status === "preparing") && <span className="tool-preparation-ring" aria-hidden="true"/>}
                       {row.label}
                     </AgentStatusText>
-                    <Icon name={row.running && row.tools.filter(tool => tool.status === "running").length === 1
-                      ? toolIcons[row.tools.find(tool => tool.status === "running")!.icon] || "tools" : "tools"} />
+                    <Icon name={row.tools.length === 1 ? toolTypeIcon(row.tools[0].icon) : "tools"} />
                   </summary>
                   <div>
                     {row.tools.map((tool) => (
                       <details className="agent-tool-row" key={tool.key} open={!!preferences[tool.key]}>
                         <summary onClick={event => { event.preventDefault(); preserveDisclosure(event.currentTarget, () => remember(tool.key, !preferences[tool.key])); }}>
                           <Icon name="chevron" size={16} className="process-chevron" />
+                          <ToolStatusIndicator status={tool.status} />
                           <AgentStatusText active={active && processOpen && ownerTool === tool.key}>
-                            {tool.status === "preparing" ? <span className="tool-preparation-ring" aria-hidden="true"/> : null}
                             {tool.status === "running"
                               ? processText("מריץ כלי", "Running tool")
                               : tool.status === "preparing" ? processText("מכין כלי", "Preparing tool")
@@ -813,7 +826,7 @@ export const RichMessage = memo(function RichMessage({
                                 : processText("הסתיים", "Finished")}{" "}
                             {tool.name}
                           </AgentStatusText>
-                          <Icon name={toolIcons[tool.icon] || "tools"} />
+                          <Icon name={toolTypeIcon(tool.icon)} />
                         </summary>
                         <div>
                           <strong>{processText("קלט ופרמטרי הפעלה", "Input and parameters")}</strong>

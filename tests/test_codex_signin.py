@@ -1163,6 +1163,13 @@ class AgentReportTests(unittest.TestCase):
 
         self.assertEqual(report, "אני בודק את הקבצים הרלוונטיים.")
 
+    def test_stream_report_framing_is_removed_before_normalization_and_persistence(self):
+        report = "בודק את הקבצים הרלוונטיים."
+        framed = f"<smarti_report>{report}</smarti_report>"
+        self.assertEqual(self.core._normalize_agent_report_text(framed), report)
+        self.assertEqual(self.core._should_emit_agent_report(framed), report)
+        self.assertEqual(self.core._should_emit_agent_report(framed, last_report=report), "")
+
     def test_duplicate_agent_report_is_suppressed(self):
         report = self.core._should_emit_agent_report(
             "אני בודק את הקבצים הרלוונטיים עכשיו.",

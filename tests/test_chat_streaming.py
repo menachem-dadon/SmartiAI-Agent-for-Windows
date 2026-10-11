@@ -48,6 +48,50 @@ class ChatStreamingTests(unittest.TestCase):
         live = LiveResponse(batches.append, **options)
         return live, batches
 
+    def test_codex_report_is_typed_before_any_tool_header_arrives(self):
+        live, batches = self.live()
+        prefix = '{"kind":"tool_calls","progress_report":"בודק מקורות'
+        for char in prefix:
+            live.text(char)
+            live.flush()
+        text_events = [e for b in batches for e in b["events"] if e["kind"] in {"text_delta", "text_replace"}]
+        self.assertTrue(text_events)
+        self.assertTrue(all(e.get("role") == "report" for e in text_events))
+        self.assertFalse(live.calls)
+        self.assertEqual(live.visible, "בודק מקורות")
+
+    def test_textual_report_marker_is_hidden_and_typed_from_first_character(self):
+        live, batches = self.live()
+        prefix = '<smarti_report>בודק מקורות</smarti_report>'
+        for char in prefix:
+            live.text(char)
+            live.flush()
+        text_events = [e for b in batches for e in b["events"] if e["kind"] in {"text_delta", "text_replace"}]
+        self.assertTrue(all(e.get("role") == "report" for e in text_events))
+        self.assertEqual(live.visible, "בודק מקורות")
+        self.assertFalse(any('<' in e["text"] for e in text_events))
+        live.text('\n{"method":"tools/call","params":{"name":"canvas_manager","arguments":{"html":"<smarti_report>literal</smarti_report>"}}}')
+        live.finish(has_tools=True)
+        self.assertEqual(live.calls["0"]["name"], "canvas_manager")
+        self.assertIn('<smarti_report>literal</smarti_report>', live.calls["0"]["arguments"])
+
+    def test_new_request_removes_unexecuted_preparation_from_durable_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "history.sqlite"))
+            run = store.create_run(store.create_session(set_active=False)["id"])
+            emit = lambda value: store.append_run_event(run, "run_stream", {"value": value})
+            first = LiveResponse(emit)
+            first.text('{"kind":"tool_calls","progress_report":"בודק","tool_calls":[{"name":"canvas_manager"')
+            first.flush()
+            self.assertTrue(any(b["kind"] == "tool" for b in store.run(run)["metadata"]["stream"]["blocks"].values()))
+            retry = LiveResponse(emit)
+            retry.text("תשובה")
+            retry.finish()
+            blocks = store.run(run)["metadata"]["stream"]["blocks"]
+            self.assertTrue(all(b["kind"] == "text" for b in blocks.values()))
+            self.assertEqual(blocks[first.request_id]["role"], "report")
+            self.assertEqual(blocks[retry.request_id]["role"], "answer")
+
     def raw_response(self, frames, *, newline="\n", bom=False):
         # Match requests' actual default for SSE without a charset. Decoded
         # string fixtures cannot catch corruption before the SSE parser runs.
@@ -270,6 +314,9 @@ class ChatStreamingTests(unittest.TestCase):
         live.finish()
         self.assertEqual(live.visible, "שלום\nworld")
         self.assertNotIn("final_answer", "".join(event.get("text", "") for batch in batches for event in batch["events"]))
+        text_events = [e for b in batches for e in b["events"] if e["kind"] in {"text_delta", "text_replace"}]
+        self.assertTrue(all(e.get("role") == "answer" for e in text_events))
+        self.assertFalse(any("{" in e["text"] for e in text_events))
 
     def test_code_example_is_markdown_not_a_tool(self):
         live, _ = self.live()

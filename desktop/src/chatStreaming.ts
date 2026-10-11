@@ -10,11 +10,13 @@ export function reduceStream(previous: StreamState | undefined, event: RunEvent)
     const request = String(value.request_id || ""), id = String(value.block_id || request);
     if (value.kind === "request_start") {
       state.request_id = request; state.stage = "waiting"; state.percent = null;
-      state.blocks = Object.fromEntries(Object.entries(state.blocks).filter(([, block]) => block.role === "report" || block.kind === "tool"));
+      // Executed tools live in run_step / agent_process. Preparation from the
+      // preceding request may have been skipped or rejected before execution.
+      state.blocks = Object.fromEntries(Object.entries(state.blocks).filter(([, block]) => block.kind === "text" && block.role === "report"));
     } else if (request === state.request_id) {
       if (value.kind === "stage") { state.stage = String(value.provider_stage); state.percent = typeof value.percent === "number" ? value.percent : null; }
       else if (value.kind === "text_delta" || value.kind === "text_replace") {
-        state.blocks[id] = { kind: "text", role: value.role === "report" ? "report" : state.blocks[id]?.role || "answer", text: (value.kind === "text_delta" ? state.blocks[id]?.text || "" : "") + String(value.text || "") };
+        state.blocks[id] = { kind: "text", role: value.role === "report" || value.role === "answer" ? value.role : state.blocks[id]?.role || "answer", text: (value.kind === "text_delta" ? state.blocks[id]?.text || "" : "") + String(value.text || "") };
         state.stage = "text";
       } else if (value.kind === "tool_preparing") {
         state.blocks[id] = { kind: "tool", call_id: String(value.call_id), name: String(value.name || ""), status: "preparing", arguments_text: String(value.arguments_text || "") };

@@ -240,13 +240,19 @@ ENGLISH = {
     'load_system_prompt_tool_protocol_block_2': (
         'When a tool is needed, use the provider native function call according to the supplied schema; do not print '
         'manual JSON. A brief natural report may accompany the first call; report again only after a significant '
-        'finding, failure or change of approach, or before a risky action.'
+        'finding, failure or change of approach, or before a risky action. '
+        'Wrap accompanying user-facing progress text in <smarti_report>...</smarti_report> '
+        'so Smarti can display it as a report from the first streamed character. '
+        'Keep final answers outside this marker and never wrap tool arguments.'
     ),
     'load_system_prompt_tool_protocol_block_3': (
         '\n'
         'Initial report requirement: before the first tool call in an agent workflow, write a brief, natural, useful '
         'report. Then report again only after a significant finding, failure/change of approach, or before a risky '
-        'action; a report is not needed for every technical step.\n'
+        'action; a report is not needed for every technical step. '
+        'Wrap this report in <smarti_report>...</smarti_report> before the tool call '
+        'so Smarti can classify it immediately while streaming. '
+        'Keep final answers outside this marker and never wrap tool arguments.\n'
         'After the report, return only a valid tool call:\n'
         '```json\n'
         '{"method":"tools/call","params":{"name":"<tool>","arguments":{}}}\n'

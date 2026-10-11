@@ -830,6 +830,7 @@ class ExecutionPolicyMixin:
 
     def _normalize_agent_report_text(self, text, limit=520):
         raw = html.unescape(str(text or "")).replace("##", "").strip()
+        raw = re.sub(r'^\s*<smarti_report>\s*|\s*</smarti_report>\s*$', '', raw, flags=re.I)
         if not raw:
             return ""
         raw = re.sub(r'<\|channel>thought.*?<channel\|>', '', raw, flags=re.DOTALL)
