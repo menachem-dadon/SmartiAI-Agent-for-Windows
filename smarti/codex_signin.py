@@ -22,12 +22,12 @@ import threading
 import time
 from typing import Iterable
 
-from .common import SmartiCancelled
+from .common import SmartiCancelled, provider_default_model
 from .api_errors import analyze_api_error
 
 
 CODEX_SIGNIN_PROVIDER = "openai_codex_signin"
-CODEX_SIGNIN_DEFAULT_MODEL = "codex default"
+CODEX_SIGNIN_DEFAULT_MODEL = provider_default_model(CODEX_SIGNIN_PROVIDER)
 CODEX_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CODEX_MODEL_CATALOG_MIN_VERSION = (0, 159, 0)
 SMARTI_TURN_OUTPUT_SCHEMA = {
@@ -476,7 +476,8 @@ class CodexSignInProvider:
             seen_cursors.add(cursor)
         if not models:
             raise CodexSignInError("לא התקבלה רשימת מודלים מ-Codex. מוצגת רשימת גיבוי.")
-        return [CODEX_SIGNIN_DEFAULT_MODEL, *models]
+        # The CLI-configured model remains an explicit compatibility choice.
+        return ["codex default", *models]
 
     @staticmethod
     def _normalize_rate_limit_window(window):

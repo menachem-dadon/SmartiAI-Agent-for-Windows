@@ -23,7 +23,7 @@ from .common import (
     USER_DATA_DIR, LEGAL_AGREEMENT_EFFECTIVE_DATE, LEGAL_AGREEMENT_TITLE,
     LEGAL_AGREEMENT_VERSION, fetch_text_models_for_provider, list_tts_voices, mask_secret_value,
     model_reasoning_options, model_reasoning_setting, normalize_provider_name,
-    provider_display_name, provider_help_url, provider_key_instructions,
+    provider_default_model, provider_display_name, provider_help_url, provider_key_instructions,
     provider_secret_key, sanitize_secret_value, set_model_reasoning_setting,
 )
 from .config import DEFAULT_SETTINGS, PUBLIC_BUILTIN_TOOLS
@@ -505,10 +505,12 @@ class SmartiLocalGateway:
             attachments = self._attachments.resolve_many(payload.get("attachment_handles") or [], session_id=session_id)
             if not text.strip() and not attachments:
                 raise RequestValidationError("text_or_attachments_required", ["text", "attachment_handles"])
-            provider_mode = normalize_provider_name(payload.get("provider_mode") or getattr(self.core, "mode", "") or "gemini")
+            provider_mode = normalize_provider_name(payload.get("provider_mode") or getattr(self.core, "mode", "") or self.core.settings.get("api_mode") or "gemini")
             if provider_mode not in MODEL_PROVIDER_ORDER:
                 raise RequestValidationError("unknown_provider", ["provider_mode"])
-            model_name = str(payload.get("model_name") or self.core.settings.get(f"selected_{provider_mode}_model") or "").strip()
+            model_name = str(payload.get("model_name") or self.core.settings.get(f"selected_{provider_mode}_model") or provider_default_model(provider_mode) or "").strip()
+            if not model_name:
+                raise RequestValidationError("model_required", ["model_name"])
             handle = self.core.run_manager.submit(
                 session_id, text, attachments=attachments, source=str(payload.get("source") or "desktop_v2"),
                 metadata={"channel": "desktop", "request_id": request["request_id"], "provider_mode": provider_mode, "model_name": model_name, "is_voice": bool(payload.get("is_voice", False))},
@@ -729,7 +731,7 @@ class SmartiLocalGateway:
                 "codex_logout": provider.logout,
             }[action]
             if action == "codex_check":
-                model = str(self.core.settings.get("selected_openai_codex_signin_model") or "codex default")
+                model = str(self.core.settings.get("selected_openai_codex_signin_model") or provider_default_model("openai_codex_signin"))
                 status = await asyncio.to_thread(method, model=model)
             else:
                 status = await asyncio.to_thread(method)

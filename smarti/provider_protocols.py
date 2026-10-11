@@ -20,7 +20,7 @@ def openai_responses_arguments(model, messages, reasoning="", tools=(), max_outp
             item["content"] = content
         converted.append(item)
     result = {"model": model, "input": converted, "store": False}
-    if reasoning:
+    if reasoning and reasoning != "auto":
         result["reasoning"] = {"effort": reasoning}
     if max_output_tokens:
         result["max_output_tokens"] = max_output_tokens

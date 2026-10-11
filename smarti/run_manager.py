@@ -106,7 +106,7 @@ class ConversationRunManager:
             run_metadata.get("model_name")
             or self.core.settings.get(f"selected_{provider_mode}_model")
             or provider_default_model(provider_mode)
-            or "Local"
+            or ""
         )
         capture_snapshot = getattr(self.core, "capture_run_model_snapshot", None)
         runtime_snapshot = (
@@ -312,7 +312,7 @@ class ConversationRunManager:
             metadata.get("model_name")
             or self.core.settings.get(f"selected_{provider_mode}_model")
             or provider_default_model(provider_mode)
-            or "Local"
+            or ""
         )
         capture_snapshot = getattr(self.core, "capture_run_model_snapshot", None)
         if callable(capture_snapshot):

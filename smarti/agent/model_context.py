@@ -590,11 +590,13 @@ class ModelContextMixin(RequestBudgetMixin):
         )
         request_mode = normalize_provider_name(provider_mode or self.mode)
         current_model = (
-            current_model
+            provider_title_model(request_mode, current_model)
             or self.settings.get(f"selected_{request_mode}_model")
             or provider_default_model(request_mode)
-            or "Local"
+            or ""
         )
+        if not current_model:
+            return ""
         title_system_prompt = prompt_text("conversation_title_system", self.settings)
         try:
             if request_mode == "gemini":
@@ -612,7 +614,7 @@ class ModelContextMixin(RequestBudgetMixin):
                     "purpose": "title",
                     "provider_mode": request_mode,
                     "system_prompt": title_system_prompt,
-                    "reasoning_effort": "low",
+                    "reasoning_effort": minimum_model_reasoning_level(request_mode, current_model),
                     "max_output_tokens": 128,
                     "native_tools": False,
                     "silent": True,
@@ -686,7 +688,7 @@ class ModelContextMixin(RequestBudgetMixin):
             current_model
             or self.settings.get(f"selected_{provider_mode}_model")
             or provider_default_model(provider_mode)
-            or "Local"
+            or ""
         )
 
         def generate_and_apply():
@@ -2764,7 +2766,11 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                     request_client = self._openai_compatible_client_for_request(request_mode)
                     if request_client is None:
                         raise ApiRequestError(api_error_for_reason(request_mode, current_model, "client_dependency"))
-                    if request_mode == "openai" and re.match(r"^(?:gpt-\d+(?:\.\d+)?-pro|o\d+-pro|gpt-\d+(?:\.\d+)?-codex|codex-mini)(?:-|$)", str(current_model).lower()):
+                    if request_mode == "openai" and (
+                        model_reasoning_contract(request_mode, current_model).get("use_responses")
+                        or re.match(r"^(?:gpt-\d+(?:\.\d+)?-pro|o\d+-pro|gpt-\d+(?:\.\d+)?-codex|codex-mini)(?:-|$)", str(current_model).lower())
+                        or (native_specs and re.match(r"^gpt-6-(?:sol|luna)(?:-|$)", str(current_model).lower()) and request_reasoning != "none")
+                    ):
                         response_options = openai_responses_arguments(
                             current_model, request_messages, request_reasoning,
                             tools=native_specs,

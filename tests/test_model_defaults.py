@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication, QComboBox
 
 from smarti.common import (
+    MODEL_PROVIDER_ORDER,
     MODEL_SELECTION_PROVENANCE_VERSION,
     MODEL_SELECTION_SOURCE_DEFAULT,
     MODEL_SELECTION_SOURCE_USER,
@@ -19,12 +20,14 @@ from smarti.common import (
     model_reasoning_options,
     model_reasoning_setting,
     provider_default_model,
+    provider_title_model,
     set_model_reasoning_setting,
 )
 from smarti.config import DEFAULT_SETTINGS
 from smarti.core import SmartiCore
 from smarti.managers import SettingsManager
 from smarti.ui_pages import SettingsPage
+from smarti.ui_controls import SearchableModelComboBox
 
 
 class _JsonResponse:
@@ -62,20 +65,50 @@ class ModelDefaultAndProvenanceTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_fresh_defaults_use_the_three_exact_models(self):
+    def test_fresh_defaults_use_requested_models_and_auto_reasoning(self):
         self.assertEqual(DEFAULT_SETTINGS["conversation_title_generation_mode"], "ai")
         expected = {
-            "gemini": "gemini-3.6-flash",
-            "openai": "gpt-5.6-sol",
-            "anthropic": "claude-opus-5",
+            "gemini": "gemini-3.8-flash",
+            "openai": "gpt-6.1-sol",
+            "openai_codex_signin": "gpt-6.1-sol",
+            "anthropic": "claude-sonnet-5-5",
         }
-        for provider, model in expected.items():
+        for provider in MODEL_PROVIDER_ORDER:
+            model = expected.get(provider, "")
             self.assertEqual(provider_default_model(provider), model)
             self.assertEqual(DEFAULT_SETTINGS[f"selected_{provider}_model"], model)
             self.assertEqual(
                 DEFAULT_SETTINGS["selected_model_source"][provider],
                 MODEL_SELECTION_SOURCE_DEFAULT,
             )
+            self.assertEqual(model_reasoning_setting(DEFAULT_SETTINGS, provider, model), "auto")
+
+    def test_only_known_automatic_selections_are_refreshed_on_load(self):
+        loaded = copy.deepcopy(DEFAULT_SETTINGS)
+        loaded.update({
+            "selected_gemini_model": "gemini-3.6-flash",
+            "selected_openai_model": "gpt-5.6-sol",
+            "selected_openai_codex_signin_model": "Codex default",
+            "selected_anthropic_model": "claude-opus-5",
+            "selected_groq_model": "openai/gpt-oss-120b",
+            "selected_qwen_model": "my-manual-qwen",
+        })
+        loaded["selected_model_source"]["qwen"] = MODEL_SELECTION_SOURCE_USER
+        migrated, changed = self.manager.migrate_or_merge(loaded)
+        self.assertTrue(changed)
+        for provider in MODEL_PROVIDER_ORDER:
+            expected = "my-manual-qwen" if provider == "qwen" else provider_default_model(provider)
+            self.assertEqual(migrated[f"selected_{provider}_model"], expected)
+        again, _ = self.manager.migrate_or_merge(migrated)
+        self.assertEqual(again, migrated)
+
+    def test_legacy_schema_manual_selection_survives_merged_default_provenance(self):
+        migrated, _ = self.manager.migrate_or_merge({
+            "settings_schema_version": 1,
+            "selected_openai_model": "my-legacy-model",
+        })
+        self.assertEqual(migrated["selected_openai_model"], "my-legacy-model")
+        self.assertEqual(migrated["selected_model_source"]["openai"], MODEL_SELECTION_SOURCE_USER)
 
     def test_missing_values_receive_new_defaults_without_marking_them_user_selected(self):
         loaded = {
@@ -147,6 +180,28 @@ class ProviderFamilyReasoningContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_catalog_loading_requires_explicit_selection_when_model_is_empty(self):
+        combo = SearchableModelComboBox()
+        combo.set_models(["first-model", "second-model"], "")
+        self.assertEqual(combo.selected_model(), "")
+        self.assertEqual(combo.currentText(), "")
+        self.assertEqual(combo.currentIndex(), -1)
+        combo.set_current_model("second-model")
+        self.assertEqual(combo.selected_model(), "second-model")
+        combo.set_models(["first-model"], "my-manual-model")
+        self.assertEqual(combo.selected_model(), "my-manual-model")
+        combo.set_models(["first-model"], "")
+        self.assertEqual(combo.currentText(), "")
+
+    def test_new_models_accept_only_documented_reasoning_parameters(self):
+        for provider, model in (("openai", "gpt-6.1-sol"), ("gemini", "gemini-3.8-flash")):
+            self.assertNotIn("none", dict(model_reasoning_options(provider, model)))
+            self.assertNotIn("minimal", dict(model_reasoning_options(provider, model)))
+            self.assertEqual(model_reasoning_api_parameters(provider, model, "auto"), {})
+        self.assertEqual(model_reasoning_api_parameters("anthropic", "claude-sonnet-5-5", "none"), {"thinking": {"type": "between_tools"}})
+        self.assertEqual(model_reasoning_api_parameters("anthropic", "claude-haiku-5-5", "none"), {"thinking": {"type": "disabled"}})
+        self.assertEqual(model_reasoning_contract("anthropic", "claude-haiku-5-5")["provider_default"], "medium")
 
     def test_gemini_active_families_resolve_to_native_contracts(self):
         expected = {
@@ -325,6 +380,91 @@ class ProviderFamilyReasoningContractTests(unittest.TestCase):
 
 
 class ExactProviderPayloadTests(unittest.TestCase):
+    def test_title_requests_use_dedicated_models_and_minimum_provider_reasoning(self):
+        expected = {
+            "openai": ("gpt-6-luna", "none"),
+            "openai_codex_signin": ("gpt-6-luna", "low"),
+            "gemini": ("gemini-3.5-flash-lite", "minimal"),
+            "anthropic": ("claude-haiku-5-5", "none"),
+            "openrouter": ("my-manual-chat-model", "auto"),
+            "local": ("my-manual-chat-model", "auto"),
+        }
+        for provider, (title_model, reasoning) in expected.items():
+            with self.subTest(provider=provider):
+                core = _request_core(provider)
+                core.settings[f"selected_{provider}_model"] = "my-manual-chat-model"
+                core.settings["codex_reasoning_effort"] = "max"
+                core._log_usage = mock.Mock()
+                calls = []
+                sdk_calls = []
+                core._request_post = lambda url, json=None, **kwargs: (
+                    calls.append((url, copy.deepcopy(json)))
+                    or _JsonResponse({
+                        "candidates": [{"content": {"parts": [{"text": "Title"}]}}],
+                        "content": [{"type": "text", "text": "Title"}],
+                    })
+                )
+                def complete(**kwargs):
+                    sdk_calls.append(copy.deepcopy(kwargs))
+                    return SimpleNamespace(usage=None, choices=[SimpleNamespace(message=SimpleNamespace(content="Title", tool_calls=[]))])
+                core.universal_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)))
+                core._openai_compatible_client_for_request = lambda mode: core.universal_client
+                core.codex_signin_provider = SimpleNamespace(complete=mock.Mock(return_value=("Title", {"prompt": 1, "completion": 1})))
+                settings_before = copy.deepcopy(core.settings)
+                self.assertEqual(core.generate_conversation_title("Name this chat", "Answer", provider_mode=provider, current_model="my-manual-chat-model"), "Title")
+                self.assertEqual(core.settings, settings_before)
+                self.assertEqual(provider_title_model(provider, "my-manual-chat-model"), title_model)
+                if provider == "openai_codex_signin":
+                    args, options = core.codex_signin_provider.complete.call_args
+                    self.assertEqual(args[1], title_model)
+                    self.assertEqual(options["reasoning_effort"], reasoning)
+                    self.assertEqual(options["purpose"], "title")
+                    self.assertEqual(core._log_usage.call_args.args[0], title_model)
+                elif provider == "gemini":
+                    self.assertIn(title_model, calls[0][0])
+                    self.assertEqual(calls[0][1]["generationConfig"]["thinkingConfig"], {"thinkingLevel": reasoning})
+                elif provider == "anthropic":
+                    self.assertEqual(calls[0][1]["model"], title_model)
+                    self.assertEqual(calls[0][1]["thinking"], {"type": "disabled"})
+                    self.assertNotIn("output_config", calls[0][1])
+                else:
+                    self.assertEqual(sdk_calls[0]["model"], title_model)
+                    if provider == "openai":
+                        self.assertEqual(sdk_calls[0]["reasoning_effort"], "none")
+                    else:
+                        self.assertNotIn("reasoning_effort", sdk_calls[0])
+                    self.assertNotIn("tools", sdk_calls[0])
+
+    def test_no_title_api_call_without_a_model_for_other_providers(self):
+        core = _request_core("groq")
+        core._handle_api_request_with_retry = mock.Mock()
+        self.assertEqual(core.generate_conversation_title("Request", "Answer"), "")
+        core._handle_api_request_with_retry.assert_not_called()
+
+    def test_sol_61_uses_responses_and_auto_does_not_reach_wire(self):
+        core = _request_core("openai")
+        core._native_tool_specs_for_request = lambda: [{"name": "lookup", "description": "Lookup", "parameters": {"type": "object", "properties": {}}}]
+        create = mock.Mock(return_value={
+            "status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": "Answer"}]}],
+        })
+        chat_create = mock.Mock()
+        core.universal_client = SimpleNamespace(responses=SimpleNamespace(create=create), chat=SimpleNamespace(completions=SimpleNamespace(create=chat_create)))
+        result, _ = core._handle_api_request_with_retry("gpt-6.1-sol", [{"role": "user", "content": "Request"}], retry_wait_times=[])
+        self.assertEqual(result, "Answer")
+        chat_create.assert_not_called()
+        self.assertNotIn("reasoning", create.call_args.kwargs)
+        self.assertEqual(create.call_args.kwargs["tools"][0]["name"], "lookup")
+
+    def test_current_default_model_context_windows(self):
+        for provider, model, tokens in (
+            ("openai", "gpt-6.1-sol", 1_050_000),
+            ("openai", "gpt-6-luna", 1_050_000),
+            ("anthropic", "claude-sonnet-5-5", 1_000_000),
+            ("anthropic", "claude-haiku-5-5", 1_000_000),
+        ):
+            with self.subTest(model=model):
+                self.assertEqual(_request_core(provider)._model_context_window_tokens(model), tokens)
+
     @staticmethod
     def _anthropic_response():
         return _JsonResponse({

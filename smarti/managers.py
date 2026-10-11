@@ -158,14 +158,11 @@ class SettingsManager:
 
     @staticmethod
     def migrate_model_selection_provenance(settings, prior_settings=None):
-        """Record conservative provenance without guessing about legacy choices."""
+        """Refresh automatic defaults, preserving explicit and unknown legacy choices."""
         settings = copy.deepcopy(settings or {})
         prior_settings = prior_settings if isinstance(prior_settings, dict) else settings
         before = copy.deepcopy(settings)
-        current_sources = settings.get("selected_model_source", {})
         prior_sources = prior_settings.get("selected_model_source", {})
-        if not isinstance(current_sources, dict):
-            current_sources = {}
         if not isinstance(prior_sources, dict):
             prior_sources = {}
         sources = {}
@@ -174,16 +171,16 @@ class SettingsManager:
             MODEL_SELECTION_SOURCE_USER,
         }
         for provider in MODEL_PROVIDER_ORDER:
+            selected_key = f"selected_{provider}_model"
             source = str(prior_sources.get(provider, "") or "").strip().lower()
             if source not in valid_sources:
-                source = str(current_sources.get(provider, "") or "").strip().lower()
-            if source not in valid_sources:
-                selected_key = f"selected_{provider}_model"
                 source = (
                     MODEL_SELECTION_SOURCE_USER
                     if str(prior_settings.get(selected_key, "") or "").strip()
                     else MODEL_SELECTION_SOURCE_DEFAULT
                 )
+            if source == MODEL_SELECTION_SOURCE_DEFAULT and selected_key in settings:
+                settings[selected_key] = provider_default_model(provider)
             sources[provider] = source
         settings["selected_model_source"] = sources
         settings["model_selection_provenance_version"] = MODEL_SELECTION_PROVENANCE_VERSION

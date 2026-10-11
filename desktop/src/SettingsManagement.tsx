@@ -627,7 +627,7 @@ export function ProviderWorkflow({
   useEffect(() => {
     if (modelsLoading || favoriteOnLoadProvider.current !== provider) return;
     favoriteOnLoadProvider.current = "";
-    const model = selectedModel || models[0] || "";
+    const model = selectedModel;
     if (
       !model ||
       favorites.some(

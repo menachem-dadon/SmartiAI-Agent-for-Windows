@@ -40,13 +40,13 @@ class ContextCompactionMixin:
             return 1_050_000
         if "gpt-5.4-mini" in model_lower or re.search(r"(^|[/_-])gpt-5-mini(?:$|[/_-])", model_lower):
             return 400_000
-        if any(name in model_lower for name in ("gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6-astra")):
+        if any(name in model_lower for name in ("gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna", "gpt-6-sol")):
             return 1_050_000
         if "gpt-5" in model_lower:
             return 400_000
         if "gemini-3" in model_lower or "gemini-2.5" in model_lower:
             return 1_048_576
-        if any(name in model_lower for name in ("claude-opus-5", "claude-opus-4-7", "claude-sonnet-4-6")):
+        if any(name in model_lower for name in ("claude-opus-5", "claude-opus-4-7", "claude-sonnet-4-6", "claude-sonnet-5-5", "claude-haiku-5-5")):
             return 1_000_000
         if mode == "anthropic" and "haiku" not in model_lower and any(name in model_lower for name in ("opus-4", "sonnet-4")):
             return 200_000

@@ -15,7 +15,10 @@ export async function coreApi<T>(method: string, path: string, body?: unknown, i
   }});
   if (identity && response.status < 500) pendingMutations.delete(identity);
   if (response.status < 200 || response.status >= 300 || response.body.error) {
-    throw new CoreApiError(response.body.detail || response.body.error || `Core API ${response.status}`, response.status);
+    const message = response.body.detail === "model_required"
+      ? "יש לבחור מודל בהגדרות הספק לפני שליחת הודעה."
+      : response.body.detail || response.body.error || `Core API ${response.status}`;
+    throw new CoreApiError(message, response.status);
   }
   publishSettingsChange(method, path, body);
   return response.body.data as T;

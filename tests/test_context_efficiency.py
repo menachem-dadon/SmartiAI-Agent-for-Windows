@@ -333,7 +333,8 @@ class ContextEfficiencyTests(unittest.TestCase):
         self.assertIn("הודעת משתמש מלאה", payload)
         self.assertIn("תשובה סופית מלאה", payload)
         self.assertIn("מסמך א.docx", payload)
-        self.assertEqual(captured["options"]["reasoning_effort"], "low")
+        self.assertEqual(captured["model"], "gemini-3.5-flash-lite")
+        self.assertEqual(captured["options"]["reasoning_effort"], "minimal")
         self.assertFalse(captured["options"]["native_tools"])
 
         core._handle_api_request_with_retry = lambda *args, **kwargs: (_ for _ in ()).throw(

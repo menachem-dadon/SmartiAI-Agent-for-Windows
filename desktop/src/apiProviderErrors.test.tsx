@@ -5,6 +5,26 @@ import { ProviderWorkflow } from "./SettingsManagement";
 
 afterEach(() => cleanup());
 
+it("keeps an unconfigured provider empty after discovering models until explicit selection", async () => {
+  const saves: Array<{ path: string; value: unknown }> = [];
+  Object.defineProperty(window, "__TAURI_INTERNALS__", {
+    configurable: true,
+    value: { invoke: async () => ({ status: 200, body: { data: { models: ["qwen-first", "qwen-second"], reasoning_options: [] } } }) },
+  });
+  const props = { secrets: {}, save: async (path: string, value: unknown) => { saves.push({ path, value }); }, reload: async () => {}, schema: { providers: [], secret_help: {} }, theme: "dark" as const };
+  const page = render(<ProviderWorkflow {...props} values={{ api_mode: "openai", selected_openai_model: "manual-openai", favorite_models: [] }} />);
+  fireEvent.click(screen.getByRole("button", { name: "ספק המודל: OpenAI" }));
+  fireEvent.click(screen.getByRole("option", { name: "Qwen" }));
+  await waitFor(() => expect(saves).toContainEqual({ path: "api_mode", value: "qwen" }));
+  page.rerender(<ProviderWorkflow {...props} values={{ api_mode: "qwen", selected_qwen_model: "", favorite_models: [] }} />);
+  const picker = await screen.findByRole("button", { name: "בחר מודל" });
+  fireEvent.click(picker);
+  await screen.findByRole("option", { name: "qwen-second" });
+  expect(saves.some(item => item.path === "favorite_models" || item.path === "selected_qwen_model")).toBe(false);
+  fireEvent.click(screen.getByRole("option", { name: "qwen-second" }));
+  await waitFor(() => expect(saves).toContainEqual({ path: "selected_qwen_model", value: "qwen-second" }));
+});
+
 it("saves a complete Qwen regional endpoint on blur and rejects invalid drafts", async () => {
   const saves: Array<{ path: string; value: unknown }> = [];
   let modelRequests = 0;

@@ -476,7 +476,7 @@ class MessagingMixin:
                 getattr(self._execution_context, "model_name", "")
                 or self.settings.get(f'selected_{self.mode}_model')
                 or provider_default_model(self.mode)
-                or "Local"
+                or ""
             )
             if resume_checkpoint:
                 current_model = str(resume_checkpoint.get("current_model") or current_model)

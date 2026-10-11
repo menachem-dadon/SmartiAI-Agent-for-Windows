@@ -245,7 +245,8 @@ class SearchableModelComboBox(NoScrollComboBox):
         self.clear()
         self.addItems(cleaned or ([selected_model] if selected_model else []))
         self.blockSignals(previous)
-        self.set_current_model(selected_model if selected_model in cleaned else (cleaned[0] if cleaned else selected_model))
+        self.setPlaceholderText("בחר מודל" if cleaned else "לא נמצאו מודלים")
+        self.set_current_model(selected_model)
 
     def selected_model(self):
         return self._selected_model
@@ -255,12 +256,13 @@ class SearchableModelComboBox(NoScrollComboBox):
 
     def set_current_model(self, model):
         model = str(model or "").strip()
-        if not model:
-            return
         previous = self.blockSignals(True)
-        if self.findText(model) < 0:
+        if not model:
+            self.setCurrentIndex(-1)
+        elif self.findText(model) < 0:
             self.addItem(model)
-        self.setCurrentText(model)
+        if model:
+            self.setCurrentText(model)
         self.blockSignals(previous)
         self._selected_model = model
         self.hidePopup()

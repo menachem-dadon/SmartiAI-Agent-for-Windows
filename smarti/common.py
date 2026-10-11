@@ -127,7 +127,8 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "gemini_api_key",
         "help_url": "https://aistudio.google.com/apikey",
         "key_instructions": "התחבר ל-Google AI Studio, לחץ Create API key, בחר או צור פרויקט והעתק את המפתח.",
-        "default_model": "gemini-3.6-flash",
+        "default_model": "gemini-3.8-flash",
+        "title_model": "gemini-3.5-flash-lite",
     },
     "openai": {
         "label": "OpenAI",
@@ -135,7 +136,8 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "openai_api_key",
         "help_url": "https://platform.openai.com/api-keys",
         "key_instructions": "התחבר ל-OpenAI Platform, לחץ Create new secret key והעתק את המפתח שנוצר.",
-        "default_model": "gpt-5.6-sol",
+        "default_model": "gpt-6.1-sol",
+        "title_model": "gpt-6-luna",
         "base_url": None,
     },
     "openai_codex_signin": {
@@ -143,7 +145,8 @@ MODEL_PROVIDER_CONFIGS = {
         "kind": "codex_signin",
         "secret_key": None,
         "key_instructions": "החיבור נפתח בדפדפן באמצעות Codex sign-in הרשמי של OpenAI. לא נדרש מפתח API.",
-        "default_model": "codex default",
+        "default_model": "gpt-6.1-sol",
+        "title_model": "gpt-6-luna",
         "fallback_models": [
             "codex default",
             "gpt-6.1-sol",
@@ -164,8 +167,9 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "anthropic_api_key",
         "help_url": "https://console.anthropic.com/settings/keys",
         "key_instructions": "התחבר ל-Anthropic Console, בחר Workspace מתאים, לחץ Create Key והעתק את המפתח.",
-        "default_model": "claude-opus-5",
-        "fallback_models": ["claude-opus-5", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+        "default_model": "claude-sonnet-5-5",
+        "title_model": "claude-haiku-5-5",
+        "fallback_models": ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
     },
     "openrouter": {
         "label": "OpenRouter",
@@ -173,7 +177,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "openrouter_api_key",
         "help_url": "https://openrouter.ai/settings/keys",
         "key_instructions": "התחבר ל-OpenRouter, לחץ Create Key, הגדר שם או מגבלת קרדיט אם צריך והעתק.",
-        "default_model": "openai/gpt-5.4",
+        "default_model": "",
         "base_url": URL_OPENROUTER,
         "validation_path": "/key",
         "models_query": "?output_modalities=text",
@@ -184,7 +188,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "groq_api_key",
         "help_url": "https://console.groq.com/keys",
         "key_instructions": "התחבר ל-Groq Console, לחץ Create API Key והעתק את המפתח.",
-        "default_model": "openai/gpt-oss-120b",
+        "default_model": "",
         "base_url": URL_GROQ,
     },
     "nvidia": {
@@ -193,7 +197,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "nvidia_api_key",
         "help_url": "https://build.nvidia.com/nvidia/",
         "key_instructions": "התחבר ל-NVIDIA Build, פתח מודל ב-Hosted API ולחץ Generate API Key, ואז העתק את המפתח.",
-        "default_model": "nvidia/llama-3.3-nemotron-super-49b-v1",
+        "default_model": "",
         "base_url": URL_NVIDIA,
         "fallback_models": [
             "nvidia/llama-3.3-nemotron-super-49b-v1",
@@ -208,7 +212,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "cerebras_api_key",
         "help_url": "https://cloud.cerebras.ai/",
         "key_instructions": "התחבר ל-Cerebras Cloud, פתח API Keys, צור מפתח חדש והעתק אותו.",
-        "default_model": "gpt-oss-120b",
+        "default_model": "",
         "base_url": URL_CEREBRAS,
         "fallback_models": ["gpt-oss-120b", "zai-glm-4.7"],
     },
@@ -218,7 +222,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "huggingface_api_key",
         "help_url": "https://huggingface.co/settings/tokens",
         "key_instructions": "התחבר ל-Hugging Face, פתח Settings > Access Tokens, צור User Access Token והעתק אותו.",
-        "default_model": "openai/gpt-oss-120b",
+        "default_model": "",
         "base_url": URL_HUGGINGFACE,
         "validation_url": "https://huggingface.co/api/whoami-v2",
         "fallback_models": [
@@ -234,7 +238,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "deepseek_api_key",
         "help_url": "https://platform.deepseek.com/api_keys",
         "key_instructions": "התחבר ל-DeepSeek Platform, פתח API keys, צור מפתח חדש והעתק.",
-        "default_model": "deepseek-v4-flash",
+        "default_model": "",
         "base_url": URL_DEEPSEEK,
         "fallback_models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"],
     },
@@ -244,7 +248,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "qwen_api_key",
         "help_url": "https://bailian.console.aliyun.com/?tab=model#/api-key",
         "key_instructions": "התחבר ל-Alibaba Model Studio/Bailian, בחר אזור, לחץ Create API Key והעתק.",
-        "default_model": "qwen-plus",
+        "default_model": "",
         "base_url": URL_QWEN,
         "fallback_models": ["qwen-plus", "qwen-max", "qwen-turbo"],
     },
@@ -254,7 +258,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "zhipu_api_key",
         "help_url": "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys",
         "key_instructions": "התחבר ל-Zhipu Open Platform, בחר פרויקט, צור API Key והעתק.",
-        "default_model": "glm-5.1",
+        "default_model": "",
         "base_url": URL_ZHIPU,
         "fallback_models": ["glm-5.1", "glm-4.7", "glm-4-flash"],
     },
@@ -264,7 +268,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "moonshot_api_key",
         "help_url": "https://platform.moonshot.ai/console/api-keys",
         "key_instructions": "התחבר ל-Kimi/Moonshot Platform, בחר את הפרויקט, צור API Key והעתק.",
-        "default_model": "kimi-k2.6",
+        "default_model": "",
         "base_url": URL_MOONSHOT,
         "fallback_models": ["kimi-k2.6", "kimi-k2.5", "moonshot-v1-128k"],
     },
@@ -274,7 +278,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "mistral_api_key",
         "help_url": "https://console.mistral.ai/api-keys",
         "key_instructions": "התחבר ל-Mistral Console, לחץ Create new key והעתק מיד כי המפתח מוצג פעם אחת.",
-        "default_model": "mistral-large-latest",
+        "default_model": "",
         "base_url": URL_MISTRAL,
         "fallback_models": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
     },
@@ -284,7 +288,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "together_api_key",
         "help_url": "https://api.together.ai/settings/api-keys",
         "key_instructions": "התחבר ל-Together AI, פתח את Project API keys, לחץ Create API Key והעתק מיד.",
-        "default_model": "openai/gpt-oss-20b",
+        "default_model": "",
         "base_url": URL_TOGETHER,
         "fallback_models": ["openai/gpt-oss-20b", "Qwen/Qwen3.5-397B-A17B", "zai-org/GLM-5"],
     },
@@ -294,7 +298,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "perplexity_api_key",
         "help_url": "https://console.perplexity.ai/",
         "key_instructions": "התחבר ל-Perplexity API Portal, צור API Group אם צריך, פתח API Keys ולחץ Generate.",
-        "default_model": "sonar-pro",
+        "default_model": "",
         "base_url": URL_PERPLEXITY,
         "models_path": "/v1/models",
         "fallback_models": ["sonar-pro", "sonar"],
@@ -305,7 +309,7 @@ MODEL_PROVIDER_CONFIGS = {
         "secret_key": "xai_api_key",
         "help_url": "https://console.x.ai/team/default/api-keys",
         "key_instructions": "התחבר ל-xAI Console, פתח API Keys, לחץ Create API Key והעתק את המפתח.",
-        "default_model": "grok-4",
+        "default_model": "",
         "base_url": URL_XAI,
         "fallback_models": ["grok-4", "grok-3"],
     },
@@ -326,6 +330,13 @@ MODEL_SELECTION_PROVENANCE_VERSION = 1
 # unknown future model intentionally inherits the provider's current contract.
 MODEL_REASONING_CONTRACTS = {
     # Google generateContent contracts.
+    "gemini_38_flash": {
+        "api_field": "generationConfig.thinkingConfig.thinkingLevel",
+        "supported_levels": ("low", "medium", "high"),
+        "provider_default": "medium",
+        "control_kind": "thinking_level",
+        "max_output_tokens": 65_536,
+    },
     "gemini_current_flash": {
         "api_field": "generationConfig.thinkingConfig.thinkingLevel",
         "supported_levels": ("minimal", "low", "medium", "high"),
@@ -396,14 +407,21 @@ MODEL_REASONING_CONTRACTS = {
         "max_output_tokens": 65_536,
     },
 
-    # OpenAI Chat Completions contracts. The UI keeps "auto" separate so
-    # omitting reasoning_effort always preserves the provider default.
+    # OpenAI contracts. "auto" omits effort in both Chat Completions and Responses.
     "openai_current": {
         "api_field": "reasoning_effort",
         "supported_levels": ("none", "low", "medium", "high", "xhigh", "max"),
         "provider_default": "medium",
         "control_kind": "reasoning_effort",
         "max_output_tokens": 128_000,
+    },
+    "openai_6_reasoning_only": {
+        "api_field": "reasoning.effort",
+        "supported_levels": ("low", "medium", "high", "xhigh", "max"),
+        "provider_default": "medium",
+        "control_kind": "reasoning_effort",
+        "max_output_tokens": 128_000,
+        "use_responses": True,
     },
     "openai_55": {
         "api_field": "reasoning_effort",
@@ -484,6 +502,22 @@ MODEL_REASONING_CONTRACTS = {
     },
 
     # Anthropic Messages contracts.
+    "anthropic_sonnet_55": {
+        "api_field": "thinking.type + output_config.effort",
+        "supported_levels": ("none", "low", "medium", "high", "xhigh", "max"),
+        "provider_default": "high",
+        "control_kind": "adaptive_between_tools",
+        "max_output_tokens": 128_000,
+        "default_output_tokens": 64_000,
+    },
+    "anthropic_haiku_55": {
+        "api_field": "thinking.type + output_config.effort",
+        "supported_levels": ("none", "low", "medium", "high", "xhigh", "max"),
+        "provider_default": "medium",
+        "control_kind": "adaptive_default_on",
+        "max_output_tokens": 128_000,
+        "default_output_tokens": 64_000,
+    },
     "anthropic_current_default_on": {
         "api_field": "thinking.type + output_config.effort",
         "supported_levels": ("none", "low", "medium", "high", "xhigh", "max"),
@@ -1026,6 +1060,14 @@ def provider_key_instructions(provider=None, secret_key=None):
 def provider_default_model(provider):
     return provider_config(provider).get("default_model", "")
 
+def provider_title_model(provider, current_model=""):
+    return provider_config(provider).get("title_model") or str(current_model or "").strip()
+
+def minimum_model_reasoning_level(provider, model):
+    """Use the least reasoning the provider's model/client contract accepts."""
+    supported = model_reasoning_contract(provider, model).get("supported_levels", ())
+    return next((level for level in ("none", "minimal", "low") if level in supported), "auto")
+
 def _reasoning_contract(contract_id):
     contract = copy.deepcopy(MODEL_REASONING_CONTRACTS.get(contract_id, {}))
     if contract:
@@ -1061,12 +1103,18 @@ def model_reasoning_contract(provider, model):
             return _reasoning_contract("gemini_current_flash_lite")
         if "pro" in name:
             return _reasoning_contract("gemini_current_pro")
+        if re.match(r"^gemini-3\.8-flash(?:-|$)", name):
+            return _reasoning_contract("gemini_38_flash")
         if re.match(r"^gemini-3(?:\.0)?-flash(?:-|$)", name):
             return _reasoning_contract("gemini_3_flash")
         return _reasoning_contract("gemini_current_flash")
     if provider == "anthropic":
         if any(token in name for token in ("embedding", "moderation")):
             return {}
+        if re.match(r"^claude-sonnet-5-5(?:-|$)", name):
+            return _reasoning_contract("anthropic_sonnet_55")
+        if re.match(r"^claude-haiku-5-5(?:-|$)", name):
+            return _reasoning_contract("anthropic_haiku_55")
         if re.search(r"claude-(?:fable|mythos)(?:-|$)", name):
             return _reasoning_contract("anthropic_current_always_on")
         if re.search(r"claude-(?:opus|sonnet)-5(?:-|$)", name):
@@ -1081,6 +1129,8 @@ def model_reasoning_contract(provider, model):
             return _reasoning_contract("anthropic_manual_45")
         return _reasoning_contract("anthropic_current_default_on")
     if provider == "openai":
+        if re.match(r"^gpt-(?:6\.1-sol|6-astra)(?:-|$)", name):
+            return _reasoning_contract("openai_6_reasoning_only")
         if re.match(
             r"^(?:gpt-4(?:\.1|o)|chatgpt|chat-latest|text-embedding|"
             r"omni-moderation|gpt-image|dall-e|sora|whisper|tts|"
@@ -1193,12 +1243,13 @@ def model_reasoning_api_parameters(provider, model, level):
         return {}
     if provider == "anthropic":
         if normalized == "none":
-            return {"thinking": {"type": "disabled"}}
+            thinking_type = "between_tools" if kind == "adaptive_between_tools" else "disabled"
+            return {"thinking": {"type": thinking_type}}
         result = {}
         if kind == "adaptive_opt_in":
             result["thinking"] = {"type": "adaptive", "display": "omitted"}
             result["output_config"] = {"effort": normalized}
-        elif kind in {"adaptive_default_on", "adaptive_always_on"}:
+        elif kind in {"adaptive_default_on", "adaptive_always_on", "adaptive_between_tools"}:
             result["output_config"] = {"effort": normalized}
         elif kind in {"manual_budget", "manual_budget_with_effort"}:
             budget = (contract.get("budget_by_level") or {}).get(normalized)

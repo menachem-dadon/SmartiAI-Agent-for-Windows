@@ -923,6 +923,25 @@ class LocalGatewayTests(unittest.TestCase):
                 gateway.stop()
                 core.run_manager.shutdown(wait=True)
 
+    def test_v2_submission_requires_a_model_before_creating_a_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            core = _FakeCore(Path(directory) / "history.json")
+            core.settings["selected_local_model"] = ""
+            core.run_manager = ConversationRunManager(core)
+            session_id = core.chat_store.create_session(set_active=False)["id"]
+            gateway = SmartiLocalGateway(core, "test-token", port=0)
+            self.assertTrue(gateway.start())
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self._request(gateway, f"/v2/conversations/{session_id}/runs", method="POST", payload={"text": "Request"})
+                self.assertEqual(error.exception.code, 400)
+                self.assertEqual(json.loads(error.exception.read())["detail"], "model_required")
+                self.assertEqual(core.chat_store.list_runs(session_id=session_id), [])
+                self.assertEqual(core.started, [])
+            finally:
+                gateway.stop()
+                core.run_manager.shutdown(wait=True)
+
     def test_v2_websocket_reconnect_replays_exactly_the_missed_durable_events(self):
         with tempfile.TemporaryDirectory() as directory:
             core = _FakeCore(Path(directory) / "history.json")

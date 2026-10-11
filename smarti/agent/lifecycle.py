@@ -221,7 +221,7 @@ class LifecycleMixin:
                 model_name
                 or self.settings.get(f"selected_{provider_mode}_model")
                 or provider_default_model(provider_mode)
-                or "Local"
+                or ""
             ),
             "universal_client": None,
             "_universal_client_key": "",
@@ -336,7 +336,7 @@ class LifecycleMixin:
             (runtime_snapshot or {}).get("model_name")
             or self.settings.get(f"selected_{self.mode}_model")
             or provider_default_model(self.mode)
-            or "Local"
+            or ""
         )
         try:
             self.system_prompt = self._load_system_prompt()
