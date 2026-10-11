@@ -178,6 +178,7 @@ function SentImage({
 
 type AgentEvent = {
   type: string;
+  user_language?: "he" | "en";
   liveEventId?: number;
   text?: string;
   tools?: unknown[];
@@ -203,7 +204,9 @@ type ProcessRow =
       tools: ToolView[];
       running: boolean;
     };
-type AgentProcessMetadata = { elapsed_seconds?: number; events?: AgentEvent[] };
+type ProcessLanguage = "he" | "en";
+type AgentProcessMetadata = { elapsed_seconds?: number; events?: AgentEvent[]; user_language?: ProcessLanguage };
+const processCaption = (language: ProcessLanguage, hebrew: string, english: string) => language === "en" ? english : hebrew;
 function StreamLetter({ node, ...props }: ComponentProps<"span"> & ExtraProps) {
   const started = Number(node?.properties?.["data-reveal-started"]);
   // Set the elapsed offset once per glyph. Updating it again on every token
@@ -297,18 +300,22 @@ function eventFromRun(event: RunEvent): AgentEvent | null {
       ],
     };
   if (event.event_type === "api_key_required")
-    return { type: "report", text: "ממתין למפתח API", liveEventId: event.event_id };
+    return { type: "api_key_wait", liveEventId: event.event_id };
   return null;
 }
-export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
+export function processRows(agentEvents: AgentEvent[], language: ProcessLanguage = "he"): ProcessRow[] {
+  const text = (he: string, en: string) => processCaption(language, he, en);
   const rows: ProcessRow[] = [];
   let current: Extract<ProcessRow, { kind: "tools" }> | null = null;
   for (const [index, event] of agentEvents.entries()) {
-    if (event.type === "report") {
+    if (event.type === "api_key_wait") {
+      rows.push({ kind: "report", key: `report-${index}`, text: text("ממתין למפתח API", "Waiting for an API key") });
+      current = null;
+    } else if (event.type === "report") {
       const text = String(event.text || "").trim();
       // Older clients projected approval waits into process history. Permission
       // state is now owned by the durable approval queue, including on replay.
-      if (/^ממתין לאישור(?: משתמש)?\.{0,3}$/u.test(text)) continue;
+      if (/^(?:ממתין לאישור(?: משתמש)?|Waiting for user approval)\.{0,3}$/iu.test(text)) continue;
       if (text) rows.push({ kind: "report", key: `report-${index}`, text });
       current = null;
     } else if (["tool_start", "tool_preparing", "tool_waiting"].includes(event.type)) {
@@ -317,7 +324,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
           kind: "tools",
           key: `tools-${index}`,
           standalone: false,
-          label: "מריץ כלים",
+          label: text("מריץ כלים", "Running tools"),
           icon: "row_status",
           tools: [],
           running: true,
@@ -368,7 +375,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
               kind: "tools",
               key: `tools-${index}`,
               standalone: false,
-              label: "כלים הסתיימו",
+              label: text("כלים הסתיימו", "Tools finished"),
               icon: "row_status",
               tools: [],
               running: false,
@@ -389,7 +396,7 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
           group.label ||
           group.title ||
           group.action ||
-          (running ? "מבצע פעילות" : "הפעילות הסתיימה"),
+          (running ? text("מבצע פעילות", "Working") : text("הפעילות הסתיימה", "Activity finished")),
       );
       const identity = String(
         group.id || group.event_id || group.action || index,
@@ -425,9 +432,9 @@ export function processRows(agentEvents: AgentEvent[]): ProcessRow[] {
     row.running = running.length > 0;
     row.label = running.length
       ? running.length === 1
-        ? `${running[0].status === "preparing" ? "מכין כלי" : running[0].status === "waiting" ? "ממתין לאישור הפעלת כלי" : "מריץ כלי"} ${running[0].name}`
-        : `מריץ ${running.length} כלים במקביל`
-      : row.tools.length === 1 ? "הורץ כלי 1" : `הורצו ${row.tools.length} כלים`;
+        ? `${running[0].status === "preparing" ? text("מכין כלי", "Preparing tool") : running[0].status === "waiting" ? text("ממתין לאישור הפעלת כלי", "Waiting for tool approval") : text("מריץ כלי", "Running tool")} ${running[0].name}`
+        : text(`מריץ ${running.length} כלים במקביל`, `Running ${running.length} tools in parallel`)
+      : row.tools.length === 1 ? text("הורץ כלי 1", "Ran 1 tool") : text(`הורצו ${row.tools.length} כלים`, `Ran ${row.tools.length} tools`);
   }
   return rows;
 }
@@ -442,11 +449,13 @@ function WaitingIndicator({ label, shimmer, immediate }: { label: string; shimme
   return visible ? <p className="agent-initial-thinking"><AgentStatusText active={shimmer}>{label}</AgentStatusText></p> : null;
 }
 
-export function formatAgentDuration(seconds: number): string {
+export function formatAgentDuration(seconds: number, language: ProcessLanguage = "he"): string {
   const safe = Math.max(0, Math.floor(seconds || 0));
   const hours = Math.floor(safe / 3600);
   const minutes = Math.floor((safe % 3600) / 60);
   const secs = safe % 60;
+  if (language === "en") return hours ? `${hours} h ${String(minutes).padStart(2, "0")} min ${String(secs).padStart(2, "0")} s`
+    : minutes ? `${minutes} min ${String(secs).padStart(2, "0")} s` : `${secs} s`;
   if (hours)
     return `${hours} ${hours === 1 ? "שעה" : "שעות"} ${String(minutes).padStart(2, "0")} דק׳ ${String(secs).padStart(2, "0")} שנ׳`;
   if (minutes) return `${minutes} דק׳ ${String(secs).padStart(2, "0")} שנ׳`;
@@ -544,6 +553,12 @@ export const RichMessage = memo(function RichMessage({
       .map(eventFromRun)
       .filter((item): item is AgentEvent => Boolean(item));
   }, [events, message.role, storedProcess]);
+  // Only new process metadata selects English. Legacy history keeps its captions.
+  const processLanguage: ProcessLanguage = storedProcess?.user_language
+    || (message.metadata?.user_language === "en" ? "en" : undefined)
+    || [...agentEvents].reverse().find(event => event.user_language)?.user_language
+    || (events.some(event => event.event_type === "run_started" && event.payload?.user_language === "en") ? "en" : "he");
+  const processText = (he: string, en: string) => processCaption(processLanguage, he, en);
   const rows = useMemo(() => {
     const pending: AgentEvent[] = [];
     const reports = Object.values(stream?.blocks || {}).filter(block => block.kind === "text" && block.role === "report" && block.text?.trim());
@@ -555,14 +570,14 @@ export const RichMessage = memo(function RichMessage({
       if (block.kind === "tool" && !existingIds.has(block.call_id || id)) pending.push({ type: "tool_preparing", tools: [{ call_id: block.call_id || id, name: block.name, arguments_text: block.arguments_text }] });
       if (block.kind === "text" && block.role === "report" && block.text?.trim() && !agentEvents.some(event => event.type === "report" && normalized(block.text || "").startsWith(normalized(event.text || "")))) pending.push({ type: "report", text: block.text });
     }
-    const result = processRows([...renderedEvents, ...pending]);
-    if (runStatus === "waiting_for_approval" && !agentEvents.some(event => event.type === "tool_waiting")) for (const row of result) if (row.kind === "tools") { for (const tool of row.tools) if (tool.status === "running") tool.status = "waiting"; const waiting = row.tools.find(tool => tool.status === "waiting"); if (waiting) row.label = `ממתין לאישור הפעלת כלי ${waiting.name}`; }
+    const result = processRows([...renderedEvents, ...pending], processLanguage);
+    if (runStatus === "waiting_for_approval" && !agentEvents.some(event => event.type === "tool_waiting")) for (const row of result) if (row.kind === "tools") { for (const tool of row.tools) if (tool.status === "running") tool.status = "waiting"; const waiting = row.tools.find(tool => tool.status === "waiting"); if (waiting) row.label = processText(`ממתין לאישור הפעלת כלי ${waiting.name}`, `Waiting for tool approval ${waiting.name}`); }
     if (!active) for (const row of result) if (row.kind === "tools" && row.tools.some(tool => ["preparing", "running", "waiting"].includes(tool.status))) {
       for (const tool of row.tools) if (["preparing", "running", "waiting"].includes(tool.status)) tool.status = "error";
-      row.running = false; row.label = runStatus === "cancelled" ? "הפעלת כלי נעצרה" : "הפעלת כלי לא הושלמה";
+      row.running = false; row.label = runStatus === "cancelled" ? processText("הפעלת כלי נעצרה", "Tool execution stopped") : processText("הפעלת כלי לא הושלמה", "Tool execution did not finish");
     }
     return result;
-  }, [agentEvents, stream, runStatus, active]);
+  }, [agentEvents, stream, runStatus, active, processLanguage]);
   const activeRows = rows.filter(row => row.kind === "tools" && row.running);
   const ownerRow = activeRows.find(row => row.kind === "tools" && preferences[row.key]) || activeRows[0];
   const ownerTool = ownerRow?.kind === "tools" && preferences[ownerRow.key] ? ownerRow.tools.find(tool => ["running", "preparing", "waiting"].includes(tool.status))?.key : undefined;
@@ -749,13 +764,14 @@ export const RichMessage = memo(function RichMessage({
       {!!rows.length && (
         <details
           className="agent-process"
+          dir={processLanguage === "en" ? "ltr" : "rtl"}
           open={processOpen}
         >
           <summary onClick={event => { event.preventDefault(); processManual.current = true; preserveDisclosure(event.currentTarget, () => { setProcessOpen(!processOpen); remember("process", !processOpen); }); }}>
             <Icon name="chevron" size={16} className="process-chevron" />
             <AgentStatusText active={active && !processOpen}>
-              {active ? "סמארטי עובד" : "סמארטי עבד"}{" "}
-              {formatAgentDuration(elapsed)}
+              {active ? processText("סמארטי עובד", "Smarti is working") : processText("סמארטי עבד", "Smarti worked")}{" "}
+              {formatAgentDuration(elapsed, processLanguage)}
             </AgentStatusText>
             <Icon name="activity" size={20} />
           </summary>
@@ -792,23 +808,23 @@ export const RichMessage = memo(function RichMessage({
                           <AgentStatusText active={active && processOpen && ownerTool === tool.key}>
                             {tool.status === "preparing" ? <span className="tool-preparation-ring" aria-hidden="true"/> : null}
                             {tool.status === "running"
-                              ? "מריץ כלי"
-                              : tool.status === "preparing" ? "מכין כלי"
-                              : tool.status === "waiting" ? "ממתין לאישור הפעלת כלי"
+                              ? processText("מריץ כלי", "Running tool")
+                              : tool.status === "preparing" ? processText("מכין כלי", "Preparing tool")
+                              : tool.status === "waiting" ? processText("ממתין לאישור הפעלת כלי", "Waiting for tool approval")
                               : tool.status === "error"
-                                ? "שגיאה"
-                                : "הסתיים"}{" "}
+                                ? processText("שגיאה", "Error")
+                                : processText("הסתיים", "Finished")}{" "}
                             {tool.name}
                           </AgentStatusText>
                           <Icon name={toolIcons[tool.icon] || "tools"} />
                         </summary>
                         <div>
-                          <strong>קלט ופרמטרי הפעלה</strong>
-                          <pre dir="ltr">{tool.query || "אין קלט."}</pre>
+                          <strong>{processText("קלט ופרמטרי הפעלה", "Input and parameters")}</strong>
+                          <pre dir="ltr">{tool.query || processText("אין קלט.", "No input.")}</pre>
                           {["finished", "error"].includes(tool.status) && (
                             <>
-                              <strong>פלט הכלי</strong>
-                              <pre dir="ltr">{tool.output || "אין פלט."}</pre>
+                              <strong>{processText("פלט הכלי", "Tool output")}</strong>
+                              <pre dir="ltr">{tool.output || processText("אין פלט.", "No output.")}</pre>
                             </>
                           )}
                         </div>
@@ -821,13 +837,13 @@ export const RichMessage = memo(function RichMessage({
           </div>
         </details>
       )}
-      {canThink && <WaitingIndicator key={agentEvents.filter(event => event.type === "report").slice(-1)[0]?.liveEventId || "initial"} immediate={stream?.stage === "prefill" || stream?.stage === "thinking"} shimmer={!rows.length || processOpen && !ownerRow} label={stream?.stage === "prefill" ? `מעבד הנחיה${stream.percent == null ? "…" : `: ${stream.percent}%`}` : "חושב..."}/>}
+      {canThink && <WaitingIndicator key={agentEvents.filter(event => event.type === "report").slice(-1)[0]?.liveEventId || "initial"} immediate={stream?.stage === "prefill" || stream?.stage === "thinking"} shimmer={!rows.length || processOpen && !ownerRow} label={stream?.stage === "prefill" ? `${processText("מעבד הנחיה", "Processing prompt")}${stream.percent == null ? "…" : `: ${stream.percent}%`}` : processText("חושב...", "Thinking...")}/>}
       {attachmentStrip}
       {message.role === "user" ? !!message.content && <UserBubble isNew={isNew}>
         {content}
         {collapsible && <div className="message-user-disclosure"><IconButton tooltip={false} icon="chevron" variant="ghost" className="message-expand-button" label={userExpanded ? "כווץ הודעה" : "הרחב הודעה"} aria-expanded={userExpanded} aria-controls={contentId} onClick={event => preserveDisclosure(event.currentTarget.closest<HTMLElement>(".sds-user-bubble") || event.currentTarget, () => { setUserExpanded(!userExpanded); remember("user", !userExpanded); })} /></div>}
       </UserBubble> : content}
-      {message.role === "assistant" && (runStatus || message.metadata?.run_status) === "cancelled" && <p className="agent-initial-thinking">היצירה נעצרה. התשובה שהתקבלה עד העצירה נשמרה.</p>}
+      {message.role === "assistant" && (runStatus || message.metadata?.run_status) === "cancelled" && <p className="agent-initial-thinking">{processText("היצירה נעצרה. התשובה שהתקבלה עד העצירה נשמרה.", "Generation stopped. The answer received before stopping was saved.")}</p>}
 
       </MessageFrame>
     </article></DesignSystemProvider>

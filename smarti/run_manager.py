@@ -1,6 +1,7 @@
 """Conversation-scoped concurrent run scheduler and durable event fan-out."""
 from .common import *
 from .attachments import normalize_attachments
+from .user_language import conversation_language
 
 from collections import deque
 
@@ -95,6 +96,7 @@ class ConversationRunManager:
             target = str(self.core.chat_store.create_session(set_active=not bool(session_id))["id"])
         should_title = self.core.chat_store.should_generate_title_for_next_turn(target)
         run_metadata = copy.deepcopy(metadata if isinstance(metadata, dict) else {})
+        run_metadata["user_language"] = conversation_language(self.core.chat_store.messages(target), user_text)
         provider_mode = normalize_provider_name(
             run_metadata.get("provider_mode")
             or self.core.settings.get("api_mode", getattr(self.core, "mode", "gemini"))
@@ -368,7 +370,9 @@ class ConversationRunManager:
                 handle.status = str(current.get("status") or "cancelled")
                 return
             handle.status = "running"
-            self._emit("run_started", run_id, session_id, {"status": "running"}, persist=False)
+            self._emit("run_started", run_id, session_id, {
+                "status": "running", "user_language": work["metadata"].get("user_language", "he"),
+            }, persist=False)
             with self.core.bind_run_context(
                 run_id,
                 session_id,

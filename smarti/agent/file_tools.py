@@ -205,7 +205,7 @@ class FileToolsMixin:
         except SmartiCancelled:
             raise
         except Exception as exc:
-            output = f"ERROR: {type(exc).__name__}: {exc}"
+            output = f'ERROR: {type(exc).__name__}: {model_error_text(exc)}'
 
         self._fm_idempotency_store(idempotency_key, args_hash, output)
         return output
@@ -1964,7 +1964,7 @@ class FileToolsMixin:
                     break
                 digest.update(chunk)
                 total += len(chunk)
-                self._fm_progress("מחשב גיבוב קבצים", total, size)
+                self._fm_progress(ui_text(self, 'מחשב גיבוב קבצים', 'Computing file hashes'), total, size)
         return digest.hexdigest(), total
 
     def _fm_hash_path(self, path, algorithm="sha256", follow_symlinks=False, *, include_entries=False):
@@ -2222,7 +2222,7 @@ class FileToolsMixin:
                         files += 1
                     except OSError:
                         continue
-                self._fm_progress("מחשב שימוש בדיסק", files + directories)
+                self._fm_progress(ui_text(self, 'מחשב שימוש בדיסק', 'Computing disk usage'), files + directories)
         volume = shutil.disk_usage(path if os.path.isdir(path) else os.path.dirname(path))
         return {
             "path": path,

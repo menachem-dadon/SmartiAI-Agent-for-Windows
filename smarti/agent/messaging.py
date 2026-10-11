@@ -1,5 +1,6 @@
 """Attachment payload handling and the main send_message agent loop."""
 from .shared import *
+from smarti.user_language import conversation_language
 from ..task_limits import TaskCancellation
 
 
@@ -300,7 +301,7 @@ class MessagingMixin:
                 return json.dumps(drive.open_web(args.get("file_id")), ensure_ascii=False, indent=2)
             return f"ERROR: Unsupported google_drive_manager action: {action}"
         except Exception as e:
-            return f"ERROR: Google Drive {action} failed: {e}"
+            return f'ERROR: Google Drive {action} failed: {model_error_text(e)}'
 
     def _append_attachment_tool_feedback(self, current_messages, ai_response_text, action, payload):
         try:
@@ -311,7 +312,7 @@ class MessagingMixin:
                 raise ValueError("No valid attachment paths")
             errors = decoded.get("errors", []) if envelope else []
         except Exception as error:
-            self._append_tool_feedback(current_messages, ai_response_text, action, f"ERROR: Invalid attachment payload: {error}")
+            self._append_tool_feedback(current_messages, ai_response_text, action, f'ERROR: Invalid attachment payload: {model_error_text(error)}')
             return
         self.conversation_attachments = merge_conversation_attachments(
             getattr(self, "conversation_attachments", []), items,
@@ -345,7 +346,7 @@ class MessagingMixin:
         conversation_lock = self._conversation_lock(target_session_id)
         lock_acquired = conversation_lock.acquire(blocking=False)
         if not lock_acquired:
-            return "ERROR_USER: כבר מתבצעת פעולה בשיחה הזאת. אפשר להמשיך לעבוד בשיחה אחרת בינתיים."
+            return ui_text(self, 'ERROR_USER: כבר מתבצעת פעולה בשיחה הזאת. אפשר להמשיך לעבוד בשיחה אחרת בינתיים.', 'ERROR_USER: An operation is already running in this conversation. You can work in another conversation in the meantime.')
         missing_context_value = object()
         previous_background_flag = getattr(self._execution_context, "is_background", False)
         previous_policy_snapshot = getattr(self._execution_context, "policy_snapshot", None)
@@ -382,6 +383,11 @@ class MessagingMixin:
             if self.settings.get("prevent_sleep_during_active_task", True):
                 sleep_prevention_active = self._set_system_sleep_prevention(True)
             user_text = str(user_text or "")
+            run_values = getattr(self._execution_context, "run_values", None)
+            if not isinstance(run_values, dict) or "_current_user_language" not in run_values:
+                store = getattr(self, "chat_store", None)
+                user_messages = store.messages(target_session_id) if store and store.has_session(target_session_id) else []
+                self._current_user_language = conversation_language(user_messages, user_text)
             attachments = normalize_attachments(attachments or [])
             if not attachments and (self._is_resume_request(user_text) or (is_background_task and run_id)):
                 resume_checkpoint = self._load_task_checkpoint(
@@ -402,9 +408,9 @@ class MessagingMixin:
                         self._raise_if_cancelled()
                     if resume_checkpoint.get("phase") == "tool_execution" and (resume_checkpoint.get("task_state") or {}).get("checkpoint_mutating_tools"):
                         checkpoint_should_keep = True
-                        return "ERROR_USER: המשימה נקטעה במהלך כלי שמשנה נתונים, ותוצאתו אינה ידועה. יש לבדוק את התוצאה לפני מתן הוראה חדשה; הכלי לא הופעל שוב."
+                        return ui_text(self, 'ERROR_USER: המשימה נקטעה במהלך כלי שמשנה נתונים, ותוצאתו אינה ידועה. יש לבדוק את התוצאה לפני מתן הוראה חדשה; הכלי לא הופעל שוב.', 'ERROR_USER: The task was interrupted during a tool that changes data, and its outcome is unknown. Check the result before giving a new instruction; the tool was not run again.')
                     if self.status_callback:
-                        self.status_callback("ממשיך מהנקודה האחרונה שנשמרה...")
+                        self.status_callback(ui_text(self, 'ממשיך מהנקודה האחרונה שנשמרה...', 'Continuing from the last saved checkpoint...'))
                     self._restore_task_checkpoint_context(resume_checkpoint)
                     user_text = str(resume_checkpoint.get("user_text") or user_text)
                     attachments = normalize_attachments(resume_checkpoint.get("attachments") or [])
@@ -435,13 +441,15 @@ class MessagingMixin:
             if not self._ensure_active_provider_api_key():
                 provider_label = self._provider_display_name(getattr(self, "mode", ""))
                 if normalize_provider_name(getattr(self, "mode", "")) == CODEX_SIGNIN_PROVIDER:
-                    detail = str(getattr(self, "_codex_connection_message", "") or "לא מחובר עם ChatGPT / Codex.")
-                    final_response = f"ERROR_USER: {detail} יש לפתוח את ההגדרות וללחוץ על 'התחבר עם ChatGPT / Codex'."
+                    detail = str(getattr(self, "_codex_connection_message", "") or ui_text(self, 'לא מחובר עם ChatGPT / Codex.', 'Not connected with ChatGPT / Codex.'))
+                    final_response = ui_text(self, f"ERROR_USER: {detail} יש לפתוח את ההגדרות וללחוץ על 'התחבר עם ChatGPT / Codex'.", f"ERROR_USER: {detail} Open Settings and click 'Connect with ChatGPT / Codex'.")
                 else:
-                    final_response = f"ERROR_USER: חסר מפתח API של {provider_label}. הזן מפתח בהגדרות או בחלון שנפתח כדי להמשיך."
+                    final_response = ui_text(self, f'ERROR_USER: חסר מפתח API של {provider_label}. הזן מפתח בהגדרות או בחלון שנפתח כדי להמשיך.', f'ERROR_USER: Missing API key for {provider_label}. Enter a key in Settings or the prompt to continue.')
                 return final_response
             if resume_checkpoint:
-                self.system_prompt = str(resume_checkpoint.get("system_prompt") or getattr(self, "system_prompt", "") or self._load_system_prompt(user_text, log_memory_usage=True))
+                # A resumed run gets current system policy. Saved messages and
+                # tool observations remain exact; only the live system slot changes.
+                self.system_prompt = self._load_system_prompt(user_text, log_memory_usage=True)
             else:
                 self.refresh_extension_catalogs_if_changed(rebuild_prompt=False)
                 self.system_prompt = self._load_system_prompt(user_text, log_memory_usage=True)
@@ -507,6 +515,9 @@ class MessagingMixin:
 
             if resume_checkpoint and isinstance(resume_checkpoint.get("current_messages"), list):
                 current_messages = copy.deepcopy(resume_checkpoint.get("current_messages") or [])
+                if self.mode != "gemini":
+                    current_messages = [item for item in current_messages if item.get("role") != "system"]
+                    current_messages.insert(0, {"role": "system", "content": self.system_prompt})
                 saved_protected_message = resume_checkpoint.get("protected_user_message")
                 protected_user_message = (
                     copy.deepcopy(saved_protected_message)
@@ -597,14 +608,14 @@ class MessagingMixin:
                     self._raise_if_cancelled()
                     break
                 if total_timeout is not None and time.time() - task_started > total_timeout:
-                    final_response = "ERROR_USER: המשימה הופסקה כי עברה את זמן הביצוע הכולל שהוגדר."
+                    final_response = ui_text(self, 'ERROR_USER: המשימה הופסקה כי עברה את זמן הביצוע הכולל שהוגדר.', 'ERROR_USER: The task stopped because it exceeded the configured total execution time.')
                     break
                 iteration += 1
                 self._execution_context.loop_iteration = iteration
                 logging.info(f"--- תחילת לולאה {iteration}/{MAX_ITERATIONS if MAX_ITERATIONS is not None else 'ללא הגבלה'} ---")
 
                 if self.status_callback:
-                    self.status_callback("חושב..." if iteration == 1 else f"חושב... (שלב {iteration})")
+                    self.status_callback(ui_text(self, 'חושב...', 'Thinking...') if iteration == 1 else ui_text(self, f'חושב... (שלב {iteration})', f'Thinking... (step {iteration})'))
                 self._emit_agent_process_event("thinking")
 
                 try:
@@ -618,7 +629,7 @@ class MessagingMixin:
                     if compacted_now:
                         checkpoint("context_compacted")
                         if self.status_callback:
-                            self.status_callback("חושב...")
+                            self.status_callback(ui_text(self, 'חושב...', 'Thinking...'))
                     if getattr(self, "agent_runtime", None):
                         self.agent_runtime.trace("model_request", f"iteration={iteration}, model={current_model}")
                     checkpoint("model_request")
@@ -639,16 +650,18 @@ class MessagingMixin:
                         codex_protocol_repair_streak += 1
                         if self._queue_codex_protocol_repair(current_messages, e, codex_protocol_repair_streak):
                             if self.status_callback:
-                                self.status_callback("Codex החזיר פלט לא תקין; מבקש תיקון…")
+                                self.status_callback(ui_text(self, 'Codex החזיר פלט לא תקין; מבקש תיקון…', 'Codex returned invalid output; requesting a correction…'))
                             checkpoint("codex_protocol_repair")
                             continue
                         final_response = (
                             "ERROR_USER: Codex החזיר שוב פלט כלי בתבנית שגויה גם לאחר בקשות תיקון. "
                             "סמארטי שמר נקודת המשך כדי שלא לאבד את המשימה."
                         )
+                        final_response = ui_text(self, final_response,
+                            "ERROR_USER: Codex kept returning malformed tool output after correction requests. Smarti saved a checkpoint to preserve the task.")
                         checkpoint_should_keep = True
                     elif "CANCELLED_BY_USER" in str(e):
-                        final_response = "הפעולה נעצרה לבקשת המשתמש."
+                        final_response = ui_text(self, "הפעולה נעצרה לבקשת המשתמש.", "The operation stopped at the user's request.")
                     elif (
                         isinstance(e, ApiRequestError)
                         and e.analysis.category == "request_too_large"
@@ -866,17 +879,17 @@ class MessagingMixin:
 
                     if self.status_callback:
                         if parallel and len(selected_calls) > 1:
-                            self.status_callback(f"מפעיל {len(selected_calls)} כלים במקביל...")
+                            self.status_callback(ui_text(self, f'מפעיל {len(selected_calls)} כלים במקביל...', f'Running {len(selected_calls)} tools in parallel...'))
                         else:
                             action = selected_calls[0].get("action", "")
                             if action == "get_tool_info":
                                 info_args = selected_calls[0].get("arguments", {})
                                 self.status_callback(
-                                    "מאתחל טעינה דינמית: "
-                                    f"{info_args.get('tool_name', '')} / {info_args.get('action') or 'full'}..."
+                                    ui_text(self, "מאתחל טעינה דינמית: ", "Loading schema: ")
+                                    + f"{info_args.get('tool_name', '')} / {info_args.get('action') or 'full'}..."
                                 )
                             else:
-                                self.status_callback(f"מפעיל כלי: {action}...")
+                                self.status_callback(ui_text(self, f'מפעיל כלי: {action}...', f'Running tool: {action}...'))
 
                     task_state["checkpoint_mutating_tools"] = any(
                         self._tool_is_mutating_or_control(call.get("action", ""), call.get("arguments") or {})
@@ -915,7 +928,7 @@ class MessagingMixin:
 
                     if any(result.get("feedback") or result.get("output") or result.get("message") for result in results):
                         if self.status_callback:
-                            self.status_callback("מעבד תוצאות...")
+                            self.status_callback(ui_text(self, 'מעבד תוצאות...', 'Processing results...'))
                         self._append_tool_results_feedback(current_messages, tool_turn_text, results)
                         task_state.pop("checkpoint_feedback", None)
                         if skipped_extra_calls:
@@ -934,7 +947,7 @@ class MessagingMixin:
                     if final_messages:
                         final_response = str(final_messages[0])
                         break
-                    final_response = "הפעולה האחרונה הושלמה, אך לא התקבל פלט להמשך."
+                    final_response = ui_text(self, 'הפעולה האחרונה הושלמה, אך לא התקבל פלט להמשך.', 'The last operation completed, but no output was received to continue.')
                     break
 
                 else:
@@ -966,7 +979,7 @@ class MessagingMixin:
                     break
 
             if MAX_ITERATIONS is not None and iteration >= MAX_ITERATIONS and not final_response:
-                final_response = "ERROR_USER: סמארטי ביצע יותר מדי פעולות ברצף והופסק."
+                final_response = ui_text(self, 'ERROR_USER: סמארטי ביצע יותר מדי פעולות ברצף והופסק.', 'ERROR_USER: Smarti stopped after too many consecutive operations.')
 
             self._trace_agent_phase("verification_policy", "main_loop_model_discretion")
             self._raise_if_cancelled()
@@ -998,6 +1011,8 @@ class MessagingMixin:
                     "ERROR_USER: המודל סיים את הבקשה בלי להחזיר תשובה. "
                     "אפשר לנסות שוב; פרטי הריצה נשמרו בלוגים."
                 )
+                final_response = ui_text(self, final_response,
+                    "ERROR_USER: The model finished the request without returning an answer. Try again; run details were saved in the logs.")
 
             if final_response and not final_response.startswith("ERROR_USER"):
                 if self.mode == "gemini":
@@ -1014,8 +1029,8 @@ class MessagingMixin:
             return final_response
         except SmartiCancelled:
             final_response = (
-                "ERROR_USER: המשימה הופסקה כי עברה את זמן הביצוע הכולל שהוגדר."
-                if run_cancel_event.expired.is_set() else "הפעולה נעצרה לבקשת המשתמש."
+                ui_text(self, 'ERROR_USER: המשימה הופסקה כי עברה את זמן הביצוע הכולל שהוגדר.', 'ERROR_USER: The task stopped because it exceeded the configured total execution time.')
+                if run_cancel_event.expired.is_set() else ui_text(self, "הפעולה נעצרה לבקשת המשתמש.", "The operation stopped at the user's request.")
             )
             return final_response
         except Exception as e:
@@ -1028,7 +1043,7 @@ class MessagingMixin:
                 return final_response
             logging.exception("Agent loop crashed unexpectedly inside send_message.")
             checkpoint_should_keep = True
-            final_response = f"ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}"
+            final_response = ui_text(self, f'ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}', f'ERROR_USER: An internal error occurred during the operation. Details were saved in the logs for review.\n{redact_sensitive_text(str(e), self.settings)}')
             return final_response
         finally:
             run_cancel_event.close()

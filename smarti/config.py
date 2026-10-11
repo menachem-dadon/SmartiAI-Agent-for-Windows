@@ -1,5 +1,6 @@
 """Builtin tool schemas and default Smarti settings."""
 from .common import *
+from .prompt_language import CANVAS_ENGLISH as _CANVAS_ENGLISH
 
 
 # ==========================================
@@ -7,60 +8,60 @@ from .common import *
 # ==========================================
 BUILTIN_TOOL_SCHEMAS = {
     "system_command": {
-        "description": "מריץ פקודות PowerShell קצרות. פקודות כתיבה/הרצה מסוכנות דורשות אישור ונחסמות אם הן פוגעות בליבת סמארטי.",
+        "description": "Runs short PowerShell commands. Risky write/execution commands require approval and are blocked if they harm Smarti's core.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "cwd": {"type": "string", "description": "Optional working directory for the command"},
                 "timeout_seconds": {"type": "integer", "description": "Optional timeout override in seconds"},
-                "command": {"type": "string", "description": "הפקודה להרצה"},
-                "require_approval": {"type": "boolean", "description": "האם לבקש מהמשתמש אישור במפורש לפני ההרצה"},
-                "explanation": {"type": "string", "description": "הסבר קצר למשתמש למה הפקודה עושה"}
+                "command": {"type": "string", "description": 'The command to run'},
+                "require_approval": {"type": "boolean", "description": 'Whether to explicitly ask the user for approval before execution'},
+                "explanation": {"type": "string", "description": 'A brief explanation to the user of what the command does'}
             },
             "required": ["command"]
         }
     },
     "create_python_tool": {
-        "description": "יוצר ושומר כלי פייתון גנרי ורב-פעמי למאגר. חובה ליצור קוד כללי שמקבל פרמטרים ולא קוד חד-פעמי למשימה ספציפית.",
+        "description": 'Creates and saves a generic reusable Python tool in the repository. Create general parameterized code, not one-time code for a specific task.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "שם הכלי באנגלית (ללא סיומת)."},
-                "code": {"type": "string", "description": "קוד הפייתון המלא. חובה לכתוב לוגיקה גנרית מבוססת פרמטרים. הסקריפט יקבל אובייקט JSON דרך sys.argv[1]. השתמש ב-print להחזרת תוצאה."},
-                "description": {"type": "string", "description": "חובה להעביר כאן אובייקט JSON Schema תקני ומלא (כמחרוזת String) שמתאר בדיוק את מבנה ה-JSON שהכלי מצפה לקבל (type, description, properties, required)."},
-                "require_approval": {"type": "boolean", "description": "האם הקוד מסוכן ודורש אישור."}
+                "name": {"type": "string", "description": 'The tool name in English (without an extension).'},
+                "code": {"type": "string", "description": 'The complete Python code. Write generic parameterized logic. The script receives a JSON object through sys.argv[1]. Use print to return results.'},
+                "description": {"type": "string", "description": 'Pass a complete standard JSON Schema object here (as a String) describing the exact JSON structure the tool expects (type, description, properties, required).'},
+                "require_approval": {"type": "boolean", "description": 'Whether the code is dangerous and requires approval.'}
             },
             "required": ["name", "code", "description"]
         }
     },
     "search_mcp": {
-        "description": "חיפוש חבילות ויכולות חדשות במאגר ה-MCP העולמי (NPM).",
+        "description": 'Search for new packages and capabilities in the global MCP registry (NPM).',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "מילות חיפוש באנגלית לחבילת ה-MCP הרצויה"}
+                "query": {"type": "string", "description": 'English search terms for the desired MCP package'}
             },
             "required": ["query"]
         }
     },
     "install_mcp": {
-        "description": "התקנת חבילת MCP (שרת) שמוסיפה יכולות חדשות למערכת. חובה להשתמש בגרסה נעולה, למשל package@1.2.3 או @scope/package@1.2.3.",
+        "description": 'Installs an MCP package (server) that adds new capabilities. A pinned version is required, e.g. package@1.2.3 or @scope/package@1.2.3.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "package": {"type": "string", "description": "השם המדויק של החבילה ממאגר NPM כולל גרסה נעולה"}
+                "package": {"type": "string", "description": 'The exact package name from NPM including a pinned version'}
             },
             "required": ["package"]
         }
     },
     "run_mcp": {
-        "description": "מפעיל פונקציה ספציפית מתוך חבילת MCP מותקנת.",
+        "description": 'Runs a specific function from an installed MCP package.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "package": {"type": "string", "description": "שם חבילת ה-MCP המדויק"},
-                "function": {"type": "string", "description": "שם הפונקציה להפעלה מתוך החבילה"},
-                "arguments": {"type": "object", "description": "אובייקט ה-JSON עם הפרמטרים הנדרשים לפונקציה"}
+                "package": {"type": "string", "description": 'The exact MCP package name'},
+                "function": {"type": "string", "description": 'The function name to execute from the package'},
+                "arguments": {"type": "object", "description": 'The JSON object containing the parameters required by the function'}
             },
             "required": ["package", "function"]
         }
@@ -92,85 +93,85 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "analyze_local_image": {
-        "description": "מצרף תמונה מקומית להקשר של לולאת הסוכן הנוכחית. הסוכן מנתח אותה בעצמו בהמשך; אין קריאת AI נפרדת.",
+        "description": 'Attaches a local image to the current agent-loop context. The agent analyzes it itself afterwards; there is no separate AI call.',
         "inputSchema": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "נתיב מלא לקובץ התמונה"}},
+            "properties": {"path": {"type": "string", "description": 'Full path to the image file'}},
             "required": ["path"]
         }
     },
     "schedule_background_task": {
-        "description": "מתזמן פעולה עתידית שתרוץ ברקע באופן עצמאי. ניתן ליצור פעולה חד-פעמית, פעולה מחזורית במרווח דקות, או פעולה שבועית בימים ספציפיים. שים לב: לאחר קריאה לכלי זה, אין לבצע את המשימה עצמה כעת בשיחה הנוכחית; יש רק לדווח למשתמש שהמשימה תוכננה בהצלחה.",
+        "description": 'Schedules a future action to run independently in the background. Supports one-time actions, recurring actions at minute intervals, or weekly actions on specific days. After calling this tool, do not execute the task now in the current conversation; only report that it was successfully scheduled.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "delay_minutes": {"type": "number", "description": "מספר הדקות להמתנה עד להרצה הראשונה"},
-                "prompt": {"type": "string", "description": "ההוראה שיש לבצע כשהזמן יגיע"},
-                "repeat": {"type": "string", "enum": ["once", "interval", "weekly"], "description": "once למשימה חד-פעמית, interval למשימה מחזורית, weekly למשימה שבועית בימים נבחרים"},
-                "interval_minutes": {"type": "number", "description": "מרווח הדקות בין ריצות חוזרות כאשר repeat=interval"},
+                "delay_minutes": {"type": "number", "description": 'Minutes to wait until the first run'},
+                "prompt": {"type": "string", "description": 'The instruction to execute when the time arrives'},
+                "repeat": {"type": "string", "enum": ["once", "interval", "weekly"], "description": 'once for a one-time task, interval for a recurring task, weekly for a task on selected weekdays'},
+                "interval_minutes": {"type": "number", "description": 'Minutes between repeated runs when repeat=interval'},
                 "days_of_week": {
                     "type": "array",
                     "items": {"type": "integer"},
-                    "description": "מערך של מספרים מ-0 (יום שני) עד 6 (יום ראשון) המייצג את ימי השבוע להרצה כאשר repeat=weekly"
+                    "description": 'An array of numbers from 0 (Monday) to 6 (Sunday) specifying execution weekdays when repeat=weekly'
                 },
                 "conversation_mode": {
                     "type": "string",
                     "enum": ["current", "new", "dedicated"],
-                    "description": "אופן ניתוב השיחה: current מחזיר כל הרצה לשיחת המקור שממנה המשימה תוזמנה; new יוצר שיחה חדשה ונקייה בכל הרצה; dedicated יוצר שיחה ייעודית חדשה בהרצה הראשונה ומשתמש בה שוב בכל המחזורים הבאים."
+                    "description": 'Conversation routing: current returns every run to the source conversation where the task was scheduled; new creates a new clean conversation each run; dedicated creates a dedicated conversation on the first run and reuses it for all subsequent cycles.'
                 }
             },
             "required": ["delay_minutes", "prompt"]
         }
     },
     "list_background_tasks": {
-        "description": "מציג את משימות הרקע, סטטוס, זמן ריצה ותוצאה אחרונה.",
+        "description": 'Lists background tasks, status, execution time, and latest result.',
         "inputSchema": {"type": "object", "properties": {}}
     },
     "cancel_background_task": {
-        "description": "מבטל משימת רקע לפי מזהה.",
+        "description": 'Cancels a background task by ID.',
         "inputSchema": {
             "type": "object",
-            "properties": {"id": {"type": "string", "description": "מזהה המשימה"}},
+            "properties": {"id": {"type": "string", "description": 'The task ID'}},
             "required": ["id"]
         }
     },
     "retry_background_task": {
-        "description": "מתזמן מחדש משימת רקע קיימת לפי מזהה.",
+        "description": 'Reschedules an existing background task by ID.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "id": {"type": "string", "description": "מזהה המשימה"},
-                "delay_minutes": {"type": "number", "description": "דקות עד להרצה מחדש"}
+                "id": {"type": "string", "description": 'The task ID'},
+                "delay_minutes": {"type": "number", "description": 'Minutes until the rescheduled run'}
             },
             "required": ["id"]
         }
     },
     "open_software": {
-        "description": "פותח תוכנה מותקנת. אזהרה: נועד רק לפתיחת תוכנות מערכת (כגון Chrome, Word) - לא לקבצים!",
+        "description": 'Opens installed software. Warning: only for opening system applications (such as Chrome, Word), not files!',
         "inputSchema": {
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "שם התוכנה"}},
+            "properties": {"name": {"type": "string", "description": 'The software name'}},
             "required": ["name"]
         }
     },
     "open_file_or_folder": {
-        "description": "הכלי האולטימטיבי לפתיחת קבצים (וידאו, אקסל, תמונות) או תיקיות כדי להציג אותם למשתמש במסך.",
+        "description": 'Opens files (video, Excel, images) or folders to show them to the user on screen.',
         "inputSchema": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "נתיב מלא לקובץ/תיקייה"}},
+            "properties": {"path": {"type": "string", "description": 'Full path to the file/folder'}},
             "required": ["path"]
         }
     },
     "trash_file_or_folder": {
-        "description": "מעביר קובץ או תיקייה לסל המחזור של Windows. מיועד לכל בקשת מחיקה של קבצי משתמש; אינו מוחק לצמיתות.",
+        "description": 'Moves a file or folder to the Windows recycle bin. Use for all user-file deletion requests; it does not delete permanently.',
         "inputSchema": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "נתיב מלא לקובץ או לתיקייה להעברה לסל המחזור"}},
+            "properties": {"path": {"type": "string", "description": 'Full path to a file or folder to move to the recycle bin'}},
             "required": ["path"]
         }
     },
     "list_software": {
-        "description": "מציג את התוכנות המותקנות במחשב.",
+        "description": 'Lists software installed on the computer.',
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -183,7 +184,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "internet_search": {
-        "description": "חיפוש מהיר ועדכני ברשת באמצעות מנוע חיפוש. מחזיר תוצאות מקוונות.",
+        "description": 'Fast, current web search using a search engine. Returns online results.',
         "inputSchema": {
             "type": "object",
             "properties": {"query": {"type": "string"}},
@@ -191,52 +192,52 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "get_weather": {
-        "description": "בודק מזג אוויר ותחזית לכל עיר או מיקום בעולם באמצעות שירותי מזג אוויר פתוחים, ללא מפתח API.",
+        "description": 'Checks weather and forecasts for any city or location worldwide using open weather services, without an API key.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "location": {"type": "string", "description": "שם עיר או מיקום, בעברית או באנגלית"},
-                "days": {"type": "integer", "description": "מספר ימי תחזית להחזיר, 1 עד 7. עבור מחר השתמש ב-2"},
-                "units": {"type": "string", "enum": ["metric", "imperial"], "description": "metric לצלזיוס וקמ״ש, imperial לפרנהייט ומייל לשעה"}
+                "location": {"type": "string", "description": 'City or location name, in Hebrew or English'},
+                "days": {"type": "integer", "description": 'Forecast days to return, 1 to 7. Use 2 for tomorrow'},
+                "units": {"type": "string", "enum": ["metric", "imperial"], "description": 'metric for Celsius and km/h, imperial for Fahrenheit and mph'}
             },
             "required": ["location"]
         }
     },
     "smart_file_search": {
-        "description": "סורק במהירות את המחשב לאיתור קבצים על פי שמם.",
+        "description": 'Quickly scans the computer for files by name.',
         "inputSchema": {
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "שם הקובץ לחיפוש"}},
+            "properties": {"query": {"type": "string", "description": 'The filename to search for'}},
             "required": ["query"]
         }
     },
     "deep_content_search": {
-        "description": "סורק עמוק בתוך קבצי טקסט/קוד בתיקייה מסוימת ומאתר מילות מפתח.",
+        "description": 'Deeply scans text/code files in a given directory for keywords.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "directory": {"type": "string", "description": "התיקייה לסרוק בה"},
-                "text": {"type": "string", "description": "הטקסט לחיפוש בתוך הקבצים"}
+                "directory": {"type": "string", "description": 'The directory to scan'},
+                "text": {"type": "string", "description": 'The text to search for inside files'}
             },
             "required": ["directory", "text"]
         }
     },
     "capture_screen": {
-        "description": "מצלם ומעביר אליך (המודל) את המסך הנוכחי של המשתמש להבנת ההקשר.",
+        "description": "Captures and sends the user's current screen to you (the model) to understand the context.",
         "inputSchema": {
             "type": "object",
             "properties": {}
         }
     },
     "save_screenshot_to_disk": {
-        "description": "שומר תמונת מסך לתיקיית התמונות של המשתמש.",
+        "description": "Saves a screenshot to the user's Pictures directory.",
         "inputSchema": {
             "type": "object",
             "properties": {}
         }
     },
     "set_volume": {
-        "description": "שליטה בהשתקת השמע במחשב.",
+        "description": 'Control computer audio muting.',
         "inputSchema": {
             "type": "object",
             "properties": {"action": {"type": "string", "enum": ["MUTE", "UNMUTE"]}},
@@ -244,7 +245,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "open_in_browser": {
-        "description": "פותח כתובת או מבצע חיפוש בדפדפן הגלוי של המשתמש לצפייה.",
+        "description": "Opens an address or searches in the user's visible browser for viewing.",
         "inputSchema": {
             "type": "object",
             "properties": {"query_or_url": {"type": "string"}},
@@ -253,23 +254,19 @@ BUILTIN_TOOL_SCHEMAS = {
     },
     "get_tool_info": {
         "description": (
-            "שליפת סכמת JSON עבור פעולה מסוימת של כלי מובנה, כלי Python, חבילת MCP או Skill. "
-            "בכל קריאה יש לשלוח tool_name וגם action. השתמש בשם הפעולה/פונקציית MCP המדויקת; "
-            "action='full' (או השמטת action לצורכי תאימות לאחור) מחזיר את הסכמה המלאה כפי שהוחזרה בעבר."
+            "Retrieve a JSON schema for a specific action of a built-in tool, Python tool, MCP package, or Skill. Every call must include tool_name and action. Use the exact action/MCP function name; action='full' (or omitting action for backward compatibility) returns the complete schema as before."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "tool_name": {
                     "type": "string",
-                    "description": "שם הכלי, חבילת ה-MCP או ה-Skill שעבורו נדרשת סכמה.",
+                    "description": 'The tool, MCP package, or Skill name whose schema is needed.',
                 },
                 "action": {
                     "type": "string",
                     "description": (
-                        "הפעולה המדויקת בתוך הכלי, או שם פונקציית MCP. המודל חייב לשלוח שדה זה. "
-                        "הערך full מבקש את הסכמה המלאה; השדה נשאר אופציונלי רק לתאימות לאחור, "
-                        "והשמטתו שקולה ל-full."
+                        'The exact action within the tool, or MCP function name. The model must send this field. full requests the complete schema; the field remains optional only for backward compatibility, and omitting it is equivalent to full.'
                     ),
                 },
             },
@@ -277,7 +274,7 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "search_tools": {
-        "description": "חיפוש בקטלוג הכלים הפעילים של סמארטי, כולל כלים מובנים, כלי Python, חבילות MCP ומיומנויות, לפני בחירה, התקנה או יצירת יכולת.",
+        "description": "Search Smarti's active tool catalog, including built-ins, Python tools, MCP packages, and Skills, before selecting, installing, or creating a capability.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -301,17 +298,17 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "agent_planner": {
-        "description": "כלי פנימי לבקשת תכנון משימה, תכנון המשכי או תכנון מחדש. השתמש בו לפי שיקול דעתך רק כאשר תכנון מפורש ישפר איכות או בטיחות. אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, התוכנית חייבת להתחיל ב-discovery קצר לפני פעולה משנה. ניתן לקרוא שוב לכלי כאשר מידע חדש, שגיאות חוזרות, כשלי אימות או שינויי סביבה מראים שהתוכנית הקודמת כבר אינה מתאימה.",
+        "description": 'Internal tool for requesting task planning, continuation planning, or replanning. Use it at your discretion only when explicit planning improves quality or safety. If the workspace, files, code, windows, system state, tool schema, existing content, or previous result is uncertain, the plan must start with brief discovery before a mutating action. Call again when new information, repeated errors, verification failures, or environmental changes show the previous plan is no longer suitable.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "intent": {"type": "string", "enum": ["initial_plan", "continue_plan", "replan"], "description": "סוג התכנון המבוקש: ראשוני, המשכי, או תכנון מחדש אחרי מידע חדש/כשל."},
-                "reason": {"type": "string", "description": "סיבה קצרה למה המשימה מצדיקה תכנון."},
+                "intent": {"type": "string", "enum": ["initial_plan", "continue_plan", "replan"], "description": 'The requested planning type: initial, continuation, or replanning after new information/failure.'},
+                "reason": {"type": "string", "description": 'A brief reason why the task warrants planning.'},
                 "steps": {"type": "array", "items": {"type": "string"}, "description": "Detailed workflow steps for the agent. Include discovery/setup first when environment, files, UI state, previous output, or tool schema are uncertain. Steps should be operational, not generic."},
                 "verification_points": {"type": "array", "items": {"type": "string"}, "description": "Concrete progress/final checks the agent should perform, including which observable result would prove the step succeeded. Mention tool-based checks when needed."},
                 "contingencies": {"type": "array", "items": {"type": "string"}, "description": "Likely failures or branches and how the agent should react, including when to retry, replan, ask the user, or run discovery/verification tools."},
-                "risk": {"type": "string", "enum": ["low", "medium", "high"], "description": "רמת סיכון משוערת."},
-                "mode": {"type": "string", "enum": ["auto", "use_provided_steps", "ask_planner"], "description": "auto ברירת מחדל; use_provided_steps אם סיפקת צעדים טובים; ask_planner אם צריך Planner פנימי נוסף."}
+                "risk": {"type": "string", "enum": ["low", "medium", "high"], "description": 'Estimated risk level.'},
+                "mode": {"type": "string", "enum": ["auto", "use_provided_steps", "ask_planner"], "description": 'auto is the default; use_provided_steps if you supplied good steps; ask_planner if another internal Planner is needed.'}
             },
             "required": ["reason"]
         }
@@ -394,66 +391,66 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "save_text_file": {
-        "description": "שומר קבצי טקסט בלבד (txt, md, py, csv) לכונן. למסמכים כגון Word, צור קוד פייתון רלוונטי ב-create_python_tool.",
+        "description": 'Saves only text files (txt, md, py, csv) to disk. For documents such as Word, create appropriate Python code with create_python_tool.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "נתיב השמירה (או רק שם הקובץ לשמירה בתיקיית התוצרים)"},
-                "content": {"type": "string", "description": "תוכן הקובץ"}
+                "path": {"type": "string", "description": 'Save path (or just the filename to save in the output directory)'},
+                "content": {"type": "string", "description": 'The file content'}
             },
             "required": ["path", "content"]
         }
     },
     "read_local_document": {
-        "description": "קורא טקסט מקבצים מקומיים (.txt, .csv, .docx, .pdf).",
+        "description": 'Reads text from local files (.txt, .csv, .docx, .pdf).',
         "inputSchema": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "נתיב מלא לקובץ"}},
+            "properties": {"path": {"type": "string", "description": 'Full path to the file'}},
             "required": ["path"]
         }
     },
     "list_skills": {
-        "description": "מציג Skills זמינים, כולל Skills מובנים, מקומיים ו-Skills שהותקנו מ-ClawHub.",
+        "description": 'Lists available Skills, including built-in, local, and ClawHub-installed Skills.',
         "inputSchema": {"type": "object", "properties": {}}
     },
     "search_skills": {
-        "description": "מחפש Skills במאגר ClawHub בלבד. החיפוש מסנן תוצאות חשודות לפי יכולות המאגר.",
+        "description": 'Searches for Skills only on ClawHub. The search filters suspicious results according to registry capabilities.',
         "inputSchema": {
             "type": "object",
-            "properties": {"query": {"type": "string", "description": "נושא או יכולת לחיפוש באנגלית או בעברית"}},
+            "properties": {"query": {"type": "string", "description": 'Topic or capability to search for in English or Hebrew'}},
             "required": ["query"]
         }
     },
     "install_skill": {
-        "description": "מתקין Skill. הסוכן רשאי להתקין רק מ-ClawHub; המשתמש יכול להתקין ידנית מתיקייה מקומית אם אישר זאת.",
+        "description": 'Installs a Skill. The agent may install only from ClawHub; the user may manually install from a local directory if authorized.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "source": {"type": "string", "enum": ["clawhub", "local"], "description": "clawhub להתקנה מהמאגר המאושר; local להתקנה מתיקייה שהמשתמש בחר"},
-                "id": {"type": "string", "description": "מזהה/slug/שם ה-Skill ב-ClawHub"},
-                "path": {"type": "string", "description": "נתיב לתיקיית Skill מקומית כאשר source=local"}
+                "source": {"type": "string", "enum": ["clawhub", "local"], "description": 'clawhub to install from the approved registry; local to install from a user-selected directory'},
+                "id": {"type": "string", "description": 'The Skill identifier/slug/name on ClawHub'},
+                "path": {"type": "string", "description": 'Path to a local Skill directory when source=local'}
             },
             "required": ["source"]
         }
     },
     "install_skill_requirements": {
-        "description": "מתקין דרישות חיצוניות מוצהרות של Skill, כגון CLI או חבילת Python, רק לאחר אישור משתמש.",
+        "description": 'Installs declared external Skill requirements, such as a CLI or Python package, only after user approval.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "שם ה-Skill שעבורו מתקינים דרישות"},
-                "reason": {"type": "string", "description": "הסבר קצר למה ההתקנה נדרשת"}
+                "name": {"type": "string", "description": 'The name of the Skill whose requirements are being installed'},
+                "reason": {"type": "string", "description": 'A brief explanation of why installation is needed'}
             },
             "required": ["name"]
         }
     },
     "run_skill": {
-        "description": "מפעיל Skill גבוה/תהליכי. לפני שימוש יש לשלוף סכמה דרך get_tool_info עם שם ה-Skill ו-action של הפעולה הפנימית שלו, או full אם אין לו שדה פעולה.",
+        "description": 'Runs a high-level/workflow Skill. Before use, retrieve its schema through get_tool_info with the Skill name and its internal action as action, or full if it has no action field.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "שם ה-Skill להפעלה"},
-                "arguments": {"type": "object", "description": "קלט מובנה לפי סכמת ה-Skill"}
+                "name": {"type": "string", "description": 'The name of the Skill to run'},
+                "arguments": {"type": "object", "description": 'Structured input according to the Skill schema'}
             },
             "required": ["name"]
         }
@@ -482,11 +479,11 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "update_memory": {
-        "description": "מעדכן את הזיכרון ארוך הטווח באופן מפורש ומבוקר. אין להשתמש בסימני טקסט חופשי לעדכון זיכרון.",
+        "description": 'Updates long-term memory explicitly and in a controlled manner. Do not use free-text markers to update memory.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "הזיכרון החדש לשמירה"},
+                "content": {"type": "string", "description": 'The new memory to save'},
                 "mode": {"type": "string", "enum": ["replace", "append", "clear"], "description": "replace מחליף, append מוסיף, clear מוחק"}
                 ,"mode": {"type": "string", "enum": ["add", "append", "replace", "clear", "forget"], "description": "add/append saves, replace replaces a memory type, clear removes memories, forget removes by id"},
                 "memory_type": {"type": "string", "enum": ["short_term", "long_term", "tool", "user"], "description": "Memory bucket. Default long_term."},
@@ -500,37 +497,37 @@ BUILTIN_TOOL_SCHEMAS = {
         }
     },
     "git_status": {
-        "description": "מריץ פעולות Git קריאה בלבד בתיקייה: status, diff, log או show.",
+        "description": 'Runs read-only Git actions in a directory: status, diff, log, or show.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "תיקיית repository"},
-                "operation": {"type": "string", "enum": ["status", "diff", "log", "show"], "description": "פעולת Git קריאה בלבד"},
-                "ref": {"type": "string", "description": "ref אופציונלי עבור show/log"}
+                "path": {"type": "string", "description": 'Repository directory'},
+                "operation": {"type": "string", "enum": ["status", "diff", "log", "show"], "description": 'Read-only Git action'},
+                "ref": {"type": "string", "description": 'Optional ref for show/log'}
             },
             "required": ["path", "operation"]
         }
     },
     "run_project_check": {
-        "description": "מריץ פקודת בדיקה/Build מוגבלת בפרויקט, עם אישור לפי מדיניות.",
+        "description": 'Runs a limited project test/build command, with approval according to policy.',
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "תיקיית הפרויקט"},
-                "command": {"type": "string", "description": "פקודת בדיקה כגון pytest, npm test, python -m pytest או npm run build"}
+                "path": {"type": "string", "description": 'Project directory'},
+                "command": {"type": "string", "description": 'A test command such as pytest, npm test, python -m pytest, or npm run build'}
             },
             "required": ["path", "command"]
         }
     },
     "list_processes": {
-        "description": "מציג רשימת תהליכים פעילים באופן קריאה בלבד.",
+        "description": 'Lists active processes in read-only mode.',
         "inputSchema": {"type": "object", "properties": {}}
     },
     "set_clipboard": {
-        "description": "מעתיק טקסט ללוח הגזירים של Windows.",
+        "description": 'Copies text to the Windows clipboard.',
         "inputSchema": {
             "type": "object",
-            "properties": {"text": {"type": "string", "description": "הטקסט להעתקה"}},
+            "properties": {"text": {"type": "string", "description": 'The text to copy'}},
             "required": ["text"]
         }
     },
@@ -538,36 +535,36 @@ BUILTIN_TOOL_SCHEMAS = {
 }
 
 BUILTIN_DYNAMIC_TOOLS = {
-    "read_website": "קורא עמוד אינטרנט או זוחל אתר שלם בצורה מבוקרת.",
-    "analyze_local_image": "ראייה ממוחשבת לקובץ מקומי.",
-    "schedule_background_task": "תזמון פעולה מחזורית.",
-    "list_background_tasks": "הצגת משימות רקע.",
-    "cancel_background_task": "ביטול משימת רקע.",
-    "retry_background_task": "הרצה מחדש של משימת רקע.",
-    "open_software": "פתיחת תוכנה (למשל Chrome, Word).",
-    "open_file_or_folder": "פותח קובץ או תיקייה באמצעות ברירת מחדל.",
-    "list_software": "הצגת תוכנות מותקנות.",
-    "get_weather": "מזג אוויר ותחזית גנרית לכל עיר או מיקום.",
-    "smart_file_search": "סורק מהיר לאיתור קבצים לפי שם.",
-    "deep_content_search": "חיפוש עמוק של טקסט בתוך קבצים.",
-    "capture_screen": "צילום מסך והקשר חזותי.",
-    "save_screenshot_to_disk": "שמירת צילום מסך כקובץ.",
-    "set_volume": "השתקת השמע.",
+    "read_website": 'Reads a web page or crawls an entire website in a controlled manner.',
+    "analyze_local_image": 'Computer vision for a local file.',
+    "schedule_background_task": 'Schedule a recurring action.',
+    "list_background_tasks": 'List background tasks.',
+    "cancel_background_task": 'Cancel a background task.',
+    "retry_background_task": 'Reschedule a background task.',
+    "open_software": 'Open an application (e.g. Chrome, Word).',
+    "open_file_or_folder": 'Opens a file or folder with its default application.',
+    "list_software": 'List installed software.',
+    "get_weather": 'Generic weather and forecasts for any city or location.',
+    "smart_file_search": 'Quick scanner to locate files by name.',
+    "deep_content_search": 'Deep search for text inside files.',
+    "capture_screen": 'Screen capture and visual context.',
+    "save_screenshot_to_disk": 'Save a screenshot as a file.',
+    "set_volume": 'Mute audio.',
     "email_manager": "Full email access through IMAP/SMTP. Use it for every email task: search/read by UID, send/draft/reply/forward, styled RTL/HTML messages, flags, archive/trash/delete/move/copy, folders, attachments. For Hebrew display-name searches use `from`, `subject_filter`, or `query`; auto mode falls back to local header scan. Use `count: 0` for all matches and preserve each result's `mailbox` when reading.",
     "browser_automation_manager": "Structured control of Smarti's embedded persistent browser through Playwright/CDP: stable tabs, accessibility snapshots/ref maps, act by ref, screenshots/PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
     "computer_automation_manager": "מנהל שליטה במחשב דרך Windows UI Automation (`auto`) ובמידת הצורך מקלדת/עכבר (`pa`).",
-    "read_local_document": "קריאת טקסט מקבצי מסמכים.",
-    "run_mcp": "הפעלת פונקציות מכלים חיצוניים שהותקנו.",
-    "list_skills": "הצגת Skills זמינים.",
-    "search_skills": "חיפוש Skills ב-ClawHub.",
-    "install_skill": "התקנת Skill.",
-    "install_skill_requirements": "התקנת דרישות חיצוניות של Skill.",
-    "load_skill": "טעינת הוראות Skill.",
-    "run_skill": "הרצת Skill.",
-    "git_status": "Git קריאה בלבד: status, diff, log, show.",
-    "run_project_check": "הרצת בדיקות או build בפרויקט תחת מדיניות.",
-    "list_processes": "הצגת תהליכים פעילים.",
-    "set_clipboard": "העתקת טקסט ללוח הגזירים.",
+    "read_local_document": 'Read text from document files.',
+    "run_mcp": 'Execute functions from installed external tools.',
+    "list_skills": 'List available Skills.',
+    "search_skills": 'Search for Skills on ClawHub.',
+    "install_skill": 'Install a Skill.',
+    "install_skill_requirements": "Install a Skill's external requirements.",
+    "load_skill": 'Load Skill instructions.',
+    "run_skill": 'Run a Skill.',
+    "git_status": 'Read-only Git: status, diff, log, show.',
+    "run_project_check": 'Run project tests or a build under policy.',
+    "list_processes": 'List active processes.',
+    "set_clipboard": 'Copy text to the clipboard.',
   }
 
 BUILTIN_TOOL_SCHEMAS["computer_automation_manager"] = {
@@ -1180,32 +1177,9 @@ BUILTIN_TOOL_SCHEMAS["extension_manager"] = {
     }
 }
 
-CANVAS_MANAGER_MODEL_GUIDANCE = """
-חוזה שימוש לקנבס חזותי חי:
-1. ברירת המחדל היא תשובת צ'אט רגילה. השתמש בקנבס רק לבקשה מפורשת לקנבס/לוח/דשבורד/טופס/תרשים/מצגת/ממשק אינטראקטיבי, או כאשר אינטראקציה אמיתית אינה מתאימה לבועת צ'אט. אל תיצור קנבס לברכה, תשובה רגילה, סיכום קצר, רשימה, טבלת Markdown או עדכון סטטוס.
-2. כאשר קנבס מתאים, אסוף את המידע ובנה אותו אוטומטית לפני התשובה הסופית: לחיצה של המשתמש על הכפתור אחר כך רק פותחת את הקנבס שכבר נשמר, ואינה פותחת סבב מודל או צורכת טוקנים.
-3. ממשק הכלי קצר ומדויק: `canvas_manager` מקבל שדות עליונים בלבד — `action` (`create`/`update`/`close`), `canvas_id` לעדכון או סגירה, `title`, `html`, ואופציונלית `css`, `javascript`, `buttons`, `images`. ב-`create` חובה `action:"create"`, `title` ו-`html`; אין לעטוף אותם ב-`data`, `content` או אובייקט אחר. ב-`update` השתמש ב-`canvas_id` הפעיל ובתוכן המלא המעודכן. אין צורך לבקש `get_tool_info` בשביל פעולה רגילה זו. כל טקסט שמוצג למשתמש — דיווחי התקדמות, כותרות הקנבס והתשובה — יישאר בשפת המשתמש; בשיחה עברית כתוב עברית. שאילתות חיפוש וקוד יכולים להיות באנגלית כשנחוץ.
-4. הממשק מוסיף בעצמו כפתור מעוצב מתחת להודעה אחרי יצירה מוצלחת. אל תנסה ליצור פקד Markdown או קישור `canvas://`; מותר בהחלט לכתוב משפט טבעי המזמין את המשתמש לפתוח את הקנבס. אם יש כבר קנבס מתאים, עדכן אותו במקום ליצור עותק; צור קנבס נוסף רק כאשר המשתמש ביקש תוצר נפרד.
-5. איכות חזותית היא חלק מהתוצר, לא קישוט: אל תסתפק בטבלה שטוחה. בנה חוויית editorial / product עדכנית עם היררכיה ברורה, פתיח בעל מסר, כרטיסי תוכן, צבעים וטיפוגרפיה עקביים, רווח לבן, מצבי hover/focus ומבנה רספונסיבי. צור סיפור חזותי המתאים לנושא עם מבט־על, ניווט, פרטים והרחבה.
-6. השתמש בגילוי הדרגתי ובפקדים רק כשהם משרתים את התוכן: טאבים, מסננים, אקורדיונים, תפריטי בחירה, מתגים, סליידרים, timeline או תצוגת־פרטים. כל פקד חייב לשנות מצב או תוכן בפועל; אל תייצר פקדי־דמה. שמור על נגישות, RTL כשהתוכן עברי, וניווט מקלדת בסיסי.
-7. אם המשתמש לא ביקש קנבס אך למשימה יש ערך חזותי או אינטראקטיבי גבוה וברור, מותר להציע פעם אחת ובמשפט קצר הדגמה חזותית. הצע רק כשיש תועלת קונקרטית מעבר לצ'אט, יש מספיק תוכן להדגמה, וההצעה טבעית להמשך השיחה. אל תציע עבור הודעות שגרתיות, תשובות קצרות, או אחרי שהמשתמש כבר סירב; אל תחזור על אותה הצעה באותה משימה. צור קנבס במקרה זה רק אחרי הסכמה מפורשת של המשתמש.
-8. HTML/CSS/JavaScript מקומיים ועצמאיים בלבד: אין CDN, הורדות, חלונות חדשים או גישה למערכת. לתמונות השתמש ב-SVG מקומי בתוך HTML או ב-`images` עם `data_url` מסוג `data:image/...`, שאליו מפנים כ-`smarti-image://<id>`. URL של תמונת רשת מותר רק אם ההנחיה הפעילה מאשרת זאת במפורש. פעולת משתמש בתוך הקנבס נשלחת רק מ-event אמיתי באמצעות `window.SmartiCanvas.send(action, data)`.
-9. גבול אימות מחייב: עד שהתשובה הסופית נשלחת, כפתור פתיחת הקנבס עדיין לא נוסף והקנבס אינו מוצג. לכן אל תנסה לפתוח אותו, לצלם אותו, או לאמת אותו חזותית באמצעות `screen_manager`, `browser_automation_manager`, `computer_automation_manager` או כלי צילום/מסך אחר. לפני הקריאה ל-`canvas_manager`, בדוק את ה-HTML/CSS/JavaScript הגולמיים, מבנה התוכן, RTL, נגישות בסיסית והפקדים. אחרי תשובת SUCCESS של create/update, התייחס לקבלת המקור ולשמירתו כהשלמת האימות האפשרי בשלב זה וסיים בתשובה סופית. אימות חזותי אפשרי רק בסבב מאוחר יותר, אחרי שהמשתמש פתח את הקנבס וביקש במפורש לבדוק אותו.
-10. בתשובה הסופית תאר בקצרה מה נבנה, בלי להדפיס HTML או JavaScript.
-""".strip()
+CANVAS_MANAGER_MODEL_GUIDANCE = _CANVAS_ENGLISH["full"]
 
-CANVAS_MANAGER_COMPACT_GUIDANCE = """
-קנבס הוא תוצר חזותי/אינטראקטיבי אופציונלי, לא ברירת מחדל. צור אותו לבקשה מפורשת
-לקנבס/לוח/דשבורד/טופס/תרשים/ממשק, או רק כשבועת צ'אט אינה יכולה לבטא היטב את
-האינטראקציה; אחרת ענה בצ'אט. אם רק נראה שעשוי להועיל, הצע פעם אחת וצור רק אחרי
-הסכמה. הקריאה הישירה היא `canvas_manager` עם action create/update/close ושדות עליונים
-title/html/css/javascript/buttons/images; אין צורך ב-get_tool_info לשימוש רגיל.
-בנה HTML/CSS/JS מקומיים, נגישים, רספונסיביים ו-RTL לפי הצורך, עם היררכיה ופקדים
-אמיתיים—not פקדי דמה. אין CDN, הורדות, חלונות חדשים או גישת מערכת; תמונות לפי מדיניות
-התמונות הפעילה. אמת את המקור, התוכן והפקדים לפני הקריאה. באותו סבב אין עדיין תצוגה
-או כפתור פתיחה, ולכן אסור לבקש צילום מסך/אימות חזותי; SUCCESS מאשר שמירת המקור.
-התשובה הסופית מתארת בקצרה מה נבנה ואינה מדפיסה קוד.
-""".strip()
+CANVAS_MANAGER_COMPACT_GUIDANCE = _CANVAS_ENGLISH["compact"]
 
 BUILTIN_TOOL_SCHEMAS["canvas_manager"] = {
     "description": (
@@ -1925,7 +1899,6 @@ TOOL_CATEGORIES = {
 BUILT_IN_TOOLS = list(BUILTIN_TOOL_SCHEMAS.keys())
 
 DEFAULT_SETTINGS = {
-    "system_prompt_language": "en",
     "settings_schema_version": SETTINGS_SCHEMA_VERSION,
     "autonomy_mode": "balanced",
     "api_mode": "gemini",

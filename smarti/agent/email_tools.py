@@ -1048,4 +1048,4 @@ class EmailToolsMixin:
         except SmartiCancelled:
             raise
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'

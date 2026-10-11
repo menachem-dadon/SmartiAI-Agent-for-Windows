@@ -39,10 +39,10 @@ class _JsonResponse:
         return self._payload
 
 
-def _prompt_core(active_tools, language="he"):
+def _prompt_core(active_tools, language="en"):
     core = SmartiCore.__new__(SmartiCore)
     core.settings = copy.deepcopy(DEFAULT_SETTINGS)
-    # These assertions retain coverage of the original Hebrew fallback contracts.
+    # The legacy preference is retained only to verify it cannot change system language.
     core.settings["system_prompt_language"] = language
     core.settings["api_mode"] = "openai_codex_signin"
     core.settings["enable_visual_surfaces"] = True
@@ -89,7 +89,7 @@ class ContextEfficiencyTests(unittest.TestCase):
 
         self.assertIn("action", schema["properties"])
         self.assertEqual(schema["required"], ["tool_name"])
-        self.assertIn("המודל חייב לשלוח", schema["properties"]["action"]["description"])
+        self.assertIn("The model must send", schema["properties"]["action"]["description"])
 
     def test_get_tool_info_missing_or_full_returns_the_original_full_schema(self):
         core = _prompt_core({"get_tool_info", "file_manager"})
@@ -98,7 +98,7 @@ class ContextEfficiencyTests(unittest.TestCase):
         explicit_full = core.get_tool_info("file_manager", "full")
 
         self.assertEqual(legacy, explicit_full)
-        self.assertIn("סכמת JSON חוקית ומלאה", legacy)
+        self.assertIn("Valid complete JSON schema", legacy)
         self.assertIn('"operations"', legacy)
 
     def test_get_tool_info_returns_a_small_action_scoped_schema(self):
@@ -163,8 +163,8 @@ class ContextEfficiencyTests(unittest.TestCase):
 
         prompt = core._load_system_prompt("מצא קובץ")
 
-        self.assertIn("בכל קריאת `get_tool_info` חובה לשלוח גם `tool_name` וגם `action`", prompt)
-        self.assertIn("השמטת action עדיין מחזירה את הסכמה המלאה", prompt)
+        self.assertIn("Every `get_tool_info` call must include both `tool_name` and `action`", prompt)
+        self.assertIn("omitting action still returns the full schema", prompt)
 
     def test_local_fast_mode_halves_the_fixed_contract_without_hiding_capabilities(self):
         active = set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner"}
@@ -183,15 +183,15 @@ class ContextEfficiencyTests(unittest.TestCase):
         self.assertLess(len(fast_prompt), len(normal_prompt) * 0.60)
         self.assertIn("<smarti_memory>", normal_prompt)
         self.assertIn('"operations":[]', normal_prompt)
-        self.assertIn("כתובת, טלפון, דוא״ל", normal_prompt)
-        self.assertIn("חובה להחזיר פעולת add/update/delete", normal_prompt)
-        self.assertIn("אסור להשתמש במבנה {\"add\":{...}}", normal_prompt)
+        self.assertIn("Addresses, phone numbers, email", normal_prompt)
+        self.assertIn("appropriate add/update/delete operation", normal_prompt)
+        self.assertIn("Do not use the structure {\"add\":{...}}", normal_prompt)
         self.assertIn("recall_policy=always|relevant", normal_prompt)
         self.assertIn("retrieval_hints", normal_prompt)
-        self.assertNotIn("מידע רגיש אחר מותר רק בעקבות בקשת משתמש מפורשת", normal_prompt)
+        self.assertNotIn("Other sensitive information is allowed only after an explicit user request", normal_prompt)
         self.assertNotIn("<smarti_memory>", fast_prompt)
         self.assertNotIn('"operations":[]', fast_prompt)
-        self.assertIn("FastMode פעיל", fast_prompt)
+        self.assertIn("FastMode is active", fast_prompt)
         self.assertIn("`get_tool_info` schema", fast_prompt)
         self.assertIn("`search_tools` schema", fast_prompt)
         self.assertIn("action=full", fast_prompt)
@@ -209,7 +209,7 @@ class ContextEfficiencyTests(unittest.TestCase):
         core.mode = "openai"
 
         self.assertFalse(core._local_fast_mode_enabled())
-        self.assertNotIn("FastMode פעיל", core._load_system_prompt("שלום"))
+        self.assertNotIn("FastMode is active", core._load_system_prompt("שלום"))
 
     def test_disabling_memory_removes_the_model_memory_contract(self):
         core = _prompt_core({"get_tool_info", "memory_manager"})
@@ -256,10 +256,11 @@ class ContextEfficiencyTests(unittest.TestCase):
         self.assertNotIn("`background_task_manager`", prompt)
         self.assertNotIn("`notification_manager`", prompt)
         self.assertNotIn("sefaria-mcp-server", prompt)
-        self.assertNotIn("למזג אוויר ותחזית השתמש קודם", prompt)
-        self.assertNotIn("אל תשתמש ב-`agent_planner` לברכה", prompt)
+        self.assertNotIn("For weather and forecasts use first", prompt)
+        self.assertNotIn("Do not use `agent_planner` for a greeting", prompt)
         self.assertIn("Available Skills Catalog", prompt)
-        self.assertLess(len(prompt), 18000)
+        # English needs more characters; keep the compact base contract bounded.
+        self.assertLess(len(prompt), 20000)
 
     def test_background_routing_policy_explains_all_three_conversation_contracts(self):
         core = _prompt_core({"background_task_manager"})
@@ -269,9 +270,9 @@ class ContextEfficiencyTests(unittest.TestCase):
             "inputSchema"
         ]["properties"]["conversation_mode"]["description"]
 
-        self.assertIn("שיחת המקור שממנה תוזמנה המשימה", prompt)
-        self.assertIn("שיחה חדשה בכל מחזור", prompt)
-        self.assertIn("שיחה ייעודית תיווצר בהרצה הראשונה", prompt)
+        self.assertIn("source conversation where it was scheduled", prompt)
+        self.assertIn("new conversation each cycle", prompt)
+        self.assertIn("dedicated conversation is created on the first run", prompt)
         self.assertIn("not whichever chat is active later", schema_description)
 
     def test_canvas_uses_compact_base_policy_but_full_policy_remains_on_demand(self):
@@ -287,9 +288,9 @@ class ContextEfficiencyTests(unittest.TestCase):
         prompt = core._load_system_prompt("בנה דשבורד")
         info = core.get_tool_info("canvas_manager")
 
-        self.assertIn("קנבס הוא תוצר חזותי/אינטראקטיבי אופציונלי", prompt)
-        self.assertNotIn("אינה פותחת סבב מודל", prompt)
-        self.assertIn("אינה פותחת סבב מודל", info)
+        self.assertIn("Canvas is an optional visual/interactive artifact", prompt)
+        self.assertNotIn("without a model round", prompt)
+        self.assertIn("without a model round", info)
 
     def test_codex_microtasks_do_not_receive_the_agent_contract(self):
         provider = CodexSignInProvider.__new__(CodexSignInProvider)
@@ -511,9 +512,9 @@ class ContextEfficiencyTests(unittest.TestCase):
             for item in core._native_tool_specs_for_request()
         }
 
-        self.assertIn("אימות הוא מדיניות בתוך לולאת העבודה", prompt)
-        self.assertIn("אחרי יצירת קובץ קרא או אתר אותו", prompt)
-        self.assertIn("אם בדיקה נכשלת", prompt)
+        self.assertIn("Verification is a policy within the work loop", prompt)
+        self.assertIn("after creating a file, read or locate it", prompt)
+        self.assertIn("If a check fails", prompt)
         self.assertNotIn("agent_verifier", prompt)
         self.assertNotIn("agent_verifier", native_names)
         self.assertTrue({"system_manager", "file_manager", "web_manager"}.issubset(native_names))

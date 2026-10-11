@@ -1,6 +1,8 @@
 """Shared imports for SmartiCore domain mixins."""
 from ..common import *
 from ..config import *
+from ..user_language import user_text as ui_text
+from ..prompt_language import model_error_text
 from ..managers import *
 from ..history import ChatSessionStore, DEFAULT_CHAT_TITLE, DEFAULT_WELCOME_MESSAGE
 from ..attachments import *

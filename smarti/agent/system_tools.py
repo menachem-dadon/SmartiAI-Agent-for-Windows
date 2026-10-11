@@ -7,38 +7,38 @@ class SystemToolsMixin:
         try:
             code = int(code)
         except Exception:
-            return "לא ידוע"
+            return 'Unknown'
         mapping = {
-            0: "שמיים בהירים",
-            1: "בהיר ברובו",
-            2: "מעונן חלקית",
-            3: "מעונן",
-            45: "ערפל",
-            48: "ערפל קופא",
-            51: "טפטוף קל",
-            53: "טפטוף בינוני",
-            55: "טפטוף חזק",
-            56: "טפטוף קופא קל",
-            57: "טפטוף קופא חזק",
-            61: "גשם קל",
-            63: "גשם בינוני",
-            65: "גשם חזק",
-            66: "גשם קופא קל",
-            67: "גשם קופא חזק",
-            71: "שלג קל",
-            73: "שלג בינוני",
-            75: "שלג חזק",
-            77: "גרגרי שלג",
-            80: "ממטרים קלים",
-            81: "ממטרים בינוניים",
-            82: "ממטרים חזקים",
-            85: "ממטרי שלג קלים",
-            86: "ממטרי שלג חזקים",
-            95: "סופת רעמים",
-            96: "סופת רעמים עם ברד קל",
-            99: "סופת רעמים עם ברד חזק",
+            0: 'Clear skies',
+            1: 'Mainly clear',
+            2: 'Partly cloudy',
+            3: 'Overcast',
+            45: 'Fog',
+            48: 'Freezing fog',
+            51: 'Light drizzle',
+            53: 'Moderate drizzle',
+            55: 'Dense drizzle',
+            56: 'Light freezing drizzle',
+            57: 'Dense freezing drizzle',
+            61: 'Light rain',
+            63: 'Moderate rain',
+            65: 'Heavy rain',
+            66: 'Light freezing rain',
+            67: 'Heavy freezing rain',
+            71: 'Light snow',
+            73: 'Moderate snow',
+            75: 'Heavy snow',
+            77: 'Snow grains',
+            80: 'Light rain showers',
+            81: 'Moderate rain showers',
+            82: 'Heavy rain showers',
+            85: 'Light snow showers',
+            86: 'Heavy snow showers',
+            95: 'Thunderstorm',
+            96: 'Thunderstorm with light hail',
+            99: 'Thunderstorm with heavy hail',
         }
-        return mapping.get(code, f"קוד מזג אוויר {code}")
+        return mapping.get(code, f'Weather code {code}')
 
     def _get_json_with_curl_fallback(self, url, params=None, headers=None, timeout=20):
         params = params or {}
@@ -126,19 +126,17 @@ class SystemToolsMixin:
                 timeout=self._timeout("network_timeout_seconds", 20)
             )
             unit_temp = data.get("current_units", {}).get("temperature_2m", "°C" if units != "imperial" else "°F")
-            unit_wind = data.get("current_units", {}).get("wind_speed_10m", "קמ״ש" if units != "imperial" else "mph")
+            unit_wind = data.get("current_units", {}).get("wind_speed_10m", 'km/h' if units != "imperial" else "mph")
             place_name = place.get("display") or location
             current = data.get("current", {}) or {}
             lines = [
                 "WEATHER_FORECAST",
-                f"מיקום: {place_name or location}",
-                "מקור: Open-Meteo",
+                f'Location: {place_name or location}',
+                'Source: Open-Meteo',
             ]
             if current:
                 lines.append(
-                    f"עכשיו ({current.get('time', '')}): {current.get('temperature_2m')} {unit_temp}, "
-                    f"{self._weather_code_text(current.get('weather_code'))}, "
-                    f"לחות {current.get('relative_humidity_2m')}%, רוח {current.get('wind_speed_10m')} {unit_wind}"
+                    f"Current ({current.get('time', '')}): {current.get('temperature_2m')} {unit_temp}, {self._weather_code_text(current.get('weather_code'))}, humidity {current.get('relative_humidity_2m')}%, wind {current.get('wind_speed_10m')} {unit_wind}"
                 )
             daily = data.get("daily", {}) or {}
             dates = daily.get("time", []) or []
@@ -147,19 +145,19 @@ class SystemToolsMixin:
             codes = daily.get("weather_code", []) or []
             pops = daily.get("precipitation_probability_max", []) or []
             if dates:
-                lines.append("תחזית יומית:")
+                lines.append('Daily forecast:')
                 for idx, day in enumerate(dates[:days]):
                     hi = maxs[idx] if idx < len(maxs) else "?"
                     lo = mins[idx] if idx < len(mins) else "?"
                     code = codes[idx] if idx < len(codes) else None
                     pop = pops[idx] if idx < len(pops) else "?"
-                    lines.append(f"- {day}: {self._weather_code_text(code)}, {lo}-{hi} {unit_temp}, סיכוי משקעים {pop}%")
+                    lines.append(f'- {day}: {self._weather_code_text(code)}, {lo}-{hi} {unit_temp}, precipitation probability {pop}%')
             return "\n".join(lines)
         except Exception as e:
             try:
                 return self._weather_wttr_fallback(location, days, units)
             except Exception as e2:
-                return f"ERROR: Weather lookup failed: {e}; fallback failed: {e2}"
+                return f'ERROR: Weather lookup failed: {model_error_text(e)}; fallback failed: {e2}'
 
     def _weather_wttr_fallback(self, location, days=2, units="metric"):
         query = urllib.parse.quote(location.replace(" ", "+"), safe="+")
@@ -171,23 +169,23 @@ class SystemToolsMixin:
         temp_key = "temp_F" if str(units).lower() == "imperial" else "temp_C"
         wind_key = "windspeedMiles" if str(units).lower() == "imperial" else "windspeedKmph"
         unit_temp = "°F" if str(units).lower() == "imperial" else "°C"
-        unit_wind = "mph" if str(units).lower() == "imperial" else "קמ״ש"
+        unit_wind = "mph" if str(units).lower() == "imperial" else 'km/h'
         lines = [
             "WEATHER_FORECAST",
-            f"מיקום: {area}",
-            "מקור: wttr.in",
-            f"עכשיו: {current.get(temp_key)} {unit_temp}, {((current.get('weatherDesc') or [{}])[0]).get('value', '')}, לחות {current.get('humidity')}%, רוח {current.get(wind_key)} {unit_wind}",
+            f'Location: {area}',
+            'Source: wttr.in',
+            f"Current: {current.get(temp_key)} {unit_temp}, {(current.get('weatherDesc') or [{}])[0].get('value', '')}, humidity {current.get('humidity')}%, wind {current.get(wind_key)} {unit_wind}",
         ]
         weather_days = data.get("weather") or []
         if weather_days:
-            lines.append("תחזית יומית:")
+            lines.append('Daily forecast:')
             for item in weather_days[:max(1, min(7, int(days or 2)))]:
                 hi = item.get("maxtempF" if str(units).lower() == "imperial" else "maxtempC")
                 lo = item.get("mintempF" if str(units).lower() == "imperial" else "mintempC")
                 hourly = item.get("hourly") or [{}]
                 desc = ((hourly[len(hourly)//2].get("weatherDesc") or [{}])[0]).get("value", "")
                 pop = hourly[len(hourly)//2].get("chanceofrain", "?")
-                lines.append(f"- {item.get('date')}: {desc}, {lo}-{hi} {unit_temp}, סיכוי גשם {pop}%")
+                lines.append(f"- {item.get('date')}: {desc}, {lo}-{hi} {unit_temp}, rain probability {pop}%")
         return "\n".join(lines)
 
     def _skill_requirement_install_target(self, cmd):
@@ -231,7 +229,7 @@ class SystemToolsMixin:
         exe = tokens[0].strip("\"'")
         args = [t.strip("\"'") for t in tokens[1:]]
         subprocess.Popen([exe] + args, env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
-        return f"SUCCESS: הופעל יישום GUI בלי להמתין לסגירתו: {exe}"
+        return f'SUCCESS: Launched a GUI application without waiting for it to close: {exe}'
 
     def run_system_command(self, params, cwd=None, timeout_seconds=None):
         cmd = str(params[0]).strip() if params else ""
@@ -248,7 +246,7 @@ class SystemToolsMixin:
             try:
                 return self._run_detached_gui_command(cmd)
             except Exception as e:
-                return f"ERROR: Failed to launch GUI app: {e}"
+                return f'ERROR: Failed to launch GUI app: {model_error_text(e)}'
         if re.match(r'(?i)^\s*curl\s+', cmd):
             cmd = re.sub(r'(?i)^\s*curl\s+', 'curl.exe ', cmd, count=1)
         try:
@@ -271,7 +269,7 @@ class SystemToolsMixin:
         except subprocess.TimeoutExpired: return f"ERROR: Timeout after {timeout}s."
         except SmartiCancelled:
             raise
-        except Exception as e: return f"ERROR: {e}"
+        except Exception as e: return f'ERROR: {model_error_text(e)}'
 
     def git_status_tool(self, path, operation="status", ref=""):
         root = self._abs_path(path)
@@ -297,7 +295,7 @@ class SystemToolsMixin:
             body = f"EXIT_CODE: {completed.returncode}\nSTDOUT:\n{(completed.stdout or '').strip()}\nSTDERR:\n{(completed.stderr or '').strip()}"
             return self._truncate_tool_output(("ERROR: Git command failed.\n" if completed.returncode else "") + body)
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'
 
     def run_project_check_tool(self, path, command):
         root = self._abs_path(path)
@@ -306,7 +304,7 @@ class SystemToolsMixin:
         if not os.path.isdir(root): return f"ERROR: Not a folder: {root}"
         cmd = str(command or "").strip()
         if not self._project_check_command_allowed(cmd):
-            return "ERROR: run_project_check מאפשר רק פקודות בדיקה/build מוכרות. השתמש ב-system_command עם אישור מפורש לפקודה אחרת."
+            return 'ERROR: run_project_check only allows recognized test/build commands. For another command, use system_command with explicit approval.'
         return self.run_system_command([cmd], cwd=root)
 
     def list_processes_tool(self):
@@ -318,18 +316,18 @@ class SystemToolsMixin:
             )
             return self._truncate_tool_output((completed.stdout or completed.stderr or "").strip())
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'
 
     def set_clipboard_tool(self, text):
         try:
             completed = self._run_cancelable_subprocess(["clip.exe"], input=str(text), text=True, encoding="utf-16le", errors="replace", timeout=10, creationflags=WIN_CREATE_NO_WINDOW)
             if completed.returncode != 0:
                 return f"ERROR: Clipboard failed: {(completed.stderr or '').strip()}"
-            return "SUCCESS: הטקסט הועתק ללוח הגזירים."
+            return 'SUCCESS: Text copied to the clipboard.'
         except SmartiCancelled:
             raise
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'
 
     def manage_python_tools(self, params):
         sub_action, name, _confirm, explanation, data = params
@@ -345,7 +343,7 @@ class SystemToolsMixin:
                 if not isinstance(schema_obj, dict) or schema_obj.get("type") != "object":
                     return "ERROR: Tool description must be a valid JSON Schema object with type='object'."
             except Exception as e:
-                return f"ERROR: Tool description must be valid JSON Schema. {e}"
+                return f'ERROR: Tool description must be valid JSON Schema. {model_error_text(e)}'
             needs_confirm = normalize_bool_text(_confirm) or (self.settings.get("permission_level", 1) == 1) or (self.settings.get("permission_level", 1) == 2 and any(m in code.lower() for m in ["os.remove", "shutil.rmtree", "os.rmdir", "format ", "del "]))
             if needs_confirm and not self._request_user_approval("אישור שמירת כלי מסוכן", f"הכלי '{tool_name}' מכיל פעולות מסוכנות.\n\nהסבר: {explanation}", risk="high"): return "ERROR: Denied."
             try:
@@ -363,8 +361,8 @@ class SystemToolsMixin:
                         "trusted_reason": "created_by_smarti_after_policy"
                     })
                 self._save_settings()
-                return f"SUCCESS: כלי פייתון נשמר והוא מוכן לשימוש ישיר: {tool_path}"
-            except Exception as e: return f"ERROR: {e}"
+                return f'SUCCESS: Python tool saved and ready for direct use: {tool_path}'
+            except Exception as e: return f'ERROR: {model_error_text(e)}'
 
         if sub_action in {"run", "הרצה"}:
             if not os.path.exists(tool_path): return f"ERROR: Not found: {tool_name}"
@@ -383,7 +381,7 @@ class SystemToolsMixin:
             except subprocess.TimeoutExpired: return f"ERROR: Timeout after {timeout}s."
             except SmartiCancelled:
                 raise
-            except Exception as e: return f"ERROR: {e}"
+            except Exception as e: return f'ERROR: {model_error_text(e)}'
 
     def _write_mcp_wrapper(self, pkg_name):
         os.makedirs(MCP_TOOLS_DIR, exist_ok=True)
@@ -391,7 +389,7 @@ class SystemToolsMixin:
         wrapper_path = os.path.join(MCP_TOOLS_DIR, f"{stem}.pyw")
         wrapper_code = r'''import sys, json, subprocess, shutil, os, io
 
-# --- תיקון קריטי: הכרחת פייתון לכתוב ל-STDOUT בקידוד UTF-8 כדי למנוע קריסות cp1255 בווינדוס בעברית ---
+# Use UTF-8 for stdout/stderr to prevent Windows locale encoding failures.
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 # ----------------------------------------------------------------------------------------------------
@@ -486,7 +484,7 @@ def main():
                         try:
                             parsed_args = json.loads(raw_args)
                         except Exception as e:
-                            print(f"JSON_PARSE_ERROR: ה-JSON שנשלח אינו חוקי: {raw_args}. שגיאה: {e}")
+                            print(f"JSON_PARSE_ERROR: Invalid JSON: {raw_args}. Error: {e}")
                             return 1
                         send("tools/call", {"name": sys.argv[3], "arguments": parsed_args})
                     else:
@@ -495,19 +493,19 @@ def main():
                 else:
                     result = resp["result"]
                     if isinstance(result, dict) and result.get("isError", False):
-                        error_msg = "הכלי החזיר שגיאה פנימית: " + str(result)
+                        error_msg = "The tool returned an internal error: " + str(result)
                     break
 
         if result and not error_msg:
             if cmd == "list":
                 tools = result.get("tools", [])
                 
-                # יצירת רשימה נקייה של סכמות JSON (הסטנדרט המדויק)
+                # Return exact JSON schemas provided by the MCP server.
                 mcp_tools_list = []
                 for t in tools:
                     schema_obj = {
                         "name": t.get('name', ''),
-                        "description": t.get('description', 'אין תיאור'),
+                        "description": t.get('description', 'No description'),
                         "inputSchema": t.get("inputSchema", {})
                     }
                     mcp_tools_list.append(schema_obj)
@@ -603,7 +601,7 @@ if __name__ == "__main__":
         except subprocess.TimeoutExpired: return f"ERROR: Timeout after {timeout}s."
         except SmartiCancelled:
             raise
-        except Exception as e: return f"ERROR: MCP crashed: {e}"
+        except Exception as e: return f'ERROR: MCP crashed: {model_error_text(e)}'
 
     def search_mcp(self, query):
         query = str(query or "").strip()
@@ -612,25 +610,25 @@ if __name__ == "__main__":
             res = self._run_cancelable_callable(lambda: self._request_get(get_url(URL_NPM) + urllib.parse.quote(f"mcp {query}"), timeout=20))
             res.raise_for_status()
             packages = res.json().get("objects", [])[:8]
-            if not packages: return f"לא נמצאו חבילות MCP עבור: {query}"
-            lines = ["תוצאות MCP מ-NPM (בחר חבילה אמינה ואז התקן עם `install_mcp`):"]
+            if not packages: return f'No MCP packages found for: {query}'
+            lines = ['MCP results from NPM (choose a trusted package, then install it with `install_mcp`):']
             for item in packages:
                 pkg = item.get("package", {})
                 score = item.get("score", {}).get("final", 0)
-                publisher = ((pkg.get("publisher") or {}).get("username") or (pkg.get("publisher") or {}).get("email") or "לא ידוע")
+                publisher = ((pkg.get("publisher") or {}).get("username") or (pkg.get("publisher") or {}).get("email") or 'Unknown')
                 links = pkg.get("links") or {}
                 npm_link = links.get("npm", "")
-                trust_hint = "גבוה יחסית" if score >= 0.75 else ("בינוני" if score >= 0.45 else "נמוך")
-                lines.append(f"- {pkg.get('name', '')}@{pkg.get('version', '')} | אמון: {trust_hint} | ציון {score:.2f} | מפרסם: {publisher} | {npm_link} | {(pkg.get('description') or '').replace(chr(10), ' ')[:220]}")
+                trust_hint = 'Relatively high' if score >= 0.75 else ('Medium' if score >= 0.45 else 'Low')
+                lines.append(f"- {pkg.get('name', '')}@{pkg.get('version', '')} | trust: {trust_hint} | score {score:.2f} | publisher: {publisher} | {npm_link} | {(pkg.get('description') or '').replace(chr(10), ' ')[:220]}")
             return "\n".join(lines)
-        except Exception as e: return f"ERROR: {e}"
+        except Exception as e: return f'ERROR: {model_error_text(e)}'
 
     def install_mcp(self, pkg_name):
         pkg_name = str(pkg_name or "").strip()
         base_pkg, version, pinned = parse_npm_package_spec(pkg_name)
         if not base_pkg: return "ERROR: Invalid package name."
         if self.settings.get("mcp_require_pinned_versions", True) and not pinned:
-            return "ERROR: התקנת MCP דורשת גרסה נעולה, למשל package@1.2.3. חפש את הגרסה דרך search_mcp ואז נסה שוב."
+            return 'ERROR: MCP installation requires a pinned version, such as package@1.2.3. Find the version through search_mcp, then retry.'
         allowed = self.settings.setdefault("allowed_mcp_packages", [])
         
         guide = self._run_mcp_wrapper(pkg_name, "list")
@@ -666,10 +664,10 @@ if __name__ == "__main__":
             else:
                 self.refresh_extension_catalogs(force=True)
                 self._save_settings()
-            return f"SUCCESS: MCP הותקן.\n\n{guide[:2500]}"
+            return f'SUCCESS: MCP installed.\n\n{guide[:2500]}'
         except SmartiCancelled:
             raise
-        except Exception as e: return f"ERROR: {e}"
+        except Exception as e: return f'ERROR: {model_error_text(e)}'
 
     def run_mcp(self, params):
         pkg_name, tool_name, json_args = params
@@ -678,7 +676,7 @@ if __name__ == "__main__":
         trusted = bool(getattr(self, "mcp_manager", None) and self.mcp_manager.is_trusted(resolved_pkg))
         installed = self._is_mcp_installed_locally(resolved_pkg) or self._is_mcp_installed_locally(pkg_name)
         if self.settings.get("external_code_requires_trust", True) and not trusted:
-            return "ERROR: MCP package is installed but not trusted yet. אשר את חבילת ה-MCP במסך הכלים לפני הרצה."
+            return 'ERROR: MCP package is installed but not trusted yet. Approve the MCP package on the Tools page before running it.'
         if resolved_pkg not in allowed and pkg_name not in allowed:
             if trusted and installed:
                 if self._sync_trusted_mcp_packages():

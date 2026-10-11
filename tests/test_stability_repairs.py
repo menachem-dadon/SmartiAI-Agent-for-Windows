@@ -245,6 +245,23 @@ class StabilityRepairTests(unittest.TestCase):
         self.assertIsNone(self.core.chat_store.load_run_checkpoint(run_id=first))
         self.assertIsNone(self.core.chat_store.load_run_checkpoint(run_id=resumed))
 
+    def test_resume_refreshes_only_live_system_slot_and_preserves_saved_tool_content(self):
+        session, first, resumed = self._managed_resume_fixture()
+        checkpoint = self.core.chat_store.load_run_checkpoint(run_id=first)
+        checkpoint["system_prompt"] = "הנחיית מערכת ישנה"
+        checkpoint["current_messages"].insert(0, {"role": "system", "content": checkpoint["system_prompt"]})
+        checkpoint["current_messages"][-1]["content"] = "בוצע בעבר"
+        self.core.chat_store.save_run_checkpoint(first, checkpoint)
+        old_messages = copy.deepcopy(self.core.chat_store.messages(session))
+        self.core._load_system_prompt = mock.Mock(return_value="Current English system policy.")
+        self.assertEqual(self.core.send_message("continue", session_id=session, run_id=resumed, persist_turn=False), "Completed original task.")
+        sent = self.core._handle_api_request_with_retry.call_args.args[1]
+        self.assertEqual(sent[0], {"role": "system", "content": "Current English system policy."})
+        self.assertIn("בוצע בעבר", json.dumps(sent, ensure_ascii=False))
+        self.assertNotIn("הנחיית מערכת ישנה", json.dumps(sent, ensure_ascii=False))
+        self.assertEqual(self.core.chat_store.messages(session), old_messages)
+        self.core.execute_tool.assert_not_called()
+
     def test_background_run_resumes_only_its_own_task(self):
         session, first, resumed = self._managed_resume_fixture(background=True)
         response = self.core.send_message("scheduled prompt", session_id=session, run_id=resumed, is_background_task=True, persist_turn=False)

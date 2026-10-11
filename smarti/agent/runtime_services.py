@@ -157,11 +157,11 @@ class RuntimeServicesMixin:
             self._raise_if_cancelled()
             if self._network_probe_available():
                 if self.status_callback:
-                    self.status_callback(f"{label}: החיבור חזר, ממשיך אוטומטית...")
+                    self.status_callback(ui_text(self, f"{label}: החיבור חזר, ממשיך אוטומטית...", f"{label}: Connection restored, resuming automatically..."))
                 return True
             remaining_minutes = max(1, int((deadline - time.time() + 59) // 60))
             if self.status_callback:
-                self.status_callback(f"{label}: החיבור לרשת נותק. ממתין לחיבור מחדש ({remaining_minutes} דק׳)...")
+                self.status_callback(ui_text(self, f"{label}: החיבור לרשת נותק. ממתין לחיבור מחדש ({remaining_minutes} דק׳)...", f"{label}: Network disconnected. Waiting to reconnect ({remaining_minutes} min)..."))
             if not self._sleep_with_cancel(10):
                 raise SmartiCancelled("CANCELLED_BY_USER")
         return False
@@ -278,13 +278,13 @@ class RuntimeServicesMixin:
 
         candidate = ""
         for line in reversed(lines):
-            stripped = re.sub(r'^(סטטוס|שלב|פעולה)\s*[:：]\s*', '', line, flags=re.IGNORECASE).strip()
+            stripped = re.sub(r'^(סטטוס|שלב|פעולה|status|step|action)\s*[:：]\s*', '', line, flags=re.IGNORECASE).strip()
             if stripped and stripped != line:
                 candidate = stripped
                 break
         if not candidate:
             candidate = lines[-1].strip()
-            candidate = re.sub(r'^(סטטוס|שלב|פעולה)\s*[:：]\s*', '', candidate, flags=re.IGNORECASE).strip()
+            candidate = re.sub(r'^(סטטוס|שלב|פעולה|status|step|action)\s*[:：]\s*', '', candidate, flags=re.IGNORECASE).strip()
 
         candidate = candidate.strip(" .:()[]")
         candidate = re.sub(r'\s+', ' ', candidate).strip()
@@ -342,6 +342,12 @@ class RuntimeServicesMixin:
         args = args_dict if isinstance(args_dict, dict) else {}
         if not action:
             return ""
+
+        if getattr(self, "_current_user_language", "he") == "en":
+            name = args.get("tool_name") or args.get("name") or action
+            if schema_check or action == "get_tool_info":
+                return f"Checking schema for {self._short_step_value(name)}"
+            return f"Running {action}"
 
         tool_name = self._short_step_value(
             args.get("tool_name") or args.get("name") or args.get("tool") or

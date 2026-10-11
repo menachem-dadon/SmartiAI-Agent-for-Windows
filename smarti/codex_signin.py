@@ -833,32 +833,32 @@ class CodexSignInProvider:
             payload = json.loads(str(value or ""))
         except (TypeError, ValueError) as exc:
             raise CodexProtocolError(
-                "Codex החזיר תשובה שאינה תואמת לפרוטוקול המובנה של סמארטי.",
+                "Codex returned a response that does not match the Smarti structured protocol.",
                 value,
             ) from exc
         if not isinstance(payload, dict):
-            raise CodexProtocolError("Codex החזיר תשובה שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
+            raise CodexProtocolError("Codex returned a response that does not match the Smarti structured protocol.", value)
         kind = str(payload.get("kind") or "").strip().lower()
         progress_report = payload.get("progress_report")
         if progress_report is not None and not isinstance(progress_report, str):
-            raise CodexProtocolError("Codex החזיר דיווח ביניים שאינו תואם לפרוטוקול המובנה של סמארטי.", value)
+            raise CodexProtocolError("Codex returned a progress report that does not match the Smarti structured protocol.", value)
         progress_report = str(progress_report or "").strip()
         if kind == "tool_calls":
             raw_calls = payload.get("tool_calls")
             if not isinstance(raw_calls, list) or not raw_calls or payload.get("final_answer") is not None:
-                raise CodexProtocolError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
+                raise CodexProtocolError("Codex returned a tool call that does not match the Smarti structured protocol.", value)
             calls = []
             for raw_call in raw_calls[:8]:
                 if not isinstance(raw_call, dict):
-                    raise CodexProtocolError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
+                    raise CodexProtocolError("Codex returned a tool call that does not match the Smarti structured protocol.", value)
                 tool_name = str(raw_call.get("name") or "").strip()
                 raw_arguments = raw_call.get("arguments_json")
                 try:
                     tool_arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else None
                 except (TypeError, ValueError) as exc:
-                    raise CodexProtocolError("Codex החזיר ארגומנטים של כלי שאינם JSON תקין.", value) from exc
+                    raise CodexProtocolError("Codex returned tool arguments that are not valid JSON.", value) from exc
                 if not tool_name or not isinstance(tool_arguments, dict):
-                    raise CodexProtocolError("Codex החזיר קריאת כלי שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
+                    raise CodexProtocolError("Codex returned a tool call that does not match the Smarti structured protocol.", value)
                 calls.append({"name": tool_name, "arguments": tool_arguments})
             tool_turn = json.dumps(
                 {"tool_calls": calls},
@@ -873,9 +873,9 @@ class CodexSignInProvider:
                 or payload.get("tool_calls") is not None
                 or progress_report
             ):
-                raise CodexProtocolError("Codex החזיר תשובה סופית שאינה תואמת לפרוטוקול המובנה של סמארטי.", value)
+                raise CodexProtocolError("Codex returned a final answer that does not match the Smarti structured protocol.", value)
             return final_answer.strip()
-        raise CodexProtocolError("Codex החזיר סוג תגובה לא מוכר בפרוטוקול המובנה של סמארטי.", value)
+        raise CodexProtocolError("Codex returned an unknown response kind in the Smarti structured protocol.", value)
 
     def complete(
         self,
@@ -996,7 +996,7 @@ class CodexSignInProvider:
             prefer_tool_calls=purpose == "agent",
         )
         if not response:
-            raise CodexProtocolError("Codex החזיר פלט מובנה בלי תשובה סופית.", stdout)
+            raise CodexProtocolError("Codex returned structured output without a final answer.", stdout)
         if purpose == "agent":
             return self._decode_structured_turn(response), usage
         return str(response or "").strip(), usage

@@ -77,11 +77,11 @@ raise SystemExit(bool(blocked))
 
 class VisualCanvasPersistenceTests(unittest.TestCase):
     def test_canvas_policy_defaults_to_chat_and_open_button_is_not_a_model_call(self):
-        self.assertIn("ברירת המחדל היא תשובת צ'אט רגילה", CANVAS_MANAGER_MODEL_GUIDANCE)
-        self.assertIn("אינה פותחת סבב מודל", CANVAS_MANAGER_MODEL_GUIDANCE)
-        self.assertIn("אל תסתפק בטבלה שטוחה", CANVAS_MANAGER_MODEL_GUIDANCE)
+        self.assertIn('The default is a regular chat answer', CANVAS_MANAGER_MODEL_GUIDANCE)
+        self.assertIn("without a model round", CANVAS_MANAGER_MODEL_GUIDANCE)
+        self.assertIn("do not settle for a flat table", CANVAS_MANAGER_MODEL_GUIDANCE)
         self.assertIn("screen_manager", CANVAS_MANAGER_MODEL_GUIDANCE)
-        self.assertIn("אימות חזותי", CANVAS_MANAGER_MODEL_GUIDANCE)
+        self.assertIn("Visual verification", CANVAS_MANAGER_MODEL_GUIDANCE)
 
     def test_canvas_is_complete_in_model_context(self):
         artifact = new_canvas_artifact({

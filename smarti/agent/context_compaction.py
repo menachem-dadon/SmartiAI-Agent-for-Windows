@@ -405,14 +405,15 @@ class ContextCompactionMixin:
         self._emit_agent_process_event(
             "tool_group_start",
             group=activity,
-            text="דוחס את ההקשר…",
+            text=ui_text(self, "דוחס את ההקשר…", "Compacting context…"),
         )
         if self.status_callback:
-            self.status_callback("דוחס את ההקשר…")
+            self.status_callback(ui_text(self, "דוחס את ההקשר…", "Compacting context…"))
         return event_id, args
 
     def _emit_context_compaction_finish(self, event_id, args, status, output):
-        text = "דחיסת ההקשר הושלמה" if status == "ok" else "דחיסת ההקשר נכשלה"
+        text = (ui_text(self, "דחיסת ההקשר הושלמה", "Context compaction completed") if status == "ok"
+                else ui_text(self, "דחיסת ההקשר נכשלה", "Context compaction failed"))
         self._emit_agent_process_event(
             "tool_group_finish",
             group=self._agent_tool_event_item(
@@ -526,8 +527,8 @@ class ContextCompactionMixin:
                 "protected_current_user_message": bool(protected_user_message),
             }
             output = (
-                f"הדחיסה הושלמה: כ-{pressure['estimated']:,} טוקנים לפני וכ-{after_tokens:,} אחרי. "
-                "הודעת המשתמש הנוכחית וההקשר האחרון נשמרו במלואם."
+                f"Compaction completed: approximately {pressure['estimated']:,} tokens before and {after_tokens:,} after. "
+                "The current user message and recent context were preserved in full."
             )
             self._emit_context_compaction_finish(event_id, event_args, "ok", output)
             logging.info(
@@ -545,7 +546,7 @@ class ContextCompactionMixin:
                 event_id,
                 event_args,
                 "error",
-                f"דחיסת ההקשר לא הושלמה; ההקשר המקורי נשמר ללא שינוי. {safe_error}",
+                f"Context compaction failed; the original context was preserved unchanged. {safe_error}",
             )
             logging.warning("Context compaction failed without modifying source messages: %s", safe_error)
             return False
@@ -616,7 +617,7 @@ class ContextCompactionMixin:
                 event_id,
                 event_args,
                 "ok",
-                f"היסטוריית העבודה הפעילה נדחסה לפי הצורך. התמליל המלא נשאר שמור בשיחה; כ-{after_tokens:,} טוקנים פעילים כעת.",
+                f"Active working history was compacted as needed. The full transcript remains saved in the conversation; approximately {after_tokens:,} tokens are active now.",
             )
             logging.info(
                 "Conversation history compacted: before=%s after=%s window=%s",
@@ -631,7 +632,7 @@ class ContextCompactionMixin:
                 event_id,
                 event_args,
                 "error",
-                f"דחיסת היסטוריית השיחה לא הושלמה; ההיסטוריה המקורית נשמרה. {safe_error}",
+                f"Conversation history compaction failed; the original history was preserved. {safe_error}",
             )
             logging.warning("Conversation history compaction failed without modifying history: %s", safe_error)
             return False

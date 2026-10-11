@@ -1416,7 +1416,7 @@ export default function App() {
               </div>
             ) : (
               <div className="message-list">
-                {[...messages, ...(displayRun && !activeAssistantRecorded ? [{ role: "assistant" as const, content: streamAnswer(streams[displayRun.id] || displayRun.metadata?.stream) || displayRun.response_text || "", metadata: { run_id: displayRun.id, is_error: displayRun.status === "failed" } }] : [])].map((message, index) => {
+                {[...messages, ...(displayRun && !activeAssistantRecorded ? [{ role: "assistant" as const, content: streamAnswer(streams[displayRun.id] || displayRun.metadata?.stream) || displayRun.response_text || "", metadata: { run_id: displayRun.id, user_language: displayRun.metadata?.user_language, is_error: displayRun.status === "failed" } }] : [])].map((message, index) => {
                   const runId = String(message.metadata?.run_id || "");
                   const messageActive = Boolean(
                     message.role === "assistant" &&

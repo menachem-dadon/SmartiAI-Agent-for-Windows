@@ -26,6 +26,7 @@ from .config import (
     PUBLIC_BUILTIN_TOOLS, TOOL_CATEGORIES,
 )
 from .open_with import open_with_dialog
+from .user_language import user_description
 
 
 SETTING_GROUPS = (
@@ -41,7 +42,6 @@ SETTING_GROUPS = (
 )
 
 SETTING_LABELS = {
-    "system_prompt_language": "שפת הנחיית המערכת",
     "api_mode": "ספק המודל הפעיל", "autonomy_mode": "רמת האוטונומיה",
     "local_server_url": "כתובת שרת מודל מקומי", "local_fast_mode_enabled": "FastMode למודל מקומי",
     "read_aloud_all": "הקראת כל התשובות", "read_aloud_voice_only": "הקראה לאחר קלט קולי בלבד",
@@ -175,8 +175,6 @@ def settings_schema_document():
             "restart_required": key in {"language", "ui_language", "update_channel"},
             "advanced": group in {"security", "updates"} or key.startswith(("mcp_", "debug_", "developer_")),
         }
-        if key == "system_prompt_language":
-            fields[key].update(advanced=True, options=["en", "he"])
     return {"groups": sorted(groups.values(), key=lambda item: item["order"]), "fields": fields}
 
 
@@ -268,7 +266,7 @@ def tools_snapshot(core):
         builtins.append({
             "name": name,
             "label": BUILTIN_TOOL_DISPLAY_LABELS.get(name, name.replace("_", " ")),
-            "description": str(schema.get("description") or BUILTIN_DYNAMIC_TOOLS.get(name) or ""),
+            "description": user_description(str(schema.get("description") or BUILTIN_DYNAMIC_TOOLS.get(name) or "")),
             "category": category,
             "category_label": TOOL_CATEGORY_DISPLAY_LABELS.get(category, category),
             "enabled": bool(config.get(name, True)),
@@ -304,7 +302,7 @@ def tools_snapshot(core):
         enabled = bool(skill_enabled(name)) if callable(skill_enabled) else bool(skills_config.get(name, True))
         external.append({
             "kind": "skill", "name": name, "label": name,
-            "description": str(spec.get("description") or ""), "source": source,
+            "description": user_description(str(spec.get("description") or "")) if source == "builtin" else str(spec.get("description") or ""), "source": source,
             "source_label": {"builtin": "מובנה", "local": "הותקן ידנית", "clawhub": "ClawHub"}.get(source, "הותקן ידנית"),
             "enabled": enabled,
             "trust": registry.trust_status("skill", name) if registry else ("trusted" if enabled else "disabled"),

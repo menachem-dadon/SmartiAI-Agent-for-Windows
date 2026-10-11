@@ -566,7 +566,7 @@ class DocumentToolsMixin:
             return _json_text(self._document_compare(args))
         except Exception as exc:
             logging.exception("document_manager failed")
-            return f"ERROR: document_manager {action} failed: {exc}"
+            return f'ERROR: document_manager {action} failed: {model_error_text(exc)}'
 
     @staticmethod
     def _document_visual_qa(path):

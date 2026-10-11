@@ -1149,10 +1149,6 @@ class SmartiLocalGateway:
                     values[key] = float(value)
                 elif default is not None and type(value) is not type(default):
                     raise RequestValidationError("setting_type_mismatch", [key])
-            if "system_prompt_language" in values and values["system_prompt_language"] not in {"en", "he"}:
-                raise RequestValidationError("invalid_system_prompt_language", ["system_prompt_language"])
-            missing_language = object()
-            previous_language = self.core.settings.get("system_prompt_language", missing_language)
             for key, value in values.items():
                 if key in {"ui_preferences", "budgets", "privacy"}:
                     current = self.core.settings.get(key)
@@ -1172,15 +1168,7 @@ class SmartiLocalGateway:
                     self.core.settings[key] = copy.deepcopy(value)
             save_settings = getattr(self.core, "_save_settings", None)
             if callable(save_settings):
-                try:
-                    save_settings()
-                except Exception:
-                    if "system_prompt_language" in values:
-                        if previous_language is missing_language:
-                            self.core.settings.pop("system_prompt_language", None)
-                        else:
-                            self.core.settings["system_prompt_language"] = previous_language
-                    raise
+                save_settings()
             if any(key.startswith("ssl_") or key == "allow_insecure_ssl_compat" for key in values):
                 sync_ssl = getattr(self.core, "_sync_ssl_compat_env", None)
                 if callable(sync_ssl):
@@ -1193,7 +1181,7 @@ class SmartiLocalGateway:
                 refresh = getattr(self.core, "refresh_extension_catalogs", None)
                 if callable(refresh):
                     refresh(force=True, rebuild_prompt=True)
-            elif any(key in {"autonomy_mode", "local_fast_mode_enabled", "system_prompt_language", "enable_visual_surfaces", "enable_web_canvas"} for key in values):
+            elif any(key in {"autonomy_mode", "local_fast_mode_enabled", "enable_visual_surfaces", "enable_web_canvas"} for key in values):
                 load_prompt = getattr(self.core, "_load_system_prompt", None)
                 if callable(load_prompt):
                     self.core.system_prompt = load_prompt()

@@ -455,7 +455,7 @@ class WebContentMixin:
         except SmartiCancelled:
             raise
         except Exception as e:
-            return f"ERROR: {redact_sensitive_text(str(e), self.settings)}"
+            return f'ERROR: {redact_sensitive_text(model_error_text(e), self.settings)}'
 
     def read_local_document(self, path):
         path = path.strip(' "\'')
@@ -478,7 +478,7 @@ class WebContentMixin:
                     for page in PyPDF2.PdfReader(f).pages: text += page.extract_text() + "\n"
                 return "[UNTRUSTED_LOCAL_FILE]\n" + text[:15000]
             else: return f"ERROR: Unsupported format {ext}"
-        except Exception as e: return f"ERROR: {e}"
+        except Exception as e: return f'ERROR: {model_error_text(e)}'
 
     def read_local_image(self, path):
         try:
@@ -489,4 +489,4 @@ class WebContentMixin:
                 return "ERROR: Image is too large for safe upload (max 12MB)."
             mime_type = guess_mime_type(path)
             with open(path, "rb") as img: return f"IMAGE_BASE64:{mime_type}:{base64.b64encode(img.read()).decode('utf-8')}"
-        except Exception as e: return f"ERROR: {e}"
+        except Exception as e: return f'ERROR: {model_error_text(e)}'

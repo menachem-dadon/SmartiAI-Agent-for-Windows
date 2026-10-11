@@ -114,7 +114,7 @@ class ToolDispatchMixin:
             try:
                 routed_action, routed_args = self._route_unified_tool(action, args_dict)
             except ValueError as e:
-                return (f"ERROR: {e}", None)
+                return (f'ERROR: {model_error_text(e)}', None)
             action = routed_action
             args_dict = self._normalize_tool_call_args(action, routed_args)
             routed_from_unified = True
@@ -154,12 +154,12 @@ class ToolDispatchMixin:
                 confirm = args_dict.get("require_approval", False)
                 expl = str(args_dict.get("explanation", ""))
                 if self._looks_like_permanent_file_delete_command(cmd) and not self._looks_like_temp_cleanup_delete_command(cmd):
-                    return ("ERROR: מחיקה קבועה דרך shell חסומה. עבור קבצי משתמש השתמש ב-file_manager action=trash, או בסקריפט שמעביר לסל המחזור באמצעות Windows Recycle Bin API. מחיקת Temp מזוהה מותרת.", None)
+                    return ('ERROR: Permanent deletion through the shell is blocked. For user files, use file_manager action=trash or a script that moves files to the Recycle Bin using the Windows Recycle Bin API. Recognized Temp cleanup is allowed.', None)
                 skill_install_target = self._skill_requirement_install_target(cmd)
                 if skill_install_target:
-                    return (f"ERROR: זוהתה פקודת התקנת דרישות עבור Skill '{skill_install_target}'. יש להשתמש בכלי install_skill_requirements עם name='{skill_install_target}' במקום להריץ התקנה ידנית דרך system_command.", None)
+                    return (f"ERROR: A dependency installation command was detected for Skill '{skill_install_target}'. Use install_skill_requirements with name='{skill_install_target}' instead of installing manually through system_command.", None)
                 risk = self._classify_system_command(cmd)
-                if risk == "blocked_self_destructive": return (None, "ERROR_USER: [הגנה עצמית]: פקודה הרסנית נחסמה.")
+                if risk == "blocked_self_destructive": return ("ERROR: [Self-protection]: Destructive command blocked.", None)
                 allowed, err = self._ensure_capability_allowed("shell", "אישור הרצת פקודה", f"פקודה:\n{cmd}\n\nסיווג סיכון: {risk}\nהסבר: {expl}", risk=("high" if risk == "high" or confirm else "medium"))
                 if not allowed: return (err, None)
                 return (self.run_system_command([cmd], cwd=args_dict.get("cwd", ""), timeout_seconds=args_dict.get("timeout_seconds", None)), None)
@@ -168,7 +168,7 @@ class ToolDispatchMixin:
                 try:
                     json.loads(str(args_dict.get("description", "")).strip())
                 except Exception as e:
-                    return (f"ERROR: Tool description must be valid JSON Schema. {e}", None)
+                    return (f'ERROR: Tool description must be valid JSON Schema. {model_error_text(e)}', None)
                 allowed, err = self._ensure_capability_allowed("python_tool_create", "אישור יצירת כלי פייתון", f"שם: {args_dict.get('name', '')}\n\n{args_dict.get('description', '')}", risk="high")
                 if not allowed: return (err, None)
                 return (self.manage_python_tools(["save", str(args_dict.get("name", "")), args_dict.get("require_approval", False), str(args_dict.get("description", "")), str(args_dict.get("code", ""))]), None)
@@ -202,7 +202,7 @@ class ToolDispatchMixin:
                 return (self.search_skills(str(args_dict.get("query", ""))), None)
             elif action == "install_skill":
                 source = str(args_dict.get("source", "clawhub"))
-                details = f"מקור: {source}\nמזהה: {args_dict.get('id', '')}\nנתיב: {args_dict.get('path', '')}"
+                details = f"מקור: {source}\nמזהה: {args_dict.get('id', '')}\nPath: {args_dict.get('path', '')}"
                 allowed, err = self._ensure_capability_allowed("skill_install", "אישור התקנת Skill", details, risk="high")
                 if not allowed: return (err, None)
                 return (self.install_skill(source, str(args_dict.get("id", "")), str(args_dict.get("path", ""))), None)
@@ -251,7 +251,7 @@ class ToolDispatchMixin:
                 if not sandbox_ok: return (sandbox_err, None)
                 ext = os.path.splitext(path)[1].lower() if os.path.isfile(path) else ""
                 if os.path.isfile(path) and ext in EXECUTABLE_OPEN_EXTENSIONS:
-                    return (f"ERROR: פתיחת קובץ מסוג {ext} נחסמה. להרצת תוכנה השתמש ב-open_software או בפקודה מאושרת מפורשת.", None)
+                    return (f'ERROR: Opening a file of type {ext} is blocked. To run software, use open_software or an explicitly approved command.', None)
                 if os.path.isfile(path) and ext and ext not in SAFE_OPEN_EXTENSIONS:
                     allowed, err = self._ensure_capability_allowed("software_run", "אישור פתיחת קובץ לא מוכר", f"נתיב:\n{path}\n\nסיומת לא מוכרת: {ext}", risk="high")
                 else:
@@ -259,8 +259,8 @@ class ToolDispatchMixin:
                 if not allowed: return (err, None)
                 try:
                     os.startfile(path)
-                    return ("SUCCESS: נפתח במסך המשתמש.", None)
-                except Exception as e: return (f"ERROR: {e}", None)
+                    return ("SUCCESS: Opened on the user's screen.", None)
+                except Exception as e: return (f'ERROR: {model_error_text(e)}', None)
             elif action == "list_software":
                 return (self._get_installed_apps(
                     query=args_dict.get("query", ""),
@@ -278,10 +278,10 @@ class ToolDispatchMixin:
                 if not allowed: return (err, None)
                 return (self.get_weather_tool(args_dict.get("location", ""), args_dict.get("days", 2), args_dict.get("units", "metric")), None)
             elif action == "smart_file_search": 
-                if self.status_callback: self.status_callback("סורק קבצים במחשב...")
+                if self.status_callback: self.status_callback(ui_text(self, 'סורק קבצים במחשב...', 'Scanning files on the computer...'))
                 return (self.smart_file_search(str(args_dict.get("query", ""))), None)
             elif action == "deep_content_search": 
-                if self.status_callback: self.status_callback("סורק תוכן עמוק...")
+                if self.status_callback: self.status_callback(ui_text(self, 'סורק תוכן עמוק...', 'Scanning file contents...'))
                 allowed, err = self._ensure_cloud_upload_allowed(str(args_dict.get("directory", "")))
                 if not allowed: return (err, None)
                 return (self.smart_content_search(str(args_dict.get("directory", "")), str(args_dict.get("text", ""))), None)
@@ -298,7 +298,7 @@ class ToolDispatchMixin:
                     try: os.remove(path)
                     except: pass
                     return (f"IMAGE_BASE64:image/png:{b64}", None)
-                except Exception as e: return (f"ERROR: {e}", None)
+                except Exception as e: return (f'ERROR: {model_error_text(e)}', None)
             elif action == "save_screenshot_to_disk":
                 allowed, err = self._ensure_capability_allowed("screenshot", "אישור צילום מסך", "צילום המסך יישמר כקובץ.", risk="medium")
                 if not allowed: return (err, None)
@@ -310,13 +310,13 @@ class ToolDispatchMixin:
                     if not allowed: return (err, None)
                     os.makedirs(os.path.dirname(path), exist_ok=True)
                     ImageGrab.grab().save(path)
-                    return (f"SUCCESS: נשמר ב: {path}", None)
-                except Exception as e: return (f"ERROR: {e}", None)
+                    return (f'SUCCESS: Saved to: {path}', None)
+                except Exception as e: return (f'ERROR: {model_error_text(e)}', None)
             elif action == "set_volume":
                 allowed, err = self._ensure_capability_allowed("audio", "אישור שינוי שמע", str(args_dict.get('action', '')), risk="low")
                 if not allowed: return (err, None)
                 subprocess.Popen(["powershell", "-Command", f"Set-Volume -Mute {'$true' if str(args_dict.get('action', '')).upper()=='MUTE' else '$false'}"], env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
-                return ("SUCCESS: ווליום עודכן.", None)
+                return ('SUCCESS: Volume updated.', None)
             elif action == "open_in_browser":
                 allowed, err = self._ensure_capability_allowed("browser_open", "אישור פתיחה בדפדפן", str(args_dict.get("query_or_url", "")), risk="low")
                 if not allowed: return (err, None)
@@ -363,12 +363,12 @@ class ToolDispatchMixin:
                     path += ".txt"
                     ext = ".txt"
                 if ext in BLOCKED_WRITE_EXTENSIONS or ext not in SAFE_TEXT_EXTENSIONS:
-                    return (f"ERROR: save_text_file מורשה לשמור רק קבצי טקסט בטוחים. סיומת חסומה/לא נתמכת: {ext}", None)
+                    return (f'ERROR: save_text_file can only save safe text files. Blocked or unsupported extension: {ext}', None)
                 allowed, err = self._ensure_write_allowed(path, "שמירת קובץ")
                 if not allowed: return (err, None)
                 os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
                 with open(path, 'w', encoding='utf-8') as f: f.write(str(args_dict.get("content", "")))
-                return (f"SUCCESS: נשמר ב: {path}", None)
+                return (f'SUCCESS: Saved to: {path}', None)
             elif action == "trash_file_or_folder":
                 path = str(args_dict.get("path", "")).strip(' "\'')
                 if not path:
@@ -422,7 +422,7 @@ class ToolDispatchMixin:
                     if args_dict.get("subject"):
                         detail += f"\nנושא: {str(args_dict.get('subject'))[:160]}"
                     if args_dict.get("path"):
-                        detail += f"\nנתיב: {args_dict.get('path')}"
+                        detail += f"\nPath: {args_dict.get('path')}"
                     risk = "high" if operation in {"clear", "forget", "import"} else "medium"
                     allowed, err = self._ensure_capability_allowed(
                         "file_write", "אישור ניהול זיכרון", detail, risk=risk
@@ -446,9 +446,9 @@ class ToolDispatchMixin:
 
         if os.path.exists(os.path.join(TOOLS_DIR, f"{action}.pyw")):
             if self._sandbox_enabled():
-                return ("ERROR: ארגז חול פעיל. כלי מותאם אישית חסום כי אי אפשר להגביל אותו בוודאות לתיקיית ארגז החול.", None)
+                return ('ERROR: Sandbox mode is enabled. Custom tools are blocked because they cannot reliably be restricted to the sandbox directory.', None)
             if self.settings.get("external_code_requires_trust", True) and getattr(self, "tool_registry", None) and not self.tool_registry.is_trusted("custom", action):
-                return (f"ERROR: Custom tool '{action}' is not trusted yet. אשר אותו במסך הכלים לפני הרצה.", None)
+                return (f"ERROR: Custom tool '{action}' is not trusted yet. Approve it on the Tools page before running it.", None)
             allowed, err = self._ensure_capability_allowed("python_tool_run", "אישור הרצת כלי פייתון", action, risk="medium")
             if not allowed: return (err, None)
             return (self.manage_python_tools(["run", action, False, "", json.dumps(args_dict, ensure_ascii=False)]), None)

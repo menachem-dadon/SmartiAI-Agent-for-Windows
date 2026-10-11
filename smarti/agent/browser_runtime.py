@@ -109,7 +109,7 @@ class BrowserRuntimeMixin:
                 time.sleep(0.25)
             return False, f"ERROR: Smarti browser did not become ready on port {SMARTI_BROWSER_DEBUG_PORT}."
         except Exception as e:
-            return False, f"ERROR: Failed to start Smarti browser: {e}"
+            return False, f'ERROR: Failed to start Smarti browser: {model_error_text(e)}'
 
     def _open_in_automation_browser(self, url):
         ok, err = self._ensure_automation_browser("about:blank")
@@ -134,4 +134,4 @@ class BrowserRuntimeMixin:
             subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=10, env=self._subprocess_env(), creationflags=WIN_CREATE_NO_WINDOW)
             return "SUCCESS: Smarti browser closed."
         except Exception as e:
-            return f"ERROR: Failed to close Smarti browser: {e}"
+            return f'ERROR: Failed to close Smarti browser: {model_error_text(e)}'

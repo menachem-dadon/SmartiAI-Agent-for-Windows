@@ -38,12 +38,12 @@ class ExtensionsMixin:
         return {
             "analyze_project": {
                 "name": "analyze_project",
-                "description": "סורק תיקיית פרויקט, ממפה קבצים מרכזיים ומחזיר תמונת מצב ראשונית.",
+                "description": 'Scans a project directory, maps key files, and returns an initial overview.',
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "תיקיית הפרויקט לסריקה"},
-                        "focus": {"type": "string", "description": "מוקד אופציונלי לבדיקה"}
+                        "path": {"type": "string", "description": 'Project directory to scan'},
+                        "focus": {"type": "string", "description": 'Optional inspection focus'}
                     },
                     "required": ["path"]
                 },
@@ -53,12 +53,12 @@ class ExtensionsMixin:
             },
             "fix_build_errors": {
                 "name": "fix_build_errors",
-                "description": "מריץ פקודת build/test ומחזיר שגיאות מרכזיות לפענוח ותיקון.",
+                "description": 'Runs a build/test command and returns key errors for analysis and repair.',
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "תיקיית הפרויקט"},
-                        "build_command": {"type": "string", "description": "פקודת build או test להרצה"}
+                        "path": {"type": "string", "description": 'Project directory'},
+                        "build_command": {"type": "string", "description": 'The build or test command to execute'}
                     },
                     "required": ["path", "build_command"]
                 },
@@ -68,7 +68,7 @@ class ExtensionsMixin:
             },
             "create_python_tool": {
                 "name": "create_python_tool",
-                "description": "יוצר כלי פייתון מותאם אישית מתוך קוד וסכמת פרמטרים.",
+                "description": 'Creates a custom Python tool from code and a parameter schema.',
                 "parameters": BUILTIN_TOOL_SCHEMAS["create_python_tool"]["inputSchema"],
                 "risk": "high",
                 "source": "builtin",
@@ -76,12 +76,12 @@ class ExtensionsMixin:
             },
             "web_research_summary": {
                 "name": "web_research_summary",
-                "description": "מבצע חיפוש אינטרנט ומחזיר סיכום מקורות ראשוני.",
+                "description": 'Performs a web search and returns an initial source summary.',
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "נושא החיפוש"},
-                        "max_results": {"type": "integer", "description": "כמות תוצאות רצויה"}
+                        "query": {"type": "string", "description": 'Search topic'},
+                        "max_results": {"type": "integer", "description": 'Desired number of results'}
                     },
                     "required": ["query"]
                 },
@@ -91,7 +91,7 @@ class ExtensionsMixin:
             },
             "mcp_workflow": {
                 "name": "mcp_workflow",
-                "description": "מפעיל פונקציה מתוך MCP מותקן כחלק מתהליך עבודה מסודר.",
+                "description": 'Executes a function from installed MCP as part of an organized workflow.',
                 "parameters": BUILTIN_TOOL_SCHEMAS["run_mcp"]["inputSchema"],
                 "risk": "high",
                 "source": "builtin",
@@ -165,7 +165,7 @@ class ExtensionsMixin:
                     "- Prefer a coherent template/style system over one-off formatting. Use real headings, real list/field structures, real tables, and Word fields rather than visual imitations.\n"
                     "- Match form to information: prose for narrative, lists for parallel items, numbered steps for sequence, tables only for genuinely comparable rows/columns, and callouts only for important decisions or warnings.\n\n"
                     "2. Hebrew and bidi defaults\n"
-                    "- Unless the user asks otherwise, use language he-IL, RTL paragraph reading order, right alignment, A4 portrait, Arial 11 pt body, and professional Hebrew typography.\n"
+                    "- Match document language to the user's requested content language, otherwise to the conversation language. For Hebrew use he-IL, RTL reading order, right alignment, and professional Hebrew typography. For English use en-US, LTR reading order, and left alignment. Unless requested otherwise, use A4 portrait and Arial 11 pt body.\n"
                     "- Treat mixed Hebrew/English, punctuation, numbers, URLs, footnotes, tables, headers, and page numbering as explicit bidi QA targets. Do not reverse strings manually.\n"
                     "- Use RTL at paragraph/table level and bidi font/language properties at run level. Preserve intentional LTR ranges for code, addresses, formulas, and English quotations.\n\n"
                     "3. Engine choice\n"
@@ -193,7 +193,7 @@ class ExtensionsMixin:
         }
 
     def _parse_skill_frontmatter(self, text, fallback_name):
-        meta = {"name": fallback_name, "description": "Skill מבוסס הוראות", "version": ""}
+        meta = {"name": fallback_name, "description": 'Instruction-based Skill', "version": ""}
         match = re.match(r"^\s*---\s*\n(.*?)\n---\s*", text or "", flags=re.DOTALL)
         if not match:
             first_heading = re.search(r"^#\s+(.+)$", text or "", flags=re.MULTILINE)
@@ -219,7 +219,7 @@ class ExtensionsMixin:
         if not isinstance(spec, dict):
             return None, "skill.json must be a JSON object."
         name = safe_filename(spec.get("name") or (os.path.basename(skill_dir) if skill_dir else "skill"))
-        description = str(spec.get("description") or "Skill ללא תיאור").strip()
+        description = str(spec.get("description") or 'Skill without a description').strip()
         parameters = spec.get("parameters") or spec.get("inputSchema") or {"type": "object", "properties": {}}
         if not isinstance(parameters, dict) or parameters.get("type", "object") != "object":
             return None, "Skill parameters must be a JSON Schema object."
@@ -272,7 +272,7 @@ class ExtensionsMixin:
                 spec = {
                     "name": meta.get("name"),
                     "description": meta.get("description"),
-                    "parameters": {"type": "object", "properties": {"task": {"type": "string", "description": "מה לבצע בעזרת ה-Skill"}}, "additionalProperties": True},
+                    "parameters": {"type": "object", "properties": {"task": {"type": "string", "description": 'Task to perform using the Skill'}}, "additionalProperties": True},
                     "risk": "medium",
                     "handler": "instructions",
                     "metadata": meta.get("metadata", {}),
@@ -437,11 +437,10 @@ class ExtensionsMixin:
             return f"ERROR: Skill '{name}' is disabled."
         status = self._skill_dependency_status(spec)
         if not status["missing_bins"]:
-            return f"SUCCESS: כל דרישות ההרצה של Skill '{name}' זמינות כבר במערכת."
+            return f"SUCCESS: All runtime requirements for Skill '{name}' are already available on the system."
         if not status["install_entries"]:
             return (
-                f"ERROR: חסרות דרישות הרצה ל-Skill '{name}': {', '.join(status['missing_bins'])}. "
-                "ה-Skill לא סיפק הוראות התקנה אוטומטיות."
+                f"ERROR: Missing runtime requirements for Skill '{name}': {', '.join(status['missing_bins'])}. The Skill did not provide automatic installation instructions."
             )
         outputs = []
         for entry in status["install_entries"]:
@@ -449,21 +448,21 @@ class ExtensionsMixin:
             if err:
                 outputs.append(err)
                 continue
-            self._emit_skill_step(name, f"מתקין דרישה: {entry.get('package') or entry.get('id') or cmd}")
+            self._emit_skill_step(name, f"Installing requirement: {entry.get('package') or entry.get('id') or cmd}")
             outputs.append(f"COMMAND: {cmd}\n{self.run_system_command([cmd])}")
         self._load_skill_registry()
         refreshed = self._skill_dependency_status(self.skill_registry.get(name, spec))
         if refreshed["missing_bins"]:
-            outputs.append(f"עדיין חסר: {', '.join(refreshed['missing_bins'])}")
+            outputs.append(f"Still missing: {', '.join(refreshed['missing_bins'])}")
         else:
-            outputs.append("SUCCESS: דרישות ה-Skill זמינות כעת.")
+            outputs.append('SUCCESS: Skill requirements are now available.')
         return self._truncate_tool_output("\n\n".join(outputs))
 
     def _clawhub_get_json(self, path, params=None):
         url = get_url(URL_CLAWHUB_API) + path
         res = self._run_cancelable_callable(lambda: self._request_get(url, params=params or {}, timeout=25))
         if res.status_code == 429:
-            return {"error": f"Rate limited. נסה שוב בעוד {res.headers.get('Retry-After', 'מספר')} שניות."}
+            return {"error": f"Rate limited. Retry in {res.headers.get('Retry-After', 'a few')} seconds."}
         res.raise_for_status()
         return res.json()
 
@@ -562,7 +561,7 @@ class ExtensionsMixin:
             if isinstance(data, dict) and data.get("error"):
                 return "ERROR: " + data["error"]
             items = data.get("items") or data.get("results") or data.get("skills") or (data if isinstance(data, list) else [])
-            lines = ["תוצאות Skills מ-ClawHub (מסונן nonSuspiciousOnly=true):"]
+            lines = ['Skills results from ClawHub (filtered with nonSuspiciousOnly=true):']
             for item in items[:10]:
                 if not isinstance(item, dict):
                     continue
@@ -571,17 +570,17 @@ class ExtensionsMixin:
                 owner = skill.get("owner") or skill.get("ownerHandle") or skill.get("author") or ""
                 desc = (skill.get("description") or skill.get("summary") or "").replace("\n", " ")[:220]
                 lines.append(f"- {slug} | {owner} | {desc}")
-            return "\n".join(lines) if len(lines) > 1 else f"לא נמצאו Skills עבור: {query}"
+            return "\n".join(lines) if len(lines) > 1 else f'No Skills found for: {query}'
         except SmartiCancelled:
             raise
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'
 
     def _install_skill_dir(self, source_dir, target_name, source):
         target_name = safe_filename(target_name)
         target_dir = os.path.join(SKILLS_DIR, target_name)
         if os.path.exists(target_dir):
-            return None, f"ERROR: Skill '{target_name}' already exists. מחק או שנה שם לפני התקנה מחדש."
+            return None, f"ERROR: Skill '{target_name}' already exists. Delete or rename it before reinstalling."
         spec, err = self._load_skill_from_dir(source_dir, source=source)
         if not spec:
             return None, f"ERROR: Skill validation failed: {err}"
@@ -721,9 +720,9 @@ class ExtensionsMixin:
             self._save_settings()
             return f"SUCCESS: Python tool installed: {target_path}"
         except SyntaxError as exc:
-            return f"ERROR: Python syntax error: {exc}"
+            return f'ERROR: Python syntax error: {model_error_text(exc)}'
         except Exception as exc:
-            return f"ERROR: {exc}"
+            return f'ERROR: {model_error_text(exc)}'
         finally:
             if cleanup is not None:
                 cleanup.cleanup()
@@ -739,7 +738,7 @@ class ExtensionsMixin:
                 with open(path, "r", encoding="utf-8") as handle:
                     payload = json.load(handle)
             except Exception as exc:
-                return f"ERROR: MCP config must be valid JSON: {exc}"
+                return f'ERROR: MCP config must be valid JSON: {model_error_text(exc)}'
             if not isinstance(payload, dict):
                 return "ERROR: MCP config must be a JSON object."
             package = str(payload.get("package") or payload.get("pkg") or payload.get("npm") or package).strip()
@@ -769,7 +768,7 @@ class ExtensionsMixin:
                 self.settings.setdefault("skills_config", {})[name] = True
             self.refresh_extension_catalogs(force=True)
             self._save_settings()
-            return f"SUCCESS: Skill מקומי הותקן: {target}"
+            return f'SUCCESS: Local Skill installed: {target}'
         if source != "clawhub":
             return "ERROR: source must be 'clawhub' or 'local'."
         slug = str(skill_id or "").strip().strip("/")
@@ -795,12 +794,12 @@ class ExtensionsMixin:
                 return f"ERROR: ClawHub safety status is unknown for this Skill: {safety.get('reason')}"
         except Exception as e:
             logging.warning(f"ClawHub moderation/scan check failed for {slug}: {e}")
-            return f"ERROR: לא ניתן להשלים בדיקת סריקה של ClawHub עבור ה-Skill הזה: {e}"
+            return f'ERROR: Could not complete the ClawHub scan check for this Skill: {model_error_text(e)}'
         try:
             url = get_url(URL_CLAWHUB_API) + "/download"
             res = self._run_cancelable_callable(lambda: self._request_get(url, params={"slug": slug, "tag": "latest"}, timeout=45))
             if res.status_code == 429:
-                return f"ERROR: ClawHub rate limit. נסה שוב בעוד {res.headers.get('Retry-After', 'מספר')} שניות."
+                return f"ERROR: ClawHub rate limit. Retry in {res.headers.get('Retry-After', 'a few')} seconds."
             res.raise_for_status()
             with tempfile.TemporaryDirectory() as tmp:
                 zip_path = os.path.join(tmp, "skill.zip")
@@ -834,24 +833,24 @@ class ExtensionsMixin:
                 self._save_settings()
                 spec = (getattr(self, "skill_registry", {}) or {}).get(safe_filename(slug), {})
                 dep_status = self._format_skill_dependency_status(spec)
-                dep_note = f"\n{dep_status}" if dep_status else "\nSkill זה הוא מדריך/תהליך עבודה ואינו בהכרח כולל כלי הרצה פנימי."
+                dep_note = f"\n{dep_status}" if dep_status else '\nThis Skill is a guide/workflow and may not include an internal executable tool.'
                 safety_note = f"\nClawHub safety status: {safety.get('status', 'unknown')}: {safety.get('reason', '')}"
-                return f"SUCCESS: Skill הותקן מ-ClawHub: {slug}\nנתיב: {target}{dep_note}{safety_note}"
+                return f'SUCCESS: Skill installed from ClawHub: {slug}\nPath: {target}{dep_note}{safety_note}'
         except SmartiCancelled:
             raise
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'
 
     def list_skills(self):
         registry = getattr(self, "skill_registry", None) or self._load_skill_registry()
         if not registry:
-            return "אין Skills זמינים."
-        lines = ["Skills זמינים:"]
+            return 'No Skills available.'
+        lines = ['Available Skills:']
         for name, spec in sorted(registry.items()):
-            status = "פעיל" if self._skill_enabled(name) else "כבוי"
+            status = 'Enabled' if self._skill_enabled(name) else 'Disabled'
             dep = self._skill_dependency_status(spec)
-            dep_note = f" | חסר: {', '.join(dep['missing_bins'])}" if dep["missing_bins"] else ""
-            lines.append(f"- {name} | {status} | סוג: {spec.get('handler')} | מקור: {spec.get('source')} | סיכון: {spec.get('risk')}{dep_note} | {spec.get('description')}")
+            dep_note = f" | missing: {', '.join(dep['missing_bins'])}" if dep["missing_bins"] else ""
+            lines.append(f"- {name} | {status} | type: {spec.get('handler')} | source: {spec.get('source')} | risk: {spec.get('risk')}{dep_note} | {spec.get('description')}")
         return "\n".join(lines)
 
     def get_skill_info(self, skill_name, action=""):
@@ -933,12 +932,12 @@ class ExtensionsMixin:
 
     def _run_builtin_skill(self, name, args):
         if name == "analyze_project":
-            self._emit_skill_step(name, "בודק תיקיית פרויקט")
+            self._emit_skill_step(name, ui_text(self, 'בודק תיקיית פרויקט', 'Checking the project directory'))
             root = self._abs_path(args.get("path", ""))
             sandbox_ok, sandbox_err = self._ensure_sandbox_path_allowed(root, "read")
             if not sandbox_ok: return sandbox_err
             if not os.path.isdir(root): return f"ERROR: Not a folder: {root}"
-            self._emit_skill_step(name, "סורק מבנה וקבצים")
+            self._emit_skill_step(name, ui_text(self, 'סורק מבנה וקבצים', 'Scanning structure and files'))
             max_files = 120
             file_count = 0
             ext_counts = {}
@@ -961,27 +960,27 @@ class ExtensionsMixin:
                 "file_count_seen": file_count,
                 "extensions": ext_counts,
                 "sample_files": samples,
-                "next_step": "בחר קבצים מרכזיים לקריאה או הרץ בדיקות/build לפי הצורך."
+                "next_step": 'Choose key files to read or run tests/build as needed.'
             }, ensure_ascii=False, indent=2))
         if name == "fix_build_errors":
-            self._emit_skill_step(name, "מכין פקודת בדיקה")
+            self._emit_skill_step(name, ui_text(self, 'מכין פקודת בדיקה', 'Preparing a check command'))
             root = self._abs_path(args.get("path", ""))
             cmd = str(args.get("build_command", "")).strip()
             if not os.path.isdir(root) or not cmd:
                 return "ERROR: Missing project path or build_command."
-            self._emit_skill_step(name, "מריץ build או בדיקות")
+            self._emit_skill_step(name, ui_text(self, 'מריץ build או בדיקות', 'Running build or tests'))
             feedback, message = self.execute_tool("system_command", {"command": cmd, "cwd": root, "require_approval": True, "explanation": "הרצת פקודת build/test כחלק מ-Skill fix_build_errors"})
             return feedback or message
         if name == "create_python_tool":
-            self._emit_skill_step(name, "יוצר כלי מותאם אישית")
+            self._emit_skill_step(name, ui_text(self, 'יוצר כלי מותאם אישית', 'Creating a custom tool'))
             feedback, message = self.execute_tool("create_python_tool", args)
             return feedback or message
         if name == "web_research_summary":
-            self._emit_skill_step(name, "מבצע חיפוש אינטרנט")
+            self._emit_skill_step(name, ui_text(self, 'מבצע חיפוש אינטרנט', 'Searching the web'))
             feedback, message = self.execute_tool("internet_search", {"query": str(args.get("query", ""))})
             return feedback or message
         if name == "mcp_workflow":
-            self._emit_skill_step(name, "מפעיל כלי חיצוני")
+            self._emit_skill_step(name, ui_text(self, 'מפעיל כלי חיצוני', 'Running an external tool'))
             feedback, message = self.execute_tool("run_mcp", args)
             return feedback or message
         return "ERROR: Unknown builtin skill."
@@ -993,7 +992,7 @@ class ExtensionsMixin:
             return "ERROR: handler.py not found."
         timeout = self._timeout("tool_timeout_seconds", 120)
         payload = json.dumps({"skill": spec.get("name"), "arguments": args}, ensure_ascii=False)
-        self._emit_skill_step(skill_name, "מריץ handler מקומי")
+        self._emit_skill_step(skill_name, ui_text(self, 'מריץ handler מקומי', 'Running a local handler'))
         stdout_lines = []
         stderr_lines = []
         json_stdout_lines = []
@@ -1088,7 +1087,7 @@ class ExtensionsMixin:
                 tool_results = []
                 for idx, call in enumerate(parsed["tool_calls"][:8], start=1):
                     tool_name = str(call.get("name", ""))
-                    self._emit_skill_step(skill_name, f"מריץ כלי פנימי {idx}: {tool_name}")
+                    self._emit_skill_step(skill_name, ui_text(self, f'מריץ כלי פנימי {idx}: {tool_name}', f'Running internal tool {idx}: {tool_name}'))
                     if tool_name in {"run_skill", "install_skill"}:
                         tool_results.append({"tool": tool_name, "result": "ERROR: nested skill calls are blocked."})
                         continue
@@ -1104,10 +1103,10 @@ class ExtensionsMixin:
         started = time.time()
         raw_name = str(name or "")
         if self.status_callback:
-            self.status_callback(f"מפעיל Skill: {safe_filename(raw_name)}...")
+            self.status_callback(ui_text(self, f'מפעיל Skill: {safe_filename(raw_name)}...', f'Running Skill: {safe_filename(raw_name)}...'))
         registry = getattr(self, "skill_registry", None) or self._load_skill_registry()
         name = safe_filename(name)
-        self._emit_skill_step(name, "טוען הגדרות ומוודא שה-Skill פעיל")
+        self._emit_skill_step(name, ui_text(self, 'טוען הגדרות ומוודא שה-Skill פעיל', 'Loading settings and checking that the Skill is enabled'))
         spec = registry.get(name)
         if spec:
             spec = self._prompt_skill_spec(spec)
@@ -1116,7 +1115,7 @@ class ExtensionsMixin:
         if not self._skill_enabled(name):
             return f"ERROR: Skill '{name}' is disabled."
         args = args or {}
-        self._emit_skill_step(name, "בודק קלט והרשאות")
+        self._emit_skill_step(name, ui_text(self, 'בודק קלט והרשאות', 'Checking input and permissions'))
         ok, err = self._validate_json_schema(spec.get("parameters", {"type": "object"}), args, "arguments")
         if not ok:
             return f"ERROR: Skill arguments validation failed: {err}"
@@ -1133,25 +1132,25 @@ class ExtensionsMixin:
                 self._log_skill_event(name, {"arguments_hash": hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12], "result_preview": result[:1200], "duration_ms": int((time.time() - started) * 1000), "ok": False})
                 return result
             if spec.get("handler") == "builtin":
-                self._emit_skill_step(name, "מריץ Skill מובנה")
+                self._emit_skill_step(name, ui_text(self, 'מריץ Skill מובנה', 'Running a built-in Skill'))
                 result = self._run_builtin_skill(name, args)
             elif spec.get("handler") == "handler.py" and spec.get("source") != "clawhub":
-                self._emit_skill_step(name, "מריץ Skill מקומי")
+                self._emit_skill_step(name, ui_text(self, 'מריץ Skill מקומי', 'Running a local Skill'))
                 result = self._run_python_skill_handler(spec, args)
             else:
-                self._emit_skill_step(name, "טוען הוראות עבודה")
+                self._emit_skill_step(name, ui_text(self, 'טוען הוראות עבודה', 'Loading workflow instructions'))
                 result = (
                     self._prompt_text('run_skill_result_2', name, spec.get('description', ''), risk, json.dumps(args, ensure_ascii=False), self._format_skill_dependency_status(spec), self._truncate_tool_output(spec.get('instructions', '')[:12000]))
                 )
             self._log_skill_event(name, {"arguments_hash": hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12], "result_preview": str(result)[:1200], "duration_ms": int((time.time() - started) * 1000), "ok": not str(result).startswith("ERROR")})
-            self._emit_skill_step(name, "סיים והחזיר תוצאה")
+            self._emit_skill_step(name, ui_text(self, 'סיים והחזיר תוצאה', 'Finished and returned a result'))
             return result
         except subprocess.TimeoutExpired:
             result = f"ERROR: Skill timeout after {self._timeout('tool_timeout_seconds', 120)}s."
             self._log_skill_event(name, {"error": result, "duration_ms": int((time.time() - started) * 1000), "ok": False})
             return result
         except Exception as e:
-            result = f"ERROR: Skill crashed: {e}"
+            result = f'ERROR: Skill crashed: {model_error_text(e)}'
             self._log_skill_event(name, {"error": result, "duration_ms": int((time.time() - started) * 1000), "ok": False})
             return result
 

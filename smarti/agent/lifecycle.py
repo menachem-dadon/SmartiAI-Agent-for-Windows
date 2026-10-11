@@ -1,6 +1,7 @@
 """SmartiCore startup, extension catalog, trust, and basic path helpers."""
 from .shared import *
 from contextlib import contextmanager
+from smarti.user_language import conversation_language
 
 
 class LifecycleMixin:
@@ -15,7 +16,7 @@ class LifecycleMixin:
         "_current_agent_process_started_at", "status_callback",
         "print_callback", "ask_user_callback", "api_key_callback",
         "step_callback", "stream_callback", "_current_stream",
-        "_held_resource_locks",
+        "_held_resource_locks", "_current_user_language",
     })
 
     def __getattribute__(self, name):
@@ -284,6 +285,7 @@ class LifecycleMixin:
         }
         saved_mode = normalize_provider_name(context.get("mode", ""))
         messages = self.chat_store.messages(session_id)
+        values["_current_user_language"] = conversation_language(messages)
         if exclude_run_id:
             messages = [
                 message for message in messages

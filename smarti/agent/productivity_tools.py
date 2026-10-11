@@ -26,11 +26,11 @@ class ProductivityToolsMixin:
             if not self._ensure_api_key_available(
                 "tavily_api_key",
                 "Tavily",
-                title="חסר מפתח API של Tavily",
-                message="סמארטי מנסה לבצע חיפוש אינטרנט דרך Tavily, אבל לא נשמר מפתח API של Tavily. הזן מפתח כדי להמשיך את החיפוש.",
+                title=ui_text(self, "חסר מפתח API של Tavily", "Missing Tavily API key"),
+                message=ui_text(self, "סמארטי מנסה לבצע חיפוש אינטרנט דרך Tavily, אבל לא נשמר מפתח API של Tavily. הזן מפתח כדי להמשיך את החיפוש.", "Smarti needs a Tavily API key to search the web. Enter a key to continue the search."),
                 help_url=self._api_key_help_url("tavily_api_key", "tavily"),
             ):
-                return "ERROR_USER: חסר מפתח API של Tavily. הזן מפתח Tavily כדי להשתמש בחיפוש האינטרנט."
+                return "ERROR: Missing Tavily API key. Enter a Tavily key to use internet search."
             api = self._ensure_secret_loaded("tavily_api_key")
         try:
             payload = {"query": query, "include_answer": "advanced"}
@@ -82,7 +82,7 @@ class ProductivityToolsMixin:
         if sandbox_only:
             root = self._sandbox_root()
             if not os.path.isdir(root):
-                return "ERROR: ארגז החול פעיל, אך תיקיית ארגז החול אינה קיימת."
+                return 'ERROR: Sandbox mode is enabled, but the sandbox directory does not exist.'
             scan_dir(root, skip_paths=scanned_roots)
             scanned_roots.add(root)
             reached_limit = True
@@ -106,9 +106,9 @@ class ProductivityToolsMixin:
                 if os.path.exists(drive):
                     if scan_dir(drive, skip_paths=scanned_roots): break
 
-        if not found_files: return f"לא נמצאו קבצים העונים לשם: {query}"
+        if not found_files: return f'No files matching the name: {query}'
         found_files.sort(key=lambda x: len(os.path.basename(x)))
-        return "תוצאות חיפוש שמות קבצים:\n" + "\n".join(found_files[:30])
+        return 'Filename search results:\n' + "\n".join(found_files[:30])
 
     def smart_content_search(self, target_dir, text_query):
         found = []
@@ -136,13 +136,13 @@ class ProductivityToolsMixin:
                                 idx = content.lower().find(text_query_lower)
                                 start = max(0, idx - 40)
                                 end = min(len(content), idx + len(text_query) + 40)
-                                found.append(f"נמצא בקובץ: {path}\nהקשר: ...{content[start:end].replace(chr(10), ' ')}...")
+                                found.append(f"Found in file: {path}\nContext: ...{content[start:end].replace(chr(10), ' ')}...")
                                 count += 1
                     except: pass
             if count >= 15: break
 
-        if not found: return f"לא נמצא '{text_query}' בתיקייה: {target_dir}"
-        return "תוצאות סריקת טקסט:\n" + "\n\n".join(found)
+        if not found: return f"No match for '{text_query}' in directory: {target_dir}"
+        return 'Text search results:\n' + "\n\n".join(found)
 
     def smart_open_app(self, params):
         query = str(params[0] if params else "").strip()
@@ -185,7 +185,7 @@ class ProductivityToolsMixin:
             return f"SUCCESS: Opened {best.get('name')} via {best.get('source')}."
         except Exception as e:
             suggestions = ", ".join(item["name"] for item in matches[:6])
-            return f"ERROR: Failed to open {best.get('name')}: {e}. Matches: {suggestions}"
+            return f"ERROR: Failed to open {best.get('name')}: {model_error_text(e)}. Matches: {suggestions}"
 
     def open_direct_website(self, query):
         query = query.strip()
@@ -196,12 +196,12 @@ class ProductivityToolsMixin:
             if self.settings.get("enable_browser_automation", False):
                 return self._open_in_automation_browser(url)
             webbrowser.open(url)
-            return f"האתר נפתח."
+            return f'Website opened.'
         search_url = get_url(URL_DDG) + urllib.parse.quote(query)
         if self.settings.get("enable_browser_automation", False):
             return self._open_in_automation_browser(search_url)
         webbrowser.open(search_url)
-        return f"בוצע חיפוש."
+        return f'Search completed.'
 
     def schedule_background_task(self, params, *, request_key=None):
         # The settings write survives a missing HTTP receipt or Core restart.
@@ -284,8 +284,8 @@ class ProductivityToolsMixin:
                 self.settings["background_tasks"].remove(task)
                 raise
             self._schedule_background_task_thread(task)
-            return f"SUCCESS: משימה תוכננה בהצלחה (מזהה: {task['id']}). המשימה תורץ ברקע בזמן המבוקש. אל תבצע את הפעולה בעצמך כעת בשיחה זו, אלא רק הודע למשתמש שהמשימה תוכננה בהצלחה ברקע."
-        except Exception as e: return f"ERROR: {e}"
+            return f"SUCCESS: Task scheduled successfully (ID: {task['id']}). The task will run in the background at the requested time. Do not perform the action yourself now in this conversation; only inform the user that the background task was scheduled successfully."
+        except Exception as e: return f'ERROR: {model_error_text(e)}'
 
     def schedule_reminder(self, delay_minutes, message, title="", repeat="once", interval_minutes=""):
         try:
@@ -326,9 +326,9 @@ class ProductivityToolsMixin:
             self.settings["background_jobs"] = self.settings["background_tasks"]
             self._save_settings()
             self._schedule_background_task_thread(task)
-            return f"SUCCESS: תזכורת תוכננה. מזהה: {task['id']}"
+            return f"SUCCESS: Reminder scheduled. ID: {task['id']}"
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'
 
     def list_reminders(self):
         tasks = [
@@ -336,26 +336,26 @@ class ProductivityToolsMixin:
             if task.get("kind") == "reminder" and task.get("status") in {"scheduled", "running", "cancelling"}
         ]
         if not tasks:
-            return "אין תזכורות פעילות."
-        lines = ["תזכורות פעילות:"]
+            return 'No active reminders.'
+        lines = ['Active reminders:']
         for task in tasks[-30:]:
-            repeat = "מחזורית" if task.get("repeat") == "interval" else "חד-פעמית"
-            lines.append(f"- {task.get('id')} | {task.get('status')} | {repeat} | זמן: {task.get('run_at')} | {task.get('title', '')}: {task.get('message', '')[:140]}")
+            repeat = 'Recurring' if task.get("repeat") == "interval" else 'One-time'
+            lines.append(f"- {task.get('id')} | {task.get('status')} | {repeat} | time: {task.get('run_at')} | {task.get('title', '')}: {task.get('message', '')[:140]}")
         return "\n".join(lines)
 
     def _open_windows_uri(self, *uris):
         if platform.system() != "Windows":
-            return "ERROR: פתיחת אפליקציות Windows זמינה רק ב-Windows."
+            return 'ERROR: Opening Windows applications is only available on Windows.'
         last_error = ""
         for uri in uris:
             if not uri:
                 continue
             try:
                 os.startfile(str(uri))
-                return f"SUCCESS: נפתח {uri}"
+                return f'SUCCESS: Opened {uri}'
             except Exception as e:
                 last_error = str(e)
-        return f"ERROR: לא ניתן לפתוח את היעד. {last_error}"
+        return f'ERROR: Could not open the target. {last_error}'
 
     def _ics_escape(self, value):
         text = str(value or "")
@@ -422,7 +422,7 @@ class ProductivityToolsMixin:
                 "content": ics,
             }, None
         except Exception as e:
-            return None, f"ERROR: {e}"
+            return None, f'ERROR: {model_error_text(e)}'
 
     def _write_calendar_event_file(self, prepared, *, open_file=True):
         path = str(prepared.get("path") or "")
@@ -436,14 +436,14 @@ class ProductivityToolsMixin:
                     os.startfile(path)
                 except Exception as e:
                     open_error = str(e)
-            result = f"SUCCESS: נוצר קובץ אירוע ליומן: {path}"
+            result = f'SUCCESS: Calendar event file created: {path}'
             if open_error:
-                result += f"\nWARNING: הקובץ נוצר, אך לא ניתן היה לפתוח אותו: {open_error}"
+                result += f'\nWARNING: The file was created, but could not be opened: {open_error}'
             return result
         except FileExistsError:
             return f"ERROR: Calendar event path changed before creation; no file was overwritten: {path}"
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'
 
     def create_calendar_event_file(self, args):
         prepared, error = self._prepare_calendar_event_file(args or {})
@@ -624,8 +624,8 @@ class ProductivityToolsMixin:
                 "open_button": args["open_button"],
                 "session_id": self._current_origin_session_id(),
             }):
-                return "SUCCESS: התראת Windows נשלחה."
-            return "ERROR: ערוץ ההתראות של הממשק אינו זמין כרגע."
+                return 'SUCCESS: Windows notification sent.'
+            return 'ERROR: The interface notification channel is currently unavailable.'
         if action == "schedule_reminder":
             return self.schedule_reminder(
                 args["delay_minutes"],
@@ -646,14 +646,14 @@ class ProductivityToolsMixin:
             if task.get("status") in {"scheduled", "running", "cancelling"}
         ]
         if not tasks:
-            return "אין משימות רקע פעילות."
-        lines = ["משימות רקע:"]
+            return 'No active background tasks.'
+        lines = ['Background tasks:']
         for task in tasks[-30:]:
-            repeat = "מחזורית" if task.get("repeat") == "interval" else "חד-פעמית"
-            kind = "תזכורת" if task.get("kind") == "reminder" else "משימה"
+            repeat = 'Recurring' if task.get("repeat") == "interval" else 'One-time'
+            kind = 'Reminder' if task.get("kind") == "reminder" else 'Task'
             prompt = task.get("message") if task.get("kind") == "reminder" else task.get("prompt", "")
             result = (task.get("last_result") or "").replace("\n", " ")[:220]
-            lines.append(f"- {task.get('id')} | {kind} | {task.get('status')} | {repeat} | ריצה: {task.get('run_at')} | {str(prompt or '')[:120]} | {result}")
+            lines.append(f"- {task.get('id')} | {kind} | {task.get('status')} | {repeat} | run: {task.get('run_at')} | {str(prompt or '')[:120]} | {result}")
         return "\n".join(lines)
 
     def cancel_background_task(self, task_id):
@@ -674,7 +674,7 @@ class ProductivityToolsMixin:
         task.setdefault("history", []).append({"time": datetime.now().isoformat(timespec="seconds"), "status": task["status"], "result": "User requested cancellation."})
         self.settings["background_jobs"] = self.settings.get("background_tasks", [])
         self._save_settings()
-        return f"SUCCESS: משימת הרקע {task_id} בוטלה."
+        return f'SUCCESS: Background task {task_id} cancelled.'
 
     def retry_background_task(self, task_id, delay_minutes=0):
         task_id = str(task_id or "").strip()
@@ -702,7 +702,7 @@ class ProductivityToolsMixin:
         self.settings["background_jobs"] = self.settings.get("background_tasks", [])
         self._save_settings()
         self._schedule_background_task_thread(task)
-        return f"SUCCESS: משימת הרקע {task_id} תורצה מחדש."
+        return f'SUCCESS: Background task {task_id} scheduled to run again.'
 
     def edit_background_task(self, params):
         try:
@@ -793,9 +793,9 @@ class ProductivityToolsMixin:
             self._save_settings()
             
             self._schedule_background_task_thread(task)
-            return f"SUCCESS: משימת הרקע {task_id} עודכנה בהצלחה ותוזמנה מחדש."
+            return f'SUCCESS: Background task {task_id} updated successfully and rescheduled.'
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'
 
     def _legacy_update_memory_tool(self, mode, content):
         mode = str(mode or "").strip().lower()
@@ -811,7 +811,7 @@ class ProductivityToolsMixin:
             return "ERROR: mode must be replace, append, or clear."
         self._save_settings()
         self.system_prompt = self._load_system_prompt()
-        return "SUCCESS: הזיכרון עודכן."
+        return 'SUCCESS: Memory updated.'
 
     def search_memory_tool(self, query, memory_type="any", max_results=6):
         if not getattr(self, "memory_manager", None):
@@ -960,4 +960,4 @@ class ProductivityToolsMixin:
                 return json.dumps({"ok": True, **result}, ensure_ascii=False)
             return f"ERROR: Unsupported memory action: {action}"
         except Exception as e:
-            return f"ERROR: {e}"
+            return f'ERROR: {model_error_text(e)}'

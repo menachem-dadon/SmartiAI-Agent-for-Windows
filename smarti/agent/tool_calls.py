@@ -699,7 +699,7 @@ class ToolCallMixin:
         if action in structured_actions:
             return ""
         if action in {"type", "type_text", "write", "write_text"} and text:
-            return f"paste_text({json.dumps(str(text), ensure_ascii=False)})\nprint('SUCCESS: הטקסט הודבק דרך Clipboard ותומך בעברית/Unicode.')"
+            return f"paste_text({json.dumps(str(text), ensure_ascii=False)})\nprint('SUCCESS: Text pasted through the Clipboard with Unicode support.')"
         if action in {"auto", "keys", "send_keys", "type_keys"} and keys:
             if isinstance(keys, list):
                 safe_keys = [str(k) for k in keys if str(k)]
@@ -709,7 +709,7 @@ class ToolCallMixin:
                     return f"press({json.dumps(safe_keys[0], ensure_ascii=False)})\nprint('SUCCESS: key sent.')"
             return f"send_keys({json.dumps(str(keys), ensure_ascii=False)})\nprint('SUCCESS: keys sent.')"
         if action in {"press", "key"} and text:
-            return f"press({json.dumps(str(text), ensure_ascii=False)})\nprint('SUCCESS: המקש נלחץ.')"
+            return f"press({json.dumps(str(text), ensure_ascii=False)})\nprint('SUCCESS: Key pressed.')"
         if action == "hotkey":
             if isinstance(keys, list) and keys:
                 safe_keys = [str(k) for k in keys]
@@ -718,7 +718,7 @@ class ToolCallMixin:
                 if args.get("param2"):
                     safe_keys.append(str(args.get("param2")))
             if all(safe_keys):
-                return f"hotkey(*{json.dumps(safe_keys, ensure_ascii=False)})\nprint('SUCCESS: קיצור המקלדת הופעל.')"
+                return f"hotkey(*{json.dumps(safe_keys, ensure_ascii=False)})\nprint('SUCCESS: Keyboard shortcut executed.')"
         if action in {"focus_window", "activate_window"} and text:
             return f"activate_window({json.dumps(str(text), ensure_ascii=False)})\nprint('SUCCESS: focus attempted.')"
         if action in {"click", "move_click"}:
@@ -1181,7 +1181,7 @@ class ToolCallMixin:
         self._emit_agent_phase(
             "planner",
             f"requested_by_model intent={intent} mode={mode} provided_steps={len(provided_steps)} reason={reason[:250]}",
-            status_text="מעדכן תוכנית..." if replanning else "מתכנן שלבי ביצוע...",
+            status_text=ui_text(self, 'מעדכן תוכנית...', 'Updating the plan...') if replanning else ui_text(self, 'מתכנן שלבי ביצוע...', 'Planning execution steps...'),
             show_step=bool(show_step) and not is_background_task,
         )
 
@@ -1359,9 +1359,9 @@ class ToolCallMixin:
             args_dict = self._normalize_tool_call_args(action, args_dict)
             provider_call_id = str(tool_call.get("provider_call_id", "") or "").strip()
         except json.JSONDecodeError as e:
-            return None, f"ERROR: Invalid JSON Tool Call. Details: {e}. You MUST output exactly valid JSON objects representing tools/call requests."
+            return None, f'ERROR: Invalid JSON Tool Call. Details: {model_error_text(e)}. You MUST output exactly valid JSON objects representing tools/call requests.'
         except Exception as e:
-            return None, f"ERROR: Invalid tool call structure. Details: {e}"
+            return None, f'ERROR: Invalid tool call structure. Details: {model_error_text(e)}'
 
         local_pre_text = pre_text if call_index == 0 else (call_entry or {}).get("pre_text", "")
 
@@ -1529,7 +1529,7 @@ class ToolCallMixin:
             raise
         except Exception as e:
             logging.exception(f"Tool execution recovered after crash: {action}")
-            feedback_for_ai, message_for_user = f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(str(e), self.settings)}", None
+            feedback_for_ai, message_for_user = f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(model_error_text(e), self.settings)}", None
         finally:
             self._execution_context.current_tool = previous_tool
         if action == "get_tool_info" and not str(feedback_for_ai).startswith("ERROR:"):
@@ -1543,7 +1543,7 @@ class ToolCallMixin:
         output = feedback_for_ai if feedback_for_ai is not None else message_for_user
         status = "error" if str(output or "").startswith("ERROR") else "ok"
         if output:
-            obs = "[תמונה צורפה]" if str(output).startswith("IMAGE_BASE64:") else self._truncate_tool_output(output, retain=False)[:1200]
+            obs = "[Image attached]" if str(output).startswith("IMAGE_BASE64:") else self._truncate_tool_output(output, retain=False)[:1200]
             self._record_tool_observation(action, args_dict, status, obs)
         return {
             "action": action,
@@ -1596,16 +1596,17 @@ class ToolCallMixin:
                 except Exception as e:
                     call = future_map[future]
                     action = call.get("action", "")
+                    failure = f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(model_error_text(e), self.settings)}"
                     results.append({
                         "action": action,
                         "effective_action": self._effective_tool_action(action, call.get("arguments", {}) or {})[0],
                         "arguments": call.get("arguments", {}) or {},
                         "event_id": str(call.get("_agent_process_event_id") or ""),
-                        "feedback": f"ERROR: Tool '{action}' crashed internally: {redact_sensitive_text(str(e), self.settings)}",
+                        "feedback": failure,
                         "message": None,
                         "status": "error",
                         "step_text": call.get("step_text", ""),
-                        "output": str(e),
+                        "output": failure,
                     })
         results.sort(key=lambda item: next((
             idx for idx, call in enumerate(calls)
@@ -1787,7 +1788,7 @@ class ToolCallMixin:
         self._emit_agent_phase(
             "evaluator",
             f"start iteration={iteration} results={len(results)} meaningful={meaningful}",
-            status_text="מעריך התקדמות...",
+            status_text=ui_text(self, 'מעריך התקדמות...', 'Assessing progress...'),
         )
         recent_results = "\n".join(
             f"- {r.get('action')} | {r.get('status')} | {self._truncate_tool_output(r.get('output', ''))[:700].replace(chr(10), ' ')}"
@@ -1874,7 +1875,7 @@ class ToolCallMixin:
                     names.append(node.module.split(".")[0])
                 blocked = sorted(set(names) & banned_modules)
                 if blocked:
-                    return False, f"ייבוא מודול חסום בקוד אוטומציה: {', '.join(blocked)}"
+                    return False, f"Blocked module import in automation code: {', '.join(blocked)}"
             if isinstance(node, ast.Call):
                 func_name = ""
                 if isinstance(node.func, ast.Name):
@@ -1882,9 +1883,9 @@ class ToolCallMixin:
                 elif isinstance(node.func, ast.Attribute):
                     func_name = node.func.attr
                 if func_name in banned_calls:
-                    return False, f"קריאה חסומה בקוד אוטומציה: {func_name}"
+                    return False, f'Blocked call in automation code: {func_name}'
             if isinstance(node, ast.Attribute) and str(node.attr).startswith("__"):
-                return False, "גישה לשדות dunder חסומה בקוד אוטומציה."
+                return False, 'Access to dunder attributes is blocked in automation code.'
             if isinstance(node, ast.While) and isinstance(node.test, ast.Constant) and node.test.value is True:
-                return False, "לולאת while True חסומה כדי למנוע תקיעה."
+                return False, 'A while True loop is blocked to prevent a hang.'
         return True, None

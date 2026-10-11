@@ -366,7 +366,7 @@ class BackgroundRuntimeMixin:
             except Exception as e:
                 logging.exception("Background task crashed unexpectedly.")
                 self._recover_after_agent_crash()
-                error_text = f"ERROR: {e}"
+                error_text = f'ERROR: {model_error_text(e)}'
                 self._mark_background_task(task_id, "failed", error_text)
                 if getattr(self, "background_task_finish_callback", None):
                     try: self.background_task_finish_callback(target_session_id or "", task_id, error_text, False)

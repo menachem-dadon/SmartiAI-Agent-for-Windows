@@ -14,7 +14,7 @@ from smarti.config import BUILTIN_TOOL_SCHEMAS, DEFAULT_SETTINGS, PUBLIC_BUILTIN
 from smarti.local_gateway import SmartiLocalGateway
 from smarti.desktop_services import settings_schema_document
 from smarti.managers import SettingsManager
-from smarti.prompt_language import ENGLISH, HEBREW, LANGUAGE_POLICY, builtin_schemas, prompt_language
+from smarti.prompt_language import ENGLISH, LANGUAGE_POLICY, builtin_schemas, prompt_language
 from smarti.run_manager import ConversationRunManager
 from tests.test_context_efficiency import _prompt_core
 from tests import test_conversation_runs as fixtures
@@ -30,26 +30,25 @@ def without_annotations(value):
 
 
 class PromptLanguageTests(unittest.TestCase):
-    def test_default_and_missing_setting_use_english_and_migration_preserves_hebrew(self):
-        self.assertEqual(DEFAULT_SETTINGS["system_prompt_language"], "en")
+    def test_system_language_is_fixed_and_migration_discards_obsolete_preference(self):
+        self.assertNotIn("system_prompt_language", DEFAULT_SETTINGS)
         self.assertEqual(prompt_language({}), "en")
         with tempfile.TemporaryDirectory() as directory:
             manager = SettingsManager(str(Path(directory) / "settings.json"), DEFAULT_SETTINGS)
             for language in ("en", "he"):
-                settings, _ = manager.migrate_or_merge({"system_prompt_language": language})
-                self.assertEqual(settings["system_prompt_language"], language)
+                settings, changed = manager.migrate_or_merge({"system_prompt_language": language})
+                self.assertNotIn("system_prompt_language", settings)
+                self.assertTrue(changed)
+                self.assertEqual(prompt_language({"system_prompt_language": language}), "en")
 
-    def test_all_owned_templates_are_english_and_preserve_interpolation_slots(self):
-        self.assertEqual(set(ENGLISH), set(HEBREW))
+    def test_all_owned_templates_are_english_with_valid_interpolation_slots(self):
         formatter = string.Formatter()
         for key, english in ENGLISH.items():
             with self.subTest(template=key):
                 self.assertNotRegex(english, r"[\u0590-\u05ff]")
-                if not re.search(r"\{\d+(?:[!}:])", english):
-                    continue
-                fields = lambda text: [(name, spec, conv) for _, name, spec, conv in formatter.parse(text)
-                                       if name is not None]
-                self.assertEqual(fields(english), fields(HEBREW[key]))
+                if re.search(r"\{\d+(?:[!}:])", english):
+                    fields = [name for _, name, _, _ in formatter.parse(english) if name is not None]
+                    self.assertTrue(all(name.isdigit() for name in fields))
 
     def test_all_prompt_calls_have_both_translations_including_error_paths(self):
         root = Path(__file__).resolve().parents[1] / "smarti" / "agent"
@@ -58,7 +57,6 @@ class PromptLanguageTests(unittest.TestCase):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "_prompt_text":
                     key = node.args[0].value
                     self.assertIn(key, ENGLISH, str(path))
-                    self.assertIn(key, HEBREW, str(path))
         core = _prompt_core({"get_tool_info"}, "en")
         self.assertEqual(core._schema_for_requested_action("custom", {"properties": []}, "full"),
                          ({"properties": []}, "full", None))
@@ -101,7 +99,7 @@ class PromptLanguageTests(unittest.TestCase):
                                                      enable_skills_beta=skills, enable_canvas_remote_images=remote_images)
                                 prompt = core._load_system_prompt()
                                 self.assertNotRegex(prompt, r"[\u0590-\u05ff]")
-                                self.assertTrue(prompt.startswith(LANGUAGE_POLICY["en"]))
+                                self.assertTrue(prompt.startswith(LANGUAGE_POLICY))
                                 self.assertIn("Switch only when the user", prompt)
                                 self.assertIn("progress reports", prompt)
                                 for tool in active:
@@ -126,21 +124,18 @@ class PromptLanguageTests(unittest.TestCase):
         block = core._loaded_skill_system_context({"sample": data})
         self.assertIn(data, block)
 
-    def test_hebrew_fallback_and_native_schemas_switch_back_without_mutating_state(self):
+    def test_obsolete_preferences_cannot_restore_hebrew_system_text(self):
         core = _prompt_core(set(PUBLIC_BUILTIN_TOOLS) | {"agent_planner"}, "en")
         state = (core.settings["tools_config"].copy(), core.memory_manager)
         for language in ("en", "he", "en"):
             core.settings["system_prompt_language"] = language
             prompt = core._load_system_prompt()
-            self.assertTrue(prompt.startswith(LANGUAGE_POLICY[language]))
-            self.assertIn("**חוקים נוספים לכלים:**" if language == "he" else "**Additional tool rules:**", prompt)
+            self.assertTrue(prompt.startswith(LANGUAGE_POLICY))
+            self.assertIn("**Additional tool rules:**", prompt)
             specs = core._native_tool_specs_for_request()
             self.assertEqual(specs[0]["name"], "agent_planner")
             info = core.get_tool_info("get_tool_info", "full")
-            if language == "en":
-                self.assertNotRegex(json.dumps(specs, ensure_ascii=False) + info, r"[\u0590-\u05ff]")
-            else:
-                self.assertRegex(info, r"[\u0590-\u05ff]")
+            self.assertNotRegex(json.dumps(specs, ensure_ascii=False) + info, r"[\u0590-\u05ff]")
         self.assertEqual((core.settings["tools_config"], core.memory_manager), state)
 
     def test_builtin_skill_catalog_and_guidance_are_english(self):
@@ -153,13 +148,15 @@ class PromptLanguageTests(unittest.TestCase):
         self.assertNotRegex("\n".join(core._get_existing_skills()), r"[\u0590-\u05ff]")
 
     def test_memory_envelope_examples_keep_their_json_contract(self):
-        envelopes = lambda text: [json.loads(value) for value in re.findall(r"<smarti_memory>(.*?)</smarti_memory>", text)]
-        english = envelopes(ENGLISH["load_system_prompt_memory_policy_1"])
-        hebrew = envelopes(HEBREW["load_system_prompt_memory_policy_1"])
-        self.assertEqual(english[0], hebrew[0])
-        self.assertEqual(set(english[1]["operations"][0]), set(hebrew[1]["operations"][0]))
-        for field in ("action", "category", "scope", "memory_type", "recall_policy", "importance", "evidence"):
-            self.assertEqual(english[1]["operations"][0][field], hebrew[1]["operations"][0][field])
+        envelopes = [json.loads(value) for value in re.findall(r"<smarti_memory>(.*?)</smarti_memory>", ENGLISH["load_system_prompt_memory_policy_1"])]
+        self.assertEqual(envelopes[0], {"operations": []})
+        operation = envelopes[1]["operations"][0]
+        self.assertEqual(operation["action"], "add")
+        self.assertEqual(operation["category"], "preference")
+        self.assertEqual(operation["scope"], "user")
+        self.assertEqual(operation["memory_type"], "user")
+        self.assertEqual(operation["recall_policy"], "always")
+        self.assertEqual(operation["evidence"], [])
 
     def test_title_and_internal_output_repair_follow_user_language(self):
         core = _prompt_core({"get_tool_info"}, "en")
@@ -178,51 +175,31 @@ class PromptLanguageTests(unittest.TestCase):
         state["observations"] = ["שם הקובץ הוא מסמך.txt {0}"]
         self.assertIn(state["observations"][0], core._planner_context_for_replan(state))
         core.settings["system_prompt_language"] = "he"
-        self.assertIn("סיבת התכנון/תכנון מחדש", core._planner_context_for_replan(state))
-        field = settings_schema_document()["fields"]["system_prompt_language"]
-        self.assertTrue(field["advanced"])
-        self.assertEqual(field["options"], ["en", "he"])
+        self.assertIn("Planning/replanning reason", core._planner_context_for_replan(state))
+        self.assertNotIn("system_prompt_language", settings_schema_document()["fields"])
 
-    def test_gateway_validates_persists_and_reloads_both_languages(self):
+    def test_gateway_rejects_obsolete_language_setting_without_partial_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             core = fixtures._FakeCore(Path(directory) / "history.json")
             core.settings = copy.deepcopy(DEFAULT_SETTINGS)
             path = Path(directory) / "settings.json"
             manager = SettingsManager(str(path), DEFAULT_SETTINGS)
             core._save_settings = lambda: manager.save(core.settings)
-            core._load_system_prompt = lambda: "prompt/" + core.settings["system_prompt_language"]
+            core._save_settings()
             core.run_manager = ConversationRunManager(core)
             gateway = SmartiLocalGateway(core, "test-token", port=0)
             self.assertTrue(gateway.start())
             request = fixtures.LocalGatewayTests._request
+            before = path.read_bytes()
+            old_values = copy.deepcopy(core.settings)
             try:
-                for language in ("he", "en"):
-                    status, _, result = request(gateway, "/v2/settings", method="PATCH",
-                                                payload={"values": {"system_prompt_language": language}})
-                    self.assertEqual(status, 200)
-                    self.assertEqual(result["data"]["values"]["system_prompt_language"], language)
-                    self.assertEqual(core.system_prompt, "prompt/" + language)
-                    self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["system_prompt_language"], language)
-                before = path.read_bytes()
-                with self.assertRaises(urllib.error.HTTPError) as rejected:
-                    request(gateway, "/v2/settings", method="PATCH",
-                            payload={"values": {"system_prompt_language": "fr", "max_agent_loops": 12}})
-                self.assertEqual(rejected.exception.code, 400)
-                self.assertEqual(path.read_bytes(), before)
-                self.assertNotEqual(core.settings["max_agent_loops"], 12)
-                core._save_settings = mock.Mock(side_effect=PermissionError("disk unavailable"))
-                for previous in ("en", None):
-                    if previous is None:
-                        core.settings.pop("system_prompt_language")
-                    else:
-                        core.settings["system_prompt_language"] = previous
-                    with self.assertRaises(urllib.error.HTTPError) as failed_save:
+                for language in ("he", "en", "fr"):
+                    with self.assertRaises(urllib.error.HTTPError) as rejected:
                         request(gateway, "/v2/settings", method="PATCH",
-                                payload={"values": {"system_prompt_language": "he"}})
-                    self.assertEqual(failed_save.exception.code, 500)
-                    self.assertEqual(core.settings.get("system_prompt_language"), previous)
-                    self.assertEqual(core.system_prompt, "prompt/en")
+                                payload={"values": {"system_prompt_language": language, "max_agent_loops": 12}})
+                    self.assertEqual(rejected.exception.code, 400)
                     self.assertEqual(path.read_bytes(), before)
+                    self.assertEqual(core.settings, old_values)
             finally:
                 gateway.stop()
                 core.run_manager.shutdown(wait=True)

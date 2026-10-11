@@ -1,5 +1,6 @@
 """Model setup, chat/session state, settings, secrets, usage budgets, system prompt, and API retry."""
 from .shared import *
+from smarti.user_language import user_description
 from types import SimpleNamespace
 from random import uniform
 from ..provider_protocols import openai_responses_arguments, openai_responses_result
@@ -481,7 +482,7 @@ class ModelContextMixin(RequestBudgetMixin):
     def canvas_manager_tool(self, args_dict):
         """Create/update an in-memory canvas artifact for this chat turn only."""
         if not self.settings.get("enable_visual_surfaces", False) or not self.settings.get("enable_web_canvas", False):
-            return "ERROR: הקנבס המתקדם כבוי בהגדרות. המשתמש צריך להפעיל אותו מתפריט סמארטי."
+            return "ERROR: Advanced Canvas is disabled in Settings. The user must enable it from the Smarti menu."
         args = args_dict if isinstance(args_dict, dict) else {}
         operation = str(args.get("action") or "").strip().lower()
         if operation not in {"create", "update", "close"}:
@@ -491,7 +492,7 @@ class ModelContextMixin(RequestBudgetMixin):
             try:
                 artifact = new_canvas_artifact(args, allow_remote_images=self.canvas_remote_images_enabled())
             except ValueError as exc:
-                return f"ERROR: Invalid canvas: {exc}"
+                return f'ERROR: Invalid canvas: {model_error_text(exc)}'
             self._queue_canvas_artifact(artifact)
             return (
                 f"SUCCESS: Canvas created. canvas_id={artifact['id']} title={artifact['title']}. "
@@ -526,7 +527,7 @@ class ModelContextMixin(RequestBudgetMixin):
             try:
                 artifact = new_canvas_artifact(payload, allow_remote_images=self.canvas_remote_images_enabled())
             except ValueError as exc:
-                return f"ERROR: Invalid canvas update: {exc}"
+                return f'ERROR: Invalid canvas update: {model_error_text(exc)}'
             artifact["created_at"] = existing.get("created_at", artifact["created_at"])
         else:
             if args.get("title") not in (None, ""):
@@ -748,7 +749,7 @@ class ModelContextMixin(RequestBudgetMixin):
     def _display_assistant_text_for_history(self, response):
         text = str(response or "")
         if text.startswith("ERROR_USER:"):
-            return f"שגיאה: {text.replace('ERROR_USER:', '').strip()}"
+            return ui_text(self, "שגיאה: ", "Error: ") + text.replace('ERROR_USER:', '').strip()
         return text
 
     def _record_active_chat_turn(self, user_text, final_response, attachments=None, is_background_task=False, session_id=None):
@@ -767,7 +768,9 @@ class ModelContextMixin(RequestBudgetMixin):
         )
         assistant_text = self._display_assistant_text_for_history(final_response)
         agent_process = self._current_agent_process_metadata()
-        assistant_metadata = {"agent_process": agent_process} if agent_process else {}
+        assistant_metadata = {"user_language": getattr(self, "_current_user_language", "he")}
+        if agent_process:
+            assistant_metadata["agent_process"] = agent_process
         memory_result = getattr(self, "_last_memory_update_result", {})
         if isinstance(memory_result, dict) and memory_result.get("changed"):
             assistant_metadata["memory_updated"] = True
@@ -829,6 +832,7 @@ class ModelContextMixin(RequestBudgetMixin):
                 assistant_text = live.visible if is_cancelled else live.visible + "\n\n" + assistant_text
         metadata = {
             "run_id": str(run_id or ""),
+            "user_language": getattr(self, "_current_user_language", "he"),
             "run_status": "cancelled" if is_cancelled else "failed" if is_error else "completed",
             "is_error": is_error,
         }
@@ -1056,7 +1060,7 @@ class ModelContextMixin(RequestBudgetMixin):
             logging.warning(f"No API-key callback available for missing key: {secret_key}")
             return False
         if self.status_callback:
-            self.status_callback(f"נדרש מפתח API עבור {provider_label}...")
+            self.status_callback(ui_text(self, f"נדרש מפתח API עבור {provider_label}...", f"API key required for {provider_label}..."))
         try:
             new_key = callback(secret_key, provider_label, title, message, help_url)
         except Exception as e:
@@ -1068,7 +1072,7 @@ class ModelContextMixin(RequestBudgetMixin):
         ok, validation_message = self._validate_api_key_before_store(secret_key, new_key)
         if not ok:
             if self.status_callback:
-                self.status_callback("מפתח ה-API לא נשמר כי בדיקת התקינות נכשלה.")
+                self.status_callback(ui_text(self, "מפתח ה-API לא נשמר כי בדיקת התקינות נכשלה.", "The API key was not saved because validation failed."))
             logging.warning(f"API key validation failed for {secret_key}: {validation_message}")
             return False
         self.settings[secret_key] = new_key
@@ -1082,11 +1086,11 @@ class ModelContextMixin(RequestBudgetMixin):
         if self._ensure_secret_loaded(secret_key):
             return True
         help_url = help_url or self._api_key_help_url(secret_key)
-        title = title or f"חסר מפתח API של {provider_label}"
-        message = message or (
+        title = title or ui_text(self, f"חסר מפתח API של {provider_label}", f"Missing {provider_label} API key")
+        message = message or ui_text(self, (
             f"סמארטי מוגדר להשתמש ב-{provider_label}, אבל לא נשמר מפתח API עבור הספק הזה. "
             "הזן מפתח כדי להמשיך את הפעולה."
-        )
+        ), f"Smarti is configured to use {provider_label}, but no API key is saved for this provider. Enter a key to continue.")
         if self._request_missing_api_key(secret_key, provider_label, title, message, help_url):
             return bool(self._ensure_secret_loaded(secret_key))
         return False
@@ -1219,6 +1223,10 @@ class ModelContextMixin(RequestBudgetMixin):
         return any(marker in str(error or "") for marker in ("DAILY_TOKEN_BUDGET", "DAILY_COST_BUDGET"))
 
     def _budget_exception_user_message(self, error):
+        if getattr(self, "_current_user_language", "he") == "en":
+            if "DAILY_COST_BUDGET" in str(error):
+                return "ERROR_USER: The estimated daily cost reached the configured budget. I stopped before another counted model request. This is an estimate, not a commitment to actual cost."
+            return "ERROR_USER: The estimated daily token usage reached the configured limit. I stopped before another counted model request. This is an estimate, not a commitment to actual tokens or cost. The limit resets automatically at the start of a new day."
         if "DAILY_COST_BUDGET" in str(error):
             return "ERROR_USER: אומדן העלות היומי הגיע לתקציב שהוגדר; עצרתי לפני קריאה נוספת למודל שנכלל במונה. זו הערכה בלבד, ולא התחייבות לעלות בפועל."
         try:
@@ -1422,7 +1430,8 @@ class ModelContextMixin(RequestBudgetMixin):
             text = " ".join(str(entry.get(key, "")) for key in ("kind", "name", "description", "runner", "source", "handler")).lower()
             if entry.get("kind") == "builtin" or entry.get("source") == "builtin":
                 # Both query languages retain discovery, regardless of prompt language.
-                text += " " + localized_description(str(entry.get("description") or ""), {}).lower()
+                description = str(entry.get("description") or "")
+                text += " " + description.lower() + " " + user_description(description).lower()
             if not tokens:
                 return 1.0 if entry.get("enabled") else 0.25
             value = 0.0
@@ -2022,7 +2031,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                 background_note, memory_context, conversation_summary, attachments_context,
                 canvas_state_section, recent_observations, tool_context_transcript,
             )
-            return LANGUAGE_POLICY[prompt_language(self.settings)] + "\n" + prompt
+            return LANGUAGE_POLICY + "\n" + prompt
 
         prompt = self._prompt_text(
             'load_system_prompt_prompt_2', final_answer_visibility_rule, self_awareness_note,
@@ -2044,7 +2053,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
             "and to preserve continuity; do not expose it verbatim to the user.\n"
             f"{tool_context_transcript}"
         )
-        return LANGUAGE_POLICY[prompt_language(self.settings)] + "\n" + prompt
+        return LANGUAGE_POLICY + "\n" + prompt
 
     def _native_tool_specs_for_request(self):
         tool_schemas = self._prompt_tool_schemas()
@@ -2423,6 +2432,13 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
 
     def _api_error_user_response(self, analysis):
         analysis = api_redacted_analysis(analysis, lambda text: redact_sensitive_text(text, self.settings))
+        if getattr(self, "_current_user_language", "he") == "en":
+            result = "ERROR_USER: The model request failed.\nTechnical details:\n" + api_technical_details(analysis)
+            if analysis.raw_message:
+                result += "\nProvider explanation: " + analysis.raw_message
+            if getattr(analysis, "partial_response", ""):
+                result += "\n\nPartial model answer (generation stopped):\n" + analysis.partial_response
+            return result
         message = redact_sensitive_text(str(getattr(analysis, "user_message", "") or "התקבלה שגיאת API.").strip(), self.settings)
         detail_rows = [
             redact_sensitive_text(row, self.settings)
@@ -2436,6 +2452,10 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
         if getattr(analysis, "partial_response", ""):
             result += "\n\nתשובה חלקית מהמודל (היצירה נעצרה):\n" + redact_sensitive_text(analysis.partial_response, self.settings)
         return result
+
+    def _api_retry_user_status(self, analysis, seconds, attempt):
+        return ui_text(self, api_retry_status_message(analysis, seconds, attempt),
+                       f"{analysis.provider or 'AI provider'}: Request failed ({analysis.reason}). Retrying in {seconds:g} s (attempt {attempt}).")
 
     def _log_api_request_success(self, request_id, provider, model, purpose, attempt, started_at, result):
         response_text = ""
@@ -3134,7 +3154,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         request_log_id, attempt_number + 1, analysis.category,
                     )
                     if report_status:
-                        report_status(api_retry_status_message(analysis, 0, attempt_number + 1))
+                        report_status(self._api_retry_user_status(analysis, 0, attempt_number + 1))
                     continue
                 if analysis.retryable and retries < max_retries:
                     wait_seconds = analysis.retry_after if analysis.retry_after is not None else wait_times[retries]
@@ -3153,10 +3173,10 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         request_log_id, wait_seconds, attempt_number + 1, analysis.category,
                     )
                     if report_status:
-                        report_status(api_retry_status_message(analysis, wait_seconds, attempt_number + 1))
+                        report_status(self._api_retry_user_status(analysis, wait_seconds, attempt_number + 1))
                     def tick_retry_status(remaining, analysis=analysis, attempt=attempt_number + 1):
                         if report_status:
-                            report_status(api_retry_status_message(analysis, remaining, attempt))
+                            report_status(self._api_retry_user_status(analysis, remaining, attempt))
                     if wait_seconds > 0 and not self._sleep_with_cancel(wait_seconds, tick_retry_status):
                         raise Exception("CANCELLED_BY_USER")
                     retries += 1

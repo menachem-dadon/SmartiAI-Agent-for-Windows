@@ -8,6 +8,7 @@ from .memory_protocol import MODEL_MEMORY_BLOCK_RE as MEMORY_BLOCK_RE, strip_mem
 class SettingsManager:
     """Schema-v2 settings migration with a clean reset of dangerous trust state."""
     DEPRECATED_CONTEXT_LIMIT_KEYS = {
+        "system_prompt_language",
         "agent_context_compact_after_loops",
         "agent_inline_history_message_limit",
         "agent_inline_history_chars",
@@ -16,7 +17,7 @@ class SettingsManager:
         "max_inline_tool_error_chars",
     }
     PRESERVE_ON_V2_MIGRATION = {
-        "api_mode", "local_server_url", "local_fast_mode_enabled", "system_prompt_language", "shopping_list", "user_memory",
+        "api_mode", "local_server_url", "local_fast_mode_enabled", "shopping_list", "user_memory",
         "read_aloud_all", "read_aloud_voice_only", "tts_voice_id", "tts_volume",
         "voice_hotkey", "keep_running_in_tray",
         "voice_sensitivity", "voice_dynamic_energy_threshold", "voice_pause_threshold",
