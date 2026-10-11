@@ -181,10 +181,10 @@ def safe_task_rows(core):
     return [copy.deepcopy(item) for item in core.settings.get("background_tasks", [])][-100:][::-1]
 
 
-def task_action(core, action, payload):
+def task_action(core, action, payload, *, request_key=None):
     task_id = str(payload.get("id") or "").strip()
     if action == "create":
-        result = core.schedule_background_task(payload)
+        result = core.schedule_background_task(payload, request_key=request_key) if request_key else core.schedule_background_task(payload)
     elif action == "edit":
         result = core.edit_background_task(payload)
     elif action == "cancel":

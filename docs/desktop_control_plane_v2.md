@@ -24,7 +24,8 @@ Generated consumers:
 - The legacy `/v1` local/channel API remains available with its existing wire
   shapes and can continue using its separately configured stable credential.
 - Request bodies are capped at 1 MiB and validated against the authoritative
-  JSON Schemas. Mutating routes support `Idempotency-Key`.
+  JSON Schemas. Mutating routes support `Idempotency-Key`; run submission and
+  task creation require it (400 when absent, 409 if reused for a different body).
 - Settings snapshots never return plaintext stored secrets. Secret writes and
   deletes use explicit endpoints.
 - Native-selected attachment paths are exchanged for random, expiring handles;
@@ -50,6 +51,21 @@ Generated consumers:
 | Manage workspaces | list/create/update/delete under `/v2/workspaces` |
 
 ## Correlation and replay
+
+Run admission writes the run, user message, initial events and receipt in one
+SQLite transaction. Workers, notifications and title generation start after
+commit. A failed receipt write rolls admission back before execution. Run and
+task creation receipts have no time expiry. Task creation additionally saves
+the trusted submission key with the scheduled task, preventing duplication if
+settings were saved but the HTTP receipt failed. Legacy `/v1` session/channel
+message submission uses the same transaction and mandatory key rules.
+
+React retains a draft's submission key, created conversation and attachment
+handles after an ambiguous transport/server failure. Reload storage contains
+only a SHA-256 draft fingerprint, IDs and the original provider/model choice.
+It contains no draft text, attachment paths or credentials. Definitive rejection
+or acceptance clears this pending identity; a later intentional identical send
+gets a new key. No automatic resend is introduced.
 
 Every `/v2` JSON response contains a `request_id`. The caller may supply it as
 `X-Request-ID`; otherwise Core creates one. Run submissions persist that value

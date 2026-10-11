@@ -382,7 +382,7 @@ class ExactProviderPayloadTests(unittest.TestCase):
         self.assertEqual(usage["cached_prompt"], 40)
         self.assertEqual(usage["cache_write_prompt"], 5)
 
-    def test_opus_5_output_limit_is_capped_by_remaining_smarti_token_budget(self):
+    def test_opus_5_output_limit_is_unchanged_by_remaining_daily_budget(self):
         core = _request_core("anthropic")
         core.settings["budgets"]["daily_token_budget"] = 8_000
         core._daily_token_usage = lambda: 1_000
@@ -396,10 +396,10 @@ class ExactProviderPayloadTests(unittest.TestCase):
             "claude-opus-5",
             [{"role": "user", "content": "inspect"}],
             retry_wait_times=[],
-            request_options={"provider_mode": "anthropic"},
+            request_options={"provider_mode": "anthropic", "native_tools": False},
         )
 
-        self.assertEqual(payloads[0]["max_tokens"], 5_000)
+        self.assertEqual(payloads[0]["max_tokens"], 64_000)
 
     def test_gemini_3_6_omits_temperature_and_maps_thinking_with_tools(self):
         core = _request_core("gemini")

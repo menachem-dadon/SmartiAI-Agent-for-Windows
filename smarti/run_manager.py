@@ -29,11 +29,10 @@ class ConversationRunManager:
 
     def __init__(self, core):
         self.core = core
-        # There is intentionally no process-wide conversation cap. Each
-        # conversation is still serialized below, while independent sessions
-        # receive their own lightweight worker and are bounded naturally by
-        # the provider, OS and the user's machine.
-        self.max_concurrent = None
+        try:
+            self.max_concurrent = max(0, min(128, int(core.settings.get("max_concurrent_conversation_runs", 0) or 0)))
+        except (TypeError, ValueError):
+            self.max_concurrent = 0
         self._lock = threading.RLock()
         self._queues = {}
         self._active_by_session = {}
@@ -57,7 +56,7 @@ class ConversationRunManager:
             return self._subscribers.pop(str(token or ""), None) is not None
 
     def _emit(self, event_type, run_id, session_id, payload=None, persist=True):
-        body = copy.deepcopy(payload if isinstance(payload, dict) else {})
+        body = redact_secret_values(copy.deepcopy(payload if isinstance(payload, dict) else {}), self.core.settings)
         event = {
             "event_type": str(event_type),
             "run_id": str(run_id or ""),
@@ -152,10 +151,10 @@ class ConversationRunManager:
                 run_metadata["initial_title"] = applied_title
                 emit_notification = getattr(self.core, "_emit_notification", None)
                 if callable(emit_notification):
-                    emit_notification(
+                    self.core.chat_store.after_commit(lambda: emit_notification(
                         "chat_title_updated",
                         {"session_id": target, "title": applied_title},
-                    )
+                    ))
         run_id = self.core.chat_store.create_run(
             target,
             user_text=user_text,
@@ -185,25 +184,25 @@ class ConversationRunManager:
             "runtime_snapshot": runtime_snapshot,
             "handle": handle,
         }
-        with self._lock:
-            self._handles[run_id] = handle
-            self._queues.setdefault(target, deque()).append(work)
-            self._schedule_next_locked(target)
+        def publish():
+            with self._lock:
+                self._handles[run_id] = handle
+                self._queues.setdefault(target, deque()).append(work)
+                self._schedule_next_locked(target)
+            self._emit("run_available", run_id, target, {"status": "queued"}, persist=False)
+        self.core.chat_store.after_commit(publish)
         if title_request:
             schedule_title = getattr(self.core, "_schedule_conversation_title", None)
             if callable(schedule_title):
                 try:
-                    schedule_title(
-                        target,
-                        title_request["user_text"],
-                        "",
+                    self.core.chat_store.after_commit(lambda: schedule_title(
+                        target, title_request["user_text"], "",
                         attachment_names=title_request["attachment_names"],
                         provider_mode=title_request["provider_mode"],
                         current_model=title_request["current_model"],
-                    )
+                    ))
                 except Exception:
                     logging.exception("Could not start first-turn title generation.")
-        self._emit("run_available", run_id, target, {"status": "queued"}, persist=False)
         return handle
 
     def _enqueue_existing(self, run):
@@ -267,6 +266,8 @@ class ConversationRunManager:
     def _schedule_next_locked(self, session_id):
         if self._closed or session_id in self._active_by_session:
             return
+        if self.max_concurrent and len(self._active_by_session) >= self.max_concurrent:
+            return
         queue = self._queues.get(session_id)
         while queue:
             work = queue.popleft()
@@ -288,6 +289,15 @@ class ConversationRunManager:
             break
         if queue is not None and not queue:
             self._queues.pop(session_id, None)
+
+    def refresh_limits(self):
+        with self._lock:
+            try:
+                self.max_concurrent = max(0, min(128, int(self.core.settings.get("max_concurrent_conversation_runs", 0) or 0)))
+            except (TypeError, ValueError):
+                self.max_concurrent = 0
+            for session in list(self._queues):
+                self._schedule_next_locked(session)
 
     def _runtime_snapshot_for_metadata(self, metadata):
         metadata = metadata if isinstance(metadata, dict) else {}
@@ -474,7 +484,8 @@ class ConversationRunManager:
                 self._threads.pop(run_id, None)
                 if self._active_by_session.get(session_id) == run_id:
                     self._active_by_session.pop(session_id, None)
-                self._schedule_next_locked(session_id)
+                for pending_session in list(self._queues):
+                    self._schedule_next_locked(pending_session)
 
     def handle(self, run_id):
         with self._lock:
@@ -560,6 +571,8 @@ class ConversationRunManager:
                 self._approval_waiters.pop(approval_id, None)
                 self.resolve_approval(approval_id, False, status="cancelled")
                 raise
+        handle = self.handle(run_id)
+        task_cancel = getattr(getattr(self.core, "_execution_context", None), "cancel_event", None)
         if callback:
             try:
                 self.resolve_approval(approval_id, bool(callback(title, prompt, risk_level)))
@@ -574,7 +587,7 @@ class ConversationRunManager:
             deadline = time.monotonic() + timeout
             handle = self.handle(run_id)
             while not waiter["event"].wait(0.25):
-                if self._closed or (handle and handle.cancel_event.is_set()) or time.monotonic() >= deadline:
+                if self._closed or (handle and handle.cancel_event.is_set()) or (task_cancel and task_cancel.is_set()) or time.monotonic() >= deadline:
                     self.resolve_approval(approval_id, False, status="expired" if time.monotonic() >= deadline else "cancelled")
                     break
         with self._lock:
@@ -583,6 +596,7 @@ class ConversationRunManager:
             return bool(waiter.get("approved")) and not self._closed and not (
                 run.get("cancel_requested") or run.get("status") in TERMINAL_RUN_STATUSES
                 or (handle and handle.cancel_event.is_set())
+                or (task_cancel and task_cancel.is_set())
             )
 
     def resolve_approval(self, approval_id, approved, status=None):
@@ -675,12 +689,13 @@ class ConversationRunManager:
             persist=True,
         )
         handle = self.handle(run_id)
+        task_cancel = getattr(getattr(self.core, "_execution_context", None), "cancel_event", None)
         while not waiter["event"].wait(0.25):
-            if handle and handle.cancel_event.is_set():
+            if self._closed or (handle and handle.cancel_event.is_set()) or (task_cancel and task_cancel.is_set()):
                 break
         with self._lock:
             self._api_key_waiters.pop(str(run_id), None)
-        return "" if handle and handle.cancel_event.is_set() else str(waiter["value"] or "")
+        return "" if self._closed or (handle and handle.cancel_event.is_set()) or (task_cancel and task_cancel.is_set()) else str(waiter["value"] or "")
 
     def resolve_api_key_request(self, run_id, secret_key, value):
         session_id = ""

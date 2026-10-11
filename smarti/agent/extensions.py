@@ -1232,7 +1232,7 @@ class ExtensionsMixin:
         try:
             completed = self._run_cancelable_subprocess(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", "Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress"],
-                text=True, encoding="utf-8", errors="replace", timeout=5, creationflags=WIN_CREATE_NO_WINDOW
+                text=True, encoding="utf-8", errors="replace", timeout=5, creationflags=WIN_CREATE_NO_WINDOW, preserve_output=True
             )
             if completed.returncode == 0 and (completed.stdout or "").strip():
                 appx_payload = json.loads(completed.stdout)

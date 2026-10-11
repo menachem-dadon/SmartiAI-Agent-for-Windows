@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { InputDialog } from "./SettingsManagement";
+import { InputDialog, SettingsView } from "./SettingsManagement";
 import { MemoryView } from "./MemoryManagement";
 import { TasksView } from "./ManagementPages";
 import { coreApi } from "./coreApi";
@@ -12,6 +12,26 @@ beforeAll(() => {
   HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
 });
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
+
+test("parallel conversation setting accepts an empty field as unlimited", async () => {
+  const settings = { values: { max_concurrent_conversation_runs: 0, ui_preferences: { settings_show_advanced: true } }, secrets: {} };
+  vi.mocked(coreApi).mockImplementation(async (method, path, body) => {
+    if (path.endsWith("/schema")) return { providers: [], secret_help: {} };
+    if (path.endsWith("/voices")) return { items: [] };
+    if (path.startsWith("/v2/management/logs")) return { lines: [], path: "" };
+    if (path.endsWith("/status")) return { playing: false };
+    if (method === "PATCH") Object.assign(settings.values, (body as { values: Record<string, unknown> }).values);
+    return settings;
+  });
+  render(<SettingsView section="settings_advanced" theme="light" setTheme={vi.fn()} policyOpen={false} setPolicyOpen={vi.fn()} />);
+  const field = await screen.findByRole("spinbutton", { name: "שיחות פעילות במקביל" });
+  expect((field as HTMLInputElement).min).toBe("0");
+  fireEvent.change(field, { target: { value: "5" } });
+  await waitFor(() => expect(coreApi).toHaveBeenCalledWith("PATCH", "/v2/settings", { values: { max_concurrent_conversation_runs: 5 } }, true));
+  fireEvent.change(field, { target: { value: "" } });
+  await waitFor(() => expect(coreApi).toHaveBeenCalledWith("PATCH", "/v2/settings", { values: { max_concurrent_conversation_runs: 0 } }, true));
+  expect(screen.getByText(/הספירה היא אומדן בלבד/)).toBeTruthy();
+});
 
 test("protected email address is routed with other secrets", () => {
   expect(settingDefinitions.find(field => field.path === "email_address")?.control).toBe("secret");

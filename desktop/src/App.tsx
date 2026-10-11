@@ -30,6 +30,7 @@ import type {
 } from "./chatTypes";
 import { Composer } from "./Composer";
 import { CoreApiError, coreApi, encodePath } from "./coreApi";
+import { RunSubmission } from "./runSubmission";
 import { type CoreSnapshot } from "./coreState";
 import {
   parseThemePreference,
@@ -201,6 +202,7 @@ function useTheme() {
 }
 
 export default function App() {
+  const [runSubmission] = useState(() => new RunSubmission());
   const [core, setCore] = useState<CoreSnapshot>(initialCore);
   const [healthOkay, setHealthOkay] = useState(false);
   const [startupError, setStartupError] = useState(false);
@@ -979,41 +981,10 @@ export default function App() {
   const send = async (text: string, isVoice = false) => {
     setError("");
     const submittedAttachments = [...attachments];
-    let sessionId = activeId;
-    if (!sessionId) {
-      const data = await coreApi<{ conversation: Conversation }>(
-        "POST",
-        "/v2/conversations",
-        {},
-        true,
-      );
-      sessionId = data.conversation.id;
-    }
-    const handles: string[] = [];
-    for (const item of submittedAttachments) {
-      if (item.size && item.size > 25 * 1024 * 1024)
-        throw new Error(`${item.name}: הקובץ גדול מ־25MB`);
-      const data = await coreApi<{ attachment: { handle: string } }>(
-        "POST",
-        "/v2/attachments",
-        { path: item.path, session_id: sessionId },
-        true,
-      );
-      handles.push(data.attachment.handle);
-    }
-    const submitted = await coreApi<{ run_id: string }>(
-      "POST",
-      `/v2/conversations/${encodePath(sessionId)}/runs`,
-      {
-        text,
-        attachment_handles: handles,
-        provider_mode: provider,
-        model_name: model,
-        source: "tauri_desktop",
-        is_voice: isVoice,
-      },
-      true,
-    );
+    const submitted = await runSubmission.submit({
+      sessionId: activeId, text, attachments: submittedAttachments, provider, model, isVoice,
+    });
+    const sessionId = submitted.session_id;
     setNewUserRun(submitted.run_id || "");
     setAttachments((current) => current.filter(item => !submittedAttachments.includes(item)));
     if (!activeId) { drafts.transfer("", sessionId); setActiveId(sessionId); }
@@ -1027,9 +998,7 @@ export default function App() {
   };
   const sendCanvasAction = async (text: string, owner: string) => {
     if (!owner) throw new Error("חסרה השיחה שאליה שייך הקנבס.");
-    await coreApi("POST", `/v2/conversations/${encodePath(owner)}/runs`, {
-      text, attachment_handles: [], provider_mode: provider, model_name: model, source: "tauri_desktop", is_voice: false,
-    }, true);
+    await runSubmission.submit({ sessionId: owner, text, attachments: [], provider, model });
     await refreshLists();
     if (activeIdRef.current === owner) await loadMessages(owner);
   };

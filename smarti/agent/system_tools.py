@@ -57,7 +57,7 @@ class SystemToolsMixin:
             user_agent = headers.get("User-Agent") or headers.get("user-agent")
             if user_agent:
                 curl_cmd[1:1] = ["-A", user_agent]
-            completed = self._run_cancelable_subprocess(curl_cmd, text=True, encoding="utf-8", errors="replace", timeout=timeout + 5, creationflags=WIN_CREATE_NO_WINDOW)
+            completed = self._run_cancelable_subprocess(curl_cmd, text=True, encoding="utf-8", errors="replace", timeout=timeout + 5, creationflags=WIN_CREATE_NO_WINDOW, preserve_output=True)
             if completed.returncode != 0:
                 raise Exception(f"{first_error}; curl fallback failed: {completed.stderr.strip()}")
             try:

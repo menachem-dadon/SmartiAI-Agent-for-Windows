@@ -1484,7 +1484,7 @@ class ToolCallMixin:
     def _is_parallel_safe_tool_call(self, call):
         action, args = self._effective_tool_action(call.get("action", ""), call.get("arguments", {}) or {})
         safe_actions = {
-            "get_tool_info", "search_tools", "load_skill", "smart_file_search", "git_status", "list_processes",
+            "get_tool_info", "search_tools", "read_tool_output", "load_skill", "smart_file_search", "git_status", "list_processes",
             "list_software", "search_memory", "internet_search", "read_website",
             "get_weather"
         }
@@ -1569,7 +1569,7 @@ class ToolCallMixin:
         output = feedback_for_ai if feedback_for_ai is not None else message_for_user
         status = "error" if str(output or "").startswith("ERROR") else "ok"
         if output:
-            obs = "[תמונה צורפה]" if str(output).startswith("IMAGE_BASE64:") else self._truncate_tool_output(output)[:1200]
+            obs = "[תמונה צורפה]" if str(output).startswith("IMAGE_BASE64:") else self._truncate_tool_output(output, retain=False)[:1200]
             self._record_tool_observation(action, args_dict, status, obs)
         return {
             "action": action,

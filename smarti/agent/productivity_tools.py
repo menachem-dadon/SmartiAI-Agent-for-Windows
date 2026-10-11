@@ -1,5 +1,7 @@
 """Internet search, local search, app/web opening, reminders, notifications, background task public APIs, and memory tools."""
 from .shared import *
+import hashlib
+_BACKGROUND_CREATION_LOCK = threading.RLock()
 
 
 class ProductivityToolsMixin:
@@ -201,7 +203,20 @@ class ProductivityToolsMixin:
         webbrowser.open(search_url)
         return f"בוצע חיפוש."
 
-    def schedule_background_task(self, params):
+    def schedule_background_task(self, params, *, request_key=None):
+        # The settings write survives a missing HTTP receipt or Core restart.
+        # Only the trusted gateway supplies this key; tool parameters cannot.
+        with getattr(self, "_background_lock", _BACKGROUND_CREATION_LOCK):
+            digest = hashlib.sha256(json.dumps(params, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if request_key else None
+            if request_key:
+                for task in self.settings.get("background_tasks", []):
+                    if task.get("submission_key") == request_key:
+                        if task.get("submission_hash") != digest:
+                            return "ERROR: idempotency_key_payload_mismatch"
+                        return f"SUCCESS: Task already created: {task['id']}"
+            return self._schedule_background_task_once(params, request_key, digest)
+
+    def _schedule_background_task_once(self, params, request_key=None, request_hash=None):
         try:
             if isinstance(params, dict):
                 args_dict = params
@@ -261,7 +276,13 @@ class ProductivityToolsMixin:
             }
             self.settings.setdefault("background_tasks", []).append(task)
             self.settings["background_jobs"] = self.settings["background_tasks"]
-            self._save_settings()
+            if request_key:
+                task.update(submission_key=request_key, submission_hash=request_hash)
+            try:
+                self._save_settings()
+            except Exception:
+                self.settings["background_tasks"].remove(task)
+                raise
             self._schedule_background_task_thread(task)
             return f"SUCCESS: משימה תוכננה בהצלחה (מזהה: {task['id']}). המשימה תורץ ברקע בזמן המבוקש. אל תבצע את הפעולה בעצמך כעת בשיחה זו, אלא רק הודע למשתמש שהמשימה תוכננה בהצלחה ברקע."
         except Exception as e: return f"ERROR: {e}"

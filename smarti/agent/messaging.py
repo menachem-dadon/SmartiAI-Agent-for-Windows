@@ -1,5 +1,6 @@
 """Attachment payload handling and the main send_message agent loop."""
 from .shared import *
+from ..task_limits import TaskCancellation
 
 
 class MessagingMixin:
@@ -352,6 +353,15 @@ class MessagingMixin:
         previous_task_id = getattr(self._execution_context, "current_task_id", missing_context_value)
         previous_task_objective = getattr(self._execution_context, "current_task_objective", missing_context_value)
         run_cancel_event = cancel_event if cancel_event is not None else threading.Event()
+        task_clock_started = time.monotonic()
+        checkpoint_elapsed = 0.0
+        try:
+            deadline_seconds = max(0, int(self.settings.get("max_total_task_seconds", 0) or 0))
+        except (TypeError, ValueError):
+            deadline_seconds = 0
+        run_cancel_event = TaskCancellation(run_cancel_event, deadline_seconds)
+        previous_deadline = getattr(self._execution_context, "task_deadline", None)
+        self._execution_context.task_deadline = run_cancel_event.deadline
         iteration = 0
         final_response = ""
         chat_turn_recorded = False
@@ -373,9 +383,26 @@ class MessagingMixin:
                 sleep_prevention_active = self._set_system_sleep_prevention(True)
             user_text = str(user_text or "")
             attachments = normalize_attachments(attachments or [])
-            if not is_background_task and not run_id and not attachments and self._is_resume_request(user_text):
-                resume_checkpoint = self._load_task_checkpoint()
+            if not attachments and (self._is_resume_request(user_text) or (is_background_task and run_id)):
+                resume_checkpoint = self._load_task_checkpoint(
+                    resume=True,
+                    task_id=getattr(self._execution_context, "current_task_id", None) if is_background_task else None,
+                )
                 if resume_checkpoint:
+                    checkpoint_elapsed = max(0.0, float(resume_checkpoint.get("elapsed_seconds", 0) or 0))
+                    if deadline_seconds:
+                        original_event = run_cancel_event.user_event
+                        run_cancel_event.close()
+                        remaining = deadline_seconds - checkpoint_elapsed - (time.monotonic() - task_clock_started)
+                        run_cancel_event = TaskCancellation(original_event, max(0, remaining))
+                        if remaining <= 0:
+                            run_cancel_event.expired.set()
+                        self._execution_context.task_deadline = run_cancel_event.deadline
+                        self._execution_context.cancel_event = run_cancel_event
+                        self._raise_if_cancelled()
+                    if resume_checkpoint.get("phase") == "tool_execution" and (resume_checkpoint.get("task_state") or {}).get("checkpoint_mutating_tools"):
+                        checkpoint_should_keep = True
+                        return "ERROR_USER: המשימה נקטעה במהלך כלי שמשנה נתונים, ותוצאתו אינה ידועה. יש לבדוק את התוצאה לפני מתן הוראה חדשה; הכלי לא הופעל שוב."
                     if self.status_callback:
                         self.status_callback("ממשיך מהנקודה האחרונה שנשמרה...")
                     self._restore_task_checkpoint_context(resume_checkpoint)
@@ -423,7 +450,7 @@ class MessagingMixin:
                 configured_iterations = int(self.settings.get("max_agent_loops", 0))
             except Exception:
                 configured_iterations = 0
-            MAX_ITERATIONS = None if configured_iterations <= 0 or configured_iterations > 30 else max(1, configured_iterations)
+            MAX_ITERATIONS = None if configured_iterations <= 0 or configured_iterations == 31 else min(30, configured_iterations)
             tool_call_counts = {}
             similar_tool_signatures = []
             tool_observation_start = len(getattr(self, "tool_observations", []) or [])
@@ -431,7 +458,7 @@ class MessagingMixin:
             internal_artifact_replies = 0
             process_report_count = 0
             last_process_report = ""
-            task_started = time.time()
+            task_started = time.time() - checkpoint_elapsed - (time.monotonic() - task_clock_started)
             try:
                 configured_total_timeout = int(self.settings.get("max_total_task_seconds", 0) or 0)
             except Exception:
@@ -514,7 +541,8 @@ class MessagingMixin:
                     phase=phase,
                     status=status,
                     reason=reason,
-                    is_background_task=is_background_task or bool(run_id),
+                    is_background_task=is_background_task,
+                    elapsed_seconds=checkpoint_elapsed + time.monotonic() - task_clock_started,
                 )
 
             def process_reports_enabled():
@@ -559,11 +587,14 @@ class MessagingMixin:
                     force=process_report_count == 0,
                 )
 
+            pending_feedback = task_state.pop("checkpoint_feedback", None)
+            if resume_checkpoint and isinstance(pending_feedback, dict):
+                self._append_tool_results_feedback(current_messages, pending_feedback["tool_turn_text"], pending_feedback["results"])
             checkpoint("resume_ready" if resume_checkpoint else "ready")
 
             while MAX_ITERATIONS is None or iteration < MAX_ITERATIONS:
                 if run_cancel_event.is_set():
-                    final_response = "הפעולה נעצרה לבקשת המשתמש."
+                    self._raise_if_cancelled()
                     break
                 if total_timeout is not None and time.time() - task_started > total_timeout:
                     final_response = "ERROR_USER: המשימה הופסקה כי עברה את זמן הביצוע הכולל שהוגדר."
@@ -601,6 +632,8 @@ class MessagingMixin:
                         len(str(ai_response_text or "")),
                         ai_response_text,
                     )
+                except SmartiCancelled:
+                    raise
                 except Exception as e:
                     if isinstance(e, CodexProtocolError):
                         codex_protocol_repair_streak += 1
@@ -846,12 +879,15 @@ class MessagingMixin:
                             else:
                                 self.status_callback(f"מפעיל כלי: {action}...")
 
+                    task_state["checkpoint_mutating_tools"] = any(
+                        self._tool_is_mutating_or_control(call.get("action", ""), call.get("arguments") or {})
+                        for call in selected_calls
+                    )
                     checkpoint("tool_execution", reason=",".join(str(call.get("action", "")) for call in selected_calls))
                     try:
                         results = self._execute_tool_call_batch(selected_calls, schemas_seen, parallel=parallel)
                     except SmartiCancelled:
-                        final_response = "הפעולה נעצרה לבקשת המשתמש."
-                        break
+                        raise
                     self._emit_agent_process_event(
                         "tool_finish",
                         results=[
@@ -872,6 +908,8 @@ class MessagingMixin:
                         for result in results:
                             self.agent_runtime.trace("observe", f"{result.get('action')}: {str(result.get('output') or '')[:1200]}")
                     self._record_results_in_task_state(task_state, results)
+                    task_state.pop("checkpoint_mutating_tools", None)
+                    task_state["checkpoint_feedback"] = {"tool_turn_text": tool_turn_text, "results": results}
                     if self._update_loaded_skill_contexts_from_results(loaded_skill_contexts, results):
                         self._apply_loaded_skill_system_context(current_messages, loaded_skill_contexts, runtime_base_system_prompt)
                     checkpoint("tool_results_observed")
@@ -880,6 +918,7 @@ class MessagingMixin:
                         if self.status_callback:
                             self.status_callback("מעבד תוצאות...")
                         self._append_tool_results_feedback(current_messages, tool_turn_text, results)
+                        task_state.pop("checkpoint_feedback", None)
                         if skipped_extra_calls:
                             self._append_user_feedback_message(
                                 current_messages,
@@ -934,6 +973,7 @@ class MessagingMixin:
                 final_response = "ERROR_USER: סמארטי ביצע יותר מדי פעולות ברצף והופסק."
 
             self._trace_agent_phase("verification_policy", "main_loop_model_discretion")
+            self._raise_if_cancelled()
 
             if loaded_skill_contexts:
                 self._apply_loaded_skill_system_context(current_messages, {}, runtime_base_system_prompt)
@@ -974,9 +1014,13 @@ class MessagingMixin:
                     self.universal_history.append({"role": "assistant", "content": final_response})
                 self._compact_conversation_history(current_model=current_model)
 
+            self._raise_if_cancelled()
             return final_response
         except SmartiCancelled:
-            final_response = "הפעולה נעצרה לבקשת המשתמש."
+            final_response = (
+                "ERROR_USER: המשימה הופסקה כי עברה את זמן הביצוע הכולל שהוגדר."
+                if run_cancel_event.expired.is_set() else "הפעולה נעצרה לבקשת המשתמש."
+            )
             return final_response
         except Exception as e:
             if self._is_budget_exception(e):
@@ -991,6 +1035,8 @@ class MessagingMixin:
             final_response = f"ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}"
             return final_response
         finally:
+            run_cancel_event.close()
+            self._execution_context.task_deadline = previous_deadline
             if persist_turn and not is_background_task and final_response and not chat_turn_recorded:
                 try:
                     self._record_active_chat_turn(
@@ -1002,7 +1048,7 @@ class MessagingMixin:
                     chat_turn_recorded = True
                 except Exception as e:
                     logging.warning(f"Chat turn persistence failed: {e}")
-            if not is_background_task and not run_id and checkpoint_task_id and not checkpoint_should_keep:
+            if checkpoint_task_id and not checkpoint_should_keep:
                 self._clear_task_checkpoint(checkpoint_task_id)
             if self.status_callback:
                 self.status_callback("")

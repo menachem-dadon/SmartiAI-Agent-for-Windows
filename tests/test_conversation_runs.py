@@ -312,7 +312,7 @@ class ConversationRunManagerTests(unittest.TestCase):
             self.assertEqual(core.chat_store.unread_count(), 3)
             manager.shutdown(wait=True)
 
-    def test_legacy_three_run_setting_does_not_cap_independent_conversations(self):
+    def test_configured_cap_queues_independent_conversations_without_dropping_work(self):
         with tempfile.TemporaryDirectory() as directory:
             core = _FakeCore(Path(directory) / "history.json")
             manager = ConversationRunManager(core)
@@ -323,14 +323,15 @@ class ConversationRunManagerTests(unittest.TestCase):
                     session_id = core.chat_store.create_session(set_active=False)["id"]
                     handles.append(manager.submit(session_id, f"wait-{index}"))
 
-                deadline = time.monotonic() + 10
-                while len(core.started) < 6 and time.monotonic() < deadline:
+                deadline = time.monotonic() + 2
+                while len(core.started) < 3 and time.monotonic() < deadline:
                     time.sleep(0.01)
-                self.assertEqual(len(core.started), 6)
-                self.assertIsNone(manager.max_concurrent)
+                self.assertEqual(len(core.started), 3)
+                self.assertEqual(manager.max_concurrent, 3)
 
                 core.release.set()
                 self.assertTrue(all(handle.done_event.wait(10) for handle in handles))
+                self.assertEqual(len(core.started), 6)
             finally:
                 core.release.set()
                 manager.shutdown(wait=True)
@@ -507,6 +508,8 @@ class LocalGatewayTests(unittest.TestCase):
     @staticmethod
     def _request(gateway, path, *, method="GET", payload=None, headers=None):
         request_headers = {"Authorization": "Bearer test-token"}
+        if method not in {"GET", "HEAD"}:
+            request_headers["Idempotency-Key"] = os.urandom(16).hex()
         request_headers.update(headers or {})
         body = None
         if payload is not None:
@@ -779,7 +782,7 @@ class LocalGatewayTests(unittest.TestCase):
                 self.assertIn(session_id, {item["id"] for item in listed["data"]["items"]})
                 _, replay_headers, replayed = self._request(
                     gateway, "/v2/conversations", method="POST",
-                    payload={"title": "לא אמור להיווצר"}, headers={"Idempotency-Key": "conversation-1"},
+                    payload={"title": "בדיקת חוזה"}, headers={"Idempotency-Key": "conversation-1"},
                 )
                 self.assertEqual(replayed["data"]["conversation"]["id"], session_id)
                 self.assertEqual(replay_headers["Idempotency-Replayed"], "true")

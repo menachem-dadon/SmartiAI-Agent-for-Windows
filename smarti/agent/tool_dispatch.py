@@ -22,7 +22,7 @@ class ToolDispatchMixin:
         try:
             serialized_args = json.dumps(safe_args, sort_keys=True, ensure_ascii=False, default=str)
             args_hash = hashlib.sha256(serialized_args.encode("utf-8")).hexdigest()[:12]
-            args_preview = self._truncate_tool_output(json.dumps(safe_args, ensure_ascii=False, default=str))[:1200]
+            args_preview = self._truncate_tool_output(json.dumps(safe_args, ensure_ascii=False, default=str), retain=False)[:1200]
         except Exception:
             args_hash = "unknown"
             args_preview = str(safe_args or "")[:1200]
@@ -37,9 +37,11 @@ class ToolDispatchMixin:
             self.audit_logger.record("tool_start", {"tool": action, "args_hash": args_hash, "args_preview": args_preview}, self.settings)
         try:
             feedback, message = self._execute_tool_impl(action, args_dict)
+            if isinstance(feedback, str) and not feedback.startswith("IMAGE_BASE64:"):
+                feedback = self._truncate_tool_output(feedback)
             status = "error" if str(feedback or message or "").startswith("ERROR") else "ok"
             duration_ms = int((time.time() - started) * 1000)
-            preview = self._truncate_tool_output(str(feedback or message or ""))[:1200]
+            preview = self._truncate_tool_output(str(feedback or message or ""), retain=False)[:1200]
             logging.info(
                 "TOOL FINISH | action=%s | status=%s | duration_ms=%s | args_hash=%s",
                 action,
@@ -142,6 +144,11 @@ class ToolDispatchMixin:
                     include_disabled=bool(args_dict.get("include_disabled", False)),
                     limit=args_dict.get("limit", 12),
                 ), None)
+            elif action == "read_tool_output":
+                allowed, err = self._ensure_capability_allowed("file_read", "אישור קריאת פלט כלי", "פלט שמור מהשיחה הנוכחית", risk="low")
+                if not allowed:
+                    return (err, None)
+                return (self.read_tool_output(args_dict), None)
             elif action == "system_command":
                 cmd = str(args_dict.get("command", ""))
                 confirm = args_dict.get("require_approval", False)

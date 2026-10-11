@@ -3,14 +3,16 @@ from .shared import *
 from types import SimpleNamespace
 from random import uniform
 from ..provider_protocols import openai_responses_arguments, openai_responses_result
+from .budgets import RequestBudgetMixin
+from ..usage_pricing import pricing_cache, bundled_pricing
 
 
-class ModelContextMixin:
+class ModelContextMixin(RequestBudgetMixin):
     PROMPT_CACHE_PROVIDER_MODES = frozenset({"openai", "gemini", "anthropic"})
     DEFAULT_PROVIDER_REQUEST_TIMEOUT_SECONDS = 1800
 
     def _provider_request_timeout(self, provider_mode):
-        return (
+        return self._bounded_task_timeout(
             None
             if normalize_provider_name(provider_mode) == "local"
             else self.DEFAULT_PROVIDER_REQUEST_TIMEOUT_SECONDS
@@ -19,11 +21,11 @@ class ModelContextMixin:
     def _provider_transport_timeout(self, provider_mode):
         # Preserve long model generation, but do not wait thirty minutes for
         # DNS/TCP establishment or a free connection from the client pool.
-        return (15, self._provider_request_timeout(provider_mode))
+        return (self._bounded_task_timeout(15), self._provider_request_timeout(provider_mode))
 
     def _sdk_transport_timeout(self, provider_mode):
         import httpx
-        return httpx.Timeout(self._provider_request_timeout(provider_mode), connect=15, write=60, pool=15)
+        return httpx.Timeout(self._provider_request_timeout(provider_mode), connect=self._bounded_task_timeout(15), write=self._bounded_task_timeout(60), pool=self._bounded_task_timeout(15))
 
     def _local_fast_mode_enabled(self, provider_mode=None):
         """Return True only when the opt-in profile is used with LOCAL."""
@@ -180,9 +182,20 @@ class ModelContextMixin:
             return None
         return payload
 
-    def _load_task_checkpoint(self):
+    def _load_task_checkpoint(self, resume=False, task_id=None):
         if not self._task_checkpoint_enabled():
             return None
+        context = getattr(self, "_execution_context", None)
+        run_id = getattr(context, "run_id", "")
+        if run_id and getattr(self, "chat_store", None):
+            checkpoint = self.chat_store.load_run_checkpoint(run_id=run_id)
+            if not checkpoint and resume:
+                checkpoint = self.chat_store.load_run_checkpoint(
+                    session_id=getattr(context, "target_session_id", ""), task_id=task_id,
+                )
+            if checkpoint and checkpoint.get("run_id") != run_id:
+                context.checkpoint_source_run_id = checkpoint.get("run_id")
+            return checkpoint
         lock = getattr(self, "_task_checkpoint_lock", None) or threading.RLock()
         self._task_checkpoint_lock = lock
         with lock:
@@ -195,6 +208,14 @@ class ModelContextMixin:
     def _write_task_checkpoint(self, payload):
         if not self._task_checkpoint_enabled():
             return False
+        context = getattr(self, "_execution_context", None)
+        run_id = getattr(context, "run_id", "")
+        if run_id and getattr(self, "chat_store", None):
+            self.chat_store.save_run_checkpoint(
+                run_id, payload, resumed_from=getattr(context, "checkpoint_source_run_id", None),
+            )
+            context.checkpoint_source_run_id = None
+            return True
         lock = getattr(self, "_task_checkpoint_lock", None) or threading.RLock()
         self._task_checkpoint_lock = lock
         with lock:
@@ -202,7 +223,9 @@ class ModelContextMixin:
                 os.makedirs(os.path.dirname(ACTIVE_TASK_CHECKPOINT_FILE), exist_ok=True)
                 tmp_path = ACTIVE_TASK_CHECKPOINT_FILE + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                    json.dump(redact_secret_values(payload, self.settings), f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
                 os.replace(tmp_path, ACTIVE_TASK_CHECKPOINT_FILE)
                 return True
             except Exception as e:
@@ -210,6 +233,10 @@ class ModelContextMixin:
                 return False
 
     def _clear_task_checkpoint(self, task_id=None):
+        run_id = getattr(getattr(self, "_execution_context", None), "run_id", "")
+        if run_id and getattr(self, "chat_store", None):
+            self.chat_store.clear_run_checkpoint(run_id)
+            return True
         lock = getattr(self, "_task_checkpoint_lock", None) or threading.RLock()
         self._task_checkpoint_lock = lock
         with lock:
@@ -251,10 +278,16 @@ class ModelContextMixin:
             return
         mode = normalize_provider_name(checkpoint.get("mode", ""))
         if mode in MODEL_PROVIDER_ORDER:
-            if mode != normalize_provider_name(self.settings.get("api_mode", "")):
-                self.settings["api_mode"] = mode
-            if mode != normalize_provider_name(getattr(self, "mode", "")):
-                self.setup_model()
+            run_values = getattr(self._execution_context, "run_values", None)
+            if isinstance(run_values, dict):
+                snapshot = self.capture_run_model_snapshot(provider_mode=mode, model_name=checkpoint.get("current_model"))
+                run_values.update({key: value for key, value in snapshot.items() if key in self._RUN_LOCAL_FIELDS})
+                self._execution_context.model_name = str(checkpoint.get("current_model") or "")
+            else:
+                if mode != normalize_provider_name(self.settings.get("api_mode", "")):
+                    self.settings["api_mode"] = mode
+                if mode != normalize_provider_name(getattr(self, "mode", "")):
+                    self.setup_model()
         context = checkpoint.get("context") if isinstance(checkpoint.get("context"), dict) else {}
         self.conversation_summary = str(context.get("conversation_summary", "") or "")
         transcript = context.get("tool_context_transcript", [])
@@ -293,13 +326,17 @@ class ModelContextMixin:
         status="running",
         reason="",
         is_background_task=False,
+        elapsed_seconds=0,
     ):
-        if is_background_task or not self._task_checkpoint_enabled():
+        run_id = str(getattr(self._execution_context, "run_id", "") or "")
+        if (is_background_task and not run_id) or not self._task_checkpoint_enabled():
             return False
         now = datetime.now().isoformat(timespec="seconds")
         existing = self._load_task_checkpoint() or {}
         payload = {
             "schema_version": 1,
+            "run_id": run_id,
+            "session_id": str(getattr(self._execution_context, "target_session_id", "") or ""),
             "status": status,
             "phase": str(phase or "running"),
             "reason": str(reason or ""),
@@ -314,6 +351,7 @@ class ModelContextMixin:
             "current_messages": self._json_safe_checkpoint_value(current_messages or []),
             "protected_user_message": self._json_safe_checkpoint_value(protected_user_message or {}),
             "iteration": int(iteration or 0),
+            "elapsed_seconds": max(0, float(elapsed_seconds or 0)),
             "tool_observation_start": int(tool_observation_start or 0),
             "tool_call_counts": self._json_safe_checkpoint_value(tool_call_counts or {}),
             "similar_tool_signatures": self._json_safe_checkpoint_value(similar_tool_signatures or []),
@@ -768,7 +806,8 @@ class ModelContextMixin:
         agent_process = self._current_agent_process_metadata()
         is_error = str(final_response or "").startswith("ERROR_USER:")
         cancel_event = getattr(getattr(self, "_execution_context", None), "cancel_event", None)
-        is_cancelled = bool(cancel_event and cancel_event.is_set())
+        user_cancel = getattr(cancel_event, "user_event", cancel_event)
+        is_cancelled = bool(user_cancel and user_cancel.is_set())
         if is_cancelled:
             is_error = False
         if is_cancelled or is_error:
@@ -847,10 +886,13 @@ class ModelContextMixin:
             ) from e
 
     def _save_settings(self):
+        # Keep a rotated credential redacted for older, still-running clients.
+        redact_secret_values("")
         manager = getattr(self, "settings_manager", None)
         if manager:
             self.settings = manager.sync_legacy_aliases(self.settings)
         _CURRENT_SETTINGS_REF["settings"] = self.settings
+        redact_secret_values("", self.settings)
         self._sync_ssl_compat_env()
         for key in SENSITIVE_SETTING_KEYS:
             if key in self.settings and self.settings.get(key):
@@ -872,18 +914,28 @@ class ModelContextMixin:
                     try:
                         keyring_mod.set_password(KEYRING_SERVICE, key, str(value))
                         data[key] = ""
-                    except Exception as e: logging.warning(f"Keyring save failed for {key}: {e}")
+                    except Exception:
+                        # A present but unavailable credential backend must never
+                        # turn a failed vault write into a plaintext JSON write.
+                        protected = dpapi_protect_text(str(value))
+                        if not protected:
+                            raise RuntimeError(f"לא ניתן לשמור את הסוד '{key}' באופן מוצפן. ההגדרות הקודמות נשמרו.")
+                        data[key] = protected
+                        logging.warning("Credential storage unavailable for %s; using encrypted storage", key)
         else:
             for key in SENSITIVE_SETTING_KEYS:
                 value = data.get(key)
                 if value:
                     protected = dpapi_protect_text(value)
-                    data[key] = protected if protected else ""
                     if not protected:
-                        logging.error(f"Secret '{key}' could not be encrypted; it was not written to settings file.")
+                        raise RuntimeError(f"לא ניתן לשמור את הסוד '{key}' באופן מוצפן. ההגדרות הקודמות נשמרו.")
+                    data[key] = protected
         if manager is None:
             manager = SettingsManager(SETTINGS_FILE, DEFAULT_SETTINGS)
         manager.save(data)
+        run_manager = getattr(self, "run_manager", None)
+        if run_manager:
+            run_manager.refresh_limits()
         if secrets_pending_deletion:
             self._secrets_pending_deletion.difference_update(secrets_pending_deletion)
 
@@ -1063,11 +1115,10 @@ class ModelContextMixin:
         return ok
 
     def _log_usage(self, model_name, usage_dict):
-        if not usage_dict or not model_name: return
+        if not usage_dict or not model_name: return True
         today = datetime.now().strftime('%Y-%m-%d')
         try:
-            lock = getattr(self, "_usage_lock", None) or threading.RLock()
-            self._usage_lock = lock
+            lock = RequestBudgetMixin._request_budget_lock(self)
             with lock:
                 data = {}
                 if os.path.exists(USAGE_FILE):
@@ -1076,41 +1127,55 @@ class ModelContextMixin:
                 if today not in data:
                     data[today] = {}
                 bucket = data[today].setdefault(model_name, {})
+                previous_cost = (
+                    RequestBudgetMixin._request_usage_cost(self, model_name, bucket, "")
+                    if int(bucket.get("total", 0) or 0) else 0.0
+                )
+                request_id = str(usage_dict.get("request_id") or "")
+                receipts = bucket.setdefault("_request_ids", [])
+                if request_id and request_id in receipts:
+                    return True
+                if "_budget_total" not in bucket:
+                    old_tokens, old_cost = RequestBudgetMixin._budget_stats(self, model_name, bucket, pricing_cache(), bundled_pricing())
+                    bucket["_budget_total"] = old_tokens
+                    bucket["_budget_cost_usd"] = old_cost
+                if usage_dict.get("_budget_eligible"):
+                    bucket["_budget_total"] += int(usage_dict.get("total", 0) or 0)
+                    bucket["_budget_cost_usd"] += float(usage_dict.get("estimated_cost_usd", 0) or 0)
+                unbounded_provider = usage_dict.get("_budget_unbounded_provider")
+                if unbounded_provider:
+                    routes = bucket.setdefault("_unbounded_providers", [])
+                    if unbounded_provider not in routes:
+                        routes.append(unbounded_provider)
                 for key in (
                     "prompt", "completion", "total", "cached_prompt",
                     "cache_write_prompt", "reasoning",
                 ):
                     bucket[key] = int(bucket.get(key, 0) or 0) + int(usage_dict.get(key, 0) or 0)
+                if request_id:
+                    receipts.append(request_id)
+                if usage_dict.get("estimated_cost_usd") is not None and previous_cost is not None:
+                    bucket["estimated_cost_usd"] = previous_cost + float(usage_dict["estimated_cost_usd"])
+                elif usage_dict.get("estimated_cost_usd") is None:
+                    bucket.pop("estimated_cost_usd", None)
                 os.makedirs(os.path.dirname(USAGE_FILE), exist_ok=True)
                 temp_path = USAGE_FILE + ".tmp"
                 with open(temp_path, 'w', encoding='utf-8') as f:
                     json.dump(data, f, ensure_ascii=False, indent=4)
+                    f.flush()
+                    os.fsync(f.fileno())
                 os.replace(temp_path, USAGE_FILE)
-        except Exception as e: logging.error(f"Failed to log usage data: {e}")
+                return True
+        except Exception:
+            logging.exception("Failed to log usage data")
+            return False
 
     def _is_local_usage_accounting_model(self, model_name):
         name = str(model_name or "").strip().lower()
         return name in {"memory-rag/local", "smarti-memory-rag/local"} or name.startswith("memory-rag/")
 
     def _daily_token_usage(self, date_str=None):
-        date_str = date_str or datetime.now().strftime('%Y-%m-%d')
-        try:
-            if not os.path.exists(USAGE_FILE):
-                return 0
-            with open(USAGE_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            models = data.get(date_str, {}) if isinstance(data, dict) else {}
-            total = 0
-            exclude_local = self.settings.get("budgets", {}).get("budget_exclude_local_accounting", True)
-            for model_name, stats in models.items():
-                if exclude_local and self._is_local_usage_accounting_model(model_name):
-                    continue
-                if isinstance(stats, dict):
-                    total += int(stats.get("total", 0) or 0)
-            return max(0, total)
-        except Exception as e:
-            logging.warning(f"Failed to read daily token usage: {e}")
-            return 0
+        return self._daily_budget_usage(date_str)[0]
 
     def _estimate_request_tokens(self, current_messages, provider_mode=None, system_prompt=None):
         provider_mode = normalize_provider_name(provider_mode or self.mode)
@@ -1131,102 +1196,27 @@ class ModelContextMixin:
             text_parts.append(self._message_text_for_budget(message))
         return estimate_text_tokens("\n".join(text_parts))
 
-    def _budget_warning_notice(self, used_tokens, estimated_prompt_tokens, budget):
-        if not budget or budget <= 0:
-            return ""
-        budgets = self.settings.get("budgets", {})
-        if not budgets.get("warn_when_budget_exceeded", True):
-            return ""
-        projected = used_tokens + max(0, int(estimated_prompt_tokens or 0))
-        ratio = projected / max(1, budget)
-        thresholds = budgets.get("daily_token_warning_thresholds", [0.7, 0.85, 0.95])
-        try:
-            thresholds = sorted(float(x) for x in thresholds)
-        except Exception:
-            thresholds = [0.7, 0.85, 0.95]
-        active = [t for t in thresholds if ratio >= t]
-        if not active:
-            return ""
-        current = active[-1]
-        next_thresholds = [f"{int(t * 100)}%" for t in thresholds if t > current]
-        remaining = max(0, budget - used_tokens)
-        severity = "soft" if current < 0.85 else ("strong" if current < 0.95 else "critical")
-        next_text = ", ".join(next_thresholds) if next_thresholds else "the hard stop at 100%"
-        return (
-            "[SMARTI_DAILY_TOKEN_BUDGET_WARNING]\n"
-            f"Severity: {severity}. Daily token budget is near its limit: used={used_tokens:,}, "
-            f"estimated_this_request_prompt={estimated_prompt_tokens:,}, budget={budget:,}, remaining_before_request={remaining:,}.\n"
-            f"Current warning threshold: {int(current * 100)}%. Next warning/stop: {next_text}.\n"
-            "Use your judgment to finish efficiently: avoid unnecessary tool calls, prefer concise answers, "
-            "reuse available context, and complete the task now if possible. Code will block further model calls once the daily token budget is exhausted.\n"
-            "[/SMARTI_DAILY_TOKEN_BUDGET_WARNING]"
-        )
-
-    def _messages_with_budget_notice(self, current_messages, notice, provider_mode=None):
-        if not notice:
-            return current_messages
-        prepared = copy.deepcopy(current_messages or [])
-        if normalize_provider_name(provider_mode or self.mode) == "gemini":
-            prepared.append({"role": "user", "parts": [{"text": notice}]})
-            return prepared
-        insert_at = 1 if prepared and prepared[0].get("role") == "system" else 0
-        prepared.insert(insert_at, {"role": "system", "content": notice})
-        return prepared
-
-    def _prepare_messages_for_budget(
-        self,
-        current_model,
-        current_messages,
-        provider_mode=None,
-        system_prompt=None,
-        include_warning=True,
-    ):
-        budgets = self.settings.get("budgets", {})
-        try:
-            budget = int(budgets.get("daily_token_budget", 0) or 0)
-        except Exception:
-            budget = 0
-        if budget <= 0:
-            return current_messages
-        used = self._daily_token_usage()
-        estimated = self._estimate_request_tokens(
-            current_messages,
-            provider_mode=provider_mode,
-            system_prompt=system_prompt,
-        )
-        if used >= budget:
-            raise Exception(f"DAILY_TOKEN_BUDGET_EXCEEDED: used={used} budget={budget}")
-        if used + estimated > budget:
-            raise Exception(f"DAILY_TOKEN_BUDGET_WOULD_EXCEED: used={used} estimated_prompt={estimated} budget={budget}")
-        notice = self._budget_warning_notice(used, estimated, budget)
-        if notice:
-            self._trace_agent_phase(
-                "budget",
-                f"warning model={current_model} used={used} estimated_prompt={estimated} budget={budget}"
-            )
-        if not include_warning:
-            return current_messages
-        return self._messages_with_budget_notice(current_messages, notice, provider_mode=provider_mode)
+    def _prepare_messages_for_budget(self, current_model, current_messages, provider_mode=None,
+                                     system_prompt=None, include_warning=True):
+        # Daily budgets do not alter messages, reasoning, or generation limits.
+        self._check_request_budget(current_model, normalize_provider_name(provider_mode or self.mode))
+        return current_messages
 
     def _is_budget_exception(self, error):
-        return "DAILY_TOKEN_BUDGET" in str(error or "")
+        return any(marker in str(error or "") for marker in ("DAILY_TOKEN_BUDGET", "DAILY_COST_BUDGET"))
 
     def _budget_exception_user_message(self, error):
+        if "DAILY_COST_BUDGET" in str(error):
+            return "ERROR_USER: אומדן העלות היומי הגיע לתקציב שהוגדר; עצרתי לפני קריאה נוספת למודל שנכלל במונה. זו הערכה בלבד, ולא התחייבות לעלות בפועל."
         try:
             budget = int(self.settings.get("budgets", {}).get("daily_token_budget", 0) or 0)
         except Exception:
             budget = 0
         used = self._daily_token_usage()
-        details = redact_sensitive_text(str(error or ""), self.settings)
-        reset_note = "המכסה מתאפסת אוטומטית בתחילת יום חדש."
-        if "WOULD_EXCEED" in details:
-            return (
-                "ERROR_USER: עצרתי לפני קריאה נוספת למודל, כי היא הייתה עלולה לחרוג ממכסת הטוקנים היומית "
-                f"שהוגדרה. נוצלו כעת כ-{used:,} מתוך {budget:,} טוקנים. {reset_note}"
-            )
         return (
-            "ERROR_USER: הגעת למכסת הטוקנים היומית שהוגדרה, ולכן עצרתי לפני קריאה נוספת למודל. "
-            f"נוצלו כעת כ-{used:,} מתוך {budget:,} טוקנים. {reset_note}"
+            "ERROR_USER: אומדן השימוש היומי הגיע למכסת הטוקנים שהוגדרה; עצרתי לפני קריאה נוספת למודל שנכלל במונה. "
+            f"נרשמו כ-{used:,} מתוך {budget:,} טוקנים. זו הערכה בלבד, ללא התחייבות למספר טוקנים או לעלות בפועל. "
+            "המכסה מתאפסת אוטומטית בתחילת יום חדש."
         )
 
     def _get_existing_python_tools(self):
@@ -2391,26 +2381,7 @@ CWD: {current_dir}
         except Exception:
             requested_limit = 0
         limit = min(capability_limit, requested_limit or default_limit)
-        budgets = self.settings.get("budgets", {})
-        try:
-            daily_budget = int(budgets.get("daily_token_budget", 0) or 0)
-        except Exception:
-            daily_budget = 0
-        if daily_budget > 0:
-            used = self._daily_token_usage()
-            prompt_tokens = self._estimate_request_tokens(
-                request_messages,
-                provider_mode=provider_mode,
-                system_prompt=system_prompt,
-            )
-            remaining = daily_budget - used - prompt_tokens
-            if remaining <= 0:
-                raise Exception(
-                    "DAILY_TOKEN_BUDGET_WOULD_EXCEED: "
-                    f"used={used} estimated_prompt={prompt_tokens} budget={daily_budget}"
-                )
-            limit = min(limit, remaining)
-        return max(1, int(limit))
+        return max(1, limit)
 
     def _raise_for_model_api_error(self, response, current_model, provider_mode=None, payload=None):
         status_code = getattr(response, "status_code", None)
@@ -2626,6 +2597,17 @@ CWD: {current_dir}
         if isinstance(result, tuple) and len(result) >= 2:
             response_text = str(result[0] or "")
             usage = result[1] if isinstance(result[1], dict) else {}
+            if int(usage.get("total", 0) or 0) > 0:
+                usage = dict(usage)
+                usage["request_id"] = f"{request_id}:{attempt}"
+                cost = self._request_usage_cost(model, usage, provider)
+                if cost is not None:
+                    usage["estimated_cost_usd"] = cost
+                usage["_budget_eligible"] = self._request_counts_toward_budget(model, provider)
+                if (provider, model) in getattr(self, "_budget_unbounded_routes", set()):
+                    usage["_budget_unbounded_provider"] = provider
+                result = (result[0], usage, *result[2:])
+                self._log_usage(model, usage)
         live = getattr(self, "_current_stream", None)
         if live and purpose == "agent":
             live.finish(response_text, has_tools=bool(live.calls))
@@ -2745,6 +2727,8 @@ CWD: {current_dir}
             attempt_number += 1
             attempt_started = time.monotonic()
             request_client = None
+            if not getattr(self, "_execution_context", None):
+                self._execution_context = threading.local()
             try:
                 self._raise_if_cancelled()
                 if request_mode not in MODEL_PROVIDER_ORDER:
@@ -2768,6 +2752,7 @@ CWD: {current_dir}
                     system_prompt=request_system_prompt,
                     include_warning=request_purpose == "agent",
                 )
+
                 logging.info(
                     "API ATTEMPT | request_id=%s | attempt=%s | messages=%s | estimated_chars=%s",
                     request_log_id,
@@ -2789,7 +2774,7 @@ CWD: {current_dir}
                     result = codex_provider.complete(
                         request_messages,
                         current_model,
-                        timeout=max(60, codex_timeout),
+                        timeout=self._bounded_task_timeout(max(60, codex_timeout)),
                         reasoning_effort=(
                             request_reasoning
                             or self.settings.get("codex_reasoning_effort", "auto")
@@ -2821,7 +2806,7 @@ CWD: {current_dir}
                     payload["generationConfig"].update(
                         reasoning_parameters.get("generationConfig", {})
                     )
-                    if request_options.get("max_output_tokens") or (self.settings.get("budgets") or {}).get("daily_token_budget"):
+                    if request_options.get("max_output_tokens"):
                         payload["generationConfig"]["maxOutputTokens"] = self._model_output_token_limit(request_mode, current_model, request_messages, request_options)
                     if native_specs:
                         payload["tools"] = [{
@@ -2903,7 +2888,7 @@ CWD: {current_dir}
                     if request_mode == "local" and self._current_stream:
                         from .local_streaming import local_progress_response
                         local_options = dict(request_options)
-                        if request_options.get("max_output_tokens") or (self.settings.get("budgets") or {}).get("daily_token_budget"):
+                        if request_options.get("max_output_tokens"):
                             local_options["max_output_tokens"] = self._model_output_token_limit(request_mode, current_model, request_messages, request_options)
                         result = self._run_cancelable_callable(lambda: local_progress_response(
                             self, provider_base_url("local", self.settings.get("local_server_url", "http://localhost:1234/v1")),
@@ -2918,7 +2903,7 @@ CWD: {current_dir}
                             current_model, request_messages, request_reasoning,
                             tools=native_specs,
                             max_output_tokens=self._model_output_token_limit(request_mode, current_model, request_messages, request_options)
-                            if request_options.get("max_output_tokens") or (self.settings.get("budgets") or {}).get("daily_token_budget") else None,
+                            if request_options.get("max_output_tokens") else None,
                         )
                         response_options["timeout"] = self._sdk_transport_timeout(request_mode)
                         if self._current_stream:
@@ -2953,7 +2938,7 @@ CWD: {current_dir}
                             current_model,
                             request_reasoning,
                         ))
-                    if request_options.get("max_output_tokens") or (self.settings.get("budgets") or {}).get("daily_token_budget"):
+                    if request_options.get("max_output_tokens"):
                         completion_kwargs["max_completion_tokens" if openai_reasoning_model else "max_tokens"] = self._model_output_token_limit(
                             request_mode, current_model, request_messages, request_options,
                         )
@@ -3022,6 +3007,17 @@ CWD: {current_dir}
                             break
                         except Exception as request_error:
                             compatibility_analysis = analyze_api_error(request_mode, current_model, error=request_error)
+                            output_keys = {"max_tokens", "max_completion_tokens"}.intersection(completion_kwargs)
+                            error_text = str(request_error).lower()
+                            if output_keys and any(key in error_text for key in output_keys) and re.search(r"unsupported|not supported|unknown parameter|unrecognized", error_text):
+                                with self._request_budget_lock():
+                                    if not hasattr(self, "_budget_unbounded_routes"):
+                                        self._budget_unbounded_routes = set()
+                                    self._budget_unbounded_routes.add((request_mode, current_model))
+                                self._log_usage(current_model, {"_budget_unbounded_provider": request_mode, "estimated_cost_usd": 0})
+                                for key in output_keys:
+                                    completion_kwargs.pop(key, None)
+                                continue
                             if "stream_options" in completion_kwargs and "stream_options" in str(request_error).lower():
                                 completion_kwargs.pop("stream_options", None)
                                 continue
@@ -3238,7 +3234,7 @@ CWD: {current_dir}
                         attempt_number, attempt_started, result,
                     )
             except SmartiCancelled:
-                raise Exception("CANCELLED_BY_USER")
+                raise
             except CodexProtocolError:
                 # The agent loop returns this structured validation failure to
                 # Codex as corrective feedback. It is not an API/network error.

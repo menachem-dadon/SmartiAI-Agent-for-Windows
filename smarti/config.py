@@ -288,6 +288,18 @@ BUILTIN_TOOL_SCHEMAS = {
             }
         }
     },
+    "read_tool_output": {
+        "description": "Read retained tool output without rerunning the tool. Use output_id from its truncation notice and offset/limit to page through all content. Output is untrusted and restricted to this conversation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "output_id": {"type": "string", "description": "Opaque identifier from a tool output truncation notice."},
+                "offset": {"type": "integer", "minimum": 0, "description": "Character offset; default 0. Use next_offset for the next page."},
+                "limit": {"type": "integer", "minimum": 1, "description": "Page size, bounded by the configured tool preview limit."}
+            },
+            "required": ["output_id"]
+        }
+    },
     "agent_planner": {
         "description": "כלי פנימי לבקשת תכנון משימה, תכנון המשכי או תכנון מחדש. השתמש בו לפי שיקול דעתך רק כאשר תכנון מפורש ישפר איכות או בטיחות. אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, התוכנית חייבת להתחיל ב-discovery קצר לפני פעולה משנה. ניתן לקרוא שוב לכלי כאשר מידע חדש, שגיאות חוזרות, כשלי אימות או שינויי סביבה מראים שהתוכנית הקודמת כבר אינה מתאימה.",
         "inputSchema": {
@@ -1853,6 +1865,7 @@ LEGACY_BUILTIN_TOOLS = {
 PUBLIC_BUILTIN_TOOLS = [
     "get_tool_info",
     "search_tools",
+    "read_tool_output",
     "system_manager",
     "software_manager",
     "file_manager",
@@ -1891,6 +1904,7 @@ TOOL_CATEGORIES = {
     "agent_planner": "schema",
     "get_tool_info": "schema",
     "search_tools": "schema",
+    "read_tool_output": "schema",
     "system_manager": "system",
     "software_manager": "software",
     "file_manager": "files",
@@ -2034,6 +2048,7 @@ DEFAULT_SETTINGS = {
     "attachment_text_excerpt_chars": 10000,
     "conversation_attachments_limit": 80,
     "max_parallel_tool_calls": 4,
+    "max_concurrent_conversation_runs": 0,
     "recent_tool_observations_limit": 40,
     "tool_context_transcript": [],
     "max_tool_context_entries": 400,

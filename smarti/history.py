@@ -2,6 +2,7 @@
 from .common import *
 
 import sqlite3
+from contextlib import contextmanager
 
 
 class _ClosingConnection(sqlite3.Connection):
@@ -13,8 +14,17 @@ class _ClosingConnection(sqlite3.Connection):
         finally:
             self.close()
 
+    def execute(self, sql, parameters=()):
+        # Cover direct TEXT columns as well as JSON events/context. This does
+        # not redact ordinary user paths or email addresses, only credentials.
+        if isinstance(parameters, dict):
+            parameters = redact_secret_values(parameters)
+        else:
+            parameters = tuple(redact_secret_values(item) for item in parameters)
+        return super().execute(sql, parameters)
 
-CHAT_HISTORY_SCHEMA_VERSION = 3
+
+CHAT_HISTORY_SCHEMA_VERSION = 5
 DEFAULT_CHAT_TITLE = "שיחה חדשה"
 DEFAULT_WELCOME_MESSAGE = (
     "שלום, אני סמארטי - סוכן AI למחשב Windows. אני יכול לענות, לחפש מידע, "
@@ -114,7 +124,7 @@ def _json_loads(value, fallback):
 
 
 def _json_dumps(value):
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(redact_secret_values(value), ensure_ascii=False, separators=(",", ":"))
 
 
 class ChatSessionStore:
@@ -130,17 +140,52 @@ class ChatSessionStore:
         root, extension = os.path.splitext(self.legacy_path)
         self.path = root + ".sqlite3" if extension.lower() == ".json" else self.legacy_path
         self._lock = threading.RLock()
+        self._transaction_state = threading.local()
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self._initialize()
         self._migrate_legacy_json()
         self.ensure_active_session()
 
     def _connect(self):
+        active = getattr(self._transaction_state, "connection", None)
+        if active is not None:
+            return self._borrow_connection(active)
         connection = sqlite3.connect(self.path, timeout=15.0, factory=_ClosingConnection)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=15000")
         return connection
+
+    @staticmethod
+    @contextmanager
+    def _borrow_connection(connection):
+        yield connection
+
+    @contextmanager
+    def transaction(self):
+        """Join nested store calls; publish/schedule only after durable commit."""
+        if getattr(self._transaction_state, "connection", None) is not None:
+            yield
+            return
+        callbacks = []
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._transaction_state.connection = db
+            self._transaction_state.callbacks = callbacks
+            try:
+                yield
+            finally:
+                del self._transaction_state.connection
+                del self._transaction_state.callbacks
+        for callback in callbacks:
+            callback()
+
+    def after_commit(self, callback):
+        callbacks = getattr(self._transaction_state, "callbacks", None)
+        if callbacks is None:
+            callback()
+        else:
+            callbacks.append(callback)
 
     def _ensure_column(self, db, table, column, declaration):
         columns = {str(row["name"]) for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -149,6 +194,18 @@ class ChatSessionStore:
 
     def _initialize(self):
         with self._lock, self._connect() as db:
+            tables = {row["name"] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if tables:
+                version = db.execute("SELECT value FROM store_meta WHERE key='schema_version'").fetchone() if "store_meta" in tables else None
+                previous = int(version["value"]) if version else 0
+                if previous > CHAT_HISTORY_SCHEMA_VERSION:
+                    raise RuntimeError("chat_history_schema_newer_than_application")
+                if previous < CHAT_HISTORY_SCHEMA_VERSION:
+                    # SQLite backup includes committed WAL pages. A raw file
+                    # copy can silently omit the most recent messages/events.
+                    backup = f"{self.path}.backup-v{previous}-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}"
+                    with sqlite3.connect(backup, factory=_ClosingConnection) as destination:
+                        db.backup(destination)
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=NORMAL")
             db.executescript(
@@ -271,6 +328,16 @@ class ChatSessionStore:
                 """
             )
             self._ensure_column(db, "sessions", "workspace_id", "TEXT")
+            self._ensure_column(db, "idempotency_keys", "request_hash", "TEXT NOT NULL DEFAULT ''")
+            db.execute("""CREATE TABLE IF NOT EXISTS run_checkpoints (
+                run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+                payload_json TEXT NOT NULL, updated_at TEXT NOT NULL
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS tool_output_chunks (
+                output_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                ordinal INTEGER NOT NULL, start_char INTEGER NOT NULL, char_count INTEGER NOT NULL,
+                encrypted_text BLOB NOT NULL, PRIMARY KEY(output_id, ordinal)
+            )""")
             db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id, updated_at DESC)")
             db.execute(
                 "INSERT OR REPLACE INTO store_meta(key, value) VALUES('schema_version', ?)",
@@ -1712,14 +1779,16 @@ class ChatSessionStore:
                 for row in rows
             ]
 
-    def idempotency_response(self, scope, key):
+    def idempotency_response(self, scope, key, request_hash=None):
         with self._lock, self._connect() as db:
             row = db.execute(
-                "SELECT response_json, expires_at FROM idempotency_keys WHERE scope=? AND key=?",
+                "SELECT response_json, expires_at, request_hash FROM idempotency_keys WHERE scope=? AND key=?",
                 (str(scope or "default"), str(key or "")),
             ).fetchone()
             if not row:
                 return None
+            if request_hash and row["request_hash"] and request_hash != row["request_hash"]:
+                raise ValueError("idempotency_key_payload_mismatch")
             expires_at = str(row["expires_at"] or "")
             if expires_at:
                 try:
@@ -1733,23 +1802,56 @@ class ChatSessionStore:
                     pass
             return _json_loads(row["response_json"], {})
 
-    def save_idempotency_response(self, scope, key, response, ttl_hours=24):
+    def save_idempotency_response(self, scope, key, response, ttl_hours=24, request_hash=""):
         if not str(key or "").strip():
             return False
         now = datetime.now()
-        expires_at = (now + timedelta(hours=max(1, int(ttl_hours or 24)))).isoformat(timespec="seconds")
+        expires_at = "" if ttl_hours is None else (now + timedelta(hours=max(1, int(ttl_hours or 24)))).isoformat(timespec="seconds")
         with self._lock, self._connect() as db:
             db.execute(
                 """
-                INSERT OR IGNORE INTO idempotency_keys(scope, key, response_json, created_at, expires_at)
-                VALUES(?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO idempotency_keys(scope, key, response_json, created_at, expires_at, request_hash)
+                VALUES(?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(scope or "default"), str(key), _json_dumps(_json_object(response)),
-                    now.isoformat(timespec="seconds"), expires_at,
+                    now.isoformat(timespec="seconds"), expires_at, str(request_hash),
                 ),
             )
             return True
+
+    def save_run_checkpoint(self, run_id, payload, resumed_from=None):
+        with self._lock, self._connect() as db:
+            db.execute("""INSERT INTO run_checkpoints(run_id, payload_json, updated_at)
+                VALUES(?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET
+                payload_json=excluded.payload_json, updated_at=excluded.updated_at""",
+                (str(run_id), _json_dumps(payload), _now_iso()))
+            if resumed_from and str(resumed_from) != str(run_id):
+                db.execute("DELETE FROM run_checkpoints WHERE run_id=?", (str(resumed_from),))
+
+    def load_run_checkpoint(self, run_id=None, session_id=None, task_id=None):
+        with self._lock, self._connect() as db:
+            if run_id:
+                row = db.execute("SELECT payload_json FROM run_checkpoints WHERE run_id=?", (str(run_id),)).fetchone()
+            elif session_id:
+                query = """SELECT c.payload_json FROM run_checkpoints c JOIN runs r ON r.id=c.run_id
+                    WHERE r.session_id=? AND r.status IN ('failed', 'interrupted')"""
+                params = [str(session_id)]
+                if task_id:
+                    query += " AND json_extract(c.payload_json, '$.task_id')=?"
+                    params.append(str(task_id))
+                if not task_id:
+                    query += """ AND r.id=(SELECT id FROM runs WHERE session_id=?
+                        AND status IN ('completed', 'failed', 'cancelled', 'interrupted') ORDER BY rowid DESC LIMIT 1)"""
+                    params.append(str(session_id))
+                row = db.execute(query + " ORDER BY c.updated_at DESC, r.rowid DESC LIMIT 1", params).fetchone()
+            else:
+                return None
+            return _json_loads(row["payload_json"], {}) if row else None
+
+    def clear_run_checkpoint(self, run_id):
+        with self._lock, self._connect() as db:
+            db.execute("DELETE FROM run_checkpoints WHERE run_id=?", (str(run_id),))
 
     def export_session(self, session_id, target_path):
         payload = self.session_export_payload(session_id)

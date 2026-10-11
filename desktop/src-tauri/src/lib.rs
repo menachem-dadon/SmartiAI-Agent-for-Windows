@@ -674,8 +674,11 @@ fn core_status(supervisor: tauri::State<'_, CoreSupervisor>) -> CoreSnapshot {
     supervisor.snapshot()
 }
 #[tauri::command]
-fn core_health(supervisor: tauri::State<'_, CoreSupervisor>) -> Result<Value, String> {
-    supervisor.health()
+async fn core_health(supervisor: tauri::State<'_, CoreSupervisor>) -> Result<Value, String> {
+    let supervisor = supervisor.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || supervisor.health())
+        .await
+        .map_err(|error| format!("Core health worker failed: {error}"))?
 }
 #[tauri::command]
 fn core_restart(app: AppHandle, supervisor: tauri::State<'_, CoreSupervisor>) -> CoreSnapshot {

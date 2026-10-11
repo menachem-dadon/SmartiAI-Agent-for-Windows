@@ -15,7 +15,7 @@ Workspace
       Artifact / tool metadata
 ```
 
-A conversation may have many queued runs, but only one run in that conversation may execute at a time. Independent conversations start independently with no Smarti-imposed global count limit. Provider rate limits, local-model server capacity, available memory, and singleton desktop resources can still create natural back-pressure or provider errors; they do not prevent unrelated conversations from being submitted.
+A conversation may have many queued runs, but only one run in that conversation may execute at a time. Independent conversations have no default application limit (`max_concurrent_conversation_runs=0`; an empty setting also means unlimited). A positive value (1–128) queues additional runs until capacity becomes available; submission is still allowed. Existing explicitly saved positive values remain intact. Provider capacity and singleton desktop resources can impose further back-pressure.
 
 The execution state and the attention state are deliberately separate:
 
@@ -37,6 +37,46 @@ The execution state and the attention state are deliberately separate:
 - `idempotency_keys`
 
 Every state change is written before a UI event is emitted. A process restart marks a run that was executing as `interrupted`, cancels an approval that can no longer continue safely, and creates an unread interruption item. A queued run is safe to restore and submit to the scheduler.
+
+Schema version 4 adds `run_checkpoints` and a request-body hash on idempotency
+receipts. Opening an older SQLite schema first creates a SQLite backup (including
+committed WAL pages). A newer schema is refused rather than silently downgraded.
+Credentials are redacted before event fan-out, SQLite writes and log formatting,
+including exception tracebacks even when additional privacy redaction is off.
+
+Managed foreground and background checkpoints are scoped by run/conversation
+and task ID. They retain the original instruction, messages, observed tool
+results, loop counters and elapsed active time. A foreground continuation
+resumes only the latest failed/interrupted task in that conversation. Background
+retries resume only the corresponding task. Checkpoint transfer to the new run
+is atomic. If interruption happened during a mutation and its outcome is
+unknown, Core asks the user to check that outcome instead of repeating the tool.
+
+Daily token/cost budgets stop subsequent eligible requests only after recorded
+usage reaches the configured threshold. They never reserve future usage, shrink
+generation limits, or insert instructions to shorten answers near the threshold.
+Active and concurrent requests can exceed it. Successful reported usage carries
+a durable request receipt and is counted once under a shared lock. Separate
+eligible totals retain request-time pricing and route eligibility while general
+usage statistics still include excluded providers. Unknown-price models and
+transports without an output cap (including Codex sign-in) are excluded from BOTH
+budget counters and remain callable after other models exhaust a daily budget.
+An explicitly rejected output parameter is retried without it and excludes that
+route. Local inference has zero model-token cost. Missing usage reports and old
+reservations do not create conservative charges or block the application.
+These numbers are estimates, with no commitment to actual cost or token count.
+
+Task deadlines propagate to model transports, subprocesses, tool workers and
+approval/key waits. Resume preserves elapsed active time and loop counters.
+Subprocess pipes are drained while capture stays bounded by the configured
+output preview limit. Oversized output is retained in encrypted SQLite chunks
+and can be read in full through `read_tool_output` pages without repeating the
+tool. Retrieval is conversation-scoped, applies the file-read permission policy,
+and redacts credentials across page boundaries; deleting the conversation
+deletes its retained output. Schema 5 uses the existing pre-upgrade backup path.
+A timed-out uncooperative Python extension can finish its current
+call later; the cancelled task does not dispatch further work. Extensions that
+perform external effects remain subject to the unknown-outcome recovery rule.
 
 ## Isolation and resource rules
 

@@ -41,6 +41,7 @@ def _v2_request(handshake, token, path, *, method="GET", payload=None, request_i
     headers = {
         "Authorization": f"Bearer {token}",
         "X-Request-ID": request_id,
+        "Idempotency-Key": request_id,
     }
     body = None
     if payload is not None:

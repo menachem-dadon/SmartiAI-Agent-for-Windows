@@ -725,14 +725,48 @@ class LifecycleMixin:
         return changed
 
     def _timeout(self, key, default):
-        try: return max(5, int(self.settings.get(key, default)))
-        except Exception: return default
+        try:
+            seconds = max(5, int(self.settings.get(key, default)))
+        except (TypeError, ValueError):
+            seconds = default
+        return self._bounded_task_timeout(seconds) if key.endswith("_seconds") else seconds
 
     def _python_executable(self):
         return SMARTI_RUNTIME.python_executable(prefer_console=True)
 
-    def _truncate_tool_output(self, text):
+    def _tool_output_writer_factory(self):
+        from ..tool_output import ToolOutputWriter
+        store = getattr(self, "chat_store", None)
+        if store is None:
+            return None
+        session = getattr(getattr(self, "_execution_context", None), "target_session_id", None) or store.active_session()["id"]
+        return lambda: ToolOutputWriter(store, session, self.settings)
+
+    def read_tool_output(self, args):
+        from ..tool_output import read_tool_output
+        store = getattr(self, "chat_store", None)
+        if store is None:
+            return "ERROR: No conversation output store."
+        session = getattr(getattr(self, "_execution_context", None), "target_session_id", None) or store.active_session()["id"]
+        try:
+            ceiling = max(1, self._timeout("max_tool_output_chars", 100000) - 512)
+            return read_tool_output(store, session, str(args.get("output_id", "")),
+                                    int(args.get("offset", 0)), min(ceiling, int(args.get("limit", ceiling))), self.settings)
+        except (ValueError, TypeError, OSError):
+            return "ERROR: Could not read retained tool output."
+
+    def _truncate_tool_output(self, text, *, retain=True):
         limit = self._timeout("max_tool_output_chars", 100000)
         text = "" if text is None else str(text)
+        text = redact_secret_values(text, self.settings)
         if len(text) <= limit: return text
-        return text[:limit] + f"\n\n[TRUNCATED: הוחזרו רק {limit} התווים הראשונים מתוך {len(text)} כדי לשמור על יציבות הלולאה.]"
+        retrieval = ""
+        factory = self._tool_output_writer_factory() if retain else None
+        if factory:
+            writer = factory()
+            writer.write(text)
+            retrieval = f" Full output: read_tool_output output_id={writer.output_id} offset={limit}; use get_tool_info action=full for its schema."
+        error_prefix = "ERROR: " if text.startswith("ERROR") else ""
+        # Keep the retrieval handle before the preview so compaction and the
+        # shorter durable context transcript cannot discard it from the tail.
+        return f"{error_prefix}[TRUNCATED: הוחזרו {limit} מתוך {len(text)} תווים.{retrieval}]\n" + text[:limit]

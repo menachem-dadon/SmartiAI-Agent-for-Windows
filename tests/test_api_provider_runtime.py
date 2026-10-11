@@ -55,6 +55,30 @@ class ProviderRuntimeTests(unittest.TestCase):
         core.universal_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
         return core
 
+    def test_daily_budget_does_not_modify_first_request_prompt_or_output(self):
+        calls = []
+        core = self.sdk_core("openai", lambda **kwargs: calls.append(copy.deepcopy(kwargs)) or completion())
+        core.settings["budgets"].update(daily_token_budget=30, daily_cost_budget_usd=0.01)
+        core._daily_budget_usage = lambda: (29, 0.009)
+        core._request_counts_toward_budget = lambda *_: True
+        core._prepare_messages_for_budget = lambda model, messages, **kwargs: ModelContextMixin._prepare_messages_for_budget(core, model, messages, **kwargs)
+        self.assertEqual(core.call(retries=[])[0], "answer")
+        self.assertEqual(calls[0]["messages"], [{"role": "user", "content": "hello"}])
+        self.assertNotIn("max_tokens", calls[0])
+        self.assertNotIn("max_completion_tokens", calls[0])
+        core._daily_budget_usage = lambda: (31, 0.011)
+        with self.assertRaisesRegex(RuntimeError, "DAILY_TOKEN_BUDGET_EXCEEDED"):
+            core.call(retries=[])
+        self.assertEqual(len(calls), 1)
+
+    def test_provider_rejecting_output_cap_is_retried_and_excluded(self):
+        create = mock.Mock(side_effect=[ValueError("Unknown parameter: max_tokens is unsupported"), completion()])
+        core = self.sdk_core("local", create)
+        self.assertEqual(core.call(retries=[], options={"max_output_tokens": 100})[0], "answer")
+        self.assertIn("max_tokens", create.call_args_list[0].kwargs)
+        self.assertNotIn("max_tokens", create.call_args_list[1].kwargs)
+        self.assertFalse(core._request_counts_toward_budget("test-model", "local"))
+
     def test_every_openai_compatible_provider_uses_a_compatible_request(self):
         providers = [p for p in MODEL_PROVIDER_ORDER if p not in {"gemini", "anthropic", "openai_codex_signin"}]
         for provider in providers:

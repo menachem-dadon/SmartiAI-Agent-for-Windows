@@ -1506,9 +1506,40 @@ def fetch_text_models_for_provider(provider, api_key="", local_url="", ssl_setti
         analysis = analyze_api_error(provider, error=e, operation="models")
         return diagnose(analysis)
 
+_KNOWN_REDACTION_SECRETS = {}
+_REDACTION_SECRETS_LOCK = threading.RLock()
+
+
+def redact_secret_values(value, settings=None):
+    """Remove credentials without changing ordinary paths, emails or JSON types."""
+    settings = settings if settings is not None else (_CURRENT_SETTINGS_REF.get("settings") or {})
+    with _REDACTION_SECRETS_LOCK:
+        for key in SENSITIVE_SETTING_KEYS:
+            secret = str(settings.get(key, "") or "")
+            if len(secret) >= 4:
+                _KNOWN_REDACTION_SECRETS[secret] = key
+        secrets = sorted(_KNOWN_REDACTION_SECRETS.items(), key=lambda item: len(item[0]), reverse=True)
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if isinstance(item, str) and re.fullmatch(
+                r"(?i)(?:api[_-]?key|password|access[_-]?token|refresh[_-]?token|authorization|client[_-]?secret)", str(key),
+            ) else redact_secret_values(item, settings)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_secret_values(item, settings) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_secret_values(item, settings) for item in value)
+    if not isinstance(value, str):
+        return value
+    for secret, key in secrets:
+        value = value.replace(secret, f"[REDACTED:{key}]")
+    return re.sub(r"(?i)\b(Bearer|Basic)\s+[a-z0-9._~+/-]{12,}=*", r"\1 [REDACTED]", value)
+
+
 def redact_sensitive_text(text, settings=None):
     if text is None: return ""
-    safe = str(text)
+    safe = redact_secret_values(str(text), settings)
     settings = settings or {}
     for key in SENSITIVE_SETTING_KEYS:
         value = str(settings.get(key, "") or "")
@@ -1525,9 +1556,18 @@ class SmartiRedactingFilter(logging.Filter):
         if getattr(record, "_smarti_redacted", False):
             return True
         settings = _CURRENT_SETTINGS_REF.get("settings") or {}
-        if settings.get("privacy_redact_logs", True):
-            record.msg = redact_sensitive_text(record.getMessage(), settings)
-            record.args = ()
+        redact = redact_sensitive_text if settings.get("privacy_redact_logs", True) else redact_secret_values
+        # Credential protection is unconditional. The privacy switch controls
+        # additional personal information, never API keys or passwords.
+        record.msg = redact(record.getMessage(), settings)
+        record.args = ()
+        if record.exc_info:
+            record.exc_text = redact(logging.Formatter().formatException(record.exc_info), settings)
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = redact(record.exc_text, settings)
+        if record.stack_info:
+            record.stack_info = redact(record.stack_info, settings)
         record._smarti_redacted = True
         return True
 

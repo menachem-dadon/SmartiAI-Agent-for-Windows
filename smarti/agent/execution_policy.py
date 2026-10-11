@@ -1,5 +1,6 @@
 """Cancellation, subprocess execution, sandbox policy, tool observations, and schema checks."""
 from .shared import *
+from ..task_limits import BoundedCapture
 
 
 class ExecutionPolicyMixin:
@@ -35,7 +36,9 @@ class ExecutionPolicyMixin:
 
     def _raise_if_cancelled(self):
         if self._is_cancel_requested():
-            raise SmartiCancelled("CANCELLED_BY_USER")
+            event = getattr(self._execution_context, "cancel_event", None)
+            expired = getattr(event, "expired", None)
+            raise SmartiCancelled("TASK_DEADLINE_EXCEEDED" if expired and expired.is_set() else "CANCELLED_BY_USER")
 
     def _sleep_with_cancel(self, seconds, tick_callback=None):
         end_at = time.time() + max(0, float(seconds or 0))
@@ -98,8 +101,9 @@ class ExecutionPolicyMixin:
         for proc in processes:
             self._terminate_process_tree(proc)
 
-    def _run_cancelable_subprocess(self, args, *, input=None, timeout=None, cwd=None, env=None, text=True, encoding="utf-8", errors="replace", creationflags=WIN_CREATE_NO_WINDOW):
+    def _run_cancelable_subprocess(self, args, *, input=None, timeout=None, cwd=None, env=None, text=True, encoding="utf-8", errors="replace", creationflags=WIN_CREATE_NO_WINDOW, preserve_output=False):
         self._raise_if_cancelled()
+        timeout = self._bounded_task_timeout(timeout)
         proc_env = self._subprocess_env(env)
         proc = subprocess.Popen(
             args,
@@ -115,28 +119,23 @@ class ExecutionPolicyMixin:
         )
         self._register_active_process(proc)
         deadline = time.time() + float(timeout) if timeout else None
-        sent_input = False
+        capture = BoundedCapture(proc, self._timeout("max_tool_output_chars", 100000), input,
+                                 self._tool_output_writer_factory() if text else None, keep_full=not text)
         try:
             while True:
                 if self._is_cancel_requested():
                     self._terminate_process_tree(proc)
-                    raise SmartiCancelled("CANCELLED_BY_USER")
+                    self._raise_if_cancelled()
                 if deadline and time.time() >= deadline:
                     self._terminate_process_tree(proc)
                     raise subprocess.TimeoutExpired(args, timeout)
-                wait_for = 0.2
-                if deadline:
-                    wait_for = max(0.01, min(wait_for, deadline - time.time()))
-                try:
-                    if input is not None and not sent_input:
-                        sent_input = True
-                        stdout, stderr = proc.communicate(input=input, timeout=wait_for)
-                    else:
-                        stdout, stderr = proc.communicate(timeout=wait_for)
+                if proc.poll() is not None and capture.ready():
+                    stdout, stderr = capture.output(text, full=preserve_output)
                     return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
-                except subprocess.TimeoutExpired:
-                    continue
+                time.sleep(0.02)
         finally:
+            if proc.poll() is None:
+                self._terminate_process_tree(proc)
             self._unregister_active_process(proc)
 
     def _run_cancelable_callable(self, func, *, poll_interval=0.1):
@@ -149,6 +148,7 @@ class ExecutionPolicyMixin:
                 "run_values", "run_id", "target_session_id", "cancel_event",
                 "is_background", "policy_snapshot", "current_task_id",
                 "current_task_objective", "loop_iteration",
+                "task_deadline",
             )
         }
 
@@ -166,6 +166,7 @@ class ExecutionPolicyMixin:
         threading.Thread(target=runner, daemon=True).start()
         while not done.wait(poll_interval):
             self._raise_if_cancelled()
+        self._raise_if_cancelled()
         if "error" in result_box:
             raise result_box["error"]
         return result_box.get("result")
@@ -293,6 +294,7 @@ class ExecutionPolicyMixin:
             "email_manager": "email",
             "get_tool_info": "file_search",
             "search_tools": "file_search",
+            "read_tool_output": "file_read",
             "list_software": "software_open",
             "open_software": "software_open",
             "open_file_or_folder": "file_open",
@@ -527,7 +529,7 @@ class ExecutionPolicyMixin:
             "status": status,
             "trust": trust,
             "redacted": True,
-            "preview": self._truncate_tool_output(redact_sensitive_text(output, self.settings))[:1200]
+            "preview": self._truncate_tool_output(redact_sensitive_text(output, self.settings), retain=False)[:1200]
         }
         with self._tool_context_guard():
             self.tool_observations.append(record)
@@ -561,7 +563,7 @@ class ExecutionPolicyMixin:
             "status": str(status or ""),
             "trust": str(trust or ""),
             "arguments": args_text[:4000],
-            "output": self._truncate_tool_output(output_text)[:per_output_limit],
+            "output": self._truncate_tool_output(output_text, retain=False)[:per_output_limit],
         }
         with self._tool_context_guard():
             transcript = getattr(self, "tool_context_transcript", [])
@@ -619,7 +621,7 @@ class ExecutionPolicyMixin:
     def _format_tool_context_entry(self, entry, output_limit):
         output = str(entry.get("output", "") or "").replace(chr(10), " ")
         if len(output) > output_limit:
-            output = output[:output_limit].rstrip() + " ... [output preview shortened; full local transcript retained]"
+            output = output[:output_limit].rstrip() + " ... [output preview shortened; use retained output IDs in the original result to read more]"
         objective = str(entry.get("objective", "") or "").replace(chr(10), " ")[:240]
         objective_line = f"  objective={objective}\n" if objective else ""
         task_line = f" task={entry.get('task_id')}" if entry.get("task_id") else ""
@@ -711,7 +713,7 @@ class ExecutionPolicyMixin:
         if omitted or budget_omitted:
             prefix += (
                 f"[Historical tool-context entries not injected: relevance/recency omitted={omitted}, budget omitted={budget_omitted}. "
-                "Full local transcript remains in settings; use memory search or targeted tools if older details are needed.]\n"
+                "Use retained output IDs with read_tool_output to fetch full tool results; context previews alone are not complete outputs.]\n"
             )
         return prefix + "\n".join(rows)
 

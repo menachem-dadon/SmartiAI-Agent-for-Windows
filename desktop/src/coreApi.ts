@@ -3,12 +3,17 @@ import { publishSettingsChange } from "./settingsChanges";
 
 interface RawResponse { status: number; body: { data?: unknown; error?: string; detail?: string } }
 export class CoreApiError extends Error { constructor(message: string, public status = 0) { super(message); } }
+const pendingMutations = new Map<string, string>();
 
-export async function coreApi<T>(method: string, path: string, body?: unknown, idempotent = false): Promise<T> {
+export async function coreApi<T>(method: string, path: string, body?: unknown, idempotent: boolean | string = false): Promise<T> {
+  const identity = idempotent === true ? JSON.stringify([method, path, body ?? null]) : "";
+  const key = typeof idempotent === "string" ? idempotent : idempotent ? pendingMutations.get(identity) || crypto.randomUUID() : null;
+  if (identity && key) pendingMutations.set(identity, key);
   const response = await invoke<RawResponse>("core_api", { request: {
     method, path, body: body ?? null,
-    idempotencyKey: idempotent ? crypto.randomUUID() : null,
+    idempotencyKey: key,
   }});
+  if (identity && response.status < 500) pendingMutations.delete(identity);
   if (response.status < 200 || response.status >= 300 || response.body.error) {
     throw new CoreApiError(response.body.detail || response.body.error || `Core API ${response.status}`, response.status);
   }

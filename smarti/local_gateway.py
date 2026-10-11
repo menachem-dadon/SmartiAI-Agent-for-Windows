@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import getpass
 import copy
+import hashlib
 import json
 import logging
 import mimetypes
@@ -227,15 +228,34 @@ class SmartiLocalGateway:
     async def _idempotent(self, request, schema_name, action):
         payload = await self._body(request, schema_name)
         key = str(request.headers.get("Idempotency-Key") or "").strip()[:200]
+        creates_task = schema_name == "taskAction" and str(payload.get("action") or "").lower() == "create"
+        if (schema_name == "submitRun" or creates_task) and not key:
+            raise RequestValidationError("idempotency_key_required", ["Idempotency-Key"])
         scope = f"{request.method}:{request.path}"
-        with self._idempotency_lock:
+        request_hash = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        # These actions are wholly SQLite-backed. A receipt failure rolls back
+        # the run, its user message and events before any worker starts.
+        atomic = schema_name in {"submitRun", "createConversation", "createWorkspace"}
+        from contextlib import nullcontext
+        transaction = self.core.chat_store.transaction() if atomic else nullcontext()
+        # Workers already acquire manager -> store. Keep that order during
+        # admission too, so concurrent completion cannot deadlock a submission.
+        manager = getattr(self.core, "run_manager", None)
+        admission_lock = manager._lock if atomic and manager else nullcontext()
+        with self._idempotency_lock, admission_lock, transaction:
             if key:
-                cached = self.core.chat_store.idempotency_response(scope, key)
+                try:
+                    cached = self.core.chat_store.idempotency_response(scope, key, request_hash=request_hash)
+                except ValueError:
+                    return self._error(request, 409, "idempotency_key_payload_mismatch")
                 if cached is not None:
                     return self._ok(request, cached, 200, {"Idempotency-Replayed": "true"})
             data, status = action(payload)
             if key:
-                self.core.chat_store.save_idempotency_response(scope, key, data)
+                self.core.chat_store.save_idempotency_response(
+                    scope, key, data, request_hash=request_hash,
+                    ttl_hours=None if schema_name == "submitRun" or creates_task else 24,
+                )
         return self._ok(request, data, status)
 
     async def _idempotent_empty(self, request, action):
@@ -291,12 +311,27 @@ class SmartiLocalGateway:
 
     async def _v1_post(self, request):
         payload = await self._body(request)
+        from contextlib import nullcontext
+        route = request.match_info.route.resource.canonical
+        atomic = route in {"/v1/sessions", "/v1/workspaces"} or route.endswith("/messages")
+        manager = getattr(self.core, "run_manager", None)
+        with self._idempotency_lock, (manager._lock if atomic and manager else nullcontext()), (self.core.chat_store.transaction() if atomic else nullcontext()):
+            return self._v1_post_action(request, payload)
+
+    def _v1_post_action(self, request, payload):
         store = self.core.chat_store
         route = request.match_info.route.resource.canonical
         key = str(request.headers.get("Idempotency-Key") or "").strip()[:200]
         scope = request.path.strip("/")
+        creates_run = route.endswith("/messages")
+        if creates_run and not key:
+            return web.json_response({"error": "idempotency_key_required"}, status=400, headers=self._security_headers())
+        request_hash = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         if key:
-            cached = store.idempotency_response(scope, key)
+            try:
+                cached = store.idempotency_response(scope, key, request_hash=request_hash)
+            except ValueError:
+                return web.json_response({"error": "idempotency_key_payload_mismatch"}, status=409, headers=self._security_headers())
             if cached is not None:
                 return web.json_response(cached)
         status = 202
@@ -352,7 +387,7 @@ class SmartiLocalGateway:
         else:
             raise web.HTTPNotFound()
         if key:
-            store.save_idempotency_response(scope, key, data)
+            store.save_idempotency_response(scope, key, data, request_hash=request_hash, ttl_hours=None if creates_run else 24)
         return web.json_response(data, status=status, headers=self._security_headers())
 
     async def _v2_health(self, request):
@@ -773,9 +808,11 @@ class SmartiLocalGateway:
     async def _tasks(self, request):
         if request.method == "GET":
             return self._ok(request, {"items": safe_task_rows(self.core)})
-        payload = await self._body(request, "taskAction")
-        action = str(payload.get("action") or "").strip().lower()
-        return self._ok(request, task_action(self.core, action, payload))
+        key = str(request.headers.get("Idempotency-Key") or "").strip()[:200]
+        command = hashlib.sha256(f"{request.method}:{request.path}:{key}".encode()).hexdigest() if key else None
+        return await self._idempotent(request, "taskAction", lambda payload: (
+            task_action(self.core, str(payload.get("action") or "").strip().lower(), payload, request_key=command), 200,
+        ))
 
     async def _memories(self, request):
         if request.method == "POST":

@@ -129,6 +129,7 @@ The current Tauri entry point is reusable and builds an isolated source snapshot
 
 ```powershell
 pwsh -NoProfile -File .\scripts\build_and_package.ps1
+pwsh -NoProfile -File .\scripts\build_and_package.ps1 -Version 0.87.0
 pwsh -NoProfile -File .\scripts\build_and_package.ps1 -Version 0.88.0 -Label preview
 ```
 
@@ -329,6 +330,7 @@ pythonw smarti_core.pyw
 
 ```powershell
 pwsh -NoProfile -File .\scripts\build_and_package.ps1
+pwsh -NoProfile -File .\scripts\build_and_package.ps1 -Version 0.87.0
 pwsh -NoProfile -File .\scripts\build_and_package.ps1 -Version 0.88.0 -Label "ניסוי"
 ```
 
