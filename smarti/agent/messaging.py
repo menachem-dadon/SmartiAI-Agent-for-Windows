@@ -420,7 +420,7 @@ class MessagingMixin:
                 current_manifest = attachment_manifest_text(attachments, title="Files attached to this turn")
                 history_user_text = (user_text + ("\n\n" + current_manifest if current_manifest else "")).strip()
             if is_background_task:
-                history_user_text = f"[משימת רקע שהופעלה אוטומטית ברקע / Background task executed automatically]:\n{history_user_text}"
+                history_user_text = self._prompt_text("background_task_context", history_user_text)
             self._execution_context.is_background = is_background_task
             self._execution_context.cancel_event = run_cancel_event
             if is_background_task and getattr(self._execution_context, "current_task_id", None):
@@ -776,8 +776,7 @@ class MessagingMixin:
                         if len(raw_tool_calls) > 1:
                             self._append_user_feedback_message(
                                 current_messages,
-                                "הנחיית מערכת: `agent_planner` הופעל. קריאות כלי נוספות מאותה תגובה לא בוצעו. "
-                                "בחר עכשיו את הפעולה הבאה לפי התוכנית."
+                                self._prompt_text('send_message_text_1')
                             )
                         checkpoint("planner_feedback")
                         continue
@@ -922,9 +921,7 @@ class MessagingMixin:
                         if skipped_extra_calls:
                             self._append_user_feedback_message(
                                 current_messages,
-                                "הנחיית מערכת: בתגובה הקודמת הופיעו קריאות כלי נוספות שלא בוצעו. "
-                                "המערכת מריצה במקביל רק פעולות עצמאיות לקריאה בלבד שאינן דורשות אישור. "
-                                "אם נדרש שלב נוסף, הפעל אותו עכשיו לפי התוצאות שכבר התקבלו."
+                                self._prompt_text('send_message_text_2')
                             )
                         # The main model sees every tool result and decides when
                         # progress needs reassessment, verification, or replanning.
@@ -960,8 +957,7 @@ class MessagingMixin:
                             current_messages.append({"role": "assistant", "content": assistant_marker})
                         self._append_user_feedback_message(
                             current_messages,
-                            "ERROR: התגובה האחרונה חשפה פלט כלי/הנחיות פנימיות. אסור להציג למשתמש [UNTRUSTED_*], SKILL_* או tools/call. "
-                            "ענה עכשיו בעברית פשוטה בתשובה סופית קצרה שמבוססת רק על תצפיות הכלים, בלי תגים פנימיים."
+                            self._prompt_text("internal_output_repair")
                         )
                         checkpoint("internal_artifact_feedback")
                         continue

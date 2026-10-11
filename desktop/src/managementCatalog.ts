@@ -16,7 +16,7 @@ export type ManagementSection =
   | "about";
 
 export type SettingsSection = Extract<ManagementSection, `settings_${string}`>;
-export type SettingControl = "switch" | "segmented" | "text" | "number" | "range" | "select" | "secret" | "directory" | "file";
+export type SettingControl = "switch" | "segmented" | "text" | "number" | "range" | "select" | "secret" | "directory" | "file" | "prompt_language";
 
 export type SettingOption = { value: string | number; label: string; description?: string };
 export type SettingDefinition = {
@@ -104,6 +104,7 @@ export const capabilityLabels: Record<string, string> = {
 
 const field = (definition: SettingDefinition) => definition;
 export const settingDefinitions: SettingDefinition[] = [
+  field({ path: "system_prompt_language", section: "settings_advanced", group: "הנחיית מערכת", label: "שפת הנחיית המערכת", help: "ברירת המחדל היא אנגלית. אפשר לחזור לעברית כגיבוי ולשוב לאנגלית בכל עת. השינוי חל מהבקשה הבאה; סמארטי ממשיך לדבר בשפתך.", control: "prompt_language", advanced: true, keywords: "system prompt language english hebrew הנחיה הנחיית מערכת שפה אנגלית עברית גיבוי" }),
   field({ path: "api_mode", section: "settings_ai", group: "ספק ומודל", label: "ספק המודל", help: "בחר את שירות ה-AI שסמארטי ישתמש בו לתשובות ולתכנון פעולות.", control: "select", options: providerOptions, keywords: "provider vendor engine gemini openai anthropic local openrouter groq nvidia cerebras huggingface deepseek qwen zhipu moonshot mistral together perplexity xai", providerWorkflow: true }),
   field({ path: "provider_api_key", section: "settings_ai", group: "ספק ומודל", label: "מפתח גישה לספק המודל", help: "מפתח API הוא קוד גישה אישי שמאפשר לסמארטי לשלוח בקשות מאובטחות לספק המודל. הוא נדרש לספקים חיצוניים, נבדק מול הספק לפני שמירה ונשמר כמפתח מוסתר שלא מוצג בלוגים.", control: "secret", keywords: "api key token secret validate connection authentication login billing", providerWorkflow: true }),
   field({ path: "codex_signin", section: "settings_ai", group: "ספק ומודל", label: "חיבור ChatGPT / Codex", help: "התחברות רשמית עם חשבון ChatGPT או Codex. לא נשמרים סיסמה, API key או token בהגדרות של סמארטי.", control: "text", keywords: "openai codex chatgpt sign in oauth login connect disconnect token credential manager", providerWorkflow: true }),

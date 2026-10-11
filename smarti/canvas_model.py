@@ -193,15 +193,16 @@ def canvas_artifacts_from_messages(messages, include_closed=False):
     return result if include_closed else [item for item in result if not item.get("closed")]
 
 
-def canvas_context_for_model(canvases):
+def canvas_context_for_model(canvases, language="he"):
     """Serialize active Canvas state in full for the next model turn."""
     active = [normalize_canvas_artifact(item) for item in canvases or []]
     active = [item for item in active if item and not item.get("closed")]
     if not active:
-        return "אין קנבס חזותי פעיל בשיחה זו."
+        return "אין קנבס חזותי פעיל בשיחה זו." if language == "he" else "No active visual Canvas in this conversation."
     encoded = json.dumps({"active_canvases": active}, ensure_ascii=False, separators=(",", ":"))
     if len(encoded) > MAX_CANVAS_CONTEXT_CHARS:
-        return "קנבס פעיל נשמר בהיסטוריה אך גדול מדי להזרקה בטוחה להקשר המודל."
+        return ("קנבס פעיל נשמר בהיסטוריה אך גדול מדי להזרקה בטוחה להקשר המודל." if language == "he"
+                else "Active Canvas is saved in history but too large to inject safely into the model context.")
     return encoded
 
 

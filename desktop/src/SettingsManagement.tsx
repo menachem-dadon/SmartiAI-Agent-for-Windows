@@ -202,6 +202,7 @@ function SettingRow({
           : (raw ?? "");
   const [draft, setDraft] = useState(String(displayed));
   const [status, setStatus] = useState("");
+  const [promptLanguageBusy, setPromptLanguageBusy] = useState(false);
   const secretSave = useSecretAutosave({
     identity: definition.path, delay: 350, deleteOnEmpty: true,
     persist: value => coreApi(value ? "PUT" : "DELETE", `/v2/settings/secrets/${encodePath(definition.path)}`, value ? { value } : {}, true),
@@ -284,6 +285,19 @@ function SettingRow({
       setStatus(`הבחירה נכשלה: ${String(reason)}`);
     }
   };
+  if (definition.control === "prompt_language") {
+    const isHebrew = raw === "he";
+    return <SourceSettingField {...sourceProps}>
+      <Button type="button" loading={promptLanguageBusy} disabled={promptLanguageBusy} onClick={async () => {
+        setPromptLanguageBusy(true);
+        setStatus("");
+        try { await onSave(definition.path, isHebrew ? "en" : "he"); }
+        catch (reason) { setStatus(`השמירה נכשלה: ${String(reason)}`); }
+        finally { setPromptLanguageBusy(false); }
+      }}>{isHebrew ? "השתמש בהנחיה באנגלית" : "החזר את ההנחיה לעברית"}</Button>
+      <ManagementFeedback message={status} />
+    </SourceSettingField>;
+  }
   if (definition.control === "secret") {
     const state = secrets[definition.path] || { configured: false, masked: "" };
     const help = schema.secret_help[definition.path];

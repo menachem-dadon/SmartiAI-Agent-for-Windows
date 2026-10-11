@@ -41,6 +41,7 @@ SETTING_GROUPS = (
 )
 
 SETTING_LABELS = {
+    "system_prompt_language": "שפת הנחיית המערכת",
     "api_mode": "ספק המודל הפעיל", "autonomy_mode": "רמת האוטונומיה",
     "local_server_url": "כתובת שרת מודל מקומי", "local_fast_mode_enabled": "FastMode למודל מקומי",
     "read_aloud_all": "הקראת כל התשובות", "read_aloud_voice_only": "הקראה לאחר קלט קולי בלבד",
@@ -174,6 +175,8 @@ def settings_schema_document():
             "restart_required": key in {"language", "ui_language", "update_channel"},
             "advanced": group in {"security", "updates"} or key.startswith(("mcp_", "debug_", "developer_")),
         }
+        if key == "system_prompt_language":
+            fields[key].update(advanced=True, options=["en", "he"])
     return {"groups": sorted(groups.values(), key=lambda item: item["order"]), "fields": fields}
 
 

@@ -39,9 +39,11 @@ class _JsonResponse:
         return self._payload
 
 
-def _prompt_core(active_tools):
+def _prompt_core(active_tools, language="he"):
     core = SmartiCore.__new__(SmartiCore)
     core.settings = copy.deepcopy(DEFAULT_SETTINGS)
+    # These assertions retain coverage of the original Hebrew fallback contracts.
+    core.settings["system_prompt_language"] = language
     core.settings["api_mode"] = "openai_codex_signin"
     core.settings["enable_visual_surfaces"] = True
     core.settings["enable_web_canvas"] = True

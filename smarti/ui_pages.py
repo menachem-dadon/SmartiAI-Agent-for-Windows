@@ -5529,6 +5529,18 @@ class SettingsPage(QWidget):
             advanced=True
         )
         self._add_section_header("מפתחים ולוגים", advanced)
+        self.prompt_language_btn = QPushButton(
+            "השתמש בהנחיה באנגלית" if self.core.settings.get("system_prompt_language") == "he"
+            else "החזר את ההנחיה לעברית"
+        )
+        self.prompt_language_btn.setStyleSheet(SECONDARY_BUTTON_CSS)
+        self.prompt_language_btn.clicked.connect(self._toggle_system_prompt_language)
+        self._add_field(
+            "שפת הנחיית המערכת", self.prompt_language_btn, advanced,
+            "ברירת המחדל היא אנגלית. עברית זמינה כגיבוי; סמארטי ממשיך לדבר בשפתך. השינוי חל מהבקשה הבאה.",
+            keywords="system prompt language english hebrew הנחיה שפה אנגלית עברית גיבוי",
+            setting_id="system_prompt_language", advanced=True,
+        )
         self._add_checkbox(self.developer_trace_cb, advanced, "שומר Trace פנימי של תכנון, בחירת כלים, תוצאות ביניים ותשובה סופית.", keywords="developer trace debug planning tool calls", advanced=True)
         self._add_checkbox(self.audit_log_cb, advanced, "שומר יומן אודיט מקומי של החלטות הרשאה, התחלת כלים וסיום כלים.", keywords="audit log policy tool execution", advanced=True)
         self._add_checkbox(self.redact_logs_cb, advanced, "מסתיר מפתחות, סיסמאות ופרטים רגישים מקובצי הלוג ככל האפשר.", keywords="redact logs secrets password privacy", advanced=True)
@@ -5886,6 +5898,21 @@ class SettingsPage(QWidget):
             self.email_test_status.setStyleSheet(
                 f"color: {ACCENT_SECONDARY_COLOR if ok else DANGER_COLOR}; font-size: 12px; background: transparent;"
             )
+
+    def _toggle_system_prompt_language(self):
+        previous = self.core.settings.get("system_prompt_language", "en")
+        language = "en" if previous == "he" else "he"
+        self.core.settings["system_prompt_language"] = language
+        try:
+            self.core._save_settings()
+        except Exception as exc:
+            self.core.settings["system_prompt_language"] = previous
+            QMessageBox.warning(self, "שמירת שפת ההנחיה", f"השמירה נכשלה: {exc}")
+            return
+        self.core.system_prompt = self.core._load_system_prompt()
+        self.prompt_language_btn.setText(
+            "השתמש בהנחיה באנגלית" if language == "he" else "החזר את ההנחיה לעברית"
+        )
 
     def _register_autosave_handlers(self):
         combos = [

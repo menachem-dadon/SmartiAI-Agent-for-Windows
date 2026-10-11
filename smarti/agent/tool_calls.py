@@ -818,8 +818,7 @@ class ToolCallMixin:
                 requested = self._schema_action_for_tool_call(action, args_dict)
                 if not self._tool_schema_was_seen(action, requested, schemas_seen):
                     return True, (
-                        "לפני הפעלת extension_manager חובה לקרוא "
-                        f"`get_tool_info` עם tool_name='extension_manager' ו-action='{requested}'."
+                        self._prompt_text('tool_requires_info_before_use_text_1', requested)
                     )
                 return False, None
             except ValueError:
@@ -833,16 +832,14 @@ class ToolCallMixin:
             requested = self._schema_action_for_tool_call(action, args_dict)
             if skill_name and not self._tool_schema_was_seen(skill_name, requested, schemas_seen):
                 return True, (
-                    "לפני הפעלת Skill חובה לקרוא `get_tool_info` "
-                    f"עם tool_name='{skill_name}' ו-action='{requested}'."
+                    self._prompt_text('tool_requires_info_before_use_text_2', skill_name, requested)
                 )
         if action == "run_mcp":
             pkg = str(args_dict.get("package", "")).strip()
             requested = self._schema_action_for_tool_call(action, args_dict)
             if pkg and not self._tool_schema_was_seen(pkg, requested, schemas_seen, resolve_mcp=True):
                 return True, (
-                    "לפני הפעלת MCP חובה לקרוא `get_tool_info` "
-                    f"עם tool_name='{pkg}' ו-action='{requested}' (שם פונקציית ה-MCP)."
+                    self._prompt_text('tool_requires_info_before_use_text_3', pkg, requested)
                 )
         if action not in BUILTIN_TOOL_SCHEMAS:
             tool_key = safe_filename(action)
@@ -852,16 +849,13 @@ class ToolCallMixin:
                 and not self._tool_schema_was_seen(tool_key, requested, schemas_seen)
             ):
                 return True, (
-                    "לפני הפעלת כלי Python מותאם אישית חובה לקרוא "
-                    f"`get_tool_info` עם tool_name='{tool_key}' ו-action='{requested}'."
+                    self._prompt_text('tool_requires_info_before_use_text_4', tool_key, requested)
                 )
         if action in BUILTIN_TOOL_SCHEMAS and action not in inline_schema_tools:
             requested = self._schema_action_for_tool_call(action, args_dict)
             if not self._tool_schema_was_seen(action, requested, schemas_seen):
                 return True, (
-                    f"לפני הפעלת הכלי `{action}` חובה לקרוא `get_tool_info` "
-                    f"עם tool_name='{action}' ו-action='{requested}', כי הסכמה שלו "
-                    "אינה מופיעה במלואה בהנחיית המערכת."
+                    self._prompt_text('tool_requires_info_before_use_text_5', action, action, requested)
                 )
         return False, None
 
@@ -924,27 +918,29 @@ class ToolCallMixin:
         return True, None
 
     def _tool_schema_hint(self, action, args_dict=None):
+        tool_schemas = self._prompt_tool_schemas()
         try:
             schema = None
-            if action in BUILTIN_TOOL_SCHEMAS:
-                schema = BUILTIN_TOOL_SCHEMAS[action].get("inputSchema", {})
+            if action in tool_schemas:
+                schema = tool_schemas[action].get("inputSchema", {})
             if action == "extension_manager" and isinstance(args_dict, dict):
                 routed_action, routed_args = self._route_unified_tool(action, args_dict)
-                if routed_action != action and routed_action in BUILTIN_TOOL_SCHEMAS:
+                if routed_action != action and routed_action in tool_schemas:
                     schema = {
-                        "unified_schema": BUILTIN_TOOL_SCHEMAS[action].get("inputSchema", {}),
+                        "unified_schema": tool_schemas[action].get("inputSchema", {}),
                         "routed_to": routed_action,
-                        "routed_schema": BUILTIN_TOOL_SCHEMAS[routed_action].get("inputSchema", {})
+                        "routed_schema": tool_schemas[routed_action].get("inputSchema", {})
                     }
             if action == "run_mcp" and isinstance(args_dict, dict):
                 mcp_schema = self._get_mcp_function_schema(args_dict.get("package", ""), args_dict.get("function", ""))
                 if mcp_schema:
-                    schema = {"run_mcp": BUILTIN_TOOL_SCHEMAS[action].get("inputSchema", {}), "function_arguments_schema": mcp_schema}
+                    schema = {"run_mcp": tool_schemas[action].get("inputSchema", {}), "function_arguments_schema": mcp_schema}
             if action == "run_skill" and isinstance(args_dict, dict):
                 registry = getattr(self, "skill_registry", None) or self._load_skill_registry()
                 spec = registry.get(safe_filename(args_dict.get("name", "")))
                 if spec:
-                    schema = {"run_skill": BUILTIN_TOOL_SCHEMAS[action].get("inputSchema", {}), "skill_arguments_schema": spec.get("parameters", {})}
+                    spec = self._prompt_skill_spec(spec)
+                    schema = {"run_skill": tool_schemas[action].get("inputSchema", {}), "skill_arguments_schema": spec.get("parameters", {})}
             if not schema:
                 return ""
             return json.dumps(schema, ensure_ascii=False, indent=2)[:5000]
@@ -969,7 +965,7 @@ class ToolCallMixin:
         if is_error:
             feedback_payload = (
                 self._wrap_tool_output_for_model(action, feedback_for_ai, is_error=True)
-                + "\n\n[הנחיית מערכת: הפעולה נכשלה. אל תחזור על אותה קריאה זהה. אם המשתמש ביקש במפורש אפליקציה, כלי או דרך ביצוע מסוימת, אל תוותר אחרי כשל ראשון: אבחן את השגיאה, שלוף סכמה אם צריך, ונסה דרך בטוחה אחרת בתוך אותה מטרה. מעבר לפתרון חלופי מותר רק אחרי כשל חוזר ברור, כלי כבוי, חסימת הרשאות או דחיית משתמש, ואז יש להסביר זאת למשתמש בקצרה.]"
+                + self._prompt_text('append_tool_feedback_feedback_payload_1')
             )
         else:
             feedback_payload = self._wrap_tool_output_for_model(action, feedback_for_ai, is_error=False)
@@ -980,7 +976,7 @@ class ToolCallMixin:
                 mime_type, b64_data = parts[1], parts[2]
             else:
                 mime_type, b64_data = "image/png", str(raw_feedback_for_ai).split(":", 1)[1]
-            image_text = self._wrap_tool_output_for_model(action, "[תמונה צורפה לניתוח]", is_error=False)
+            image_text = self._wrap_tool_output_for_model(action, self._prompt_text('append_tool_feedback_image_text_1'), is_error=False)
             if self.mode == "gemini":
                 current_messages.append({"role": "model", "parts": [{"text": ai_response_text}]})
                 current_messages.append({"role": "user", "parts": [{"text": image_text}, {"inlineData": {"mimeType": mime_type, "data": b64_data}}]})
@@ -1010,11 +1006,11 @@ class ToolCallMixin:
 
     def _fallback_task_plan(self, objective):
         return [
-            "להבין את המטרה והאילוצים",
-            "לאסוף את המידע או המצב הדרוש לפני פעולה",
-            "לבצע את הצעדים הנדרשים לפי התוצאות שהתקבלו",
-            "לאמת שהתוצאה תואמת לבקשה",
-            "להחזיר סיכום קצר וברור למשתמש",
+            self._prompt_text("fallback_plan_objective"),
+            self._prompt_text("fallback_plan_discovery"),
+            self._prompt_text("fallback_plan_execution"),
+            self._prompt_text("fallback_plan_verification"),
+            self._prompt_text("fallback_plan_answer"),
         ]
 
     def _fallback_verification_points(self):
@@ -1048,21 +1044,9 @@ class ToolCallMixin:
         return ""
 
     def _model_task_plan(self, objective, current_model, context=""):
-        context_block = f"\n\nמידע קיים לתכנון מחדש/המשך:\n{context[:2200]}" if str(context or "").strip() else ""
+        context_block = self._prompt_text('model_task_plan_context_block_1', context[:2200]) if str(context or "").strip() else ""
         planner_prompt = (
-            "אתה Planner פנימי של סמארטי. אל תפעיל כלים ואל תענה למשתמש.\n"
-            "Create a practical, detailed workflow for the task. Return JSON only in this exact shape:\n"
-            "{\"steps\":[\"...\"],\"verification_points\":[\"...\"],\"contingencies\":[\"...\"],\"risk\":\"low|medium|high\",\"notes\":\"...\"}\n"
-            "The workflow must include concrete discovery/setup steps when environment, files, UI state, previous output, or tool schema are uncertain.\n"
-            "verification_points must define what evidence proves partial/final success, including tool-based checks when needed.\n"
-            "contingencies must cover likely failures, schema errors, missing permissions, unavailable files/UI, and when to retry, replan, or ask the user.\n"
-            "Use 4-9 operational steps when useful; avoid generic filler and do not expose hidden reasoning.\n"
-            "אם מדובר בתכנון מחדש/המשך, התבסס על המידע הקיים ושנה אסטרטגיה במקום לחזור מכנית על אותה דרך.\n"
-            "אם יש אי-ודאות לגבי סביבת העבודה, קבצים, קוד, חלונות, מצב מערכת, סכמת כלי, תוכן קיים או תוצאה קודמת, "
-            "אל תנחש: התחל בשלב discovery קצר ללמידת הסביבה, כגון בדיקת סכמה, חיפוש/קריאת קובץ, git status, בדיקת מסך/חלון, "
-            "בדיקת תהליכים או איסוף מצב רלוונטי. רק אחר כך תכנן פעולה משנה.\n\n"
-            f"משימה:\n{objective}"
-            f"{context_block}"
+            self._prompt_text('model_task_plan_planner_prompt_1', objective, context_block)
         )
         if self.mode == "gemini":
             messages = [{"role": "user", "parts": [{"text": planner_prompt}]}]
@@ -1146,23 +1130,19 @@ class ToolCallMixin:
         current_plan = "\n".join(
             f"{idx}. {step}"
             for idx, step in enumerate((task_state.get("plan_steps") or [])[:9], start=1)
-        ) or "אין תוכנית קודמת."
+        ) or self._prompt_text("replan_no_plan")
         verification_points = "\n".join(
             f"- {point}" for point in (task_state.get("verification_points") or [])[:8]
-        ) or "אין נקודות אימות קודמות."
+        ) or self._prompt_text("replan_no_verification")
         contingencies = "\n".join(
             f"- {item}" for item in (task_state.get("contingencies") or [])[:8]
-        ) or "אין תרחישי כשל קודמים."
-        recent_obs = "\n".join(task_state.get("observations", [])[-8:]) or "אין תצפיות."
-        failures = "\n".join(task_state.get("failures", [])[-6:]) or "אין כשלים."
-        return (
-            f"סיבת התכנון/תכנון מחדש: {reason or 'לא צוינה'}\n"
-            f"תוכנית קודמת:\n{current_plan}\n"
-            f"נקודות אימות קודמות:\n{verification_points}\n"
-            f"תרחישי כשל קודמים:\n{contingencies}\n"
-            f"תצפיות אחרונות:\n{recent_obs}\n"
-            f"כשלים/אזהרות:\n{failures}\n"
-            f"הערכת Evaluator אחרונה: {task_state.get('last_evaluation', '') or 'אין'}"
+        ) or self._prompt_text("replan_no_contingencies")
+        recent_obs = "\n".join(task_state.get("observations", [])[-8:]) or self._prompt_text("replan_no_observations")
+        failures = "\n".join(task_state.get("failures", [])[-6:]) or self._prompt_text("replan_no_failures")
+        return self._prompt_text(
+            "replan_context", reason or self._prompt_text("replan_no_reason"), current_plan,
+            verification_points, contingencies, recent_obs, failures,
+            task_state.get("last_evaluation", "") or self._prompt_text("replan_no_evaluation"),
         )
 
     def _activate_model_requested_planner(self, task_state, planner_args, current_model, is_background_task=False, show_step=True):
@@ -1280,18 +1260,17 @@ class ToolCallMixin:
         contingency_lines = "\n".join(
             f"- {item}" for item in (task_state.get("contingencies") or [])[:8]
         ) or "- On schema errors, call get_tool_info with tool_name and action; on failed checks, retry or replan."
-        recent_obs = "\n".join(task_state.get("observations", [])[-5:]) or "אין עדיין תצפיות."
-        failures = "\n".join(task_state.get("failures", [])[-3:]) or "אין כשלים משמעותיים."
+        recent_obs = "\n".join(task_state.get("observations", [])[-5:]) or self._prompt_text('task_state_summary_recent_obs_1')
+        failures = "\n".join(task_state.get("failures", [])[-3:]) or self._prompt_text('task_state_summary_failures_1')
         guidance = (
-            "\nהנחיות: פעל לפי התוכנית בגמישות. אם עובדות חדשות משנות את הדרך, עדכן אסטרטגיה. "
-            "הרץ במקביל רק כלים עצמאיים לקריאה בלבד; פעולות כתיבה, מערכת, אימייל, GUI או הרשאות רצות אחת-אחת."
+            self._prompt_text('task_state_summary_guidance_1')
             if include_guidance else ""
         )
         return (
             "[SMARTI_TASK_STATE_BEGIN]\n"
             f"Objective: {task_state.get('objective', '')[:900]}\n"
             f"Mode: {'hierarchical' if task_state.get('planner_enabled') else 'direct'} | Risk: {task_state.get('risk', 'medium')} | Planner: {task_state.get('planner_source') or ('model' if task_state.get('used_model_planner') else 'local')}\n"
-            f"Plan:\n" + ("\n".join(plan_lines) if plan_lines else "אין תוכנית נפרדת.") + "\n"
+            f"Plan:\n" + ("\n".join(plan_lines) if plan_lines else self._prompt_text('task_state_summary_text_1')) + "\n"
             f"Verification points:\n{verification_lines}\n"
             f"Contingencies:\n{contingency_lines}\n"
             f"Recent observations:\n{recent_obs}\n"
@@ -1302,11 +1281,7 @@ class ToolCallMixin:
 
     def _append_internal_planner_feedback(self, current_messages, tool_turn_text, task_state, planner_feedback):
         payload = (
-            "[SMARTI_PLANNER_BEGIN]\n"
-            f"{planner_feedback}\n"
-            "המשך כעת לפי מצב המשימה. אל תציג את מצב המשימה או את הודעת ה-Planner למשתמש.\n"
-            "[SMARTI_PLANNER_END]\n\n"
-            f"{self._task_state_summary(task_state, include_guidance=True)}"
+            self._prompt_text('append_internal_planner_feedback_payload_1', planner_feedback, self._task_state_summary(task_state, include_guidance=True))
         )
         if self.mode == "gemini":
             current_messages.append({"role": "model", "parts": [{"text": tool_turn_text}]})
@@ -1396,8 +1371,7 @@ class ToolCallMixin:
             step_text = self._fallback_step_for_tool(action, args_dict, schema_check=needs_info)
         if needs_info:
             return None, (
-                f"SCHEMA_REQUIRED: {info_error} הפעל קודם get_tool_info עם "
-                "tool_name ו-action מתאימים, ואז המשך."
+                self._prompt_text('decode_tool_call_entry_text_1', info_error)
             )
 
         valid_call, validation_error = self._validate_tool_call(action, args_dict)
@@ -1459,7 +1433,7 @@ class ToolCallMixin:
         if getattr(self, "agent_runtime", None):
             similar_sig = self.agent_runtime.similarity_signature(action, args_dict)
             if not (allow_similar_repeat or safe_to_repeat) and self.agent_runtime.is_similar_repeat(similar_tool_signatures, similar_sig):
-                return f"ERROR: Abnormal repeated side-effecting tool-call loop blocked for '{action}'. בדוק את התוצאה הקודמת לפני ניסיון נוסף."
+                return self._prompt_text('reserve_tool_call_text_1', action)
             similar_tool_signatures.append(similar_sig)
         call_sig = hashlib.sha256(f"{action}\0{json.dumps(args_dict, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
         tool_call_counts[call_sig] = tool_call_counts.get(call_sig, 0) + 1
@@ -1469,7 +1443,7 @@ class ToolCallMixin:
         # so a model cannot repeatedly send, delete, write, or launch by mistake.
         identical_limit = 8 if safe_to_repeat else 2
         if tool_call_counts[call_sig] > identical_limit:
-            return f"ERROR: Abnormal repeated identical tool-call loop blocked for '{action}'. בחן את התוצאות שכבר התקבלו ושנה אסטרטגיה."
+            return self._prompt_text('reserve_tool_call_text_2', action)
         return None
 
     def _effective_tool_action(self, action, args_dict):
@@ -1827,17 +1801,7 @@ class ToolCallMixin:
             f"- {item}" for item in (task_state.get("contingencies") or [])[:8]
         ) or "- If evidence is missing or a check fails, request a verification/discovery step or replan."
         evaluator_prompt = (
-            "You are Smarti's internal progress evaluator. Do not answer the user and do not call tools directly.\n"
-            "Evaluate actual evidence, not whether a tool merely ran. If evidence is insufficient, require the main agent to run a concrete verification/discovery tool next.\n"
-            "Return JSON only:\n"
-            "{\"status\":\"continue|verify|retry|done|ask_user\",\"step_done\":true|false,\"next_step_index\":null|1,\"evidence\":\"...\",\"guidance\":\"...\"}\n"
-            "Use status=verify when another tool-based check is needed before declaring progress or completion. guidance must tell the main agent what to verify and what evidence to collect, without naming a tool unless that tool is clearly appropriate.\n"
-            "Use status=retry when the last action failed or produced the wrong state. Use ask_user only when safe discovery cannot obtain the missing information or permission.\n\n"
-            f"מטרה:\n{task_state.get('objective', '')[:900]}\n\n"
-            f"תוכנית:\n{plan}\n\n"
-            f"נקודות אימות מתוכננות:\n{verification_points}\n\n"
-            f"תרחישי כשל/הסתעפויות:\n{contingencies}\n\n"
-            f"תוצאות אחרונות:\n{recent_results}"
+            self._prompt_text('maybe_evaluate_task_progress_evaluator_prompt_1', task_state.get('objective', '')[:900], plan, verification_points, contingencies, recent_results)
         )
         if self.mode == "gemini":
             messages = [{"role": "user", "parts": [{"text": evaluator_prompt}]}]

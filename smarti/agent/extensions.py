@@ -327,8 +327,9 @@ class ExtensionsMixin:
         lines = []
         for name, spec in sorted(registry.items()):
             if self._skill_enabled(name):
+                spec = self._prompt_skill_spec(spec)
                 dep = self._skill_dependency_status(spec)
-                dep_note = f" | חסר: {', '.join(dep['missing_bins'])}" if dep["missing_bins"] else ""
+                dep_note = self._prompt_text('get_existing_skills_dep_note_1', ', '.join(dep['missing_bins'])) if dep["missing_bins"] else ""
                 lines.append(f"`{name}` ({spec.get('risk', 'medium')}, {spec.get('handler', 'instructions')}{dep_note}): {spec.get('description', '')}")
         return lines
 
@@ -402,15 +403,15 @@ class ExtensionsMixin:
         lines = []
         if status["required_bins"]:
             installed = [name for name in status["required_bins"] if name not in status["missing_bins"]]
-            lines.append("דרישות הרצה:")
-            lines.append(f"- קיימות במערכת: {', '.join(installed) if installed else 'אין'}")
-            lines.append(f"- חסרות: {', '.join(status['missing_bins']) if status['missing_bins'] else 'אין'}")
+            lines.append(self._prompt_text('format_skill_dependency_status_text_1'))
+            lines.append(self._prompt_text('format_skill_dependency_status_text_2', ', '.join(installed) if installed else self._prompt_text('format_skill_dependency_status_text_value_1')))
+            lines.append(self._prompt_text('format_skill_dependency_status_text_3', ', '.join(status['missing_bins']) if status['missing_bins'] else self._prompt_text('format_skill_dependency_status_text_value_2')))
         if status["install_entries"]:
             labels = []
             for entry in status["install_entries"]:
                 label = entry.get("label") or entry.get("id") or entry.get("package") or entry.get("kind") or "install"
                 labels.append(str(label))
-            lines.append(f"התקנות מוצעות: {', '.join(labels)}")
+            lines.append(self._prompt_text('format_skill_dependency_status_text_4', ', '.join(labels)))
         return "\n".join(lines)
 
     def _skill_install_command(self, entry):
@@ -859,6 +860,7 @@ class ExtensionsMixin:
         spec = registry.get(name)
         if not spec:
             return None
+        spec = self._prompt_skill_spec(spec)
         parameters, canonical_action, schema_error = self._schema_for_requested_action(
             name,
             spec.get("parameters", {"type": "object", "properties": {}}),
@@ -874,7 +876,7 @@ class ExtensionsMixin:
             "source": spec.get("source"),
             "handler": spec.get("handler"),
             "trust": "trusted" if self._skill_enabled(name) else self.tool_registry.trust_status("skill", name) if getattr(self, "tool_registry", None) else "unknown",
-            "skill_kind": "מובנה" if spec.get("handler") == "builtin" else ("כלי Python מקומי" if spec.get("handler") == "handler.py" else "מדריך תהליכי/הוראות"),
+            "skill_kind": self._prompt_text('get_skill_info_data_1') if spec.get("handler") == "builtin" else (self._prompt_text('get_skill_info_data_2') if spec.get("handler") == "handler.py" else self._prompt_text('get_skill_info_data_3')),
             "dependency_status": self._skill_dependency_status(spec)
         }
         if spec.get("homepage"):
@@ -882,8 +884,7 @@ class ExtensionsMixin:
         if spec.get("instructions"):
             data["instructions_preview"] = spec["instructions"][:1500]
         guidance = (
-            f"להפעלה השתמש בכלי run_skill עם name='{name}' ו-arguments לפי הסכמה.\n"
-            "חשוב: Skill מסוג מדריך אינו כלי הרצה בפני עצמו. הוא מספק הוראות עבודה לסוכן; אם חסרות דרישות הרצה, התקן אותן קודם עם install_skill_requirements."
+            self._prompt_text('get_skill_info_guidance_1', name)
         )
         action_note = "" if canonical_action == "full" else f" | action={canonical_action}"
         return f"--- Skill: {name}{action_note} ---\n{json.dumps(data, ensure_ascii=False, indent=2)}\n\n{guidance}"
@@ -894,6 +895,7 @@ class ExtensionsMixin:
         spec = registry.get(name)
         if not spec:
             return f"ERROR: Skill '{name}' not found."
+        spec = self._prompt_skill_spec(spec)
         if not self._skill_enabled(name):
             return f"ERROR: Skill '{name}' is disabled or untrusted."
         dep = self._skill_dependency_status(spec)
@@ -1107,6 +1109,8 @@ class ExtensionsMixin:
         name = safe_filename(name)
         self._emit_skill_step(name, "טוען הגדרות ומוודא שה-Skill פעיל")
         spec = registry.get(name)
+        if spec:
+            spec = self._prompt_skill_spec(spec)
         if not spec:
             return f"ERROR: Skill '{name}' not found."
         if not self._skill_enabled(name):
@@ -1124,11 +1128,7 @@ class ExtensionsMixin:
             dep = self._skill_dependency_status(spec)
             if spec.get("handler") == "instructions" and dep["missing_bins"]:
                 result = (
-                    f"SKILL_REQUIREMENTS_MISSING: {name}\n"
-                    f"חסרות דרישות הרצה: {', '.join(dep['missing_bins'])}\n"
-                    "ה-Skill הזה הוא מדריך תהליכי שמצריך כלי חיצוני שאינו מותקן כרגע.\n"
-                    "אל תריץ פקודת CLI לפני התקנת הדרישות. אם המשתמש אישר התקנה, השתמש בכלי install_skill_requirements.\n\n"
-                    f"{self._format_skill_dependency_status(spec)}"
+                    self._prompt_text('run_skill_result_1', name, ', '.join(dep['missing_bins']), self._format_skill_dependency_status(spec))
                 )
                 self._log_skill_event(name, {"arguments_hash": hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12], "result_preview": result[:1200], "duration_ms": int((time.time() - started) * 1000), "ok": False})
                 return result
@@ -1141,13 +1141,7 @@ class ExtensionsMixin:
             else:
                 self._emit_skill_step(name, "טוען הוראות עבודה")
                 result = (
-                    f"SKILL_INSTRUCTIONS: {name}\n"
-                    f"תיאור: {spec.get('description', '')}\n"
-                    f"סיכון: {risk}\n"
-                    f"קלט המשתמש ל-Skill: {json.dumps(args, ensure_ascii=False)}\n"
-                    f"{self._format_skill_dependency_status(spec)}\n"
-                    "ה-Skill הזה הוא Skill מנחה. קרא את ההוראות, ואז המשך להשתמש בכלים הרגילים לפי הצורך ובכפוף להרשאות.\n\n"
-                    f"{self._truncate_tool_output(spec.get('instructions', '')[:12000])}"
+                    self._prompt_text('run_skill_result_2', name, spec.get('description', ''), risk, json.dumps(args, ensure_ascii=False), self._format_skill_dependency_status(spec), self._truncate_tool_output(spec.get('instructions', '')[:12000]))
                 )
             self._log_skill_event(name, {"arguments_hash": hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12], "result_preview": str(result)[:1200], "duration_ms": int((time.time() - started) * 1000), "ok": not str(result).startswith("ERROR")})
             self._emit_skill_step(name, "סיים והחזיר תוצאה")

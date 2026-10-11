@@ -1925,6 +1925,7 @@ TOOL_CATEGORIES = {
 BUILT_IN_TOOLS = list(BUILTIN_TOOL_SCHEMAS.keys())
 
 DEFAULT_SETTINGS = {
+    "system_prompt_language": "en",
     "settings_schema_version": SETTINGS_SCHEMA_VERSION,
     "autonomy_mode": "balanced",
     "api_mode": "gemini",
