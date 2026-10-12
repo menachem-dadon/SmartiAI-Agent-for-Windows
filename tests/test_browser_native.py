@@ -9,6 +9,10 @@ from unittest import mock
 
 from smarti.browser_control import SmartiBrowserController, UNTRUSTED_BROWSER_PREFIX
 from smarti.agent.browser_runtime import BrowserRuntimeMixin
+from smarti.core import SmartiCore
+from smarti.config import DEFAULT_SETTINGS
+from smarti.history import ChatSessionStore
+from smarti.browser_control import _HELPER_CODE
 from tests.test_doctor import _BrowserAutomationCore
 
 
@@ -104,6 +108,86 @@ class NativeBrowserTests(unittest.TestCase):
         runtime._chrome_executable = mock.Mock(side_effect=AssertionError("external Chrome"))
         self.assertEqual(runtime._ensure_automation_browser(), (True, None))
         runtime.run_browser_action.assert_called_once_with({"action": "start", "url": "about:blank", "noSnapshot": True})
+
+    def test_compact_state_retains_targets_options_paging_and_full_output(self):
+        refs = {f'e{i}': {'ref': f'e{i}', 'role': 'link', 'name': 'A meaningful link', 'href': f'https://example.com/{i}',
+                          'visible': True, 'enabled': True, 'tag': 'a', 'box': {'x': i, 'y': i, 'width': 100, 'height': 20}}
+                for i in range(80)}
+        refs['select'] = {'role': 'combobox', 'name': 'Sort', 'options': [{'value': 'price', 'label': 'Price', 'selected': False}], 'enabled': False}
+        page = {'snapshotEpoch': 'document-a', 'url': 'https://example.com/', 'refs': refs, 'bodyText': 'page prose',
+                'snapshot': 'duplicated names ' * 500, 'accessibility': [{'name': 'duplicate'}] * 300,
+                'offset': 80, 'total': 180, 'hasMore': True}
+        payload = {'ok': True, 'protocolVersion': 2, 'page': page, 'result': page}
+        writer = mock.Mock(output_id='a' * 32)
+        self.core._tool_output_writer_factory = lambda: lambda: writer
+        compact = self.controller._json(payload)
+        result = json.loads(compact.removeprefix(UNTRUSTED_BROWSER_PREFIX))
+        self.assertLess(len(compact), len(json.dumps(payload)) * .4)
+        self.assertEqual(set(result['page']['refs']), set(refs))
+        self.assertEqual(result['page']['refs']['select']['options'], refs['select']['options'])
+        self.assertFalse(result['page']['refs']['select']['enabled'])
+        self.assertTrue(result['page']['hasMore'])
+        self.assertEqual(result['page']['bodyText'], 'page prose')
+        self.assertNotIn('result', result)
+        self.assertEqual(result['fullOutput']['output_id'], writer.output_id)
+        retained = json.loads(writer.write.call_args.args[0].removeprefix(UNTRUSTED_BROWSER_PREFIX))
+        self.assertEqual(retained, payload)
+        full = json.loads(self.controller._json(payload, detail='full').removeprefix(UNTRUSTED_BROWSER_PREFIX))
+        self.assertEqual(full, payload)
+
+    def test_archive_failure_returns_observation_without_claiming_action_failed(self):
+        self.core._tool_output_writer_factory = lambda: lambda: mock.Mock(write=mock.Mock(side_effect=OSError('encryption unavailable')))
+        self.core._truncate_tool_output = lambda text, **kwargs: text
+        payload = {'protocolVersion': 2, 'ok': True, 'result': {'snapshotEpoch': 'epoch', 'refs': {}, 'snapshot': 'full observation'}}
+        result = self.controller._json(payload)
+        self.assertEqual(json.loads(result.removeprefix(UNTRUSTED_BROWSER_PREFIX)), payload)
+
+    def test_default_body_excerpt_is_small_and_explicit_full_or_size_is_preserved(self):
+        for arguments, expected in (({}, 2000), ({'bodyChars': 12345}, 12345), ({'detail': 'full'}, None)):
+            with mock.patch('smarti.browser_control._open_native_request', return_value=self.response({'ok': True})) as opened:
+                self.controller.run({'action': 'snapshot', **arguments})
+            sent = json.loads(opened.call_args.args[0].data)
+            self.assertEqual(sent.get('bodyChars'), expected)
+
+    def test_browser_normalization_preserves_documented_arguments(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.settings = dict(DEFAULT_SETTINGS)
+        calls = [
+            {'action': 'snapshot', 'tabId': 'tab', 'offset': 80, 'textOffset': 2000, 'bodyChars': 2000, 'detail': 'full'},
+            {'action': 'navigate', 'targetId': 'target', 'url': 'https://example.com/', 'presentation': 'visible'},
+            {'action': 'select', 'tabId': 'tab', 'values': ['price'], 'ref': 'ref', 'requestId': 'receipt'},
+            {'action': 'click', 'tabId': 'tab', 'ref': 'ref', 'nth': 2, 'snapshotEpoch': 'epoch', 'frameId': 'frame'},
+        ]
+        for arguments in calls:
+            with self.subTest(arguments=arguments):
+                normalized = core._normalize_tool_call_args('browser_automation_manager', arguments)
+                self.assertEqual(normalized, arguments)
+                self.assertEqual(core._validate_tool_call('browser_automation_manager', normalized), (True, None))
+        normalized = core._normalize_tool_call_args('browser_automation_manager', {'action': 'snapshot', 'tab_id': 'tab', 'body_chars': 20})
+        self.assertEqual(normalized, {'action': 'snapshot', 'tabId': 'tab', 'bodyChars': 20})
+        invalid = core._normalize_tool_call_args('browser_automation_manager', {'action': 'snapshot', 'bogus': True})
+        self.assertFalse(core._validate_tool_call('browser_automation_manager', invalid)[0])
+
+    def test_legacy_helper_is_valid_python(self):
+        compile(_HELPER_CODE, '<browser-helper>', 'exec')
+
+    def test_full_observation_is_encrypted_and_retrievable_only_by_owning_conversation(self):
+        core = SmartiCore.__new__(SmartiCore)
+        core.settings = dict(DEFAULT_SETTINGS)
+        core.chat_store = ChatSessionStore(str(Path(self.core.tempdir.name) / 'retention.json'))
+        session = core.chat_store.active_session()['id']
+        core._execution_context = types.SimpleNamespace(target_session_id=session)
+        controller = SmartiBrowserController(core)
+        payload = {'protocolVersion': 2, 'ok': True, 'result': {'snapshotEpoch': 'epoch', 'refs': {}, 'snapshot': 'complete untrusted fixture observation'}}
+        value = json.loads(controller._json(payload).removeprefix(UNTRUSTED_BROWSER_PREFIX))
+        handle = value['fullOutput']['output_id']
+        full = core.read_tool_output({'output_id': handle, 'limit': 5000})
+        self.assertEqual(json.loads(full.split('\n', 1)[1].removeprefix(UNTRUSTED_BROWSER_PREFIX)), payload)
+        with core.chat_store._connect() as db:
+            encrypted = db.execute('SELECT encrypted_text FROM tool_output_chunks WHERE output_id=?', (handle,)).fetchone()[0]
+            self.assertNotIn(b'complete untrusted fixture', encrypted)
+        core._execution_context.target_session_id = core.chat_store.create_session(set_active=False)['id']
+        self.assertIn('not found in this conversation', core.read_tool_output({'output_id': handle}))
 
 
 if __name__ == "__main__":

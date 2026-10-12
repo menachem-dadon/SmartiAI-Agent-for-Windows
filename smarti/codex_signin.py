@@ -114,6 +114,18 @@ class CodexSignInProvider:
         # established through the official CLI.
         self.workspace_dir = self.data_dir / "codex_signin" / "workspace"
         self.executable = executable or "codex"
+        self._stream_sessions = {}
+        self._stream_sessions_lock = threading.RLock()
+
+    def close_stream_session(self, key, expected=None):
+        with self._stream_sessions_lock:
+            current = self._stream_sessions.get(key) if key else None
+            session = expected if expected is not None else current
+            if key and current is session:
+                self._stream_sessions.pop(key, None)
+        if session is not None:
+            with session.lock:
+                session.close()
 
     def _find_executable(self) -> str:
         override = os.environ.get("SMARTI_CODEX_CLI")
@@ -887,11 +899,15 @@ class CodexSignInProvider:
         cancel_event=None,
         purpose: str = "agent",
         stream=None,
+        session_key=None,
     ) -> tuple[str, dict]:
-        """Run a single response through official, ephemeral ``codex exec``."""
-        status = self.connection_status()
-        if status.state != "connected":
-            raise CodexSignInError(status.message)
+        """Use run-scoped App Server turns; isolated exec for standalone/fallback calls."""
+        with self._stream_sessions_lock:
+            connected_session = bool(session_key and session_key in self._stream_sessions)
+        if not connected_session:
+            status = self.connection_status()
+            if status.state != "connected":
+                raise CodexSignInError(status.message)
         selected_model = str(model or CODEX_SIGNIN_DEFAULT_MODEL).strip()
         selected_reasoning_effort = str(reasoning_effort or "auto").strip().lower()
         if (
@@ -900,10 +916,12 @@ class CodexSignInProvider:
         ):
             selected_reasoning_effort = "auto"
         purpose = str(purpose or "agent").strip().lower()
-        if stream is not None and purpose == "agent":
+        if purpose == "agent" and (stream is not None or session_key):
+            from .agent.streaming import LiveResponse
+            stream = stream or LiveResponse()
             from .codex_stream import complete_stream
             try:
-                return complete_stream(self, messages, selected_model, timeout, selected_reasoning_effort, cancel_event, stream, SMARTI_TURN_OUTPUT_SCHEMA)
+                return complete_stream(self, messages, selected_model, timeout, selected_reasoning_effort, cancel_event, stream, SMARTI_TURN_OUTPUT_SCHEMA, session_key=session_key)
             except CodexSignInError as error:
                 if error.reason != "stream_unsupported" or stream.visible or stream.calls:
                     raise

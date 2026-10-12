@@ -3732,36 +3732,6 @@ class AgentRuntime:
         parsed["extra_tool_blocks"] = max(0, len(parsed.get("tool_calls", []) or []) - 1)
         return parsed
 
-    def _canonicalize_for_similarity(self, value):
-        if isinstance(value, dict):
-            return {str(k).strip().lower(): self._canonicalize_for_similarity(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]).lower())}
-        if isinstance(value, list):
-            return [self._canonicalize_for_similarity(v) for v in value]
-        if isinstance(value, str):
-            text = unicodedata.normalize("NFKC", value)
-            text = re.sub(r'\s+', ' ', text).strip().lower()
-            text = re.sub(r'["\'`]+', '', text)
-            text = re.sub(r'([\\/]){2,}', r'\1', text)
-            return text
-        return value
-
-    def similarity_signature(self, action, args_dict):
-        normalized_obj = self._canonicalize_for_similarity(args_dict or {})
-        normalized = json.dumps(normalized_obj, sort_keys=True, ensure_ascii=False, default=str)
-        normalized = re.sub(r'\s+', ' ', normalized).strip().lower()
-        return f"{str(action or '').strip().lower()}:{normalized[:3000]}"
-
-    def is_similar_repeat(self, signatures, signature):
-        recent = signatures[-10:]
-        strong_hits = 0
-        weak_hits = 0
-        for previous in recent:
-            ratio = difflib.SequenceMatcher(None, previous, signature).ratio()
-            if ratio >= 0.985:
-                strong_hits += 1
-            elif ratio >= 0.93:
-                weak_hits += 1
-        return strong_hits >= 2 or (strong_hits >= 1 and weak_hits >= 1) or weak_hits >= 3
 
 
 class McpManager:

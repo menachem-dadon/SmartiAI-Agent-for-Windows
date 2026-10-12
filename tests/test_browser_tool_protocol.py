@@ -61,6 +61,40 @@ class BrowserToolProtocolTests(unittest.TestCase):
                 submitted = self.core._handle_api_request_with_retry.call_args.args[1]
                 self.assertIn('ERROR:', json.dumps(submitted))
 
+    def test_repeated_calls_are_executed_without_automatic_loop_prevention(self):
+        schema = self.call('get_tool_info', {'tool_name': 'browser_automation_manager', 'action': 'full'})
+        navigate = self.call('browser_automation_manager', {'action': 'navigate', 'url': 'https://example.com/'})
+        self.core._handle_api_request_with_retry = mock.Mock(side_effect=[(schema, {}), *[(navigate, {})] * 12, ('done', {})])
+        self.assertEqual(self.core.send_message('keep navigating', persist_turn=False), 'done')
+        self.assertEqual(self.core.execute_tool.call_count, 13)
+
+    def test_run_completion_closes_its_codex_session(self):
+        provider = self.core.codex_signin_provider = mock.Mock()
+        self.core._handle_api_request_with_retry = mock.Mock(return_value=('done', {}))
+        self.assertEqual(self.core.send_message('hello', persist_turn=False), 'done')
+        provider.close_stream_session.assert_called_once()
+        self.assertTrue(provider.close_stream_session.call_args.args[0])
+
+    def test_browsing_approval_is_reused_within_run_but_high_risk_and_deny_are_rechecked(self):
+        core = self.core
+        core._policy_decision = mock.Mock(return_value='ask')
+        core._request_user_approval = mock.Mock(return_value=True)
+        for _ in range(3):
+            self.assertEqual(core._ensure_capability_allowed('browser_automation', 'browse', risk='medium'), (True, None))
+        self.assertEqual(core._request_user_approval.call_count, 1)
+        for _ in range(2):
+            self.assertEqual(core._ensure_capability_allowed('browser_automation', 'mutate', risk='high'), (True, None))
+        self.assertEqual(core._request_user_approval.call_count, 3)
+        core._policy_decision.return_value = 'deny'
+        self.assertFalse(core._ensure_capability_allowed('browser_automation', 'browse', risk='low')[0])
+        self.assertEqual(core._request_user_approval.call_count, 3)
+
+    def test_browsing_approval_is_cleared_between_runs(self):
+        self.core._execution_context.browser_browsing_approved = True
+        self.core._handle_api_request_with_retry = mock.Mock(return_value=('done', {}))
+        self.core.send_message('hello', persist_turn=False)
+        self.assertFalse(self.core._execution_context.browser_browsing_approved)
+
 
 if __name__ == '__main__':
     unittest.main()

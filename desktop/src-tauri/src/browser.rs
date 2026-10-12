@@ -1411,7 +1411,8 @@ mod tests {
                                 let action=payload["action"].clone();
                                 structured_action(&handle,&broker,payload).map_err(|error|format!("fixture {action}: {error}"))
                             };
-                            call(json!({"action":"navigate","url":format!("http://127.0.0.1:{port}/agent")}))?;
+                            let initial=call(json!({"action":"start","url":format!("http://127.0.0.1:{port}/agent")}))?;
+                            if initial["page"]["url"]=="about:blank" || initial.get("result").is_some() || initial.pointer("/page/refs").and_then(Value::as_object).is_none(){return Err(format!("start did not return one loaded page observation: {initial}"));}
                             call(json!({"action":"wait","selector":"#message"}))?;
                             let page=call(json!({"action":"snapshot","refs":"aria"}))?;
                             if page.to_string().contains("never-return-this"){return Err("password leaked into snapshot".into());}
@@ -1448,7 +1449,7 @@ mod tests {
                             let alias=structured_action(&handle,&broker,json!({"action":"snapshot","targetId":tab.target_id,"sessionId":"fixture-session"}))?;
                             if alias["tabId"]!=tab.tab_id{return Err("targetId alias routed to wrong tab".into());}
                             let blank=structured_action(&handle,&broker,json!({"action":"start","sessionId":"second-session","profile":"guest"}))?;
-                            if blank.pointer("/result/url").and_then(Value::as_str)!=Some("about:blank"){return Err(format!("start opened a website instead of blank: {blank}"));}
+                            if blank.pointer("/page/url").and_then(Value::as_str)!=Some("about:blank"){return Err(format!("start opened a website instead of blank: {blank}"));}
                             if structured_action(&handle,&broker,json!({"action":"click","selector":"#trusted","tabId":tab.tab_id,"sessionId":"second-session"})).is_ok(){return Err("second session stole target".into());}
                             let extra=structured_action(&handle,&broker,json!({"action":"open","newTab":true,"url":"about:blank","sessionId":"fixture-session","profile":"guest"}))?;
                             if structured_action(&handle,&broker,json!({"action":"click","selector":"#trusted","tabId":tab.tab_id,"sessionId":"second-session"})).is_ok(){return Err("opening a new tab lost ownership of the old tab".into());}

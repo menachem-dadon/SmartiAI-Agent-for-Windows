@@ -643,16 +643,11 @@ fn run_inner(app: &AppHandle, broker: &BrowserBroker, mut payload: Value) -> Res
         } else {
             BrowserProfile::Persistent
         };
-        let initial = payload
-            .get("url")
-            .or_else(|| payload.get("targetUrl"))
-            .and_then(Value::as_str)
-            .unwrap_or("about:blank");
         let snapshot = create_webview_with_presentation(
             app,
             broker,
             profile,
-            initial,
+            "about:blank",
             Some(owner.clone()),
             false,
         )?;
@@ -869,7 +864,16 @@ fn run_inner(app: &AppHandle, broker: &BrowserBroker, mut payload: Value) -> Res
         .get("phase")
         .cloned()
         .unwrap_or_else(|| json!("executed"));
-    let mut response = json!({"ok":true,"protocolVersion":PROTOCOL_VERSION,"action":action,"tabId":tab.tab_id,"targetId":tab.target_id,"workspaceId":tab.workspace_id,"phase":phase,"result":result});
+    let page_result = matches!(action.as_str(), "navigate" | "open" | "start");
+    let mut response = json!({"ok":true,"protocolVersion":PROTOCOL_VERSION,"action":action,"tabId":tab.tab_id,"targetId":tab.target_id,"workspaceId":tab.workspace_id,"phase":phase});
+    if page_result {
+        if payload.get("noSnapshot").and_then(Value::as_bool) != Some(true) {
+            response["page"] = result;
+        }
+        response["verification"] = json!("observed");
+    } else {
+        response["result"] = result;
+    }
     let pending_dialog = t_dialog(&target);
     if let Some(dialog) = pending_dialog {
         response["dialog"] = dialog;
@@ -891,10 +895,7 @@ fn run_inner(app: &AppHandle, broker: &BrowserBroker, mut payload: Value) -> Res
         .unwrap_or(false)
         && matches!(
             action.as_str(),
-            "navigate"
-                | "open"
-                | "start"
-                | "click"
+            "click"
                 | "double_click"
                 | "fill"
                 | "type"
@@ -1006,8 +1007,15 @@ fn execute(
             }
             Ok(json!({"tabOrder":group}))
         }
-        "start" => snapshot(app, tab, p),
-        "open" | "navigate" => {
+        "start"
+            if p.get("url")
+                .or_else(|| p.get("targetUrl"))
+                .or_else(|| p.get("query_or_url"))
+                .is_none() =>
+        {
+            snapshot(app, tab, p)
+        }
+        "start" | "open" | "navigate" => {
             let raw = p
                 .get("url")
                 .or_else(|| p.get("targetUrl"))

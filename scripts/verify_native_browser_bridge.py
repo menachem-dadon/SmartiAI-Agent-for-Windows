@@ -36,6 +36,11 @@ def main():
     try:
         assert call('doctor')['protocolVersion'] == 2
         assert call('snapshot')['tabId'] == tab
+        page=call('snapshot', limit=2, offset=2)['result']
+        assert page['offset']==2 and len(page['refs'])==2 and page['hasMore'], page
+        assert 'snapshot' not in page and 'accessibility' not in page, page
+        call('select', selector='#choice', values=['b'])
+        assert call('evaluate', script="document.querySelector('#choice').value")['result']=='b'
         call('act', request={'kind': 'fill', 'selector': '#message', 'text': 'HTTP bridge verified'})
         assert call('evaluate', script='document.body.dataset.typed')['result'] == 'HTTP bridge verified'
         call('storage', op='add', storage='local', key='bridge-fixture', value=42)

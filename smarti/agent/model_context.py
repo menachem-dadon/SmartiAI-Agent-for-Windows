@@ -334,8 +334,6 @@ class ModelContextMixin(RequestBudgetMixin):
         protected_user_message,
         iteration,
         task_state,
-        tool_call_counts,
-        similar_tool_signatures,
         schemas_seen,
         internal_artifact_replies,
         current_model,
@@ -371,8 +369,6 @@ class ModelContextMixin(RequestBudgetMixin):
             "iteration": int(iteration or 0),
             "elapsed_seconds": max(0, float(elapsed_seconds or 0)),
             "tool_observation_start": int(tool_observation_start or 0),
-            "tool_call_counts": self._json_safe_checkpoint_value(tool_call_counts or {}),
-            "similar_tool_signatures": self._json_safe_checkpoint_value(similar_tool_signatures or []),
             "schemas_seen": sorted(str(item) for item in (schemas_seen or [])),
             "internal_artifact_replies": int(internal_artifact_replies or 0),
             "task_state": self._json_safe_checkpoint_value(task_state or {}),
@@ -2210,6 +2206,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                 "prompt_cache_options",
                 "prompt_cache_key",
                 "prompt_cache_breakpoint",
+                "cache_control",
             ))
             and any(term in text for term in (
                 "unsupported",
@@ -2657,6 +2654,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         ),
                         cancel_event=getattr(getattr(self, "_execution_context", None), "cancel_event", None),
                         purpose=request_purpose,
+                        session_key=(str(getattr(getattr(self, "_execution_context", None), "current_task_id", "") or "") if request_purpose == "agent" else None),
                         **({"stream": self._current_stream} if self._current_stream else {}),
                     )
                     return self._log_api_request_success(
@@ -3032,22 +3030,21 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                             )
                         )
                     )
-                    should_cache_system = (
+                    should_cache_prompt = (
                         cache_controls_allowed
                         and request_mode == "anthropic"
                         and request_purpose == "agent"
-                        and len(system_text) >= 4096
+                        and len(system_text) + sum(len(self._message_text_for_budget(m)) for m in request_messages) >= 4096
                         and (
                             cache_mode == "always"
                             or (cache_mode == "auto" and tool_feedback_rounds >= 2)
                         )
                     )
-                    if should_cache_system:
-                        payload["system"] = [{
-                            "type": "text",
-                            "text": system_text,
-                            "cache_control": {"type": "ephemeral"},
-                        }]
+                    if should_cache_prompt:
+                        # Native automatic caching follows the growing message
+                        # prefix, including tool results, rather than caching
+                        # only the small system prompt. Respect off/auto/always.
+                        payload["cache_control"] = {"type": "ephemeral"}
                     response = self._run_cancelable_callable(
                         lambda: self._provider_http_response(
                             url,
@@ -3056,6 +3053,18 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                             timeout=self._provider_transport_timeout(request_mode),
                         )
                     )
+                    if (
+                        payload.get("cache_control")
+                        and getattr(response, "status_code", 200) in {400, 422}
+                        and self._prompt_cache_controls_unsupported(getattr(response, "text", ""))
+                    ):
+                        payload.pop("cache_control")
+                        response = self._run_cancelable_callable(
+                            lambda: self._provider_http_response(
+                                url, json=payload, headers=headers,
+                                timeout=self._provider_transport_timeout(request_mode),
+                            )
+                        )
                     if getattr(response, "status_code", 200) in {400, 422} and native_specs:
                         response_text = str(getattr(response, "text", "") or "")
                         if self._native_tools_unsupported(response_text):

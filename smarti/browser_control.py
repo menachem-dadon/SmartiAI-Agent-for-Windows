@@ -141,9 +141,48 @@ class SmartiBrowserController:
             return None, f"ERROR: Unknown browser profile '{profile}'. Use 'smarti' or 'guest'."
         return aliases[profile], None
 
-    def _json(self, payload):
+    @staticmethod
+    def _compact_page(page):
+        """Keep all returned targets/options and prose, omit duplicate layout data."""
+        page = dict(page)
+        refs = page.get("refs")
+        if isinstance(refs, dict):
+            fields = {"role", "name", "href", "value", "options", "checked", "editable"}
+            page["refs"] = {
+                ref: {**{k: v for k, v in data.items() if k in fields and v is not None},
+                      **{k: False for k in ("visible", "enabled") if data.get(k) is False}}
+                for ref, data in refs.items() if isinstance(data, dict)
+            }
+            page.pop("snapshot", None)  # Same names/refs, already present above.
+            page.pop("accessibility", None)  # Raw AX wrappers duplicate the DOM observation.
+        return page
+
+    def _json(self, payload, *, detail="compact"):
+        if isinstance(payload, dict) and payload.get("protocolVersion") == 2 and detail != "full":
+            original = payload
+            payload = dict(payload)
+            if isinstance(payload.get("page"), dict):
+                payload["page"] = self._compact_page(payload["page"])
+                if isinstance(payload.get("result"), dict) and "snapshotEpoch" in payload["result"]:
+                    payload.pop("result")  # Navigation/start returned the same observation twice.
+            elif isinstance(payload.get("result"), dict) and "snapshotEpoch" in payload["result"]:
+                payload["result"] = self._compact_page(payload["result"])
+            if payload != original:
+                factory = getattr(self.core, "_tool_output_writer_factory", lambda: None)()
+                if factory:
+                    try:
+                        writer = factory()
+                        writer.write(UNTRUSTED_BROWSER_PREFIX + json.dumps(original, ensure_ascii=False, separators=(",", ":")))
+                        payload["fullOutput"] = {"output_id": writer.output_id, "offset": 0, "tool": "read_tool_output"}
+                    except OSError:
+                        # The browser action already happened. Preserve the
+                        # observation instead of making a mutation look failed.
+                        payload = original
+                        return self.core._truncate_tool_output(
+                            UNTRUSTED_BROWSER_PREFIX + json.dumps(payload, ensure_ascii=False, separators=(",", ":")), retain=False
+                        )
         return self.core._truncate_tool_output(
-            UNTRUSTED_BROWSER_PREFIX + json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+            UNTRUSTED_BROWSER_PREFIX + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
         )
 
     def _tauri_bridge_available(self):
@@ -156,6 +195,8 @@ class SmartiBrowserController:
         port = int(os.environ["SMARTI_TAURI_BROWSER_BROKER_PORT"])
         token = os.environ["SMARTI_TAURI_BROWSER_BROKER_TOKEN"]
         payload = dict(payload or {})
+        if payload.get("detail", "compact") != "full":
+            payload.setdefault("bodyChars", 2000)
         if self._normalize_action(payload.get("action")) == "click" and payload.get("expectDownload"):
             payload["action"] = "download"
         payload.setdefault("requestId", uuid.uuid4().hex)
@@ -224,7 +265,7 @@ class SmartiBrowserController:
             return "ATTACHMENT_JSON:" + json.dumps({
                 "attachments": [{"path": parsed["path"]}], "tool_result": parsed,
             }, ensure_ascii=False)
-        return self._json(parsed)
+        return self._json(parsed, detail=payload.get("detail", "compact"))
 
     def _playwright_dependency(self):
         try:
@@ -592,7 +633,7 @@ _HELPER_CODE = textwrap.dedent(
     import re
     import sys
     import time
-import uuid
+    import uuid
 
     sys.stdin = open(sys.stdin.fileno(), mode="r", encoding="utf-8", errors="replace", closefd=False)
     sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False)

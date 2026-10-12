@@ -1244,6 +1244,7 @@ BROWSER_AUTOMATION_PROPERTIES = {
     "url": {"type": "string", "description": "URL for open/navigate/start."},
     "pinned": {"type": "boolean", "description": "Desired pin state for a tab."},
     "requestId": {"type": "string", "description": "Optional stable action identity to retrieve an uncertain response without repeating a mutation."},
+    "detail": {"type": "string", "enum": ["compact", "full"], "description": "Compact page state by default; full includes layout and raw accessibility metadata. Earlier full observations are available via fullOutput/read_tool_output."},
     "presentation": {"type": "string", "enum": ["preview", "hidden", "visible"], "description": "preview by default; hidden for quiet tasks; visible opens the same target for the user."},
     "workspaceId": {"type": "string", "description": "Owned browser workspace from results. Normally inferred from this conversation."},
     "frameId": {"type": "string", "description": "Frame from frames; selectors and refs are resolved inside this frame, including cross-origin frames."},
@@ -1584,10 +1585,10 @@ _EMAIL_SEARCH_FIELDS = (
     "scan_limit", "include_body", "max_body_chars",
 )
 _EMAIL_TARGET_FIELDS = ("mailbox", "uid", "uids")
-_BROWSER_TAB_FIELDS = ("requestId", "profile", "targetId", "tabId", "workspaceId", "presentation", "frameId")
+_BROWSER_TAB_FIELDS = ("requestId", "profile", "targetId", "tabId", "workspaceId", "presentation", "frameId", "detail")
 _BROWSER_REF_FIELDS = (
     "requestId", "targetId", "tabId", "ref", "snapshotEpoch", "refEpoch", "allowStaleRef",
-    "selector", "role", "name", "textSelector", "nth", "exact", "frameId", "presentation",
+    "selector", "role", "name", "textSelector", "nth", "exact", "frameId", "presentation", "detail",
 )
 _BROWSER_ACTION_TAIL = (
     "timeoutMs", "expectDialog", "promptText", "expectDownload",
@@ -2033,6 +2034,7 @@ DEFAULT_SETTINGS = {
     "agent_model_context_window_tokens": 0,
     "agent_model_context_window_overrides": {},
     "agent_context_compaction_trigger_ratio": 0.82,
+    "agent_context_working_set_tokens": 128000,
     "agent_context_compaction_target_ratio": 0.55,
     "agent_context_recent_fraction": 0.30,
     "agent_context_output_reserve_tokens": 16384,

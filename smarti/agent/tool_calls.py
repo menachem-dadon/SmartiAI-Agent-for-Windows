@@ -395,67 +395,21 @@ class ToolCallMixin:
             }}
 
         if action == "browser_automation_manager":
-            if "targetId" in args and "target_id" not in args:
-                args["target_id"] = args.get("targetId")
-            if "tabId" in args and "tab_id" not in args:
-                args["tab_id"] = args.get("tabId")
-            if "targetUrl" in args and "target_url" not in args:
-                args["target_url"] = args.get("targetUrl")
-            if "timeoutMs" in args and "timeout_ms" not in args:
-                args["timeout_ms"] = args.get("timeoutMs")
-            if "timeMs" in args and "time_ms" not in args:
-                args["time_ms"] = args.get("timeMs")
-            if "fullPage" in args and "full_page" not in args:
-                args["full_page"] = args.get("fullPage")
-            if "bodyChars" in args and "body_chars" not in args:
-                args["body_chars"] = args.get("bodyChars")
-            if "htmlChars" in args and "html_chars" not in args:
-                args["html_chars"] = args.get("htmlChars")
-            if "includeUrls" in args and "include_urls" not in args:
-                args["include_urls"] = args.get("includeUrls")
-            if "downloadPath" in args and "download_path" not in args:
-                args["download_path"] = args.get("downloadPath")
-            if "maxChars" in args and "max_chars" not in args:
-                args["max_chars"] = args.get("maxChars")
-            if "maxBodyChars" in args and "max_body_chars" not in args:
-                args["max_body_chars"] = args.get("maxBodyChars")
-            if "snapshotEpoch" in args and "snapshot_epoch" not in args:
-                args["snapshot_epoch"] = args.get("snapshotEpoch")
-            if "refEpoch" in args and "ref_epoch" not in args:
-                args["ref_epoch"] = args.get("refEpoch")
-            if "captureMs" in args and "capture_ms" not in args:
-                args["capture_ms"] = args.get("captureMs")
-            if "traceCategories" in args and "trace_categories" not in args:
-                args["trace_categories"] = args.get("traceCategories")
-            if "includeBody" in args and "include_body" not in args:
-                args["include_body"] = args.get("includeBody")
-            if "responseBody" in args and "response_body" not in args:
-                args["response_body"] = args.get("responseBody")
-            if "delayMs" in args and "delay_ms" not in args:
-                args["delay_ms"] = args.get("delayMs")
-            if "closeOthers" in args and "close_others" not in args:
-                args["close_others"] = args.get("closeOthers")
-            allowed = {
-                "action", "profile", "url", "targetUrl", "target_url", "query_or_url",
-                "targetId", "target_id", "tabId", "tab_id", "ref", "selector",
-                "snapshotEpoch", "snapshot_epoch", "refEpoch", "ref_epoch", "allowStaleRef",
-                "refs", "snapshotFormat", "snapshot_format", "role", "name", "textSelector", "request", "kind", "text", "value",
-                "keys", "key", "label", "index", "x", "y", "deltaX", "deltaY",
-                "width", "height", "path", "paths", "files", "timeoutMs",
-                "timeout_ms", "timeMs", "time_ms", "timeout", "limit", "bodyChars",
-                "body_chars", "maxChars", "max_chars", "maxBodyChars", "max_body_chars",
-                "htmlChars", "html_chars", "urls", "includeUrls",
-                "include_urls", "includeHidden", "fullPage", "full_page", "labels",
-                "annotate", "clip", "includeBody", "include_body", "responseBody", "response_body",
-                "captureMs", "capture_ms", "reload", "live", "record", "save", "traceCategories", "trace_categories",
-                "includeValues", "storage", "op", "operation", "script", "expression",
-                "function", "method", "params", "urlContains", "waitUntil", "state",
-                "accept", "expectDialog", "promptText", "expectDownload",
-                "downloadPath", "download_path", "submit", "clear", "slowly",
-                "delay", "delayMs", "delay_ms", "newTab", "cleanup", "closeOthers",
-                "close_others", "noSnapshot", "printBackground", "landscape"
+            # Canonicalize legacy aliases into the public schema, never add a
+            # second spelling or discard documented fields before validation.
+            aliases = {
+                "target_id": "targetId", "tab_id": "tabId", "target_url": "targetUrl",
+                "timeout_ms": "timeoutMs", "time_ms": "timeMs", "full_page": "fullPage",
+                "body_chars": "bodyChars", "html_chars": "htmlChars", "include_urls": "includeUrls",
+                "download_path": "downloadPath", "max_chars": "maxChars", "max_body_chars": "maxBodyChars",
+                "snapshot_epoch": "snapshotEpoch", "ref_epoch": "refEpoch", "capture_ms": "captureMs",
+                "trace_categories": "traceCategories", "include_body": "includeBody", "response_body": "responseBody",
+                "delay_ms": "delayMs", "close_others": "closeOthers", "snapshot_format": "snapshotFormat",
             }
-            return {k: v for k, v in args.items() if k in allowed}
+            for alias, canonical in aliases.items():
+                if alias in args:
+                    args.setdefault(canonical, args.pop(alias))
+            return args
 
         if action == "computer_automation_manager":
             if "window" not in args:
@@ -923,6 +877,11 @@ class ToolCallMixin:
             schema = None
             if action in tool_schemas:
                 schema = tool_schemas[action].get("inputSchema", {})
+                scoped, _, error = self._schema_for_requested_action(
+                    action, schema, self._schema_action_for_tool_call(action, args_dict)
+                )
+                if not error:
+                    schema = scoped
             if action == "extension_manager" and isinstance(args_dict, dict):
                 routed_action, routed_args = self._route_unified_tool(action, args_dict)
                 if routed_action != action and routed_action in tool_schemas:
@@ -1428,25 +1387,6 @@ class ToolCallMixin:
         except Exception:
             return ""
 
-    def _reserve_tool_call(self, call, tool_call_counts, similar_tool_signatures, allow_similar_repeat=False):
-        action = call.get("action", "")
-        args_dict = call.get("arguments", {}) or {}
-        safe_to_repeat = not self._tool_is_mutating_or_control(action, args_dict)
-        if getattr(self, "agent_runtime", None):
-            similar_sig = self.agent_runtime.similarity_signature(action, args_dict)
-            if not (allow_similar_repeat or safe_to_repeat) and self.agent_runtime.is_similar_repeat(similar_tool_signatures, similar_sig):
-                return self._prompt_text('reserve_tool_call_text_1', action)
-            similar_tool_signatures.append(similar_sig)
-        call_sig = hashlib.sha256(f"{action}\0{json.dumps(args_dict, sort_keys=True, ensure_ascii=False)}".encode("utf-8")).hexdigest()
-        tool_call_counts[call_sig] = tool_call_counts.get(call_sig, 0) + 1
-        # Read-only/idempotent calls may legitimately need several identical
-        # retries. Eight identical attempts is treated as an emergency loop,
-        # not as ordinary control flow. Calls with side effects remain strict
-        # so a model cannot repeatedly send, delete, write, or launch by mistake.
-        identical_limit = 8 if safe_to_repeat else 2
-        if tool_call_counts[call_sig] > identical_limit:
-            return self._prompt_text('reserve_tool_call_text_2', action)
-        return None
 
     def _effective_tool_action(self, action, args_dict):
         if action in {"system_manager", "software_manager", "file_manager", "web_manager", "screen_manager", "background_task_manager", "memory_manager", "extension_manager"}:

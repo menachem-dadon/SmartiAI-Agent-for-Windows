@@ -31,11 +31,12 @@ class EnglishToolLayerTests(unittest.TestCase):
     def assertEnglish(self, value):
         self.assertNotRegex(str(value), r"[\u0590-\u05ff]")
 
-    def test_schema_contract_matches_pre_translation_baseline(self):
-        # Captured from commit 481bd74; only prose annotations are excluded.
+    def test_schema_contract_tracks_reviewed_browser_extensions(self):
+        # D88 native browser fields and D89's optional compact/full detail are
+        # authorized contract additions. Prose annotations remain excluded.
         encoded = json.dumps(without_annotations(BUILTIN_TOOL_SCHEMAS), sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(encoded).hexdigest(),
-                         "35d13083faf9b743dcb173b1b359a9d7417af3776a3667c0dac8f36a572b35b9")
+                         "f40d892fc693d52c962fc7c461dafef7d2bcc532ca75dffc514b530a142541a1")
 
     def test_security_wrappers_are_english_and_keep_markers_and_payloads(self):
         core = self.core()

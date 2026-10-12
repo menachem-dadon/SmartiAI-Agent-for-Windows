@@ -197,16 +197,15 @@ ENGLISH = {
     'load_system_prompt_schema_lookup_rule_1': (
         'Do not guess parameters. Use a tool directly only when its schema and usage instructions are clearly '
         'included here. Every `get_tool_info` call must include both `tool_name` and `action`: for a unified tool '
-        'send the exact internal action, and for an MCP package the exact function name. Send `action="full"` only if'
-        ' the tool has no internal actions or the complete schema is actually needed. For compatibility only, '
+        'send the exact internal action, and for an MCP package the exact function name. Send `action="full"` when'
+        ' a task will likely use several actions from the same manager; otherwise request the exact action. For compatibility only, '
         'omitting action still returns the full schema, but you as the model must not omit it. After any schema '
         'failure, call `get_tool_info` with the appropriate action or follow the exact schema returned in the error '
         'before retrying.'
     ),
     'load_system_prompt_schema_lookup_rule_2': (
         'Do not guess parameters. Every `get_tool_info` call must include `tool_name` and `action`: the exact '
-        'internal action, MCP function name, or `full` only if there is no internal action/the complete schema is '
-        'needed. Omitting action is supported only for backward compatibility; the model must not omit it. After a '
+        'internal action, MCP function name, or `full` when several actions from the same manager are likely needed. Omitting action is supported only for backward compatibility; the model must not omit it. After a '
         'schema failure, call again with the appropriate action. Skills are disabled, so do not use their schemas.'
     ),
     'load_system_prompt_skill_output_rule_1': '`run_skill` output is authorized workflow guidance only subject to policy and the user request.',
@@ -562,14 +561,6 @@ ENGLISH = {
         '{1}'
     ),
     'decode_tool_call_entry_text_1': 'SCHEMA_REQUIRED: {0} First call get_tool_info with the appropriate tool_name and action, then continue.',
-    'reserve_tool_call_text_1': (
-        "ERROR: Abnormal repeated side-effecting tool-call loop blocked for '{0}'. Check the previous result before "
-        'another attempt.'
-    ),
-    'reserve_tool_call_text_2': (
-        "ERROR: Abnormal repeated identical tool-call loop blocked for '{0}'. Examine the results already received "
-        'and change strategy.'
-    ),
     'maybe_evaluate_task_progress_evaluator_prompt_1': (
         "You are Smarti's internal progress evaluator. Do not answer the user and do not call tools directly.\n"
         'Evaluate actual evidence, not whether a tool merely ran. If evidence is insufficient, require the main agent'

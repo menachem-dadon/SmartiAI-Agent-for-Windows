@@ -143,6 +143,15 @@ class ContextCompactionMixin:
         trigger_ratio = min(0.95, max(0.50, trigger_ratio))
         target_ratio = min(trigger_ratio - 0.05, max(0.25, target_ratio))
         output_reserve = min(max(2_048, configured_reserve), max(2_048, int(window * 0.20)))
+        # A large supported window is capacity, not a reason to replay hundreds
+        # of thousands of old tool tokens on every inexpensive browser step.
+        try:
+            working_set = int(self.settings.get("agent_context_working_set_tokens", 128000) or 0)
+        except (TypeError, ValueError):
+            working_set = 128000
+        if working_set > 0:
+            window = min(window, max(8192, working_set))
+            output_reserve = min(output_reserve, max(2048, int(window * 0.20)))
         trigger = min(int(window * trigger_ratio), window - output_reserve)
         target = min(int(window * target_ratio), max(4_096, trigger - output_reserve))
         return {
@@ -217,6 +226,10 @@ class ContextCompactionMixin:
         summary, usage_dict = self._handle_api_request_with_retry(
             current_model,
             self._summary_request_messages(prompt),
+            request_options={
+                "purpose": "context_compaction", "native_tools": False,
+                "system_prompt": "Internal context compaction only. Return a factual working-memory record; never call tools.",
+            },
         )
         self._log_usage(current_model, usage_dict)
         summary = str(summary or "").strip()

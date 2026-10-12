@@ -343,7 +343,17 @@ class ToolDispatchMixin:
                 return (self.email_manager_tool(args_dict), None)
             elif action == "browser_automation_manager":
                 automation_details = json.dumps(args_dict, ensure_ascii=False, default=str)[:1200]
-                allowed, err = self._ensure_capability_allowed("browser_automation", "אישור אוטומציית דפדפן", automation_details, risk="high")
+                browser_action = str(args_dict.get("action", ""))
+                if browser_action == "act":
+                    browser_action = str((args_dict.get("request") or {}).get("kind", ""))
+                reads = {"doctor", "status", "profiles", "tabs", "snapshot", "text", "find", "frames", "console", "errors", "requests", "network"}
+                browsing = {"start", "open", "navigate", "back", "forward", "reload", "focus", "show", "hide", "workspace", "scroll", "scroll_into_view", "scrollIntoView", "hover", "resize", "wait", "select"}
+                risk = "low" if browser_action in reads else "medium" if browser_action in browsing else "high"
+                title = "אישור אוטומציית דפדפן"
+                if risk != "high":
+                    title = "אישור גלישה למשימה זו"
+                    automation_details = "אישור זה מאפשר קריאה, ניווט ופעולות גלישה רגילות בהמשך המשימה. פעולות רגישות ייבדקו בנפרד.\n\n" + automation_details
+                allowed, err = self._ensure_capability_allowed("browser_automation", title, automation_details, risk=risk)
                 if not allowed: return (err, None)
                 return (self.run_browser_action(args_dict), None)
             elif action == "computer_automation_manager":

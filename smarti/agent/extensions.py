@@ -114,10 +114,11 @@ class ExtensionsMixin:
                 "handler": "instructions",
                 "instructions": (
                     "Use this Skill as the browser-operator playbook, not as a replacement for the tool schema.\n\n"
+                    "For multi-step browsing, load get_tool_info action=full once and reuse it.\n"
                     "Operating loop:\n"
                     "1. Check doctor/status/tabs/profiles when setup, login state, or tab drift might matter.\n"
                     "2. Use one labeled tab per task. Reuse an existing matching label or URL before opening a duplicate tab.\n"
-                    "3. Snapshot before acting. Prefer refs='aria' and keep targetId plus snapshotEpoch with any ref you plan to reuse.\n"
+                    "3. Snapshot before acting. Use compact page state (including navigation results) and keep targetId plus snapshotEpoch with any ref you plan to reuse.\n"
                     "4. Act narrowly by ref. If a ref is missing/stale or not in the expected snapshotEpoch, snapshot the same targetId again and retry once with the new ref.\n"
                     "5. After navigation, modal changes, form submission, or dynamic loading, verify with the returned page state or a fresh snapshot. Use noSnapshot=true only for cheap intermediate actions where the next check is already planned.\n\n"
                     "Profiles:\n"

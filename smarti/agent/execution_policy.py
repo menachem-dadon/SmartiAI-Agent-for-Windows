@@ -356,6 +356,11 @@ class ExecutionPolicyMixin:
             decision = self._policy_decision(capability)
             if getattr(self, "policy_engine", None) and self.policy_engine.force_approval_for(capability, risk):
                 decision = "ask"
+            # One approved ordinary browsing scope per run, while deny policy
+            # and sensitive/state-changing actions are checked on every call.
+            context = getattr(self, "_execution_context", None)
+            if capability == "browser_automation" and risk != "high" and decision == "ask" and getattr(context, "browser_browsing_approved", False):
+                decision = "allow"
             evaluated.append((capability, decision))
             logging.info(f"POLICY | capability={capability} | decision={decision} | risk={risk}")
 
@@ -369,6 +374,9 @@ class ExecutionPolicyMixin:
             labels = [CAPABILITY_LABELS.get(capability, capability) for capability, decision in evaluated if decision == "ask"]
             msg = f"יכולות: {', '.join(labels)}\n\n{details or 'לא סופקו פרטים.'}"
             allowed = bool(self._request_user_approval(title, msg, risk=risk))
+            context = getattr(self, "_execution_context", None)
+            if allowed and context is not None and risk != "high" and "browser_automation" in ordered_capabilities:
+                context.browser_browsing_approved = True
             outcome = "allowed" if allowed else "denied_user"
             error = None if allowed else "ERROR: User denied action by policy."
         else:

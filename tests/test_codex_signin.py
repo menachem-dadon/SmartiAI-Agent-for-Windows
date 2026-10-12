@@ -897,6 +897,9 @@ class LongTaskSettingsTests(unittest.TestCase):
 
         self.assertIn("retained chunk facts", summary)
         self.assertGreater(core._handle_api_request_with_retry.call_count, 1)
+        for call in core._handle_api_request_with_retry.call_args_list:
+            self.assertEqual(call.kwargs['request_options']['purpose'], 'context_compaction')
+            self.assertFalse(call.kwargs['request_options']['native_tools'])
 
     def test_token_pressure_compacts_and_preserves_the_current_user_message(self):
         core = self._context_compaction_core()
@@ -1016,48 +1019,16 @@ class AgentToolLoopRegressionTests(unittest.TestCase):
         self.core.settings = {}
         self.core.agent_runtime = AgentRuntime(self.core)
 
-    def test_distinct_email_uids_are_not_blocked_as_similar_repeats(self):
-        counts = {}
-        signatures = []
-
-        feedback = [
-            self.core._reserve_tool_call(
-                {"action": "email_manager", "arguments": {"action": "read", "mailbox": "INBOX", "uid": uid}},
-                counts,
-                signatures,
-            )
-            for uid in ("10568", "10566", "10565", "10561")
-        ]
-
-        self.assertEqual(feedback, [None, None, None, None])
-
-    def test_identical_safe_read_is_blocked_only_as_an_emergency_loop(self):
-        counts = {}
-        signatures = []
-        call = {"action": "email_manager", "arguments": {"action": "read", "mailbox": "INBOX", "uid": "10568"}}
-
-        feedback = [self.core._reserve_tool_call(call, counts, signatures) for _ in range(9)]
-
-        self.assertEqual(feedback[:8], [None] * 8)
-        self.assertIn("Abnormal repeated identical", feedback[8])
-
-    def test_identical_side_effecting_call_remains_strictly_bounded(self):
-        counts = {}
-        signatures = []
-        call = {"action": "email_manager", "arguments": {"action": "send", "to": "a@example.com", "subject": "x", "body": "y"}}
-
-        self.assertIsNone(self.core._reserve_tool_call(call, counts, signatures))
-        self.assertIsNone(self.core._reserve_tool_call(call, counts, signatures))
-        self.assertIn("Abnormal repeated", self.core._reserve_tool_call(call, counts, signatures))
-
-    def test_schema_can_be_reloaded_after_context_compaction(self):
-        counts = {}
-        signatures = []
-        call = {"action": "get_tool_info", "arguments": {"tool_name": "email_manager"}}
-
-        feedback = [self.core._reserve_tool_call(call, counts, signatures) for _ in range(3)]
-
-        self.assertEqual(feedback, [None, None, None])
+    def test_large_model_capacity_uses_bounded_working_context(self):
+        self.core.mode = 'openai_codex_signin'
+        self.core.settings.update(agent_model_context_window_overrides={'gpt-6.1-sol': 1050000})
+        limits = self.core._context_compaction_limits('gpt-6.1-sol')
+        self.assertEqual(limits['window'], 128000)
+        self.assertEqual(limits['trigger'], 104960)
+        self.core.settings['agent_context_working_set_tokens'] = 'invalid'
+        self.assertEqual(self.core._context_compaction_limits('gpt-6.1-sol'), limits)
+        self.core.settings['agent_context_working_set_tokens'] = 0
+        self.assertGreater(self.core._context_compaction_limits('gpt-6.1-sol')['window'], 128000)
 
     def test_read_only_email_calls_are_safe_for_model_directed_retries(self):
         self.assertFalse(self.core._tool_is_mutating_or_control("email_manager", {"action": "search"}))

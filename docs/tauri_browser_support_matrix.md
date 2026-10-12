@@ -72,3 +72,61 @@ Behavioral references include [Playwright actionability](https://playwright.dev/
 [Codex browser documentation](https://learn.chatgpt.com/docs/browser). These
 public contracts informed the implementation; they are not claims about private
 agent internals or full feature parity.
+
+## Agent efficiency and context (D89, 2026-10-12)
+
+Browser arguments now preserve every documented field before validation. Legacy
+snake-case aliases become the single public camel-case spelling; pagination,
+presentation, select values, frame/epoch targeting and receipt IDs are retained.
+Unknown fields are rejected rather than silently dropped. `start` with a URL
+waits for the new document, like navigation, and returns one `page` observation.
+
+Native page observations default to compact JSON: one map of actionable refs,
+names, roles, links, form state and select options, plus a 2,000-character prose
+excerpt and explicit paging metadata. Duplicate snapshot text, raw AX wrappers
+and element geometry are omitted. `detail=full` restores layout/AX metadata;
+explicit `bodyChars`, paged `text` and snapshots remain available. When Core's
+conversation store is present, the original observation is encrypted and its
+`fullOutput` handle can be read with `read_tool_output` only in that conversation.
+Failure to archive does not turn an already executed browser action into an
+apparent failure. Observations remain untrusted content.
+
+The agent's repeat/similarity guard is removed, including checkpoint counters.
+Native request receipts still return the original result for the same action ID:
+this avoids accidental transport re-execution and does not block new calls.
+Configured task/iteration limits and user cancellation remain effective.
+Ordinary browsing approval explicitly covers the current task and is reused only
+within that run; deny policies and sensitive actions are evaluated each time.
+
+Tool discovery remains on demand. The compact shared instruction recommends
+`get_tool_info action=full` once when multiple actions of a manager will be used;
+it does not preload managers or skills. Error feedback uses the applicable native
+action schema instead of exposing an unrelated legacy/full contract.
+
+Codex agent requests now share one ephemeral model-only App Server process and
+thread per run. Later `turn/start` requests send only new Core feedback/images;
+the server already retains its own assistant responses. Core tool execution,
+approvals, official account authentication and model/reasoning selections remain
+authoritative. Changed instructions/model, edited history or Core compaction
+start a fresh thread with the authoritative context. Completion, cancellation
+and errors close the owned process. Distinct runs have separate threads.
+Cumulative token-usage deltas count all inference requests in a turn without
+recounting older turns; session-reuse counts are logged without prompt content.
+
+All providers use a 128,000-token working-context target by default, bounded by
+the actual supported window, with the existing semantic compactor triggered at
+82% of that target. Exact current user messages, attachments, loaded schemas and
+task state use the existing preservation rules. This is not a hard input limit:
+large mandatory user input is preserved. The internal
+`agent_context_working_set_tokens` setting can override the target (zero uses
+the model window); no new UI control was added. Compaction uses a small internal
+request without tools or the agent stream/session. Anthropic's existing
+off/auto/always cache preference now controls native automatic prefix caching
+of growing message/tool history, with a compatibility fallback for unsupported
+controls. Other providers retain their existing native cache contracts.
+
+References: [Codex App Server thread continuation](https://learn.chatgpt.com/docs/app-server#start-a-turn),
+[OpenClaw compact observations](https://docs.openclaw.ai/tools/browser/agent-tools),
+and [Anthropic automatic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#automatic-caching).
+These contracts justify the transport/context changes, not a promised quota
+reduction: paid-model cache hit rates and live task cost require a separate run.

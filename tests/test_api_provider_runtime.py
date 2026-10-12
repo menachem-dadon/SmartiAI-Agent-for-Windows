@@ -189,6 +189,37 @@ class ProviderRuntimeTests(unittest.TestCase):
         self.assertEqual(failed.exception.analysis.reason, "output_limit")
         core._request_post.assert_not_called()
 
+    def test_anthropic_caches_growing_tool_history_and_respects_off(self):
+        for cache_mode in ('auto', 'always', 'off'):
+            with self.subTest(cache_mode=cache_mode):
+                core = RequestCore('anthropic')
+                core.settings['anthropic_prompt_cache_mode'] = cache_mode
+                core._request_post = mock.Mock(return_value=response(200, {'content': [{'type': 'text', 'text': 'done'}], 'stop_reason': 'end_turn'}))
+                messages = [{'role': 'user', 'content': 'task'},
+                            {'role': 'assistant', 'content': 'tool call'},
+                            {'role': 'user', 'content': 'UNTRUSTED_TOOL_OUTPUT ' + 'x' * 5000},
+                            {'role': 'assistant', 'content': 'another tool call'},
+                            {'role': 'user', 'content': 'UNTRUSTED_TOOL_OUTPUT result'}]
+                core._handle_api_request_with_retry('claude-sonnet-5-5', messages, retry_wait_times=[])
+                payload = core._request_post.call_args.kwargs['json']
+                self.assertEqual(payload.get('cache_control'), None if cache_mode == 'off' else {'type': 'ephemeral'})
+                self.assertIsInstance(payload['system'], str)
+
+    def test_anthropic_unsupported_cache_control_falls_back_once(self):
+        core = RequestCore('anthropic')
+        core.settings['anthropic_prompt_cache_mode'] = 'always'
+        sent = []
+        def post(*args, **kwargs):
+            sent.append(copy.deepcopy(kwargs['json']))
+            return response(400, {'error': {'message': 'Unknown parameter cache_control'}}) if len(sent) == 1 else response(200, {'content': [{'type': 'text', 'text': 'done'}], 'stop_reason': 'end_turn'})
+        core._request_post = post
+        messages = [{'role': 'user', 'content': 'x' * 5000}]
+        self.assertEqual(core._handle_api_request_with_retry('claude-sonnet-5-5', messages, retry_wait_times=[])[0], 'done')
+        self.assertEqual(len(sent), 2)
+        self.assertIn('cache_control', sent[0])
+        self.assertNotIn('cache_control', sent[1])
+        self.assertEqual(sent[0]['messages'], sent[1]['messages'])
+
     def test_daily_quota_fails_without_retry_and_logs_same_message(self):
         core = RequestCore("gemini")
         post = mock.Mock(return_value=response(429, google_quota("GenerateRequestsPerDay-FreeTier", "20")))

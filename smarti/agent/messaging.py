@@ -356,6 +356,7 @@ class MessagingMixin:
         previous_task_id = getattr(self._execution_context, "current_task_id", missing_context_value)
         previous_task_objective = getattr(self._execution_context, "current_task_objective", missing_context_value)
         run_cancel_event = cancel_event if cancel_event is not None else threading.Event()
+        self._execution_context.browser_browsing_approved = False
         task_clock_started = time.monotonic()
         checkpoint_elapsed = 0.0
         try:
@@ -461,8 +462,6 @@ class MessagingMixin:
             except Exception:
                 configured_iterations = 0
             MAX_ITERATIONS = None if configured_iterations <= 0 or configured_iterations == 31 else min(30, configured_iterations)
-            tool_call_counts = {}
-            similar_tool_signatures = []
             tool_observation_start = len(getattr(self, "tool_observations", []) or [])
             schemas_seen = set()
             internal_artifact_replies = 0
@@ -488,10 +487,6 @@ class MessagingMixin:
                     iteration = 0
                 if str(resume_checkpoint.get("phase") or "") == "model_request":
                     iteration = max(0, iteration - 1)
-                saved_counts = resume_checkpoint.get("tool_call_counts", {})
-                tool_call_counts = dict(saved_counts) if isinstance(saved_counts, dict) else {}
-                saved_signatures = resume_checkpoint.get("similar_tool_signatures", [])
-                similar_tool_signatures = list(saved_signatures) if isinstance(saved_signatures, list) else []
                 schemas_seen = set(str(item) for item in resume_checkpoint.get("schemas_seen", []) or [])
                 try:
                     internal_artifact_replies = max(0, int(resume_checkpoint.get("internal_artifact_replies", 0) or 0))
@@ -545,8 +540,6 @@ class MessagingMixin:
                     protected_user_message=protected_user_message,
                     iteration=iteration,
                     task_state=task_state,
-                    tool_call_counts=tool_call_counts,
-                    similar_tool_signatures=similar_tool_signatures,
                     schemas_seen=schemas_seen,
                     internal_artifact_replies=internal_artifact_replies,
                     current_model=current_model,
@@ -820,42 +813,6 @@ class MessagingMixin:
 
                     parallel = parallel and len(selected_calls) > 1
 
-                    reserve_feedback = None
-                    candidate_tool_call_counts = dict(tool_call_counts)
-                    candidate_similar_tool_signatures = list(similar_tool_signatures)
-                    for call in selected_calls:
-                        reserve_feedback = self._reserve_tool_call(
-                            call,
-                            candidate_tool_call_counts,
-                            candidate_similar_tool_signatures,
-                            allow_similar_repeat=parallel and self._is_parallel_safe_tool_call(call),
-                        )
-                        if reserve_feedback:
-                            break
-                    if reserve_feedback:
-                        blocked_call = selected_calls[0]
-                        blocked_action = blocked_call.get("action", "tool")
-                        blocked_args = blocked_call.get("arguments", {}) or {}
-                        logging.warning(
-                            "TOOL GUARD | action=%s | feedback=%s",
-                            blocked_action,
-                            reserve_feedback,
-                        )
-                        if getattr(self, "agent_runtime", None):
-                            self.agent_runtime.trace("tool_guard", f"{blocked_action}: {reserve_feedback}")
-                        self._record_results_in_task_state(task_state, [{
-                            "action": blocked_action,
-                            "arguments": blocked_args,
-                            "status": "error",
-                            "output": reserve_feedback,
-                            "feedback": reserve_feedback,
-                            "step_text": blocked_call.get("step_text", ""),
-                        }])
-                        self._append_tool_feedback(current_messages, tool_turn_text, blocked_action, reserve_feedback)
-                        checkpoint("tool_reserve_feedback")
-                        continue
-                    tool_call_counts = candidate_tool_call_counts
-                    similar_tool_signatures = candidate_similar_tool_signatures
                     live_calls = list(getattr(getattr(self, "_current_stream", None), "calls", {}).values())
                     for call_index, call in enumerate(selected_calls):
                         streamed_id = live_calls[call_index]["call_id"] if call_index < len(live_calls) and live_calls[call_index].get("name") == call.get("action") else ""
@@ -1048,6 +1005,10 @@ class MessagingMixin:
             final_response = ui_text(self, f'ERROR_USER: אירעה תקלה פנימית במהלך ביצוע הפעולה. הפרטים נשמרו בלוגים לצורך בדיקה.\n{redact_sensitive_text(str(e), self.settings)}', f'ERROR_USER: An internal error occurred during the operation. Details were saved in the logs for review.\n{redact_sensitive_text(str(e), self.settings)}')
             return final_response
         finally:
+            self._execution_context.browser_browsing_approved = False
+            provider = getattr(self, "codex_signin_provider", None)
+            if provider is not None and hasattr(provider, "close_stream_session"):
+                provider.close_stream_session(getattr(self._execution_context, "current_task_id", None))
             run_cancel_event.close()
             self._execution_context.task_deadline = previous_deadline
             if persist_turn and not is_background_task and final_response and not chat_turn_recorded:
