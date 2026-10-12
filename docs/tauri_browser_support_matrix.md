@@ -8,7 +8,7 @@ is used.
 
 | Area | Smarti support | Boundary |
 |---|---|---|
-| Tabs and navigation | New, close, duplicate, drag-reorder, pin, recently-closed restore, persistent-session restore, titles, loading/crash/audio states, back/forward/reload/stop/home and LTR omnibox | Inactive WebViews are hidden and asked to enter the frozen lifecycle state. Restore is capped at 12 tabs. |
+| Tabs and navigation | New, close, duplicate, drag-reorder, pin, recently-closed restore, persistent-session restore, titles, loading/crash/audio states, back/forward/reload/stop/home and LTR omnibox | Ordinary inactive WebViews can freeze. Agent-owned targets remain live offscreen between calls and when the workspace closes. Restore is capped at 12 tabs. |
 | Keyboard and focus | `Ctrl+L/T/W/Shift+T/F/D/R`, Alt+Left/Right, governed popup tabs and predictable active-target focus | Site-reserved shortcuts can still vary with WebView2 and IME configuration. |
 | Page commands | Find, 25-500% zoom, full screenshot, print-to-PDF, copy address and open externally | Native print preview, device emulation and DevTools remain developer-oriented WebView2/CDP facilities rather than Edge UI. |
 | Responsive viewport | Live window/splitter resizing; automatic mobile viewport at content widths up to 600 CSS px; per-tab Auto/Mobile/Desktop override; compact toolbar and full-width panels on phones | Mobile metrics follow actual available width/height and native DPI. This does not rewrite a site's fixed desktop layout or automatically change its user agent/reload a form; the separate mobile User Agent command is available for server-selected mobile sites. |
@@ -41,3 +41,34 @@ native/CDP requests, tab changes, mobile/desktop overrides, narrow side panels,
 short/collapsed viewports, and the single controller across Workbench entries.
 These checks establish scheduling/state behavior, not perceived native-window
 smoothness; no live visual acceptance or installer validation is claimed.
+
+## Agent protocol 2 (2026-10-12)
+
+Core now uses the authenticated native broker for doctor/profiles/readiness as
+well as actions. An installed Chrome, Playwright process or debugging listener
+is unnecessary on this path. `doctor` returns the actual capabilities and
+transport. The engine and user view share each Rust-owned WebView2 target.
+
+| Area | Implemented behavior | Boundary |
+|---|---|---|
+| Read and locate | Paged DOM text, role/name/CSS/text locators, document-scoped node references, optional native accessibility tree, frames and open shadow roots | Refs expire on navigation/removal; ambiguous matches fail. Closed shadow roots require other inspection or visual input. |
+| Act and verify | Trusted CDP mouse/keyboard input, fill versus append, hover, select, check, drag, nested scroll and explicit condition waits; observed page state after mutations | Observation proves the resulting page state, not business success. Native select sets selection and dispatches change; it does not emulate an OS select menu. |
+| Visual and files | Real image attachment to the model, full/element screenshot, PDF, approved file upload and completed download artifacts in Core's controlled directory | Screenshot labels are reference metadata, not drawn numeric overlays. Native downloads also retain their normal Downloads file. |
+| Diagnostics | Native console/errors/network/dialog subscriptions and bounded diagnostic event export | Trace is bounded CDP events, not a Chrome performance trace. Network bodies/headers are not automatically captured. |
+| Workspace and background | Explicit visible/preview/hidden presentation; open/activate/expand/split/collapse/close; live offscreen targets and session ownership | Quiet work in another conversation preserves the user's current UI. An acknowledged presentation request confirms UI handling, not a screenshot proof. App exit ends these in-process browser sessions. |
+| User control and recovery | Pause/resume/stop, generation fences, target serialization, cancellation routing, bounded request receipts and rejection of conflicting/in-flight repeats | Cancellation cannot undo already dispatched input. Lost results require observation before another mutation; receipts last only for the current process. |
+| Privacy and policy | Persistent/guest separation, password-value redaction, redacted cookie/storage values by default, Core approval paths and native navigation policy | This is not comprehensive network interception or DNS-rebinding protection. Login, 2FA and CAPTCHA remain user steps; no account-blocking guarantee is made. |
+
+The permanent model guidance stays short; detailed parameters are supplied by
+`get_tool_info` for the selected action. Legacy transport code remains for
+compatibility but is not used when Tauri's broker is available. Personal Chrome
+extension control is outside this change.
+
+The transport choice follows WebView2's [native CDP API](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/chromium-devtools-protocol).
+Behavioral references include [Playwright actionability](https://playwright.dev/docs/actionability),
+[Playwright MCP snapshots](https://github.com/microsoft/playwright-mcp),
+[Claude Desktop browsing](https://code.claude.com/docs/en/desktop#browse-external-sites),
+[OpenClaw browser tools](https://docs.openclaw.ai/tools/browser/agent-tools), and
+[Codex browser documentation](https://learn.chatgpt.com/docs/browser). These
+public contracts informed the implementation; they are not claims about private
+agent internals or full feature parity.

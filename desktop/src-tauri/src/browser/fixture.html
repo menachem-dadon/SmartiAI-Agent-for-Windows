@@ -1,0 +1,15 @@
+<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8"><title>Smarti Agent Fixture</title>
+<label>הודעה <input id="message"></label><input id="password" type="password" value="never-return-this">
+<button id="trusted" aria-label="אהבתי">אהבתי</button><output id="result"></output>
+<button>כפול</button><button>כפול</button><input id="checked" type="checkbox" aria-label="בדיקה">
+<select id="choice"><option value="a">ראשון</option><option value="b">שני</option></select>
+<div id="shadow"></div><div style="height:120px;overflow:auto" id="scroller"><div style="height:600px">גלילה פנימית</div><button id="deep">עמוק</button></div>
+<button id="dialog" onclick="document.body.dataset.dialog=confirm('Smarti?')">אישור</button>
+<a href="/fixture.txt" download="fixture.txt" id="download">הורדה</a>
+<input id="upload" type="file"><iframe name="child" src="/frame" title="מסגרת"></iframe>
+<script>
+document.querySelector('#trusted').addEventListener('click',e=>{document.querySelector('#result').textContent=e.isTrusted?'trusted-success':'synthetic-failure';});
+document.querySelector('#message').addEventListener('input',e=>document.body.dataset.typed=e.target.value);
+document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<button id="shadow-button">צל</button>';
+console.log('fixture-console');setTimeout(()=>{throw Error('fixture-error');},600);
+</script></html>

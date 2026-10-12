@@ -1279,6 +1279,37 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    const subscription = listen<{ workspaceId: string; tabId: string; sessionId?: string; mode: string; operation?: string; requestId?: string }>("browser://presentation", ({ payload }) => {
+      if (!alive) return;
+      const apply = async () => {
+        if (payload.mode === "visible") {
+          workbenchRef.current?.openBrowser(payload.workspaceId);
+          setDismissedBrowserPreview("");
+          setWorkbenchOpen(true);
+          if (payload.operation === "expand") setWorkbenchExpanded(true);
+          else if (payload.operation === "split") setWorkbenchExpanded(false);
+          try { await invoke("browser_activate", { tabId: payload.tabId }); }
+          catch { return; }
+        } else {
+          if (payload.mode === "hidden" && workbenchRestore?.active === payload.workspaceId) setWorkbenchOpen(false);
+          setDismissedBrowserPreview(payload.mode === "hidden" ? payload.workspaceId : "");
+        }
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        if (payload.requestId) void invoke("browser_presentation_ack", { requestId: payload.requestId }).catch(() => undefined);
+      };
+      if (payload.sessionId && payload.sessionId !== activeId) {
+        // Quiet/background work in another conversation must not move the user.
+        if (payload.mode !== "visible") return;
+        void selectConversation(payload.sessionId)
+          .then(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+          .then(apply).catch(() => undefined);
+      } else void apply().catch(() => undefined);
+    });
+    return () => { alive = false; void subscription.then(dispose => dispose()); };
+  }, [activeId, setWorkbenchOpen, workbenchRestore?.active]);
+
   const startupPending = core.state !== "ready" || !healthOkay || !workspaceWindowReady || !legalChecked || Boolean(legalStatus?.accepted && !bootstrapReady);
   const startupRecovery = core.state === "ready" && (startupError || startupDelayed);
   useLayoutEffect(() => {
@@ -1502,7 +1533,8 @@ export default function App() {
           </div>
           </div>
           </div>
-          {!workspace.workbenchOpen &&
+        </section>
+          {(!workspace.workbenchOpen || workbenchRestore?.tabs.find(tab => tab.id === workbenchRestore.active)?.kind !== "browser") &&
             browserActivity &&
             dismissedBrowserPreview !== browserActivity.workspaceId &&
             workbenchRestore?.tabs.some((tab) => tab.kind === "browser" && tab.id === browserActivity.workspaceId) &&
@@ -1515,7 +1547,6 @@ export default function App() {
                 onDismiss={() => setDismissedBrowserPreview(browserActivity.workspaceId)}
               />
             )}
-        </section>
         <aside
           className={`workbench ${workspace.workbenchOpen ? "is-open" : ""}`}
           aria-label="Workbench"

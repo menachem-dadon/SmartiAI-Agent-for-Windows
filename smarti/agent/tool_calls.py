@@ -1348,6 +1348,8 @@ class ToolCallMixin:
         return "\n".join(blocks)
 
     def _decode_tool_call_entry(self, call_entry, pre_text, schemas_seen, call_index=0):
+        if (call_entry or {}).get("protocol_error"):
+            return None, call_entry["protocol_error"]
         json_str = (call_entry or {}).get("json_str", "")
         tool_turn_text = (call_entry or {}).get("tool_turn_text", "") or ""
         try:

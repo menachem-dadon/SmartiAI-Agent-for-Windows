@@ -3651,10 +3651,16 @@ class AgentRuntime:
 
     def extract_tool_calls(self, text):
         text = text or ""
+        # A report is explicit protocol framing. Its closing tag is a call
+        # boundary even when a text-only provider omits the following newline.
+        # Never scan the report itself or accept arbitrary inline JSON examples.
+        report = re.match(r'\s*<smarti_report>.*?</smarti_report>', text, re.DOTALL | re.IGNORECASE)
         fenced = list(re.finditer(r'```[^\n]*\n.*?```', text, re.DOTALL))
         blocks = list(re.finditer(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL | re.IGNORECASE))
         calls = []
         for m in blocks:
+            if report and m.start() < report.end():
+                continue
             if re.search(r'(?:\bexample\b|דוגמ[אה])', text[:m.start()], re.IGNORECASE):
                 continue
             raw = m.group(1)
@@ -3684,11 +3690,20 @@ class AgentRuntime:
                 continue
             if any(m.start() <= idx < m.end() for m in fenced):
                 continue
-            if text[text.rfind("\n", 0, idx) + 1:idx].strip() or re.search(r'(?:\bexample\b|דוגמ[אה])', text[:idx], re.IGNORECASE):
+            if report and idx < report.end():
+                continue
+            after_report = bool(report and not text[report.end():idx].strip())
+            if (not after_report and text[text.rfind("\n", 0, idx) + 1:idx].strip()) or re.search(r'(?:\bexample\b|דוגמ[אה])', text[:idx], re.IGNORECASE):
                 continue
             try:
                 obj, end = decoder.raw_decode(text[idx:])
             except Exception:
+                # Route incomplete canonical envelopes through validation and
+                # model repair; stripping them must not turn a report into a
+                # successful final answer. Do not guess or execute arguments.
+                if re.match(r'\{\s*"method"\s*:\s*"tools/call"', text[idx:]):
+                    calls.append(self._tool_call_entry(text, idx, len(text), text[idx:]))
+                    break
                 continue
             raw = text[idx:idx + end]
             entries = self._tool_call_entries_from_obj(text, idx, idx + end, raw, obj)
@@ -3705,6 +3720,11 @@ class AgentRuntime:
                 "extra_tool_blocks": max(0, len(calls) - 1),
                 "tool_calls": calls,
             }
+        if report:
+            entry = self._tool_call_entry(text, len(text), len(text), "")
+            entry["protocol_error"] = "ERROR: A progress report is not a completed answer. Return the intended tool call using its documented schema, or a plain final answer explaining what was actually done."
+            return {"json_str": "", "pre_text": report.group().strip(), "is_tool_call_intent": True,
+                    "tool_turn_text": text, "extra_tool_blocks": 0, "tool_calls": [entry]}
         return {"json_str": "", "pre_text": "", "is_tool_call_intent": False, "tool_turn_text": text, "extra_tool_blocks": 0, "tool_calls": []}
 
     def extract_tool_call(self, text):

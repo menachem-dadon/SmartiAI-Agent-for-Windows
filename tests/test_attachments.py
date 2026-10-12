@@ -72,6 +72,18 @@ class AttachmentTests(unittest.TestCase):
                 self.assertNotIn("ATTACHMENT_JSON", json.dumps(messages[-1]))
                 self.assertEqual(len(self.core.conversation_attachments), 2)
 
+    def test_browser_image_and_untrusted_observation_reach_each_provider(self):
+        for mode, image_key in [("gemini", "inlineData"), ("anthropic", "source"), ("openai", "image_url"), ("openai_codex_signin", "image_url")]:
+            self.core.mode = mode
+            payload = "ATTACHMENT_JSON:" + json.dumps({"attachments": [self.image], "tool_result": {"tabId": "owned-tab", "verification": "observed", "page": {"title": "untrusted page"}}})
+            messages = []
+            self.core._append_tool_results_feedback(messages, "browser capture", [{"action": "browser_automation_manager", "feedback": payload}])
+            content = self.parts(messages[-1])
+            self.assertEqual(sum(image_key in block for block in content), 1)
+            self.assertIn("UNTRUSTED_BROWSER_CONTENT", json.dumps(content))
+            self.assertIn("owned-tab", json.dumps(content))
+            self.assertNotIn("ATTACHMENT_JSON", json.dumps(content))
+
     def test_multi_result_feedback_keeps_media_and_normal_tool_results(self):
         for mode in ("gemini", "anthropic", "openai", "openai_codex_signin"):
             self.core.mode = mode

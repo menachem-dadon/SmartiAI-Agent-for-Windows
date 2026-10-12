@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([string]$TargetDirectory = '')
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
@@ -28,7 +28,9 @@ $manifest = @'
 [IO.File]::WriteAllText($manifestPath, $manifest, [Text.UTF8Encoding]::new($false))
 Push-Location $nativeRoot
 try {
-    $output = & cargo test --lib --features native-preview-test --no-run --message-format=json
+    $cargoArguments = @('test', '--lib', '--features', 'native-preview-test', '--no-run', '--message-format=json')
+    if ($TargetDirectory) { $cargoArguments += @('--target-dir', $TargetDirectory) }
+    $output = & cargo @cargoArguments
     if ($LASTEXITCODE -ne 0) { throw 'Native preview test compilation failed.' }
     $artifacts = $output | Where-Object { $_.StartsWith('{') } | ForEach-Object { $_ | ConvertFrom-Json }
     $executable = $artifacts | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.profile.test -and $_.executable } |

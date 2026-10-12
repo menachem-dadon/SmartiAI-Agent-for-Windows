@@ -422,3 +422,15 @@ describe("native browser overlay visibility", () => {
     );
   });
 });
+
+it("previews the conversation's background target while another workspace is selected", async () => {
+  const owned = { ...snapshot.tabs[0], tabId: "owned-agent-tab", workspaceId: "agent-workspace", active: false, title: "Agent task" };
+  const agent = { tabId: owned.tabId, workspaceId: owned.workspaceId, sessionId: "session-a", state: "running", action: "snapshot", presentation: "preview" };
+  const state = { ...snapshot, tabs: [snapshot.tabs[0], owned], agent };
+  mocks.invoke.mockImplementation(async (command: string) => command === "browser_status" ? state : command === "browser_action" ? { result: { data: "real-owned-capture" } } : undefined);
+  const onActivity = vi.fn();
+  render(<BrowserPanel visible={false} workspaceTabId="user-workspace" sessionId="session-a" onActivity={onActivity} />);
+  await waitFor(() => expect(onActivity).toHaveBeenCalledWith(expect.objectContaining({ tabId: "owned-agent-tab", workspaceId: "agent-workspace" })));
+  await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("browser_action", expect.objectContaining({ action: expect.objectContaining({ tabId: "owned-agent-tab", method: "Page.captureScreenshot" }) })));
+  expect(mocks.invoke.mock.calls.some(([command]) => command === "browser_open")).toBe(false);
+});

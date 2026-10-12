@@ -10,6 +10,9 @@ class BrowserRuntimeMixin:
         return f"http://127.0.0.1:{SMARTI_BROWSER_DEBUG_PORT}{path}"
 
     def _automation_browser_is_ready(self):
+        if self.browser_controller._tauri_bridge_available():
+            result = self.browser_controller._run_tauri_bridge({"action": "status"})
+            return not str(result).startswith("ERROR")
         try:
             res = self._request_get(self._automation_browser_endpoint(), timeout=0.7)
             return res.ok
@@ -75,6 +78,9 @@ class BrowserRuntimeMixin:
         return args
 
     def _ensure_automation_browser(self, initial_url="about:blank"):
+        if self.browser_controller._tauri_bridge_available():
+            result = self.run_browser_action({"action": "start", "url": initial_url, "noSnapshot": True})
+            return (False, result) if str(result).startswith("ERROR") else (True, None)
         if self._automation_browser_is_ready():
             if self._automation_browser_ssl_mode_matches():
                 return True, None
@@ -115,7 +121,9 @@ class BrowserRuntimeMixin:
         ok, err = self._ensure_automation_browser("about:blank")
         if not ok:
             return err
-        result = self.run_browser_action({"action": "navigate", "url": url, "noSnapshot": True})
+        result = self.run_browser_action({"action": "navigate", "url": url, "presentation": "visible", "noSnapshot": True})
+        if self.browser_controller._tauri_bridge_available() and not str(result).startswith("ERROR"):
+            self.run_browser_action({"action": "show", "noSnapshot": True})
         if str(result or "").startswith("ERROR"):
             return result
         return f"SUCCESS: Opened in Smarti browser: {url}"

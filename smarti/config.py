@@ -551,7 +551,7 @@ BUILTIN_DYNAMIC_TOOLS = {
     "save_screenshot_to_disk": 'Save a screenshot as a file.',
     "set_volume": 'Mute audio.',
     "email_manager": "Full email access through IMAP/SMTP. Use it for every email task: search/read by UID, send/draft/reply/forward, styled RTL/HTML messages, flags, archive/trash/delete/move/copy, folders, attachments. For Hebrew display-name searches use `from`, `subject_filter`, or `query`; auto mode falls back to local header scan. Use `count: 0` for all matches and preserve each result's `mailbox` when reading.",
-    "browser_automation_manager": "Structured control of Smarti's embedded persistent browser through Playwright/CDP: stable tabs, accessibility snapshots/ref maps, act by ref, screenshots/PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
+    "browser_automation_manager": "Structured control of Smarti's embedded persistent browser through the native CDP bridge: stable tabs, accessibility snapshots/ref maps, act by ref, screenshots/PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait and evaluate.",
     "computer_automation_manager": "מנהל שליטה במחשב דרך Windows UI Automation (`auto`) ובמידת הצורך מקלדת/עכבר (`pa`).",
     "read_local_document": 'Read text from document files.',
     "run_mcp": 'Execute functions from installed external tools.',
@@ -1235,13 +1235,32 @@ BROWSER_AUTOMATION_ACTIONS = [
     "storage", "cookies", "upload", "download", "dialog", "evaluate",
     "pdf", "cdp", "click", "clickCoords", "type", "fill", "press",
     "hover", "select", "wait", "scroll", "scrollIntoView", "resize",
-    "close_tab", "close_browser", "close_all"
+    "close_tab", "close_browser", "close_all", "text", "find", "frames",
+    "double_click", "check", "drag", "show", "hide", "workspace", "pause", "resume",
+    "click_coords", "scroll_into_view", "back", "forward", "reload", "stop_loading", "duplicate", "pin", "reorder"
 ]
 
 BROWSER_AUTOMATION_PROPERTIES = {
     "url": {"type": "string", "description": "URL for open/navigate/start."},
+    "pinned": {"type": "boolean", "description": "Desired pin state for a tab."},
+    "requestId": {"type": "string", "description": "Optional stable action identity to retrieve an uncertain response without repeating a mutation."},
+    "presentation": {"type": "string", "enum": ["preview", "hidden", "visible"], "description": "preview by default; hidden for quiet tasks; visible opens the same target for the user."},
+    "workspaceId": {"type": "string", "description": "Owned browser workspace from results. Normally inferred from this conversation."},
+    "frameId": {"type": "string", "description": "Frame from frames; selectors and refs are resolved inside this frame, including cross-origin frames."},
+    "offset": {"type": "integer", "minimum": 0, "description": "Pagination offset."},
+    "textOffset": {"type": "integer", "minimum": 0, "description": "Body text pagination offset for snapshot."},
+    "nth": {"type": "integer", "minimum": 0, "description": "Explicit match index; ambiguous locators fail by default."},
+    "exact": {"type": "boolean", "description": "Match the accessible name or text exactly."},
+    "button": {"type": "string", "enum": ["left", "right", "middle"]},
+    "modifiers": {"type": "array", "items": {"type": "string", "enum": ["Alt", "Control", "Meta", "Shift"]}},
+    "checked": {"type": "boolean", "description": "Desired checked state; defaults true."},
+    "toRef": {"type": "string", "description": "Destination ref for drag."},
+    "toSelector": {"type": "string", "description": "Destination CSS selector for drag."},
+    "values": {"type": "array", "items": {"type": "string"}, "description": "Select option values or labels."},
+    "key": {"type": "string", "description": "Key or chord, e.g. Control+A or Enter."},
+    "cookies": {"type": "array", "items": {"type": "object"}, "description": "Approved cookies for operation=set."},
     "targetUrl": {"type": "string", "description": "Alias for url."},
-    "profile": {"type": "string", "enum": ["smarti"], "description": "Browser profile. Automation uses Smarti's persistent embedded profile."},
+    "profile": {"type": "string", "enum": ["smarti", "guest"], "description": "Browser profile. Automation uses Smarti's persistent embedded profile."},
     "targetId": {"type": "string", "description": "Tab/window target id from tabs/snapshot results."},
     "tabId": {"type": "string", "description": "Alias for targetId."},
     "ref": {"type": "string", "description": "Stable element ref from snapshot, for example e12."},
@@ -1327,7 +1346,7 @@ BUILTIN_TOOL_SCHEMAS["browser_automation_manager"] = {
     "description": (
         "Structured browser automation manager for Smarti's persistent embedded browser profile. Prefer snapshot -> act by ref. "
         "Supports profiles, stable tabs, accessibility snapshots/ref maps, navigation, screenshots, PDF, console/errors/requests/trace, CDP, storage/cookies, dialogs, upload, "
-        "downloads, wait, and JavaScript evaluate. profile='smarti' uses Smarti's persistent Playwright/CDP browser. Raw Python browser code is not used."
+        "downloads, wait, and JavaScript evaluate. profile='smarti' uses Smarti's persistent built-in WebView2 browser. Raw Python browser code is not used."
     ),
     "inputSchema": {
         "type": "object",
@@ -1565,14 +1584,14 @@ _EMAIL_SEARCH_FIELDS = (
     "scan_limit", "include_body", "max_body_chars",
 )
 _EMAIL_TARGET_FIELDS = ("mailbox", "uid", "uids")
-_BROWSER_TAB_FIELDS = ("profile", "targetId", "tabId")
+_BROWSER_TAB_FIELDS = ("requestId", "profile", "targetId", "tabId", "workspaceId", "presentation", "frameId")
 _BROWSER_REF_FIELDS = (
-    "targetId", "tabId", "ref", "snapshotEpoch", "refEpoch", "allowStaleRef",
-    "selector", "role", "name", "textSelector",
+    "requestId", "targetId", "tabId", "ref", "snapshotEpoch", "refEpoch", "allowStaleRef",
+    "selector", "role", "name", "textSelector", "nth", "exact", "frameId", "presentation",
 )
 _BROWSER_ACTION_TAIL = (
     "timeoutMs", "expectDialog", "promptText", "expectDownload",
-    "downloadPath", "noSnapshot",
+    "downloadPath", "noSnapshot", "button", "modifiers",
 )
 _COMPUTER_TARGET_FIELDS = (
     "window", "name", "automation_id", "class_name", "control_type", "path",
@@ -1709,10 +1728,30 @@ TOOL_ACTION_FIELDS = {
         "save_attachments": _EMAIL_TARGET_FIELDS + ("output_dir", "attachment_names"),
     },
     "browser_automation_manager": {
+        "back": _BROWSER_TAB_FIELDS,
+        "forward": _BROWSER_TAB_FIELDS,
+        "reload": _BROWSER_TAB_FIELDS,
+        "stop_loading": _BROWSER_TAB_FIELDS,
+        "duplicate": _BROWSER_TAB_FIELDS,
+        "pin": _BROWSER_TAB_FIELDS + ("pinned",),
+        "reorder": _BROWSER_TAB_FIELDS + ("index",),
+        "double_click": _BROWSER_REF_FIELDS + _BROWSER_ACTION_TAIL,
+        "click_coords": _BROWSER_TAB_FIELDS + ("x", "y") + _BROWSER_ACTION_TAIL,
+        "scroll_into_view": _BROWSER_REF_FIELDS + ("noSnapshot",),
+        "check": _BROWSER_REF_FIELDS + ("checked",) + _BROWSER_ACTION_TAIL,
+        "drag": _BROWSER_REF_FIELDS + ("toRef", "toSelector") + _BROWSER_ACTION_TAIL,
+        "text": _BROWSER_REF_FIELDS + ("offset", "limit"),
+        "find": _BROWSER_REF_FIELDS + ("offset", "limit", "bodyChars"),
+        "frames": _BROWSER_TAB_FIELDS,
+        "show": _BROWSER_TAB_FIELDS,
+        "hide": _BROWSER_TAB_FIELDS,
+        "workspace": _BROWSER_TAB_FIELDS + ("operation",),
+        "pause": _BROWSER_TAB_FIELDS,
+        "resume": _BROWSER_TAB_FIELDS,
         "doctor": (),
         "status": ("profile",),
-        "start": ("profile", "url", "targetUrl"),
-        "stop": ("profile",),
+        "start": _BROWSER_TAB_FIELDS + ("url", "targetUrl", "noSnapshot"),
+        "stop": _BROWSER_TAB_FIELDS,
         "profiles": (),
         "tabs": _BROWSER_TAB_FIELDS + ("cleanup", "closeOthers"),
         "open": _BROWSER_TAB_FIELDS + ("url", "targetUrl", "newTab", "waitUntil", "timeoutMs", "noSnapshot"),
@@ -1721,7 +1760,7 @@ TOOL_ACTION_FIELDS = {
         "navigate": _BROWSER_TAB_FIELDS + ("url", "targetUrl", "newTab", "waitUntil", "timeoutMs", "noSnapshot"),
         "snapshot": _BROWSER_TAB_FIELDS + (
             "refs", "snapshotFormat", "limit", "maxChars", "bodyChars",
-            "htmlChars", "urls", "includeUrls", "includeHidden",
+            "htmlChars", "urls", "includeUrls", "includeHidden", "offset", "textOffset",
         ),
         "screenshot": _BROWSER_REF_FIELDS + ("path", "fullPage", "clip", "labels", "annotate"),
         "act": _BROWSER_REF_FIELDS + (
@@ -1735,11 +1774,11 @@ TOOL_ACTION_FIELDS = {
         "requests": _BROWSER_TAB_FIELDS + ("limit", "includeBody", "responseBody", "maxBodyChars", "captureMs", "reload", "live"),
         "network": _BROWSER_TAB_FIELDS + ("limit", "includeBody", "responseBody", "maxBodyChars", "captureMs", "reload", "live"),
         "trace": _BROWSER_TAB_FIELDS + ("captureMs", "reload", "record", "save", "path", "traceCategories"),
-        "storage": _BROWSER_TAB_FIELDS + ("storage", "op", "operation", "key", "value"),
-        "cookies": _BROWSER_TAB_FIELDS + ("op", "operation", "key", "value", "includeValues"),
+        "storage": _BROWSER_TAB_FIELDS + ("kind", "storage", "op", "operation", "key", "value", "includeValues"),
+        "cookies": _BROWSER_TAB_FIELDS + ("op", "operation", "cookies", "key", "value", "includeValues"),
         "upload": _BROWSER_REF_FIELDS + ("path", "paths", "files", "timeoutMs", "noSnapshot"),
         "download": _BROWSER_REF_FIELDS + ("path", "downloadPath", "timeoutMs", "noSnapshot"),
-        "dialog": _BROWSER_TAB_FIELDS + ("accept", "promptText", "timeoutMs"),
+        "dialog": _BROWSER_TAB_FIELDS + ("operation", "accept", "promptText", "timeoutMs"),
         "evaluate": _BROWSER_TAB_FIELDS + ("script", "expression", "timeoutMs", "noSnapshot"),
         "pdf": _BROWSER_TAB_FIELDS + ("path", "printBackground", "landscape"),
         "cdp": _BROWSER_TAB_FIELDS + ("method", "params"),
@@ -1747,16 +1786,16 @@ TOOL_ACTION_FIELDS = {
         "clickCoords": _BROWSER_TAB_FIELDS + ("x", "y") + _BROWSER_ACTION_TAIL,
         "type": _BROWSER_REF_FIELDS + ("text", "value", "submit", "clear", "slowly", "delay", "delayMs") + _BROWSER_ACTION_TAIL,
         "fill": _BROWSER_REF_FIELDS + ("text", "value", "submit", "clear") + _BROWSER_ACTION_TAIL,
-        "press": _BROWSER_REF_FIELDS + ("keys", "text") + _BROWSER_ACTION_TAIL,
+        "press": _BROWSER_REF_FIELDS + ("key", "keys", "text") + _BROWSER_ACTION_TAIL,
         "hover": _BROWSER_REF_FIELDS + _BROWSER_ACTION_TAIL,
-        "select": _BROWSER_REF_FIELDS + ("value", "label", "index") + _BROWSER_ACTION_TAIL,
-        "wait": _BROWSER_TAB_FIELDS + ("text", "urlContains", "state", "timeMs", "script", "function", "timeoutMs"),
+        "select": _BROWSER_REF_FIELDS + ("value", "values", "label", "index") + _BROWSER_ACTION_TAIL,
+        "wait": _BROWSER_REF_FIELDS + ("text", "url", "urlContains", "state", "timeMs", "timeoutMs"),
         "scroll": _BROWSER_REF_FIELDS + ("x", "y", "deltaX", "deltaY", "noSnapshot"),
         "scrollIntoView": _BROWSER_REF_FIELDS + ("noSnapshot",),
         "resize": _BROWSER_TAB_FIELDS + ("width", "height", "noSnapshot"),
         "close_tab": _BROWSER_TAB_FIELDS,
-        "close_browser": ("profile",),
-        "close_all": ("profile",),
+        "close_browser": _BROWSER_TAB_FIELDS,
+        "close_all": _BROWSER_TAB_FIELDS,
     },
     "computer_automation_manager": {
         "inspect": _COMPUTER_TARGET_FIELDS + ("max_depth", "limit", "include_offscreen"),
@@ -1820,7 +1859,7 @@ BUILTIN_DYNAMIC_TOOLS.update({
     "extension_manager": "Unified MCP and Skills operations.",
     "search_tools": "Search Smarti's effective catalog before selecting, installing, or creating a tool.",
     "canvas_manager": "Live Visual Canvas for an explicit visual or interactive request. Use the compact canvas contract in the system instructions; a successful create adds a native Open Canvas button without another model call.",
-    "browser_automation_manager": "Browser automation manager via Smarti's persistent embedded Playwright/CDP profile: profiles, tabs, accessibility refs, act by ref, screenshots, PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
+    "browser_automation_manager": "Browser automation manager via Smarti's owned built-in WebView2 browser: profiles, tabs, accessibility refs, act by ref, screenshots, PDF, console/errors/requests/trace, CDP, storage, dialogs, uploads, downloads, wait, evaluate.",
     "computer_automation_manager": "Computer automation manager via Windows UI Automation: inspect/list/find UIA elements, then invoke/set/focus them without guessed coordinates.",
     "document_manager": "Structured Word/DOCX authoring, editing, COM automation, export/conversion, inspection, comparison, and page-PNG visual QA; Hebrew/RTL by default.",
 })

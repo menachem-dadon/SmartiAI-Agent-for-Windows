@@ -503,7 +503,7 @@ class BrowserAutomationManagerTests(unittest.TestCase):
                     "SMARTI_TAURI_BROWSER_BROKER_PORT": "54321",
                     "SMARTI_TAURI_BROWSER_BROKER_TOKEN": "a" * 64,
                 }),
-                mock.patch("smarti.browser_control.urllib.request.urlopen", return_value=response) as opened,
+                mock.patch("smarti.browser_control._open_native_request", return_value=response) as opened,
             ):
                 result = SmartiBrowserController(core).run({"action": "snapshot"})
             self.assertTrue(result.startswith(UNTRUSTED_BROWSER_PREFIX))
@@ -555,9 +555,9 @@ class BrowserAutomationManagerTests(unittest.TestCase):
         finally:
             core.cleanup()
 
-    def test_schema_exposes_only_smarti_profile(self):
+    def test_schema_exposes_only_owned_builtin_profiles(self):
         profile_schema = BUILTIN_TOOL_SCHEMAS["browser_automation_manager"]["inputSchema"]["properties"]["profile"]
-        self.assertEqual(profile_schema["enum"], ["smarti"])
+        self.assertEqual(profile_schema["enum"], ["smarti", "guest"])
 
     def test_private_navigation_is_blocked_before_browser_launch(self):
         core = _BrowserAutomationCore()

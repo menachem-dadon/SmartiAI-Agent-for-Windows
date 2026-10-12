@@ -114,6 +114,18 @@ class ContextEfficiencyTests(unittest.TestCase):
         self.assertNotIn('"operations"', scoped)
         self.assertLess(len(scoped), len(full) // 5)
 
+    def test_native_browser_schema_is_scoped_and_omits_unsupported_options(self):
+        core = _prompt_core({"get_tool_info", "browser_automation_manager"})
+        with mock.patch.dict("os.environ", {"SMARTI_TAURI_BROWSER_BROKER_PORT": "54321"}):
+            scoped = core.get_tool_info("browser_automation_manager", "click")
+            full = core.get_tool_info("browser_automation_manager", "full")
+            show = core.get_tool_info("browser_automation_manager", "show")
+        self.assertIn('"tabId"', scoped)
+        self.assertNotIn('"allowStaleRef"', scoped)
+        self.assertNotIn('"traceCategories"', full)
+        self.assertIn('"presentation"', show)
+        self.assertLess(len(scoped), len(full) // 3)
+
     def test_every_registered_manager_action_has_a_valid_scoped_field_map(self):
         for tool_name, action_map in TOOL_ACTION_FIELDS.items():
             schema = BUILTIN_TOOL_SCHEMAS[tool_name]["inputSchema"]

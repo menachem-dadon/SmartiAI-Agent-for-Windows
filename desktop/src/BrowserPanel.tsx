@@ -17,10 +17,12 @@ import {
   pageTitle,
   workspaceActiveTab,
   workspaceBrowserTabs,
+  type BrowserAgentActivity,
   type BrowserProfile,
   type BrowserSnapshot,
   type BrowserTab,
 } from "./browserState";
+import { BrowserAgentControls } from "./BrowserAgentControls";
 import { coreApi } from "./coreApi";
 import { subscribeSettingsChanges } from "./settingsChanges";
 import { Button, Field, Icon, IconButton, SearchField } from "./design-system";
@@ -106,19 +108,21 @@ export const browserProductCapabilities = {
   maxRestoredTabs: 12,
 } as const;
 
-export type BrowserActivity = { workspaceId: string; tabId: string; title: string; url: string; loading: boolean; previewDataUrl?: string; previewError?: string };
+export type BrowserActivity = { workspaceId: string; tabId: string; title: string; url: string; loading: boolean; previewDataUrl?: string; previewError?: string; agent?: BrowserAgentActivity };
 export function BrowserPanel({
   visible,
   geometryRevision,
   onActivity,
   workspaceTabId = "",
   obscured = false,
+  sessionId = "",
 }: {
   visible: boolean;
   geometryRevision?: boolean | string;
   onActivity?: (activity: BrowserActivity | null) => void;
   workspaceTabId?: string;
   obscured?: boolean;
+  sessionId?: string;
 }) {
   const [browser, setBrowser] = useState<BrowserSnapshot>(initialBrowser);
   const [hydrated, setHydrated] = useState(false);
@@ -214,7 +218,11 @@ export function BrowserPanel({
       }),
     [],
   );
-  const { preview: surfacePreview, error: previewError } = useBrowserPreview(current, runCdp);
+  const agent = browser.agents?.find(activity => activity.sessionId === sessionId) ?? (browser.agent?.sessionId === sessionId ? browser.agent : null);
+  const { preview: surfacePreview } = useBrowserPreview(!visible && agent?.presentation === "hidden" ? null : current, runCdp);
+  const activityTab = agent ? browser.tabs.find(tab => tab.tabId === agent.tabId) ?? null : current;
+  const previewTab = agent?.presentation === "hidden" ? null : activityTab;
+  const { preview: activityPreview, error: previewError } = useBrowserPreview(previewTab?.tabId === current?.tabId ? null : previewTab, runCdp);
   useEffect(() => {
     if (!visible || !hydrated || legacyMigrationAttempted.current) return;
     const tab = workspaceActiveTab(browserRef.current, workspaceTabId, lastActiveByWorkspace.current[workspaceTabId]);
@@ -354,12 +362,13 @@ export function BrowserPanel({
       .catch((error) => setNotice(String(error)));
   }, [visible, hydrated, restoreComplete, current?.tabId, browser.activeTabId]);
   useEffect(() => {
-    onActivity?.(current ? {
-      workspaceId: current.workspaceId || workspaceTabId, tabId: current.tabId,
-      title: pageTitle(current), url: current.url, loading: current.loading,
-      previewDataUrl: surfacePreview?.dataUrl, previewError,
+    onActivity?.(activityTab && agent?.presentation !== "hidden" ? {
+      workspaceId: activityTab.workspaceId || workspaceTabId, tabId: activityTab.tabId,
+      title: pageTitle(activityTab), url: activityTab.url, loading: activityTab.loading,
+      previewDataUrl: activityTab.tabId === current?.tabId ? surfacePreview?.dataUrl : activityPreview?.dataUrl,
+      previewError, ...(agent ? { agent } : {}),
     } : null);
-  }, [workspaceTabId, current?.tabId, current?.title, current?.url, current?.loading, current?.crashed, surfacePreview, previewError, onActivity]);
+  }, [workspaceTabId, activityTab, current?.tabId, surfacePreview, activityPreview, previewError, onActivity, agent]);
   useEffect(() => {
     if (current) setAddress(current.url);
   }, [current?.tabId, current?.url]);
@@ -833,7 +842,7 @@ export function BrowserPanel({
         )}
         {groupTabs.length === 0 && <span>פותח את Smarti Browser…</span>}
       </div>
-      <div className="browser-status">{notice || viewportError ? <span role="alert">{notice || viewportError}</span> : current?.profile === "guest" ? "גלישה זמנית" : "פרופיל Smarti"}</div>
+      <div className="browser-status">{agent && agent.tabId === current?.tabId && <BrowserAgentControls agent={agent} />}{notice || viewportError ? <span role="alert">{notice || viewportError}</span> : current?.profile === "guest" ? "גלישה זמנית" : "פרופיל Smarti"}</div>
       {panel && (
         <aside className="browser-side-panel" dir="rtl">
           <header>

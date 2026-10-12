@@ -14,6 +14,8 @@ use tauri::{
     WebviewUrl,
 };
 
+pub mod agent;
+
 const CDP_TIMEOUT: Duration = Duration::from_secs(12);
 const DEFAULT_URL: &str = "https://www.google.com/?hl=he";
 
@@ -81,6 +83,8 @@ pub struct BrowserSnapshot {
     pub active_tab_id: Option<String>,
     pub transport: &'static str,
     pub remote_debugging_port: Option<u16>,
+    pub agent: Option<agent::Activity>,
+    pub agents: Vec<agent::Activity>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -119,6 +123,7 @@ struct BrowserInner {
 pub struct BrowserBroker {
     inner: Arc<Mutex<BrowserInner>>,
     bridge_stop: Arc<AtomicBool>,
+    agent: Arc<agent::AgentState>,
 }
 
 pub struct BrowserBridgeEndpoint {
@@ -151,6 +156,7 @@ impl BrowserBroker {
                 guest_root: cache_dir.join(format!("browser-guest-{}", std::process::id())),
             })),
             bridge_stop: Arc::new(AtomicBool::new(false)),
+            agent: Arc::new(agent::AgentState::default()),
         }
     }
 
@@ -166,6 +172,8 @@ impl BrowserBroker {
             active_tab_id: inner.active_tab_id.clone(),
             transport: "webview2-in-process-cdp",
             remote_debugging_port: None,
+            agent: self.agent.activity(),
+            agents: self.agent.activities(),
         }
     }
 
@@ -174,7 +182,7 @@ impl BrowserBroker {
             .lock()
             .map_err(|_| "browser broker mutex poisoned".to_string())?
             .tabs
-            .get(tab_id)
+            .values().find(|tab| tab.tab_id == tab_id || tab.target_id == tab_id)
             .cloned()
             .ok_or_else(|| "browser tab not found".into())
     }
@@ -279,8 +287,12 @@ impl BrowserBroker {
         }
     }
 
-    pub fn cleanup_guest(&self) {
+    pub fn shutdown(&self) {
         self.bridge_stop.store(true, Ordering::Release);
+        self.cleanup_guest();
+    }
+
+    pub fn cleanup_guest(&self) {
         let guest_root = self.inner.lock().ok().map(|inner| inner.guest_root.clone());
         if let Some(path) = guest_root {
             if path
@@ -294,40 +306,8 @@ impl BrowserBroker {
     }
 }
 
-fn active_tab_for_request(
-    broker: &BrowserBroker,
-    requested: Option<&str>,
-) -> Result<BrowserTab, String> {
-    if let Some(tab_id) = requested.filter(|value| !value.trim().is_empty()) {
-        return broker.tab(tab_id);
-    }
-    let active = broker
-        .snapshot()
-        .active_tab_id
-        .ok_or("no active Smarti Browser tab")?;
-    broker.tab(&active)
-}
-
 fn js_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
-}
-
-fn selector_for(payload: &Value) -> Result<String, String> {
-    if let Some(selector) = payload
-        .get("selector")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        return Ok(selector.to_string());
-    }
-    if let Some(reference) = payload
-        .get("ref")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        return Ok(format!("[data-smarti-ref={}]", js_string(reference)));
-    }
-    Err("browser action requires selector or snapshot ref".into())
 }
 
 fn cdp_for_tab(
@@ -342,208 +322,14 @@ fn cdp_for_tab(
     cdp_call(&webview, method.to_string(), params.to_string())
 }
 
-fn structured_action(
-    app: &AppHandle,
-    broker: &BrowserBroker,
-    payload: Value,
-) -> Result<Value, String> {
-    let action = payload
-        .get("action")
-        .and_then(Value::as_str)
-        .unwrap_or("snapshot")
-        .replace('-', "_")
-        .to_lowercase();
-    if matches!(action.as_str(), "status" | "tabs") {
-        return serde_json::to_value(broker.snapshot()).map_err(|error| error.to_string());
-    }
-    if matches!(action.as_str(), "open" | "start")
-        && payload
-            .get("newTab")
-            .and_then(Value::as_bool)
-            .unwrap_or(action == "open")
-    {
-        let url = payload
-            .get("url")
-            .or_else(|| payload.get("targetUrl"))
-            .and_then(Value::as_str)
-            .unwrap_or(DEFAULT_URL);
-        return create_webview(app, broker, BrowserProfile::Persistent, url, None)
-            .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string()));
-    }
-    let tab = active_tab_for_request(
-        broker,
-        payload
-            .get("tabId")
-            .or_else(|| payload.get("targetId"))
-            .and_then(Value::as_str),
-    )?;
-    let result = match action.as_str() {
-        "navigate" | "open" | "start" => {
-            let url = payload
-                .get("url")
-                .or_else(|| payload.get("targetUrl"))
-                .or_else(|| payload.get("query_or_url"))
-                .and_then(Value::as_str)
-                .ok_or("navigate requires url")?;
-            let address = normalize_url(url)?;
-            cdp_for_tab(app, &tab, "Page.navigate", json!({"url": address}))?
-        }
-        "snapshot" => {
-            let expression = r#"(() => {
-              let n=0; const refs={}; const rows=[];
-              const candidates=[...document.querySelectorAll('a,button,input,textarea,select,[role],[contenteditable=true]')].slice(0,180);
-              for(const el of candidates){ const r=`e${++n}`; el.setAttribute('data-smarti-ref',r); const role=el.getAttribute('role')||el.tagName.toLowerCase(); const name=(el.getAttribute('aria-label')||el.innerText||el.value||el.getAttribute('placeholder')||'').trim().slice(0,180); refs[r]={ref:r,role,name}; rows.push(`${r} ${role} ${name}`.trim()); }
-              return {title:document.title,url:location.href,bodyText:(document.body?.innerText||'').slice(0,8000),snapshot:rows.join('\n'),refs,dir:document.dir||getComputedStyle(document.documentElement).direction};
-            })()"#;
-            cdp_for_tab(
-                app,
-                &tab,
-                "Runtime.evaluate",
-                json!({"expression": expression, "returnByValue": true}),
-            )?
-        }
-        "evaluate" => {
-            let expression = payload
-                .get("script")
-                .or_else(|| payload.get("expression"))
-                .and_then(Value::as_str)
-                .ok_or("evaluate requires script")?;
-            cdp_for_tab(
-                app,
-                &tab,
-                "Runtime.evaluate",
-                json!({"expression": expression, "returnByValue": true, "awaitPromise": true}),
-            )?
-        }
-        "click" | "hover" | "fill" | "type" | "select" => {
-            let selector = selector_for(&payload)?;
-            let selector_js = js_string(&selector);
-            let value = payload
-                .get("text")
-                .or_else(|| payload.get("value"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let value_js = js_string(value);
-            let script = match action.as_str() {
-                "click" => format!("(() => {{ const el=document.querySelector({selector_js}); if(!el) throw new Error('target not found'); el.scrollIntoView({{block:'center'}}); el.click(); return true; }})()"),
-                "hover" => format!("(() => {{ const el=document.querySelector({selector_js}); if(!el) throw new Error('target not found'); el.dispatchEvent(new MouseEvent('mouseover',{{bubbles:true}})); return true; }})()"),
-                "select" => format!("(() => {{ const el=document.querySelector({selector_js}); if(!el) throw new Error('target not found'); el.value={value_js}; el.dispatchEvent(new Event('change',{{bubbles:true}})); return el.value; }})()"),
-                _ => format!("(() => {{ const el=document.querySelector({selector_js}); if(!el) throw new Error('target not found'); el.focus(); const set=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el),'value')?.set; if(set) set.call(el,{value_js}); else el.value={value_js}; el.dispatchEvent(new Event('input',{{bubbles:true}})); el.dispatchEvent(new Event('change',{{bubbles:true}})); return true; }})()"),
-            };
-            cdp_for_tab(
-                app,
-                &tab,
-                "Runtime.evaluate",
-                json!({"expression": script, "returnByValue": true}),
-            )?
-        }
-        "press" => {
-            let key = payload
-                .get("key")
-                .or_else(|| payload.get("text"))
-                .and_then(Value::as_str)
-                .unwrap_or("Enter");
-            cdp_for_tab(
-                app,
-                &tab,
-                "Input.dispatchKeyEvent",
-                json!({"type":"keyDown","key":key}),
-            )?;
-            cdp_for_tab(
-                app,
-                &tab,
-                "Input.dispatchKeyEvent",
-                json!({"type":"keyUp","key":key}),
-            )?
-        }
-        "scroll" | "scroll_into_view" => {
-            let x = payload
-                .get("deltaX")
-                .or_else(|| payload.get("x"))
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0);
-            let y = payload
-                .get("deltaY")
-                .or_else(|| payload.get("y"))
-                .and_then(Value::as_f64)
-                .unwrap_or(600.0);
-            cdp_for_tab(
-                app,
-                &tab,
-                "Runtime.evaluate",
-                json!({"expression":format!("window.scrollBy({x},{y})"),"returnByValue":true}),
-            )?
-        }
-        "upload" => {
-            let selector = selector_for(&payload)?;
-            let paths = payload
-                .get("paths")
-                .or_else(|| payload.get("files"))
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if paths.is_empty() {
-                return Err("upload requires approved paths".into());
-            }
-            let doc = cdp_for_tab(app, &tab, "DOM.getDocument", json!({"depth":0}))?;
-            let root = doc
-                .pointer("/root/nodeId")
-                .and_then(Value::as_i64)
-                .ok_or("DOM root unavailable")?;
-            let node = cdp_for_tab(
-                app,
-                &tab,
-                "DOM.querySelector",
-                json!({"nodeId":root,"selector":selector}),
-            )?;
-            let node_id = node
-                .get("nodeId")
-                .and_then(Value::as_i64)
-                .filter(|id| *id > 0)
-                .ok_or("upload target not found")?;
-            cdp_for_tab(
-                app,
-                &tab,
-                "DOM.setFileInputFiles",
-                json!({"nodeId":node_id,"files":paths}),
-            )?
-        }
-        "screenshot" => cdp_for_tab(
-            app,
-            &tab,
-            "Page.captureScreenshot",
-            json!({"format":"png","captureBeyondViewport":payload.get("fullPage").and_then(Value::as_bool).unwrap_or(false)}),
-        )?,
-        "pdf" => cdp_for_tab(
-            app,
-            &tab,
-            "Page.printToPDF",
-            json!({"printBackground":payload.get("printBackground").and_then(Value::as_bool).unwrap_or(true)}),
-        )?,
-        "cdp" => {
-            let method = payload
-                .get("method")
-                .and_then(Value::as_str)
-                .ok_or("cdp requires method")?;
-            cdp_for_tab(
-                app,
-                &tab,
-                method,
-                payload.get("params").cloned().unwrap_or_else(|| json!({})),
-            )?
-        }
-        _ => {
-            return Err(format!(
-                "Smarti Tauri browser action is not implemented in Point 6: {action}"
-            ))
-        }
-    };
-    Ok(
-        json!({"ok":true,"action":action,"tabId":tab.tab_id,"targetId":tab.target_id,"result":result}),
-    )
+fn structured_action(app: &AppHandle, broker: &BrowserBroker, payload: Value) -> Result<Value, String> {
+    agent::run(app, broker, payload)
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Result<(String, Value), String> {
+    // Windows accepted sockets inherit the listener's nonblocking mode. HTTP
+    // headers/body often arrive in separate packets; WouldBlock is not EOF.
+    stream.set_nonblocking(false).map_err(|error|error.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|error| error.to_string())?;
@@ -565,6 +351,9 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, Value), String> 
         }
     }
     let headers = String::from_utf8_lossy(&buffer[..header_end]);
+    if headers.lines().next() != Some("POST /v1/action HTTP/1.1") {
+        return Err("unsupported browser bridge route".into());
+    }
     let token = headers
         .lines()
         .find_map(|line| line.strip_prefix("Authorization: Bearer "))
@@ -642,7 +431,8 @@ pub fn start_core_bridge(
             while !stop.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((stream, address)) if address.ip().is_loopback() => {
-                        serve_bridge_connection(stream, &app, &broker, &thread_token)
+                        let connection_app=app.clone(); let connection_broker=broker.clone(); let connection_token=thread_token.clone();
+                        std::thread::spawn(move || serve_bridge_connection(stream, &connection_app, &connection_broker, &connection_token));
                     }
                     Ok(_) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -673,8 +463,12 @@ fn start_smoke_site() -> Result<(u16, Arc<AtomicBool>), String> {
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     let mut discard = [0u8; 2048];
-                    let _ = stream.read(&mut discard);
-                    let body = html.as_bytes();
+                    let read = stream.read(&mut discard).unwrap_or(0);
+                    let request=String::from_utf8_lossy(&discard[..read]);
+                    let body = if request.starts_with("GET /fixture.txt ") {b"bridge download fixture".as_slice()}
+                        else if request.starts_with("GET /agent ") {include_str!("browser/fixture.html").as_bytes()}
+                        else if request.starts_with("GET /frame ") {b"<!doctype html><button aria-label='frame action'>Frame</button>".as_slice()}
+                        else {html.as_bytes()};
                     let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: default-src 'self' data: 'unsafe-inline'\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
                     let _ = stream.write_all(body);
                 }
@@ -689,7 +483,7 @@ fn start_smoke_site() -> Result<(u16, Arc<AtomicBool>), String> {
 }
 
 fn runtime_value(result: &Value) -> Option<&Value> {
-    result.pointer("/result/result/value")
+    result.pointer("/result/result/value").or_else(|| result.get("result"))
 }
 
 pub fn run_foundation_smoke(app: AppHandle, broker: BrowserBroker, result_path: PathBuf) {
@@ -785,9 +579,8 @@ pub fn run_foundation_smoke(app: AppHandle, broker: BrowserBroker, result_path: 
 
 fn normalize_url(input: &str) -> Result<String, String> {
     let input = input.trim();
-    if input.is_empty() {
-        return Ok(DEFAULT_URL.into());
-    }
+    if input.is_empty() { return Ok(DEFAULT_URL.into()); }
+    if input.eq_ignore_ascii_case("about:blank") { return Ok("about:blank".into()); }
     let candidate = if input.contains("://") {
         input.to_string()
     } else if input.contains('.') && !input.contains(' ') {
@@ -882,6 +675,7 @@ fn safe_download_destination(app: &AppHandle, url: &tauri::Url) -> Result<PathBu
 }
 
 fn validate_cdp_method(method: &str) -> Result<(), String> {
+    if matches!(method,"Browser.close"|"Browser.crash"|"Browser.crashGpuProcess") {return Err("browser-wide destructive CDP methods are blocked".into());}
     const ALLOWED_PREFIXES: &[&str] = &[
         "Accessibility.",
         "Browser.",
@@ -955,20 +749,41 @@ fn create_webview(
     input: &str,
     workspace_id: Option<String>,
 ) -> Result<BrowserSnapshot, String> {
+    create_webview_with_presentation(app, broker, profile, input, workspace_id, true)
+}
+
+fn create_webview_with_presentation(
+    app: &AppHandle, broker: &BrowserBroker, profile: BrowserProfile,
+    input: &str, workspace_id: Option<String>, activate: bool,
+) -> Result<BrowserSnapshot, String> {
+    let previous = broker.snapshot().active_tab_id;
     let url = normalize_url(input)?;
     let parsed = url
         .parse::<tauri::Url>()
         .map_err(|error| error.to_string())?;
     let (tab, _, data_dir) = broker.allocate_tab(profile, url, workspace_id)?;
-    let (bounds, _) = broker.surface_bounds()?;
+    if !activate {
+        let mut inner=broker.inner.lock().map_err(|_|"browser mutex poisoned")?;
+        inner.active_tab_id=previous;
+        let active=inner.active_tab_id.clone();
+        for tab in inner.tabs.values_mut(){tab.active=Some(&tab.tab_id)==active.as_ref();}
+    }
+    let (mut bounds, _) = broker.surface_bounds()?;
+    if !activate { bounds=presentation_bounds(&bounds,false); }
     std::fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
     let parent = app
         .get_window("main")
         .ok_or("main Tauri window is unavailable")?;
     for existing in parent.webviews() {
-        if existing.label().starts_with("browser-") {
-            let _ = existing.hide();
-            let _ = cdp_call(&existing, "Page.setWebLifecycleState".into(), json!({"state":"frozen"}).to_string());
+        if activate && existing.label().starts_with("browser-") {
+            if let Some(tab) = broker.snapshot().tabs.iter().find(|tab|tab.webview_label==existing.label() && broker.agent.running(&tab.tab_id)) {
+                let _ = set_webview_bounds(&existing, &presentation_bounds(&bounds, false));
+                let _ = existing.show();
+                let _ = tab;
+            } else {
+                let _ = existing.hide();
+                let _ = cdp_call(&existing, "Page.setWebLifecycleState".into(), json!({"state":"frozen"}).to_string());
+            }
         }
     }
 
@@ -982,12 +797,16 @@ fn create_webview(
     let popup_broker = broker.clone();
     let popup_profile = profile;
     let popup_workspace = tab.workspace_id.clone();
+    let navigation_broker=broker.clone();
+    let navigation_workspace=tab.workspace_id.clone();
+    let download_broker=broker.clone();
+    let download_tab=tab.tab_id.clone();
     let download_app = app.clone();
     let download_profile = profile;
     let builder = WebviewBuilder::new(&tab.webview_label, WebviewUrl::External(parsed))
         .data_directory(data_dir)
         .incognito(profile == BrowserProfile::Guest)
-        .on_navigation(|url| matches!(url.scheme(), "http" | "https" | "about"))
+        .on_navigation(move |url| matches!(url.scheme(), "http" | "https" | "about") && navigation_broker.agent.navigation_allowed(&navigation_workspace,url))
         .on_page_load(move |_webview, payload| {
             load_broker.update_page(
                 &load_tab,
@@ -1001,6 +820,10 @@ fn create_webview(
             emit_snapshot(&title_app, &title_broker);
         })
         .on_download(move |_webview, event| {
+            match &event {
+                DownloadEvent::Finished {url,path,success}=>download_broker.agent.record_download(&download_tab,json!({"url":url,"path":path,"success":success})),
+                _=>{},
+            }
             match event {
                 DownloadEvent::Requested { url, destination } => match safe_download_destination(&download_app, &url) {
                     Ok(path) => { *destination = path.clone(); let _ = download_app.emit("browser://download", json!({"phase":"requested","profile":download_profile,"url":url,"name":path.file_name().and_then(|name| name.to_str()).unwrap_or("download")})); true }
@@ -1086,6 +909,7 @@ pub async fn browser_close(
     tab_id: String,
 ) -> Result<BrowserSnapshot, String> {
     let tab = broker.tab(&tab_id)?;
+    broker.agent.closed(&tab.tab_id);
     if let Some(webview) = app.get_webview(&tab.webview_label) {
         webview.close().map_err(|error| error.to_string())?;
     }
@@ -1273,6 +1097,9 @@ pub async fn browser_activate(
                 );
                 webview.show().map_err(|error| error.to_string())?;
                 if visible { webview.set_focus().map_err(|error| error.to_string())?; }
+            } else if broker.agent.running(&tab.tab_id) {
+                set_webview_bounds(&webview, &presentation_bounds(&bounds, false))?;
+                webview.show().map_err(|error| error.to_string())?;
             } else {
                 let _ = webview.hide();
                 let _ = cdp_call(
@@ -1358,6 +1185,10 @@ pub async fn browser_set_visible(
                     "Page.setWebLifecycleState".into(),
                     json!({"state":"active"}).to_string(),
                 );
+            } else if broker.agent.running(&tab.tab_id) {
+                let bounds=broker.inner.lock().map_err(|_|"browser broker mutex poisoned")?.bounds.clone();
+                set_webview_bounds(&webview, &presentation_bounds(&bounds,false))?;
+                webview.show().map_err(|error|error.to_string())?;
             } else {
                 webview.hide().map_err(|error| error.to_string())?;
                 let _ = cdp_call(
@@ -1507,6 +1338,26 @@ pub async fn browser_clear_guest(
 mod tests {
     use super::*;
 
+    #[test]
+    fn bridge_reads_fragmented_request_from_nonblocking_listener() {
+        let listener=TcpListener::bind(("127.0.0.1",0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address=listener.local_addr().unwrap();
+        let client=std::thread::spawn(move||{
+            let mut stream=TcpStream::connect(address).unwrap();
+            stream.write_all(b"POST /v1/action HTTP/1.1\r\nAuthorization: Bearer fixture\r\n").unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+            let body=b"{\"action\":\"doctor\"}";
+            write!(stream,"Content-Length: {}\r\n\r\n",body.len()).unwrap();
+            std::thread::sleep(Duration::from_millis(30));
+            stream.write_all(body).unwrap();
+        });
+        let mut stream=loop {match listener.accept(){Ok((stream,_))=>break stream,Err(error)if error.kind()==std::io::ErrorKind::WouldBlock=>std::thread::sleep(Duration::from_millis(2)),Err(error)=>panic!("{error}")}};
+        let (token,payload)=read_http_request(&mut stream).unwrap();
+        assert_eq!(token,"fixture");assert_eq!(payload["action"],"doctor");
+        client.join().unwrap();
+    }
+
     #[cfg(all(windows, feature = "native-preview-test"))]
     #[test]
     #[ignore = "requires installed WebView2; runs an isolated hidden native window"]
@@ -1555,8 +1406,74 @@ mod tests {
                                 images.push(image.get("data").and_then(Value::as_str).unwrap_or("").to_string());
                             }
                             if images[0].len() < 1000 || images[0] == images[1] { return Err("collapsed screenshots are empty or do not update".into()); }
+                            let call = |payload: Value| -> Result<Value,String> {
+                                let mut payload=payload; payload["tabId"]=json!(tab.tab_id); payload["sessionId"]=json!("fixture-session");
+                                let action=payload["action"].clone();
+                                structured_action(&handle,&broker,payload).map_err(|error|format!("fixture {action}: {error}"))
+                            };
+                            call(json!({"action":"navigate","url":format!("http://127.0.0.1:{port}/agent")}))?;
+                            call(json!({"action":"wait","selector":"#message"}))?;
+                            let page=call(json!({"action":"snapshot","refs":"aria"}))?;
+                            if page.to_string().contains("never-return-this"){return Err("password leaked into snapshot".into());}
+                            let reference=page["result"]["refs"].as_object().ok_or("missing refs")?.values()
+                                .find(|value|value["name"]=="אהבתי").and_then(|value|value["ref"].as_str()).ok_or("missing button ref")?.to_string();
+                            call(json!({"action":"click","ref":reference,"snapshotEpoch":page["result"]["snapshotEpoch"]}))?;
+                            call(json!({"action":"wait","text":"trusted-success"}))?;
+                            call(json!({"action":"fill","selector":"#message","text":"שלום Smarti"}))?;
+                            call(json!({"action":"type","selector":"#message","text":"!"}))?;
+                            let typed=call(json!({"action":"evaluate","script":"document.body.dataset.typed"}))?;
+                            if typed["result"]!="שלום Smarti!"{return Err(format!("trusted typing failed: {typed}"));}
+                            if call(json!({"action":"click","role":"button","name":"כפול","timeoutMs":500})).is_ok(){return Err("ambiguous locator silently clicked".into());}
+                            call(json!({"action":"check","selector":"#checked","checked":true}))?;
+                            call(json!({"action":"select","selector":"#choice","value":"b"}))?;
+                            call(json!({"action":"click","selector":"#shadow-button"}))?;
+                            call(json!({"action":"click","selector":"#deep"}))?;
+                            let frame=call(json!({"action":"frames"}))?;
+                            let frame_id=frame.pointer("/result/frameTree/childFrames/0/frame/id").and_then(Value::as_str).ok_or("missing child frame")?;
+                            call(json!({"action":"click","frameId":frame_id,"role":"button","name":"frame action"}))?;
+                            let id="trusted-once";
+                            let once=json!({"action":"click","selector":"#trusted","requestId":id});
+                            let first=call(once.clone())?;if call(once)?!=first{return Err("receipt replay differed".into());}
+                            if call(json!({"action":"evaluate","script":"throw new Error('intentional')"})).is_ok(){return Err("JS exception reported success".into());}
+                            call(json!({"action":"pause","userControl":true}))?;
+                            if call(json!({"action":"click","selector":"#trusted"})).is_ok(){return Err("paused target accepted input".into());}
+                            if call(json!({"action":"resume"})).is_ok(){return Err("model overrode user's takeover".into());}
+                            call(json!({"action":"resume","userControl":true}))?;
+                            call(json!({"action":"navigate","url":format!("http://127.0.0.1:{port}/agent")}))?;
+                            if call(json!({"action":"click","ref":reference})).is_ok(){return Err("stale document ref accepted".into());}
+                            let shot=call(json!({"action":"screenshot","fullPage":true}))?;
+                            if shot.pointer("/result/data").and_then(Value::as_str).unwrap_or("").len()<1000{return Err("agent screenshot empty".into());}
+                            let console=call(json!({"action":"console"}))?;
+                            if !console.to_string().contains("fixture-console"){return Err("native console event missing".into());}
+                            let alias=structured_action(&handle,&broker,json!({"action":"snapshot","targetId":tab.target_id,"sessionId":"fixture-session"}))?;
+                            if alias["tabId"]!=tab.tab_id{return Err("targetId alias routed to wrong tab".into());}
+                            let blank=structured_action(&handle,&broker,json!({"action":"start","sessionId":"second-session","profile":"guest"}))?;
+                            if blank.pointer("/result/url").and_then(Value::as_str)!=Some("about:blank"){return Err(format!("start opened a website instead of blank: {blank}"));}
+                            if structured_action(&handle,&broker,json!({"action":"click","selector":"#trusted","tabId":tab.tab_id,"sessionId":"second-session"})).is_ok(){return Err("second session stole target".into());}
+                            let extra=structured_action(&handle,&broker,json!({"action":"open","newTab":true,"url":"about:blank","sessionId":"fixture-session","profile":"guest"}))?;
+                            if structured_action(&handle,&broker,json!({"action":"click","selector":"#trusted","tabId":tab.tab_id,"sessionId":"second-session"})).is_ok(){return Err("opening a new tab lost ownership of the old tab".into());}
+                            structured_action(&handle,&broker,json!({"action":"close_tab","tabId":extra["tabId"],"sessionId":"fixture-session"}))?;
+                            tauri::async_runtime::block_on(browser_activate(handle.clone(), handle.state::<BrowserBroker>(), blank["tabId"].as_str().ok_or("blank target missing")?.into()))?;
+                            tauri::async_runtime::block_on(browser_set_visible(handle.clone(), handle.state::<BrowserBroker>(), false))?;
+                            call(json!({"action":"click","selector":"#trusted"}))?;
+                            call(json!({"action":"wait","text":"trusted-success"}))?;
+                            structured_action(&handle,&broker,json!({"action":"close_tab","tabId":blank["tabId"],"sessionId":"second-session"}))?;
+                            call(json!({"action":"click","selector":"#dialog","expectDialog":true,"accept":false}))?;
+                            if call(json!({"action":"evaluate","script":"document.body.dataset.dialog"}))?["result"]!="false" {return Err("dialog dismissal did not reach the page".into());}
+                            let endpoint=start_core_bridge(handle.clone(),broker.clone())?;
+                            let script=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/verify_native_browser_bridge.py");
+                            let output=std::process::Command::new("python").arg(script)
+                                .env("SMARTI_TAURI_BROWSER_BROKER_PORT",endpoint.port.to_string())
+                                .env("SMARTI_TAURI_BROWSER_BROKER_TOKEN",endpoint.token)
+                                .env("SMARTI_TEST_BROWSER_TAB",tab.tab_id.clone()).env("PYTHONUTF8","1").output().map_err(|e|e.to_string())?;
+                            if !output.status.success(){return Err(format!("Core bridge regression failed: {}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr)));}
+                            println!("{}",String::from_utf8_lossy(&output.stdout).trim());
+                            println!("native agent verified: trusted click/type, password redaction, ambiguity, check/select, shadow DOM, nested scroll, frames, receipts, exceptions, pause and stale refs");
                             tauri::async_runtime::block_on(browser_close(handle.clone(), handle.state::<BrowserBroker>(), tab.tab_id.clone()))?;
                             if !broker.snapshot().tabs.is_empty() || broker.tab(&tab.tab_id).is_ok() { return Err("closed preview target survived".into()); }
+                            broker.cleanup_guest();
+                            if broker.bridge_stop.load(Ordering::Acquire) {return Err("guest cleanup stopped the bridge".into());}
+                            broker.shutdown();
                             Ok((images[0].len(), images[1].len()))
                         })();
                         stop.store(true, Ordering::Release);

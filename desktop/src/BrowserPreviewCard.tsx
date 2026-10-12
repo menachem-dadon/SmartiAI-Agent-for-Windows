@@ -1,5 +1,6 @@
 import { IconButton } from "./design-system";
 import type { BrowserActivity } from "./BrowserPanel";
+import { BrowserAgentControls } from "./BrowserAgentControls";
 
 export function BrowserPreviewCard({ activity, onOpen, onDismiss }: {
   activity: BrowserActivity;
@@ -19,5 +20,6 @@ export function BrowserPreviewCard({ activity, onOpen, onDismiss }: {
         : <span className="browser-preview-placeholder" role="status">{activity.loading ? "טוען את העמוד…" : activity.previewError || "מכין תצוגה מקדימה…"}</span>}
     </button>
     <small dir="ltr" title={activity.url}>{activity.url}</small>
+    {activity.agent && <BrowserAgentControls agent={activity.agent} />}
   </aside>;
 }

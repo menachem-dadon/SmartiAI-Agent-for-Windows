@@ -101,7 +101,7 @@
 .browser-side-panel select { min-height:40px; min-width:0; background:var(--sds-color-surface); color:var(--sds-color-text); border:1px solid var(--sds-color-control-border); }
 .permission-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-block:12px; }
 .permission-row span { width:100%; }
-.browser-preview-card { width:min(260px,calc(100% - 24px)); position:absolute; bottom:16px; left:16px; z-index:50; border:1px solid var(--sds-color-border); border-radius:12px; padding:8px; background:var(--sds-color-surface); box-shadow:var(--sds-shadow-floating); }
+.browser-preview-card { width:min(260px,calc(100% - 24px)); position:absolute; bottom:16px; left:16px; z-index:75; border:1px solid var(--sds-color-border); border-radius:12px; padding:8px; background:var(--sds-color-surface); box-shadow:var(--sds-shadow-floating); }
 .browser-preview-card header { display:flex; align-items:center; gap:4px; }
 .browser-preview-card strong { flex:1; min-width:0; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .browser-preview-image { width:100%; height:96px; padding:0; border:0; background:var(--sds-color-surface-muted); overflow:hidden; border-radius:8px; cursor:pointer; }
@@ -126,3 +126,9 @@
 .workspace-preferences { padding:24px; display:grid; gap:24px; color:var(--sds-color-text); }
 .workspace-preferences-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .workspace-preferences .sds-setting-row p { overflow-wrap:anywhere; unicode-bidi:plaintext; }
+
+/* Agent controls share accepted Smarti controls and tokens; browser content is native. */
+.browser-agent-controls { display:flex; align-items:center; gap:var(--sds-space-1); flex-wrap:wrap; color:var(--sds-color-text-muted); font-size:var(--sds-font-caption); }
+.browser-agent-controls > [role="status"] { flex:1; min-width:120px; }
+.browser-agent-controls [role="alert"] { color:var(--sds-color-danger); width:100%; }
+.browser-preview-card .browser-agent-controls { border-top:1px solid var(--sds-color-border); margin-top:var(--sds-space-2); padding-top:var(--sds-space-1); }

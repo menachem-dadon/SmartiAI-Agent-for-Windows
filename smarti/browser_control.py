@@ -1,16 +1,18 @@
-"""Structured Playwright/CDP control plane for Smarti's persistent browser."""
+"""Policy-controlled browser actions; WebView2 is the desktop transport."""
 import ipaddress
 import importlib.metadata
 import base64
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 import subprocess
 import tempfile
 import textwrap
 import time
+import uuid
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -22,8 +24,14 @@ UNTRUSTED_BROWSER_PREFIX = "[UNTRUSTED_BROWSER_CONTENT]\n"
 HELPER_RESULT_PREFIX = "SMARTI_BROWSER_RESULT="
 
 
+def _open_native_request(request, timeout):
+    # This authenticated endpoint is always loopback. Never send its token
+    # through the user's Internet proxy or let that proxy filter agent input.
+    return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout)
+
+
 class SmartiBrowserController:
-    """Runs high-level browser actions against Smarti Browser through Playwright/CDP."""
+    """Runs policy-approved actions on the owned WebView2 target (legacy CDP fallback)."""
 
     def __init__(self, core):
         self.core = core
@@ -40,6 +48,30 @@ class SmartiBrowserController:
                 "Use structured browser actions, action=evaluate for JavaScript, or action=cdp for Chrome DevTools Protocol."
             )
 
+        if self._tauri_bridge_available():
+            effective_action, effective_args = self._effective_action(args)
+            effective_args = dict(effective_args)
+            effective_args["action"] = effective_action
+            profile, profile_error = self._normalize_profile(effective_args.get("profile"))
+            if profile_error:
+                return profile_error
+            effective_args["profile"] = profile
+            ok, err = self._preflight_policy(effective_action, effective_args)
+            if not ok:
+                return err
+            prepared, err = self._prepare_paths(effective_args, effective_action, effective_args)
+            if err:
+                return err
+            context = getattr(self.core, "_execution_context", None)
+            prepared["sessionId"] = str(getattr(context, "target_session_id", "") or "__legacy__")
+            prepared["runId"] = str(getattr(context, "run_id", "") or "")
+            prepared["navigationPolicy"] = {
+                "allowPrivate": bool(self.core.settings.get("browser_allow_private_network", False)),
+                "allowedHosts": self.core.settings.get("browser_allowed_hosts") or [],
+            }
+            prepared.pop("userControl", None)  # Native UI alone can override ownership.
+            return self._run_tauri_bridge(prepared)
+
         if action == "profiles":
             return self._json(self._profiles_payload())
         if action == "doctor":
@@ -49,16 +81,6 @@ class SmartiBrowserController:
         if profile_error:
             return profile_error
         args["profile"] = profile
-
-        if self._tauri_bridge_available():
-            effective_action, effective_args = self._effective_action(args)
-            ok, err = self._preflight_policy(effective_action, effective_args)
-            if not ok:
-                return err
-            prepared, err = self._prepare_paths(args, effective_action, effective_args)
-            if err:
-                return err
-            return self._run_tauri_bridge(prepared)
 
         if action in {"close_browser", "stop", "close_all"}:
             return self.core._close_automation_browser()
@@ -90,7 +112,8 @@ class SmartiBrowserController:
         return result
 
     def _normalize_action(self, value):
-        return str(value or "snapshot").strip().lower().replace("-", "_")
+        action = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value or "snapshot").strip()).lower().replace("-", "_")
+        return {"clickcoords": "click_coords", "scrollintoview": "scroll_into_view", "dblclick": "double_click"}.get(action, action)
 
     def _effective_action(self, args):
         action = self._normalize_action(args.get("action") or "snapshot")
@@ -111,9 +134,11 @@ class SmartiBrowserController:
             "smarti": "smarti",
             "smarti_profile": "smarti",
             "chrome": "smarti",
+            "persistent": "smarti",
+            "guest": "guest",
         }
         if profile not in aliases:
-            return None, f"ERROR: Unknown browser profile '{profile}'. Use 'smarti'."
+            return None, f"ERROR: Unknown browser profile '{profile}'. Use 'smarti' or 'guest'."
         return aliases[profile], None
 
     def _json(self, payload):
@@ -130,7 +155,18 @@ class SmartiBrowserController:
         """Route the existing policy-approved action to the visible Tauri WebView2 tab."""
         port = int(os.environ["SMARTI_TAURI_BROWSER_BROKER_PORT"])
         token = os.environ["SMARTI_TAURI_BROWSER_BROKER_TOKEN"]
-        body = json.dumps(dict(payload or {}), ensure_ascii=False).encode("utf-8")
+        payload = dict(payload or {})
+        if self._normalize_action(payload.get("action")) == "click" and payload.get("expectDownload"):
+            payload["action"] = "download"
+        payload.setdefault("requestId", uuid.uuid4().hex)
+        aliases = {"op": "operation", "urlContains": "url", "promptText": "text", "keys": "key", "storage": "kind"}
+        for old, new in aliases.items():
+            if old in payload and new not in payload:
+                payload[new] = payload[old]
+        if isinstance(payload.get("key"), list):
+            payload["key"] = "+".join(str(key) for key in payload["key"])
+        payload["timeoutMs"] = min(30000, max(0, int(payload.get("timeoutMs") or 10000)))
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             f"http://127.0.0.1:{port}/v1/action",
             data=body,
@@ -143,7 +179,7 @@ class SmartiBrowserController:
         )
         try:
             timeout = max(5, int(self.core._timeout("tool_timeout_seconds", 120)))
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with _open_native_request(request, timeout=timeout) as response:
                 parsed = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             try:
@@ -152,16 +188,28 @@ class SmartiBrowserController:
                 detail = str(exc)
             return f"ERROR: Tauri browser action failed: {detail}"
         except Exception as exc:
-            return f"ERROR: Tauri browser bridge unavailable: {exc}"
+            return f"ERROR: Browser response unavailable; execution outcome is unknown. Inspect the page before retrying any mutation. requestId={payload['requestId']}: {exc}"
 
         action = self._normalize_action(payload.get("action"))
+        if action == "download" and isinstance(parsed, dict) and parsed.get("ok") and isinstance(parsed.get("result"), dict) and parsed["result"].get("success"):
+            try:
+                source = Path(parsed["result"]["path"]).resolve()
+                target, error = self._resolve_controlled_path(payload["downloadDir"], payload.get("downloadPath"), source.suffix.lstrip("."), "browser_download")
+                if error:
+                    return error
+                shutil.copy2(source, target)
+                parsed["path"] = target
+                parsed["result"].update(artifactPath=target, saved=True)
+            except Exception as exc:
+                return f"ERROR: Native download completed, but its controlled artifact could not be saved: {exc}"
         if action in {"screenshot", "pdf"} and payload.get("path"):
             encoded = (((parsed.get("result") or {}).get("data")) if isinstance(parsed, dict) else None)
             if encoded:
                 try:
                     Path(payload["path"]).write_bytes(base64.b64decode(encoded, validate=True))
                     parsed["path"] = payload["path"]
-                    parsed["result"] = {"saved": True, "bytes": os.path.getsize(payload["path"])}
+                    parsed["result"].pop("data", None)
+                    parsed["result"].update({"saved": True, "bytes": os.path.getsize(payload["path"])})
                 except Exception as exc:
                     return f"ERROR: Tauri browser capture could not be saved: {exc}"
         post_ok, parsed, post_err = self._postflight_policy(action, parsed)
@@ -169,6 +217,13 @@ class SmartiBrowserController:
             return post_err
         if isinstance(parsed, dict) and parsed.get("ok") is False:
             return "ERROR: Tauri browser action failed.\n" + self._json(parsed)
+        if action == "trace" and payload.get("path") and isinstance(parsed, dict):
+            Path(payload["path"]).write_text(json.dumps(parsed, ensure_ascii=False, indent=2), encoding="utf-8")
+            parsed["path"] = payload["path"]
+        if action == "screenshot" and isinstance(parsed, dict) and parsed.get("path"):
+            return "ATTACHMENT_JSON:" + json.dumps({
+                "attachments": [{"path": parsed["path"]}], "tool_result": parsed,
+            }, ensure_ascii=False)
         return self._json(parsed)
 
     def _playwright_dependency(self):
@@ -320,7 +375,7 @@ class SmartiBrowserController:
                 ok, err = self._url_allowed(url)
                 if not ok:
                     return False, "ERROR: " + err
-        if (action == "cookies" or (action == "storage" and str(args.get("kind") or args.get("storage") or "").lower() == "cookies")) and args.get("includeValues"):
+        if action in {"cookies", "storage"} and args.get("includeValues"):
             ok, err = self._ensure_sensitive_allowed(
                 "אישור חשיפת Cookies",
                 "פעולת הדפדפן מבקשת לחשוף ערכי Cookies. העדף includeValues=false אלא אם המשתמש ביקש זאת במפורש.",
@@ -392,7 +447,7 @@ class SmartiBrowserController:
                 candidate = root_path / candidate
             target = candidate.resolve()
             if target == root_path or target.is_dir():
-                name = f"{default_prefix}_{int(time.time())}" + (f".{suffix}" if suffix else "")
+                name = f"{default_prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}" + (f".{suffix}" if suffix else "")
                 target = target / name
             if suffix and not target.suffix:
                 target = target.with_suffix("." + suffix)
@@ -400,7 +455,7 @@ class SmartiBrowserController:
                 return None, f"ERROR: Browser artifacts must stay inside the controlled directory: {root_path}"
             target.parent.mkdir(parents=True, exist_ok=True)
             return str(target), None
-        name = f"{default_prefix}_{int(time.time())}" + (f".{suffix}" if suffix else "")
+        name = f"{default_prefix}_{int(time.time())}_{uuid.uuid4().hex[:8]}" + (f".{suffix}" if suffix else "")
         target = root_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         return str(target), None
@@ -427,6 +482,8 @@ class SmartiBrowserController:
 
     def _prepare_paths(self, args, effective_action, effective_args):
         prepared = dict(args)
+        if effective_action not in {"screenshot", "pdf", "trace", "download", "upload"} and not effective_args.get("expectDownload"):
+            return prepared, None
         captures = self._artifact_dir("captures")
         downloads = self._artifact_dir("downloads")
         prepared.setdefault("outputDir", captures)
@@ -535,6 +592,7 @@ _HELPER_CODE = textwrap.dedent(
     import re
     import sys
     import time
+import uuid
 
     sys.stdin = open(sys.stdin.fileno(), mode="r", encoding="utf-8", errors="replace", closefd=False)
     sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", errors="replace", closefd=False)

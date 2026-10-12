@@ -75,6 +75,36 @@ class ChatStreamingTests(unittest.TestCase):
         self.assertEqual(live.calls["0"]["name"], "canvas_manager")
         self.assertIn('<smarti_report>literal</smarti_report>', live.calls["0"]["arguments"])
 
+    def test_browser_call_adjacent_to_report_is_executed_protocol_not_visible_json(self):
+        report = '<smarti_report>פותח את המידע על כלי אוטומציית הדפדפן...</smarti_report>'
+        call = '{"method":"tools/call","params":{"name":"get_tool_info","arguments":{"tool_name":"browser_automation_manager","action":"full"}}}'
+        live, batches = self.live()
+        for char in report + call:
+            live.text(char)
+            live.flush()
+        live.finish(has_tools=True)
+        self.assertEqual(live.visible, 'פותח את המידע על כלי אוטומציית הדפדפן...')
+        self.assertEqual(live.calls['0']['name'], 'get_tool_info')
+        visible = ''.join(event.get('text', '') for batch in batches for event in batch['events'])
+        self.assertNotIn('tools/call', visible)
+        self.assertNotIn('tool_name', visible)
+        self.assertNotIn('<', visible)
+        parsed = AgentRuntime(Mock()).extract_tool_calls(report + call)
+        self.assertTrue(parsed['is_tool_call_intent'])
+        self.assertEqual(parsed['tool_calls'][0]['json_str'], call)
+
+    def test_report_boundary_does_not_execute_examples_or_change_literal_arguments(self):
+        runtime = AgentRuntime(Mock())
+        call = '{"method":"tools/call","params":{"name":"canvas_manager","arguments":{"content":"<smarti_report>literal</smarti_report>"}}}'
+        for text in ['The example is ' + call, '<smarti_report>Example: ' + call + '</smarti_report>']:
+            parsed = runtime.extract_tool_calls(text)
+            self.assertFalse(any(entry['json_str'] for entry in parsed['tool_calls']))
+        parsed = runtime.extract_tool_calls('<smarti_report>פותח</smarti_report>' + call)
+        self.assertEqual(json.loads(parsed['json_str'])['params']['arguments']['content'], '<smarti_report>literal</smarti_report>')
+        malformed = runtime.extract_tool_calls('<smarti_report>פותח</smarti_report>{"method":"tools/call","params":')
+        self.assertTrue(malformed['is_tool_call_intent'])
+        self.assertTrue(malformed['tool_calls'])
+
     def test_new_request_removes_unexecuted_preparation_from_durable_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             store = ChatSessionStore(str(Path(directory) / "history.sqlite"))

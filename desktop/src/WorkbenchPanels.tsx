@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import type { BrowserSnapshot } from "./browserState";
 import { closeBrowserWorkspace } from "./browserWorkspaceLifecycle";
 import { BrowserPanel, type BrowserActivity } from "./BrowserPanel";
 import { CanvasPanel } from "./CanvasPanel";
@@ -11,7 +14,7 @@ import { forgetPanelSession } from "./workbenchSession";
 
 const launcherKinds: WorkbenchTab[] = ["browser", "files", "terminal", "artifacts"];
 const icons: Record<WorkbenchTab, IconName> = { browser: "browser", files: "folder", terminal: "terminal", canvas: "canvas", artifacts: "file" };
-export type WorkbenchHandle = { activateTab: (id: string) => void; openCanvas: (sessionId: string, canvasId: string) => void };
+export type WorkbenchHandle = { openBrowser: (workspaceId: string) => void; activateTab: (id: string) => void; openCanvas: (sessionId: string, canvasId: string) => void };
 
 export function WorkbenchSurface({ ref, initial, visible, motionRevision, restored, onStateChange, onBrowserActivity, onClose, showCloseControl = true, sessionId, onCanvasAction, owner = "", expanded = false, onToggleExpanded }: {
   ref?: Ref<WorkbenchHandle>; initial: WorkbenchTab | null; visible: boolean; motionRevision?: boolean | string;
@@ -65,12 +68,33 @@ export function WorkbenchSurface({ ref, initial, visible, motionRevision, restor
   const reorder = (source: string, target: string) => setSnapshot(current => reorderWorkbenchTabs(current, source, target));
   const drag = useWorkbenchTabDrag(visible, reorder);
   const current = tabs.find(tab => tab.id === active);
+  const adoptBrowser = useCallback((workspaceId: string, activate = false) => {
+    if (!workspaceId) return;
+    setSnapshot(current => {
+      const exists = current.tabs.some(tab => tab.id === workspaceId);
+      if (exists && (!activate || current.active === workspaceId)) return current;
+      return { tabs: exists ? current.tabs : [...current.tabs, { id: workspaceId, kind: "browser", title: "דפדפן Smarti" }], active: activate || !current.active ? workspaceId : current.active };
+    });
+  }, []);
+  useEffect(() => {
+    let alive = true;
+    const update = (state: BrowserSnapshot) => { const agent=state?.agents?.find(activity => activity.sessionId === sessionId) ?? (state?.agent?.sessionId === sessionId ? state.agent : null); if (alive && agent && state.tabs.some(tab => tab.tabId === agent.tabId)) adoptBrowser(agent.workspaceId); };
+    const subscription = listen<BrowserSnapshot>("browser://state", ({ payload }) => update(payload));
+    const closed = listen<{workspaceId:string}>("browser://workspace-closed", ({payload}) => {
+      if (!alive) return;
+      forgetPanelSession(payload.workspaceId);
+      setSnapshot(current => closeWorkbenchTab(current,payload.workspaceId));
+    });
+    void invoke<BrowserSnapshot>("browser_status").then(update).catch(() => undefined);
+    return () => { alive = false; void subscription.then(dispose => dispose()); void closed.then(dispose => dispose()); };
+  }, [sessionId, adoptBrowser]);
   useImperativeHandle(ref, () => ({
+    openBrowser: workspaceId => adoptBrowser(workspaceId, true),
     activateTab: id => setSnapshot(current => current.tabs.some(tab => tab.id === id) ? { ...current, active: id } : current),
     openCanvas: (source, target) => add("canvas", false, { sessionId: source, targetId: target }),
   }), [owner, sessionId]);
   const reportBrowserActivity = useCallback((activity: BrowserActivity | null) => {
-    onBrowserActivity?.(current?.kind === "browser" && activity?.workspaceId === current.id ? activity : null);
+    onBrowserActivity?.(activity?.agent || current?.kind === "browser" && activity?.workspaceId === current.id ? activity : null);
   }, [current?.id, current?.kind, onBrowserActivity]);
   useEffect(() => { if (current?.kind !== "browser") onBrowserActivity?.(null); return () => onBrowserActivity?.(null); }, [current?.id, current?.kind, onBrowserActivity]);
   useEffect(() => {
@@ -106,7 +130,7 @@ export function WorkbenchSurface({ ref, initial, visible, motionRevision, restor
     <div className="workbench-body">
       {!current && <div className="workbench-empty" role="group" aria-label="מה תרצה לפתוח?"><h2>סביבת העבודה</h2><p>פתח כלי לצד השיחה</p>{launcherKinds.map(kind => <Button variant="ghost" icon={icons[kind]} key={kind} onClick={() => add(kind, true)}>{workbenchLabels[kind]}</Button>)}</div>}
       {tabs.some(tab => tab.kind === "browser") && <section className="workbench-panel" role="tabpanel" id={current?.kind === "browser" ? `workbench-panel-${current.id}` : undefined} aria-labelledby={current?.kind === "browser" ? `workbench-tab-${current.id}` : undefined} hidden={current?.kind !== "browser"} aria-label="דפדפן">
-        <BrowserPanel workspaceTabId={current?.kind === "browser" ? current.id : ""} visible={visible && current?.kind === "browser" && !closingIds.has(current.id)} obscured={overlay || modal} geometryRevision={motionRevision} onActivity={reportBrowserActivity} />
+        <BrowserPanel sessionId={sessionId} workspaceTabId={current?.kind === "browser" ? current.id : ""} visible={visible && current?.kind === "browser" && !closingIds.has(current.id)} obscured={overlay || modal} geometryRevision={motionRevision} onActivity={reportBrowserActivity} />
       </section>}
       {tabs.filter(tab => tab.kind !== "browser").map(tab => <section className="workbench-panel" role="tabpanel" id={`workbench-panel-${tab.id}`} aria-labelledby={`workbench-tab-${tab.id}`} hidden={tab.id !== active} key={tab.id} aria-label={tab.title}>
         {tab.kind === "files" && <WorkbenchFiles id={tab.id} />}

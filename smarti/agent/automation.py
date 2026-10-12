@@ -4,8 +4,29 @@ from .shared import *
 
 class AutomationMixin:
     def run_browser_action(self, payload):
-        with self.run_resource_guard("browser"):
-            return self.browser_controller.run(payload if isinstance(payload, dict) else {"action": "snapshot"})
+        context = getattr(self, "_execution_context", None)
+        session = str(getattr(context, "target_session_id", "") or "__legacy__")
+        resource = "browser:" + session if self.browser_controller._tauri_bridge_available() else "browser"
+        with self.run_resource_guard(resource):
+            args = payload if isinstance(payload, dict) else {"action": "snapshot"}
+            cancel = getattr(context, "cancel_event", None)
+            if not self.browser_controller._tauri_bridge_available() or cancel is None:
+                return self.browser_controller.run(args)
+            if cancel.is_set():
+                return "ERROR: Browser run cancelled; do not retry."
+            done = threading.Event()
+            run_id = str(getattr(context, "run_id", "") or "")
+            def watch_cancel():
+                while not done.wait(0.1):
+                    if cancel.is_set():
+                        self.browser_controller._run_tauri_bridge({"action": "stop", "sessionId": session, "runId": run_id})
+                        break
+            threading.Thread(target=watch_cancel, name="smarti-browser-cancel", daemon=True).start()
+            try:
+                result = self.browser_controller.run(args)
+                return "ERROR: Browser run cancelled; inspect state before any retry." if cancel.is_set() else result
+            finally:
+                done.set()
 
     def run_computer_automation(self, payload):
         if not self.settings.get("enable_computer_control", False):

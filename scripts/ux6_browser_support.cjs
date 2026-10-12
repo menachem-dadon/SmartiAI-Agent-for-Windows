@@ -20,7 +20,7 @@ async function browserQA(options={}) {
  assert.equal((await api('POST','/v2/management/legal',{accepted:true,version:legal.version})).status,200);
  const browser=await chromium.launch({channel:'msedge',headless:true});
  const context=await browser.newContext({viewport:{width:1380,height:900}}),page=await context.newPage();
- const calls=[];let native={tabs:[],activeTabId:null,available:true};
+ const listeners=new Map(); const calls=[];let native={tabs:[],activeTabId:null,available:true};
  await page.exposeFunction('__qaInvoke',async(cmd,args={})=>{
   calls.push(cmd);
   if(cmd==='core_api'){const r=args.request;return api(r.method,r.path,r.body);}
@@ -31,12 +31,12 @@ async function browserQA(options={}) {
   if(cmd==='browser_close_workspace'){native={...native,tabs:native.tabs.filter(t=>t.workspaceId!==args.workspaceId)};return native;}
   if(cmd==='browser_action')return{result:args.action.method==='Page.captureScreenshot'?{data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg=='}:{}};
   if(cmd==='plugin:window|is_maximized')return false;
-  if(cmd==='plugin:event|listen')return calls.length;
+  if(cmd==='plugin:event|listen'){listeners.set(calls.length,{event:args.event,handler:args.handler});return calls.length;}
   if(['browser_set_visible','browser_set_bounds','plugin:event|unlisten','desktop_finish_startup','desktop_set_close_to_tray','desktop_set_voice_hotkey','desktop_set_unread','desktop_notify'].includes(cmd))return true;
   if(options.invoke)return options.invoke(cmd,args);
   throw Error('Unadapted native IPC: '+cmd);
  });
- await page.addInitScript(()=>{let id=0;window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main',windowLabel:'main'}},transformCallback:()=>++id,unregisterCallback:()=>{},invoke:(cmd,args)=>window.__qaInvoke(cmd,args)};window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:()=>{}};});
- return{page,browser,api,handshake,calls,close:async()=>{await browser.close();host.stdin.end('shutdown\n');await Promise.race([new Promise(r=>host.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(host.exitCode===null)host.kill();}};
+ await page.addInitScript(()=>{let id=0;window.__TAURI_INTERNALS__={metadata:{currentWindow:{label:'main'},currentWebview:{label:'main',windowLabel:'main'}},transformCallback:callback=>{window.__qaCallbacks??=new Map();window.__qaCallbacks.set(++id,callback);return id;},unregisterCallback:id=>window.__qaCallbacks?.delete(id),invoke:(cmd,args)=>window.__qaInvoke(cmd,args)};window.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener:()=>{}};});
+ return{page,browser,api,handshake,calls,setNative:value=>{native=value;},emit:async(event,payload)=>{for(const [id,listener] of listeners)if(listener.event===event)await page.evaluate(({handler,id,event,payload})=>window.__qaCallbacks?.get(handler)?.({id,event,payload}),{handler:listener.handler,id,event,payload});},close:async()=>{await browser.close();host.stdin.end('shutdown\n');await Promise.race([new Promise(r=>host.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(host.exitCode===null)host.kill();}};
 }
 module.exports={browserQA};

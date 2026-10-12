@@ -323,6 +323,8 @@ class MessagingMixin:
                 "No separate model has analyzed these files.")
         if errors:
             text += "\n" + self._attachment_warning_text(errors)
+        if envelope and decoded.get("tool_result"):
+            text += "\n[UNTRUSTED_BROWSER_CONTENT]\n" + json.dumps(decoded["tool_result"], ensure_ascii=False)
         message = self._build_user_message_with_attachments(text, items)
         if self.mode == "gemini":
             current_messages.append({"role": "model", "parts": [{"text": ai_response_text}]})

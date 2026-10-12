@@ -239,7 +239,10 @@ class LiveResponse:
             if closing:
                 # Remove framing only. A literal marker in the following tool
                 # arguments must remain byte-for-byte intact.
-                raw = raw[:closing.start()] + raw[closing.end():]
+                # Preserve the framing boundary for the tool scanner when the
+                # provider places JSON immediately after the report marker.
+                tail = raw[closing.end():]
+                raw = raw[:closing.start()] + ("\n" + tail if tail else "")
             else:
                 for length in range(len(closing_tag) - 1, 0, -1):
                     if raw.lower().endswith(closing_tag[:length]):
@@ -291,7 +294,7 @@ class LiveResponse:
                 # Do not release an undecided JSON prefix. Once classified as a
                 # non-tool object, let normal code/table rendering handle it.
                 if is_call or (not final and undecided and not example):
-                    raw = raw[:match.start()]
+                    raw = raw[:match.start()].rstrip()
             elif not final:
                 raw = re.sub(r'(?:^|\n)\s*`{1,3}(?:j(?:s(?:o(?:n)?)?)?)?\s*$', '', raw)
         # Filter decoded structured answers too, including JSON-escaped tags.

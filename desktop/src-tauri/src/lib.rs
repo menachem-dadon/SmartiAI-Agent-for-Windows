@@ -1518,6 +1518,8 @@ pub fn run() {
             browser::browser_navigate,
             browser::browser_reload,
             browser::browser_action,
+            browser::agent::browser_agent_control,
+            browser::agent::browser_presentation_ack,
             browser::browser_metadata,
             browser::browser_open_devtools,
             browser::browser_clear_guest,
@@ -1581,7 +1583,7 @@ pub fn run() {
         .expect("error while building SmartiAI desktop application");
     app.run(|handle, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-            handle.state::<browser::BrowserBroker>().cleanup_guest();
+            handle.state::<browser::BrowserBroker>().shutdown();
             handle.state::<CoreSupervisor>().stop(Some(handle));
         }
     });

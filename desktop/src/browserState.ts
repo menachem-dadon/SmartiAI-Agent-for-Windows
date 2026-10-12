@@ -1,6 +1,7 @@
 export type BrowserProfile = "persistent" | "guest";
 export type BrowserTab = { tabId: string; workspaceId?: string; targetId: string; webviewLabel: string; profile: BrowserProfile; url: string; title: string; loading: boolean; active: boolean; crashed: boolean; pinned: boolean; faviconUrl: string; audioPlaying: boolean };
-export type BrowserSnapshot = { tabs: BrowserTab[]; activeTabId: string | null; transport: "webview2-in-process-cdp"; remoteDebuggingPort: number | null };
+export type BrowserAgentActivity = { tabId: string; workspaceId: string; sessionId: string; action: string; state: "running" | "ready" | "paused" | "stopped" | "error"; presentation: "preview" | "hidden" | "visible" };
+export type BrowserSnapshot = { tabs: BrowserTab[]; activeTabId: string | null; transport: "webview2-in-process-cdp"; remoteDebuggingPort: number | null; agent?: BrowserAgentActivity | null; agents?: BrowserAgentActivity[] };
 // Rust's browser_status reports tabs as an array. Older count-shaped data is
 // accepted defensively; missing or malformed status is unknown, never zero.
 export function browserTargetCount(snapshot: unknown): number | null {
