@@ -172,6 +172,48 @@ test("a real live transport failure keeps its reconnect state and recovers throu
 });
 
 describe("settings synchronization through the real API client", () => {
+  test.each([false, true])("preserves sidebar preference %s through zero-size minimize and restore", async (collapsed) => {
+    values.ui_preferences.workspace_sidebar_collapsed = collapsed;
+    await start();
+    const drawer = () => document.querySelector(".conversation-drawer")!;
+    await waitFor(() => expect(drawer().classList.contains("is-open")).toBe(!collapsed));
+    const preferences = structuredClone(values.ui_preferences);
+    for (const [width, height] of [[0, 0], [1800, 900]]) {
+      vi.stubGlobal("innerWidth", width);
+      vi.stubGlobal("innerHeight", height);
+      await act(async () => {
+        fireEvent.resize(window);
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      });
+      expect(drawer().classList.contains("is-open")).toBe(!collapsed);
+      expect(document.querySelector(".workspace")?.classList.contains("is-overlay-layout")).toBe(false);
+      expect(values.ui_preferences).toEqual(preferences);
+    }
+  });
+
+  test("ignores hidden viewport changes and applies real narrow resizing on return", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    await start();
+    const drawer = () => document.querySelector(".conversation-drawer")!;
+    expect(drawer().classList.contains("is-open")).toBe(true);
+    visibility.mockReturnValue("hidden");
+    vi.stubGlobal("innerWidth", 900);
+    await act(async () => {
+      fireEvent(document, new Event("visibilitychange"));
+      fireEvent.resize(window);
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    });
+    expect(drawer().classList.contains("is-open")).toBe(true);
+    visibility.mockReturnValue("visible");
+    fireEvent(document, new Event("visibilitychange"));
+    await waitFor(() => expect(drawer().classList.contains("is-open")).toBe(false));
+    expect(document.querySelector(".workspace")?.classList.contains("is-overlay-layout")).toBe(true);
+    vi.stubGlobal("innerWidth", 1800);
+    fireEvent.resize(window);
+    await waitFor(() => expect(drawer().classList.contains("is-open")).toBe(true));
+    expect(values.ui_preferences.workspace_sidebar_collapsed).toBeUndefined();
+  });
+
   test("automatic update discovery records success and displays the available version", async () => {
     values.updates_auto_check = true;
     await start();

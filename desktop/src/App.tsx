@@ -289,7 +289,7 @@ export default function App() {
   const [initialWorkbench] = useState(readWorkbenchSession);
   const [workbenchExpanded, setWorkbenchExpanded] = useState(initialWorkbench.expanded);
   const workbenchTrigger = useRef<HTMLButtonElement>(null);
-  const chatMotionRef = useChatLayoutMotion(`${workspace.workbenchOpen}:${workspace.conversationDrawerOpen}:${narrowWorkspace}:${workbenchExpanded}`);
+  const chatMotionRef = useChatLayoutMotion(`${workspace.workbenchOpen}:${workspace.conversationDrawerOpen}:${narrowWorkspace}:${workbenchExpanded}`, workspaceResizing);
   const [uiPreferences, setUiPreferences] = useState<Record<string, unknown>>(
     {},
   );
@@ -583,6 +583,7 @@ export default function App() {
     let frame = 0;
     let settled = 0;
     const applyResponsiveLayout = (syncWidePreference: boolean) => {
+      if (document.visibilityState === "hidden" || innerWidth <= 0 || innerHeight <= 0) return;
       const width = innerWidth;
       const narrow = workspaceIsNarrow(width);
       const breakpointChanged = narrowWorkspaceRef.current !== narrow;
@@ -599,6 +600,7 @@ export default function App() {
         });
     };
     const responsive = () => {
+      if (document.visibilityState === "hidden" || innerWidth <= 0 || innerHeight <= 0) return;
       setWorkspaceResizing(true);
       cancelAnimationFrame(frame);
       clearTimeout(settled);
@@ -608,10 +610,12 @@ export default function App() {
     setWorkspaceResizing(false);
     applyResponsiveLayout(true);
     window.addEventListener("resize", responsive);
+    document.addEventListener("visibilitychange", responsive);
     return () => {
       cancelAnimationFrame(frame);
       clearTimeout(settled);
       window.removeEventListener("resize", responsive);
+      document.removeEventListener("visibilitychange", responsive);
     };
   }, [uiPreferences.workspace_sidebar_collapsed]);
   useEffect(() => {
