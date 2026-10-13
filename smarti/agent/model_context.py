@@ -1,5 +1,6 @@
 """Model setup, chat/session state, settings, secrets, usage budgets, system prompt, and API retry."""
 from .shared import *
+from ..prompt_cache import openai_cache_controls, remove_openai_cache_controls, cache_usage_metrics
 from smarti.user_language import user_description
 from types import SimpleNamespace
 from random import uniform
@@ -2485,6 +2486,23 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
         if live and purpose == "agent":
             live.finish(response_text, has_tools=bool(live.calls))
         duration_ms = int(max(0.0, time.monotonic() - started_at) * 1000)
+        if usage.get("prompt"):
+            context = getattr(self, "_execution_context", None)
+            task_id = str(getattr(context, "current_task_id", "") or request_id)
+            key = (task_id, provider, model, purpose)
+            previous = getattr(context, "cache_measurements", None) if context else None
+            groups = previous[1] if previous and previous[0] == task_id else {}
+            totals = groups.setdefault((provider, model, purpose), {})
+            metrics = cache_usage_metrics(usage, totals)
+            if context is not None:
+                context.cache_measurements = (task_id, groups)
+                context.cache_measurement = (key, totals)
+            logging.info("API CACHE | task_id=%s | request_id=%s | provider=%s | model=%s | "
+                "purpose=%s | duration_ms=%s | input=%s | cached=%s | written=%s | uncached=%s | "
+                "hit_percent=%s | sequence=%s | sequence_hit_percent=%s",
+                task_id, request_id, provider, model, purpose, duration_ms,
+                metrics["prompt"], metrics["cached"], metrics["written"], metrics["uncached"],
+                metrics["hit_percent"], metrics["sequence"], metrics["sequence_hit_percent"])
         logging.info(
             "API SUCCESS | request_id=%s | provider=%s | model=%s | purpose=%s | "
             "attempt=%s | duration_ms=%s | response_chars=%s | prompt_tokens=%s | "
@@ -2655,6 +2673,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         cancel_event=getattr(getattr(self, "_execution_context", None), "cancel_event", None),
                         purpose=request_purpose,
                         session_key=(str(getattr(getattr(self, "_execution_context", None), "current_task_id", "") or "") if request_purpose == "agent" else None),
+                        **({"context_window_tokens": self._model_context_window_tokens(current_model)} if request_purpose == "agent" and hasattr(self, "_model_context_window_tokens") else {}),
                         **({"stream": self._current_stream} if self._current_stream else {}),
                     )
                     return self._log_api_request_success(
@@ -2784,17 +2803,25 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                             if request_options.get("max_output_tokens") else None,
                         )
                         response_options["timeout"] = self._sdk_transport_timeout(request_mode)
+                        if cache_controls_allowed:
+                            openai_cache_controls(response_options, current_model, request_purpose,
+                                str(getattr(getattr(self, "_execution_context", None), "current_task_id", "") or ""),
+                                message_field="input")
                         if self._current_stream:
                             response_options["stream"] = True
-                        try:
-                            response = self._run_cancelable_callable(lambda: self._collect_responses_stream(request_client.responses.create(**response_options)) if response_options.get("stream") else request_client.responses.create(**response_options))
-                        except Exception as response_error:
-                            if not native_specs or not self._native_tools_unsupported(response_error):
-                                raise
-                            self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, analyze_api_error(request_mode, current_model, error=response_error), response_error)
-                            response_options.pop("tools", None)
-                            response_options["input"].insert(0, {"role": "system", "content": self._native_tool_text_fallback_contract(native_specs)})
-                            response = self._run_cancelable_callable(lambda: self._collect_responses_stream(request_client.responses.create(**response_options)) if response_options.get("stream") else request_client.responses.create(**response_options))
+                        while True:
+                            try:
+                                response = self._run_cancelable_callable(lambda: self._collect_responses_stream(request_client.responses.create(**response_options)) if response_options.get("stream") else request_client.responses.create(**response_options))
+                                break
+                            except Exception as response_error:
+                                if ("prompt_cache_key" in response_options or "prompt_cache_options" in response_options.get("extra_body", {})) and self._prompt_cache_controls_unsupported(response_error):
+                                    remove_openai_cache_controls(response_options, message_field="input")
+                                    continue
+                                if not response_options.get("tools") or not self._native_tools_unsupported(response_error):
+                                    raise
+                                self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, analyze_api_error(request_mode, current_model, error=response_error), response_error)
+                                response_options.pop("tools", None)
+                                response_options["input"].insert(0, {"role": "system", "content": self._native_tool_text_fallback_contract(native_specs)})
                         response_text, native_calls, usage_dict, finish, blocked = openai_responses_result(response, current_model)
                         self._check_generated_response(request_mode, current_model, response_text, native_calls, finish, blocked)
                         result = (self._canonical_native_tool_response(native_calls, response_text) if native_calls else response_text), usage_dict
@@ -2820,53 +2847,9 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         completion_kwargs["max_completion_tokens" if openai_reasoning_model else "max_tokens"] = self._model_output_token_limit(
                             request_mode, current_model, request_messages, request_options,
                         )
-                    openai_paid_cache_writes = str(current_model or "").lower().startswith(
-                        "gpt-5.6"
-                    )
-                    if cache_controls_allowed and request_mode == "openai" and openai_paid_cache_writes:
-                        # Newer OpenAI models bill cache writes. Disable the
-                        # implicit latest-message breakpoint, then opt in only
-                        # after the turn has clearly become multi-step.
-                        # The wire API supports this before all installed SDK
-                        # versions expose it as a named argument.
-                        completion_kwargs["extra_body"] = {"prompt_cache_options": {"mode": "explicit"}}
-                        feedback_rounds = sum(
-                            1
-                            for message in request_messages
-                            if any(
-                                marker in self._message_text_for_budget(message)
-                                for marker in (
-                                    "UNTRUSTED_TOOL_OUTPUT",
-                                    "SMARTI_PARALLEL_TOOL_RESULTS",
-                                )
-                            )
-                        )
-                        if request_purpose == "agent" and feedback_rounds >= 2:
-                            cache_messages = copy.deepcopy(list(request_messages))
-                            for message in cache_messages:
-                                if (
-                                    isinstance(message, dict)
-                                    and message.get("role") == "system"
-                                    and isinstance(message.get("content"), str)
-                                    and message.get("content")
-                                ):
-                                    message["content"] = [{
-                                        "type": "text",
-                                        "text": message["content"],
-                                        "prompt_cache_breakpoint": {"mode": "explicit"},
-                                    }]
-                                    completion_kwargs["messages"] = cache_messages
-                                    task_id = str(
-                                        getattr(
-                                            getattr(self, "_execution_context", None),
-                                            "current_task_id",
-                                            "",
-                                        )
-                                        or ""
-                                    ).strip()
-                                    if task_id:
-                                        completion_kwargs["prompt_cache_key"] = f"smarti:{task_id}"
-                                    break
+                    if cache_controls_allowed and request_mode == "openai":
+                        openai_cache_controls(completion_kwargs, current_model, request_purpose,
+                            str(getattr(getattr(self, "_execution_context", None), "current_task_id", "") or ""))
                     if native_specs:
                         completion_kwargs["tools"] = [{
                             "type": "function",
@@ -2910,13 +2893,11 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                                 completion_kwargs["stream"] = True
                                 continue
                             if (
-                                "prompt_cache_options" in (completion_kwargs.get("extra_body") or {})
+                                ("prompt_cache_key" in completion_kwargs or "prompt_cache_options" in (completion_kwargs.get("extra_body") or {}))
                                 and self._prompt_cache_controls_unsupported(request_error)
                             ):
                                 self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, compatibility_analysis, request_error)
-                                completion_kwargs.pop("extra_body", None)
-                                completion_kwargs.pop("prompt_cache_key", None)
-                                completion_kwargs["messages"] = request_messages
+                                remove_openai_cache_controls(completion_kwargs)
                                 continue
                             if "tools" in completion_kwargs and self._native_tools_unsupported(request_error):
                                 self._log_api_request_failure(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, compatibility_analysis, request_error)

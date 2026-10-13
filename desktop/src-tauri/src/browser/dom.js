@@ -15,7 +15,8 @@
   const visible = el => {const r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&s.opacity!=='0';};
   const info = el => {
     const r=el.getBoundingClientRect();
-    return {role:role(el),name:name(el),tag:el.tagName.toLowerCase(),visible:visible(el),enabled:!el.disabled&&el.getAttribute('aria-disabled')!=='true',editable:el.isContentEditable||(!el.readOnly&&(el.tagName==='TEXTAREA'||el.tagName==='INPUT'&&!['checkbox','radio','button','submit','reset','file','range','hidden'].includes(el.type))),checked:el.checked??el.getAttribute('aria-checked'),value:el.type==='password'?'[redacted]':('value' in el?String(el.value).slice(0,500):undefined),options:el.tagName==='SELECT'?[...el.options].slice(0,100).map(o=>({value:o.value,label:o.label,selected:o.selected,disabled:o.disabled})):undefined,href:el.tagName==='A'?el.href:undefined,box:{x:r.x,y:r.y,width:r.width,height:r.height}};
+    const parent=el.parentElement||el.getRootNode().host;
+    return {role:role(el),name:name(el),tag:el.tagName.toLowerCase(),level:/^H[1-6]$/.test(el.tagName)?Number(el.tagName[1]):undefined,parentRole:parent?role(parent):undefined,visible:visible(el),enabled:!el.disabled&&el.getAttribute('aria-disabled')!=='true',editable:el.isContentEditable||(!el.readOnly&&(el.tagName==='TEXTAREA'||el.tagName==='INPUT'&&!['checkbox','radio','button','submit','reset','file','range','hidden'].includes(el.type))),checked:el.checked??el.getAttribute('aria-checked'),value:el.type==='password'?'[redacted]':('value' in el?String(el.value):undefined),options:el.tagName==='SELECT'?[...el.options].map(o=>({value:o.value,label:o.label,selected:o.selected,disabled:o.disabled})):undefined,href:el.tagName==='A'?el.href:undefined,box:{x:r.x,y:r.y,width:r.width,height:r.height}};
   };
   const resolve = () => {
     if (request.snapshotEpoch && request.snapshotEpoch !== state.epoch || request.refEpoch && request.refEpoch !== state.epoch) throw Error('STALE_REF: request a new snapshot');
@@ -36,14 +37,24 @@
     for(const [ref,el] of state.refs)if(!el.isConnected)state.refs.delete(ref);
     const reverse=new Map([...state.refs].map(([ref,el])=>[el,ref]));
     const refs={};
-    for(const el of elements.slice(offset,offset+max)){let ref=reverse.get(el);if(!ref){ref=`e${state.epoch.replaceAll('-','').slice(0,12)}-${++state.sequence}`;state.refs.set(ref,el);}refs[ref]={ref,...info(el)};}
-    const text=document.body?.innerText||'',textOffset=Math.max(0,Number(request.textOffset||0)),chars=Math.min(24000,Math.max(0,Number(request.bodyChars??8000)));
-    return {snapshotEpoch:state.epoch,title:document.title,url:location.href,readyState:document.readyState,bodyText:text.slice(textOffset,textOffset+chars),textOffset,textLength:text.length,textTruncated:textOffset+chars<text.length,refs,snapshot:Object.values(refs).map(e=>`${e.ref} ${e.role} ${JSON.stringify(e.name)}${e.enabled?'':' [disabled]'}${e.checked===true?' [checked]':''}`).join('\n'),offset,total:elements.length,hasMore:offset+max<elements.length,frames:all('iframe,frame').map(el=>({name:el.name,src:el.src,title:el.title})),dir:document.dir||getComputedStyle(document.documentElement).direction};
+    for(const el of elements.slice(offset,offset+max)){let ref=reverse.get(el);if(!ref){ref=`e${state.epoch.replaceAll('-','').slice(0,12)}-${++state.sequence}`;state.refs.set(ref,el);reverse.set(el,ref);}refs[ref]={ref,...info(el)};}
+    for(const el of elements.slice(offset,offset+max)){let parent=el.parentElement||el.getRootNode().host;while(parent){const ref=reverse.get(parent);if(ref){refs[reverse.get(el)].parentRef=ref;break;}parent=parent.parentElement||parent.getRootNode().host;}}
+    const originalText=document.body?.innerText||'';
+    let text=originalText,removedAds=0;
+    if(request.detail!=='full')for(const ad of all('ins.adsbygoogle,[data-ad-slot],[data-google-query-id]')){
+      // Explicit ad-provider markers only. Never infer ads from words, banner
+      // roles, or CSS class substrings; preserve forms and dialogs even here.
+      if(ad.closest('form,[contenteditable=true],[role=dialog]')||ad.querySelector('form,input,textarea,[contenteditable=true],[role=dialog]'))continue;
+      const value=ad.innerText?.trim();
+      if(value&&text.indexOf(value)>=0&&text.indexOf(value)===text.lastIndexOf(value)){text=text.replace(value,'');removedAds++;}
+    }
+    const textOffset=Math.max(0,Number(request.textOffset||0)),chars=request.bodyChars===undefined?text.length:Math.max(0,Number(request.bodyChars));
+    return {snapshotEpoch:state.epoch,title:document.title,url:location.href,readyState:document.readyState,bodyText:text.slice(textOffset,textOffset+chars),textOffset,textLength:text.length,textTruncated:textOffset+chars<text.length,...(removedAds?{originalBodyText:originalText,contentFilter:{removedAds,originalTextLength:originalText.length}}:{}),refs,snapshot:Object.values(refs).map(e=>`${e.ref} ${e.role} ${JSON.stringify(e.name)}${e.enabled?'':' [disabled]'}${e.checked===true?' [checked]':''}`).join('\n'),offset,total:elements.length,hasMore:offset+max<elements.length,frames:all('iframe,frame').map(el=>({name:el.name,src:el.src,title:el.title})),dir:document.dir||getComputedStyle(document.documentElement).direction};
   };
   if(request.op==='snapshot')return snapshot();
   if(request.op==='text'){
     const text=request.selector||request.ref||request.role||request.textSelector?resolve().innerText:document.body?.innerText||'';
-    const offset=Math.max(0,Number(request.offset||0)),limit=Math.min(24000,Math.max(1,Number(request.limit||8000)));
+    const offset=Math.max(0,Number(request.offset||0)),limit=request.limit===undefined?text.length:Math.max(1,Number(request.limit));
     return {text:text.slice(offset,offset+limit),offset,total:text.length,hasMore:offset+limit<text.length};
   }
   const el=resolve();

@@ -58,6 +58,7 @@ class CodexSessionTests(unittest.TestCase):
         self.script = root / "server.py"
         self.script.write_text(SERVER, encoding="utf-8")
         self.logs, self.processes = [], []
+        self.commands = []
         self.behavior = "normal"
         self.provider = CodexSignInProvider(root)
         self.provider._environment = lambda: dict(os.environ, CODEX_HOME=str(root))
@@ -66,6 +67,7 @@ class CodexSessionTests(unittest.TestCase):
         launch_lock = threading.Lock()
 
         def launch(_command, **options):
+            self.commands.append(_command)
             with launch_lock:
                 log = root / f"rpc-{len(self.logs)}.jsonl"
                 self.logs.append(log)
@@ -130,6 +132,15 @@ class CodexSessionTests(unittest.TestCase):
                 self.assertIn(changed[1]["content"], turn["params"]["input"][0]["text"])
                 self.cleanup_sessions()
 
+    def test_model_window_and_85_percent_threshold_are_local_process_overrides(self):
+        complete_stream(self.provider, self.messages, 'test-model', 5, 'low', None,
+                        LiveResponse(), SMARTI_TURN_OUTPUT_SCHEMA, session_key='window-run', context_window_tokens=1000000)
+        command = self.commands[-1]
+        self.assertIn('model_context_window=1000000', command)
+        self.assertIn('model_auto_compact_token_limit=850000', command)
+        self.assertIn('memories.use_memories=false', command)
+        self.assertFalse((Path(self.directory.name) / 'config.toml').exists())
+
     def test_parallel_runs_have_independent_context_and_cleanup(self):
         errors = []
         def run(key):
@@ -190,7 +201,7 @@ class CodexSessionTests(unittest.TestCase):
         incoming.put(json.dumps({'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}}))
         _, usage = _read_turn(self.provider, None, incoming, lambda _: None, time.monotonic() + 2,
                               'fixture-thread', None, LiveResponse(), 'test-model', usage_totals=totals)
-        self.assertEqual(usage, {'prompt': 100, 'cached_prompt': 100, 'completion': 100, 'total': 200, 'reasoning': 0})
+        self.assertEqual(usage, {'prompt': 100, 'cached_prompt': 100, 'completion': 100, 'total': 200, 'reasoning': 0, 'context_prompt': 50})
         self.assertEqual(totals['inputTokens'], 1100)
 
 

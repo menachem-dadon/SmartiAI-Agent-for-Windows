@@ -1019,16 +1019,25 @@ class AgentToolLoopRegressionTests(unittest.TestCase):
         self.core.settings = {}
         self.core.agent_runtime = AgentRuntime(self.core)
 
-    def test_large_model_capacity_uses_bounded_working_context(self):
+    def test_compaction_uses_85_percent_of_model_window_even_with_legacy_settings(self):
         self.core.mode = 'openai_codex_signin'
         self.core.settings.update(agent_model_context_window_overrides={'gpt-6.1-sol': 1050000})
         limits = self.core._context_compaction_limits('gpt-6.1-sol')
-        self.assertEqual(limits['window'], 128000)
-        self.assertEqual(limits['trigger'], 104960)
+        self.assertEqual(limits['window'], 1050000)
+        self.assertEqual(limits['trigger'], 892500)
+        self.core.settings['agent_context_compaction_trigger_ratio'] = .82
         self.core.settings['agent_context_working_set_tokens'] = 'invalid'
         self.assertEqual(self.core._context_compaction_limits('gpt-6.1-sol'), limits)
         self.core.settings['agent_context_working_set_tokens'] = 0
-        self.assertGreater(self.core._context_compaction_limits('gpt-6.1-sol')['window'], 128000)
+        self.assertEqual(self.core._context_compaction_limits('gpt-6.1-sol'), limits)
+        for window in (2048, 4096, 8192, 128000, 200000, 1000000):
+            self.core.settings['agent_model_context_window_overrides'] = {'gpt-6.1-sol': window}
+            limit = self.core._context_compaction_limits('gpt-6.1-sol')
+            self.assertEqual(limit['trigger'], int(window * .85))
+            with mock.patch.object(self.core, '_estimate_context_tokens', return_value=limit['trigger'] - 1):
+                self.assertFalse(self.core._context_pressure([], 'gpt-6.1-sol')['needed'])
+            with mock.patch.object(self.core, '_estimate_context_tokens', return_value=limit['trigger']):
+                self.assertTrue(self.core._context_pressure([], 'gpt-6.1-sol')['needed'])
 
     def test_read_only_email_calls_are_safe_for_model_directed_retries(self):
         self.assertFalse(self.core._tool_is_mutating_or_control("email_manager", {"action": "search"}))

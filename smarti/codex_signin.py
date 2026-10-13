@@ -900,6 +900,7 @@ class CodexSignInProvider:
         purpose: str = "agent",
         stream=None,
         session_key=None,
+        context_window_tokens=None,
     ) -> tuple[str, dict]:
         """Use run-scoped App Server turns; isolated exec for standalone/fallback calls."""
         with self._stream_sessions_lock:
@@ -921,7 +922,7 @@ class CodexSignInProvider:
             stream = stream or LiveResponse()
             from .codex_stream import complete_stream
             try:
-                return complete_stream(self, messages, selected_model, timeout, selected_reasoning_effort, cancel_event, stream, SMARTI_TURN_OUTPUT_SCHEMA, session_key=session_key)
+                return complete_stream(self, messages, selected_model, timeout, selected_reasoning_effort, cancel_event, stream, SMARTI_TURN_OUTPUT_SCHEMA, session_key=session_key, context_window_tokens=context_window_tokens)
             except CodexSignInError as error:
                 if error.reason != "stream_unsupported" or stream.visible or stream.calls:
                     raise

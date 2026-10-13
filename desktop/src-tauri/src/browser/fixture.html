@@ -12,4 +12,8 @@ document.querySelector('#trusted').addEventListener('click',e=>{document.querySe
 document.querySelector('#message').addEventListener('input',e=>document.body.dataset.typed=e.target.value);
 document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML='<button id="shadow-button">צל</button>';
 console.log('fixture-console');setTimeout(()=>{throw Error('fixture-error');},600);
+const article=document.createElement('article');article.textContent='Complete useful paragraph. '.repeat(400)+'ARTICLE_FINAL_MARKER';
+const ad=document.createElement('ins');ad.className='adsbygoogle';ad.textContent='EXPLICIT_AD_MARKER';document.body.append(ad);
+const banner=document.createElement('aside');banner.setAttribute('role','banner');banner.textContent='LEGITIMATE_BANNER_MARKER';document.body.append(banner,article);
+const form=document.createElement('form');form.innerHTML='<ins class="adsbygoogle">FORM_KEEP_MARKER</ins>';document.body.insertBefore(form,article);
 </script></html>

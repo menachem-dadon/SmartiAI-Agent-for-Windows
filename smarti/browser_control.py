@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from .common import SMARTI_BROWSER_DEBUG_PORT, WIN_CREATE_NO_WINDOW
+from .common import SMARTI_BROWSER_DEBUG_PORT, WIN_CREATE_NO_WINDOW, redact_secret_values
 
 
 UNTRUSTED_BROWSER_PREFIX = "[UNTRUSTED_BROWSER_CONTENT]\n"
@@ -143,27 +143,46 @@ class SmartiBrowserController:
 
     @staticmethod
     def _compact_page(page):
-        """Keep all returned targets/options and prose, omit duplicate layout data."""
+        """Keep layout, structure and text; remove only an exact generated duplicate."""
         page = dict(page)
+        page.pop("originalBodyText", None)  # Retained before filtering below.
         refs = page.get("refs")
         if isinstance(refs, dict):
-            fields = {"role", "name", "href", "value", "options", "checked", "editable"}
             page["refs"] = {
-                ref: {**{k: v for k, v in data.items() if k in fields and v is not None},
-                      **{k: False for k in ("visible", "enabled") if data.get(k) is False}}
-                for ref, data in refs.items() if isinstance(data, dict)
+                ref: {k: v for k, v in data.items() if not (k == "ref" and v == ref)}
+                if isinstance(data, dict) else data
+                for ref, data in refs.items()
             }
-            page.pop("snapshot", None)  # Same names/refs, already present above.
-            page.pop("accessibility", None)  # Raw AX wrappers duplicate the DOM observation.
+            # Remove the text rendering only if it is exactly reproducible from
+            # the retained refs. An AX tree or an enriched snapshot is not a duplicate.
+            rendered = "\n".join(
+                f'{ref} {data.get("role")} {json.dumps(data.get("name"), ensure_ascii=False, separators=(",", ":"))}'
+                + ("" if data.get("enabled") else " [disabled]")
+                + (" [checked]" if data.get("checked") is True else "")
+                for ref, data in refs.items() if isinstance(data, dict)
+            )
+            if page.get("snapshot") == rendered:
+                page.pop("snapshot")
         return page
 
     def _json(self, payload, *, detail="compact"):
         if isinstance(payload, dict) and payload.get("protocolVersion") == 2 and detail != "full":
+            source = payload
             original = payload
+            # The native observer returns unfiltered text alongside carefully
+            # filtered prose. Store the original, not a second filtered copy.
+            for key in ("page", "result"):
+                page = original.get(key)
+                if isinstance(page, dict) and "originalBodyText" in page:
+                    original = dict(original)
+                    page = original[key] = dict(page)
+                    page["bodyText"] = page.pop("originalBodyText")
+                    page["textOffset"], page["textLength"], page["textTruncated"] = 0, len(page["bodyText"]), False
+                    page.pop("contentFilter", None)
             payload = dict(payload)
             if isinstance(payload.get("page"), dict):
                 payload["page"] = self._compact_page(payload["page"])
-                if isinstance(payload.get("result"), dict) and "snapshotEpoch" in payload["result"]:
+                if "result" in source and source["result"] == source["page"]:
                     payload.pop("result")  # Navigation/start returned the same observation twice.
             elif isinstance(payload.get("result"), dict) and "snapshotEpoch" in payload["result"]:
                 payload["result"] = self._compact_page(payload["result"])
@@ -178,11 +197,11 @@ class SmartiBrowserController:
                         # The browser action already happened. Preserve the
                         # observation instead of making a mutation look failed.
                         payload = original
-                        return self.core._truncate_tool_output(
-                            UNTRUSTED_BROWSER_PREFIX + json.dumps(payload, ensure_ascii=False, separators=(",", ":")), retain=False
-                        )
-        return self.core._truncate_tool_output(
-            UNTRUSTED_BROWSER_PREFIX + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+        # Keep JSON intact even beyond the generic tool preview limit. Semantic
+        # context compaction, not a character slice, governs model input.
+        return redact_secret_values(
+            UNTRUSTED_BROWSER_PREFIX + json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+            self.core.settings,
         )
 
     def _tauri_bridge_available(self):
@@ -195,8 +214,6 @@ class SmartiBrowserController:
         port = int(os.environ["SMARTI_TAURI_BROWSER_BROKER_PORT"])
         token = os.environ["SMARTI_TAURI_BROWSER_BROKER_TOKEN"]
         payload = dict(payload or {})
-        if payload.get("detail", "compact") != "full":
-            payload.setdefault("bodyChars", 2000)
         if self._normalize_action(payload.get("action")) == "click" and payload.get("expectDownload"):
             payload["action"] = "download"
         payload.setdefault("requestId", uuid.uuid4().hex)

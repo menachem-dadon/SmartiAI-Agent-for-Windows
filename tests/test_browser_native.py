@@ -122,12 +122,15 @@ class NativeBrowserTests(unittest.TestCase):
         self.core._tool_output_writer_factory = lambda: lambda: writer
         compact = self.controller._json(payload)
         result = json.loads(compact.removeprefix(UNTRUSTED_BROWSER_PREFIX))
-        self.assertLess(len(compact), len(json.dumps(payload)) * .4)
+        self.assertLess(len(compact), len(json.dumps(payload)))
         self.assertEqual(set(result['page']['refs']), set(refs))
         self.assertEqual(result['page']['refs']['select']['options'], refs['select']['options'])
         self.assertFalse(result['page']['refs']['select']['enabled'])
         self.assertTrue(result['page']['hasMore'])
         self.assertEqual(result['page']['bodyText'], 'page prose')
+        self.assertEqual(result['page']['refs']['e0']['box'], refs['e0']['box'])
+        self.assertEqual(result['page']['accessibility'], page['accessibility'])
+        self.assertEqual(result['page']['snapshot'], page['snapshot'])
         self.assertNotIn('result', result)
         self.assertEqual(result['fullOutput']['output_id'], writer.output_id)
         retained = json.loads(writer.write.call_args.args[0].removeprefix(UNTRUSTED_BROWSER_PREFIX))
@@ -142,8 +145,8 @@ class NativeBrowserTests(unittest.TestCase):
         result = self.controller._json(payload)
         self.assertEqual(json.loads(result.removeprefix(UNTRUSTED_BROWSER_PREFIX)), payload)
 
-    def test_default_body_excerpt_is_small_and_explicit_full_or_size_is_preserved(self):
-        for arguments, expected in (({}, 2000), ({'bodyChars': 12345}, 12345), ({'detail': 'full'}, None)):
+    def test_default_body_text_is_unrestricted_and_explicit_paging_is_preserved(self):
+        for arguments, expected in (({}, None), ({'bodyChars': 12345}, 12345), ({'detail': 'full'}, None)):
             with mock.patch('smarti.browser_control._open_native_request', return_value=self.response({'ok': True})) as opened:
                 self.controller.run({'action': 'snapshot', **arguments})
             sent = json.loads(opened.call_args.args[0].data)
@@ -178,7 +181,7 @@ class NativeBrowserTests(unittest.TestCase):
         session = core.chat_store.active_session()['id']
         core._execution_context = types.SimpleNamespace(target_session_id=session)
         controller = SmartiBrowserController(core)
-        payload = {'protocolVersion': 2, 'ok': True, 'result': {'snapshotEpoch': 'epoch', 'refs': {}, 'snapshot': 'complete untrusted fixture observation'}}
+        payload = {'protocolVersion': 2, 'ok': True, 'result': {'snapshotEpoch': 'epoch', 'refs': {}, 'snapshot': '', 'bodyText': 'complete untrusted fixture observation'}}
         value = json.loads(controller._json(payload).removeprefix(UNTRUSTED_BROWSER_PREFIX))
         handle = value['fullOutput']['output_id']
         full = core.read_tool_output({'output_id': handle, 'limit': 5000})
@@ -188,6 +191,25 @@ class NativeBrowserTests(unittest.TestCase):
             self.assertNotIn(b'complete untrusted fixture', encrypted)
         core._execution_context.target_session_id = core.chat_store.create_session(set_active=False)['id']
         self.assertIn('not found in this conversation', core.read_tool_output({'output_id': handle}))
+
+    def test_large_observation_stays_valid_json_and_distinct_results_are_preserved(self):
+        page = {'snapshotEpoch': 'epoch', 'refs': {}, 'bodyText': 'useful article\n' * 10000}
+        payload = {'protocolVersion': 2, 'page': page, 'result': {'snapshotEpoch': 'epoch', 'verification': 'distinct result'}}
+        self.core.settings['max_tool_output_chars'] = 1000
+        parsed = json.loads(self.controller._json(payload).removeprefix(UNTRUSTED_BROWSER_PREFIX))
+        self.assertEqual(parsed, payload)
+
+    def test_ad_filter_retains_unfiltered_text_for_original_retrieval(self):
+        page = {'snapshotEpoch': 'epoch', 'refs': {}, 'bodyText': 'article', 'originalBodyText': 'article\nadvertisement',
+                'textOffset': 0, 'textLength': 7, 'textTruncated': False, 'contentFilter': {'removedAds': 1}}
+        writer = mock.Mock(output_id='a' * 32)
+        self.core._tool_output_writer_factory = lambda: lambda: writer
+        parsed = json.loads(self.controller._json({'protocolVersion': 2, 'result': page}).removeprefix(UNTRUSTED_BROWSER_PREFIX))
+        self.assertEqual(parsed['result']['bodyText'], 'article')
+        self.assertNotIn('originalBodyText', parsed['result'])
+        original = json.loads(writer.write.call_args.args[0].removeprefix(UNTRUSTED_BROWSER_PREFIX))
+        self.assertEqual(original['result']['bodyText'], 'article\nadvertisement')
+        self.assertEqual(original['result']['textLength'], len('article\nadvertisement'))
 
 
 if __name__ == "__main__":

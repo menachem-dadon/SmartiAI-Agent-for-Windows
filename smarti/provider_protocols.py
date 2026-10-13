@@ -62,6 +62,7 @@ def openai_responses_result(response, model):
         "completion": int(usage.get("output_tokens", 0) or 0),
         "total": int(usage.get("total_tokens", 0) or 0),
         "cached_prompt": int((usage.get("input_tokens_details") or {}).get("cached_tokens", 0) or 0),
+        "cache_write_prompt": int((usage.get("input_tokens_details") or {}).get("cache_write_tokens", 0) or 0),
         "reasoning": int((usage.get("output_tokens_details") or {}).get("reasoning_tokens", 0) or 0),
     }
     finish = ""

@@ -21,6 +21,7 @@ def main():
     controller = core.browser_controller = SmartiBrowserController(core)
     core.run_resource_guard = lambda resource: nullcontext()
     tab = os.environ['SMARTI_TEST_BROWSER_TAB']
+    cache_observations = []
     def call(action, **args):
         print('bridge check: ' + action, flush=True)
         output = AutomationMixin.run_browser_action(core, {'action': action, 'tabId': tab, **args})
@@ -31,6 +32,9 @@ def main():
         assert output.startswith(UNTRUSTED_BROWSER_PREFIX), output
         value = json.loads(output.removeprefix(UNTRUSTED_BROWSER_PREFIX))
         assert value['ok'], value
+        page = value.get('page') or value.get('result')
+        if action in {'snapshot', 'select', 'act', 'fill'} and isinstance(page, dict) and page.get('snapshotEpoch') and not args.get('detail') and not args.get('limit'):
+            cache_observations.append(page)
         return value
     downloaded = None
     try:
@@ -38,7 +42,19 @@ def main():
         assert call('snapshot')['tabId'] == tab
         page=call('snapshot', limit=2, offset=2)['result']
         assert page['offset']==2 and len(page['refs'])==2 and page['hasMore'], page
-        assert 'snapshot' not in page and 'accessibility' not in page, page
+        assert 'snapshot' not in page and page['accessibility'], page
+        assert all('box' in value and 'tag' in value for value in page['refs'].values()), page
+        text=call('snapshot')['result']
+        assert len(text['bodyText'])>8000 and 'ARTICLE_FINAL_MARKER' in text['bodyText'], text
+        assert 'EXPLICIT_AD_MARKER' not in text['bodyText'] and 'LEGITIMATE_BANNER_MARKER' in text['bodyText'], text
+        assert 'FORM_KEEP_MARKER' in text['bodyText'], 'ad filtering must preserve form content'
+        assert text['contentFilter']['removedAds']==1, text
+        original=call('snapshot', detail='full')['result']
+        assert 'EXPLICIT_AD_MARKER' in original['bodyText'], original
+        assert original['accessibility'] and all('nodeId' in node for node in original['accessibility']), original
+        assert any('childIds' in node for node in original['accessibility']), original
+        assert call('text')['result']['text'].endswith('ARTICLE_FINAL_MARKER'), 'full text must include article tail'
+        assert call('text', offset=0, limit=100)['result']['hasMore'], 'explicit text pagination'
         call('select', selector='#choice', values=['b'])
         assert call('evaluate', script="document.querySelector('#choice').value")['result']=='b'
         call('act', request={'kind': 'fill', 'selector': '#message', 'text': 'HTTP bridge verified'})
@@ -76,6 +92,9 @@ def main():
         call('fill', selector='#message', text='next run works')
         print(json.dumps({'ok': True, 'checks': ['real Core controller HTTP routing', 'nested action', 'trusted typing', 'storage writes/removal', 'cookie redaction/removal', 'image attachment', 'PDF artifact', 'native upload', 'completed download artifact', 'in-flight cancellation fences input', 'next run can continue']}))
     finally:
+        observation_path = os.environ.get('SMARTI_TEST_BROWSER_OBSERVATIONS')
+        if observation_path:
+            Path(observation_path).write_text(json.dumps(cache_observations, ensure_ascii=False), encoding='utf-8')
         # Remove only the unique file created by this fixture from Downloads.
         if downloaded and downloaded.is_file() and downloaded.name.startswith('fixture') and downloaded.suffix == '.txt':
             downloaded.unlink()

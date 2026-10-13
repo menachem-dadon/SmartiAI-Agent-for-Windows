@@ -73,7 +73,7 @@ Behavioral references include [Playwright actionability](https://playwright.dev/
 public contracts informed the implementation; they are not claims about private
 agent internals or full feature parity.
 
-## Agent efficiency and context (D89, 2026-10-12)
+## Agent efficiency and context (D89 plus context/cache correction, 2026-10-13)
 
 Browser arguments now preserve every documented field before validation. Legacy
 snake-case aliases become the single public camel-case spelling; pagination,
@@ -81,15 +81,26 @@ presentation, select values, frame/epoch targeting and receipt IDs are retained.
 Unknown fields are rejected rather than silently dropped. `start` with a URL
 waits for the new document, like navigation, and returns one `page` observation.
 
-Native page observations default to compact JSON: one map of actionable refs,
-names, roles, links, form state and select options, plus a 2,000-character prose
-excerpt and explicit paging metadata. Duplicate snapshot text, raw AX wrappers
-and element geometry are omitted. `detail=full` restores layout/AX metadata;
-explicit `bodyChars`, paged `text` and snapshots remain available. When Core's
-conversation store is present, the original observation is encrypted and its
-`fullOutput` handle can be read with `read_tool_output` only in that conversation.
-Failure to archive does not turn an already executed browser action into an
-apparent failure. Observations remain untrusted content.
+Native observations now preserve the complete page text by default, element
+geometry/tags, heading levels, parent references, form values/options and the
+full native accessibility tree with node identities, hierarchy and states.
+The same applies to navigation observations. There is no automatic 2,000-character
+excerpt or generic 100,000-character tool-output slice. Explicit `bodyChars`,
+`textOffset` and paged `text` remain available when deliberately requested;
+actionable refs still use explicit paging with `hasMore` and a total count.
+`snapshotFormat=dom` or `refs=dom` deliberately skips the native AX tree.
+
+Compact JSON removes a redundant ref field, an exactly reproducible textual
+rendering of refs and an exactly equal duplicate page/result. Distinct action
+results, enriched snapshots and accessibility nodes are retained. Only text in
+explicit ad-provider containers is filtered, and only if it occurs once; forms,
+editable content and dialogs are protected. This does not change the site or
+remove interactive elements. `detail=full` and `action=text` return unfiltered
+text. When Core's conversation store is present, the original observation is
+encrypted and its `fullOutput` handle can be read with `read_tool_output` only
+in that conversation. Failure to archive preserves the original response rather
+than turning an already executed action into an apparent failure. Observations
+remain untrusted content and password/credential redaction remains effective.
 
 The agent's repeat/similarity guard is removed, including checkpoint counters.
 Native request receipts still return the original result for the same action ID:
@@ -113,20 +124,51 @@ and errors close the owned process. Distinct runs have separate threads.
 Cumulative token-usage deltas count all inference requests in a turn without
 recounting older turns; session-reuse counts are logged without prompt content.
 
-All providers use a 128,000-token working-context target by default, bounded by
-the actual supported window, with the existing semantic compactor triggered at
-82% of that target. Exact current user messages, attachments, loaded schemas and
-task state use the existing preservation rules. This is not a hard input limit:
-large mandatory user input is preserved. The internal
-`agent_context_working_set_tokens` setting can override the target (zero uses
-the model window); no new UI control was added. Compaction uses a small internal
-request without tools or the agent stream/session. Anthropic's existing
-off/auto/always cache preference now controls native automatic prefix caching
-of growing message/tool history, with a compatibility fallback for unsupported
-controls. Other providers retain their existing native cache contracts.
+All providers trigger semantic compaction at 85% of the resolved model context
+window. The old 128,000-token working-set cap and persisted earlier trigger
+ratios no longer lower this threshold. Model-specific capacity overrides and the
+known model capacity table determine the window; unknown models retain a
+conservative provider fallback. Token pressure is estimated and calibrated
+against reported input tokens, so this is not a claim of exact tokenization.
+Exact current user messages, attachments, loaded schemas and task state retain
+their preservation rules. Compaction uses a small internal request without tools
+or the agent stream/session. No new UI control or system-prompt section was added.
+
+Codex receives per-process context-window and 85% automatic-compaction settings;
+personal account configuration is untouched. Context calibration uses the most
+recent inference input, while billing/telemetry still counts all inference
+requests in the turn through cumulative deltas. Its model-only processes do not
+load the account's unrelated personal memories.
+
+OpenAI API requests now cache the growing conversation, including browser/tool
+results, on both Chat Completions and Responses. Current models use native
+implicit caching plus stable system/recent-tool cache boundaries and a stable
+run key; older models retain their native cache contract. Standalone summaries
+and titles avoid paid cache writes where supported. Unsupported controls are
+removed before retry without changing text or images. Anthropic's existing
+off/auto/always preference controls its native automatic history caching;
+Gemini retains native implicit caching. Content-free `API CACHE` records measure
+input, cached reads, cache writes, uncached input, output and weighted cumulative
+hit rates separately by run/provider/model/purpose.
+
+An isolated real WebView2 test verified full text including an article's final
+marker, geometry, AX hierarchy, cautious ad filtering and protected form/banner
+content, plus the existing trusted-input/artifact/cancellation checks. Four live
+Codex requests (`gpt-6.1-sol`, low reasoning) then consumed captured native fixture
+observations, with the last three reusing the same ephemeral thread. Cached-input
+hit rates were 0%, 56.95%, 71.15% and 77.39%; the weighted aggregate was 61.98%
+(140,416 cached tokens out of 226,555 input tokens; 173 output tokens). This is
+an actual transport/cache measurement, not an autonomous website-task benchmark
+or proof of subscription-quota savings. The opt-in script
+`scripts/measure_browser_cache.py` reproduces at most four calls; native capture
+is enabled with `SMARTI_TEST_BROWSER_OBSERVATIONS` when running
+`scripts/test_tauri_browser_preview.ps1`. Local page payloads/reports are not
+committed.
 
 References: [Codex App Server thread continuation](https://learn.chatgpt.com/docs/app-server#start-a-turn),
-[OpenClaw compact observations](https://docs.openclaw.ai/tools/browser/agent-tools),
+[Codex context configuration](https://learn.chatgpt.com/docs/config-file/config-reference),
+[OpenAI agent prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching#multi-turn-agent),
+[Gemini caching](https://ai.google.dev/gemini-api/docs/generate-content/caching),
 and [Anthropic automatic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#automatic-caching).
-These contracts justify the transport/context changes, not a promised quota
-reduction: paid-model cache hit rates and live task cost require a separate run.
+These contracts and measurements support the changes; they do not guarantee a
+particular cache hit rate or total cost reduction for future tasks.

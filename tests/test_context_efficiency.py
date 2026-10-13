@@ -640,8 +640,8 @@ class ContextEfficiencyTests(unittest.TestCase):
             retry_wait_times=[],
             request_options={"provider_mode": "openai"},
         )
-        self.assertEqual(cache_calls[-1]["extra_body"]["prompt_cache_options"], {"mode": "explicit"})
-        self.assertNotIn("prompt_cache_key", cache_calls[-1])
+        self.assertEqual(cache_calls[-1]["extra_body"]["prompt_cache_options"], {"mode": "implicit"})
+        self.assertEqual(cache_calls[-1]["prompt_cache_key"], 'smarti:task-1')
         self.assertEqual(usage["cache_write_prompt"], 20)
 
         core._handle_api_request_with_retry(

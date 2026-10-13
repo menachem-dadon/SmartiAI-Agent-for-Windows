@@ -485,7 +485,7 @@ fn snapshot(app: &AppHandle, tab: &BrowserTab, payload: &Value) -> Result<Value,
     let mut value = dom(app, tab, payload, "snapshot")?;
     value["tabId"] = json!(tab.tab_id);
     value["targetId"] = json!(tab.target_id);
-    if string(payload, "refs") == "aria" {
+    if string(payload, "refs") != "dom" && string(payload, "snapshotFormat") != "dom" {
         let ax = cdp_for_tab(
             app,
             tab,
@@ -496,7 +496,9 @@ fn snapshot(app: &AppHandle, tab: &BrowserTab, payload: &Value) -> Result<Value,
                 json!({})
             },
         )?;
-        value["accessibility"]=json!(ax["nodes"].as_array().map(|nodes|nodes.iter().filter(|n|n["ignored"]!=true).take(300).map(|n|json!({"role":n.pointer("/role/value"),"name":n.pointer("/name/value"),"backendNodeId":n["backendDOMNodeId"]})).collect::<Vec<_>>()).unwrap_or_default());
+        // Preserve parent/child relationships, states and ignored containers:
+        // these are structural data, not a duplicate of actionable DOM refs.
+        value["accessibility"] = ax["nodes"].clone();
     }
     Ok(value)
 }
@@ -1056,7 +1058,7 @@ fn execute(
                             _ => page["readyState"] != "loading",
                         };
                         if ready && (page["url"] != "about:blank" || raw == "about:blank") {
-                            return Ok(page);
+                            return snapshot(app, tab, p);
                         }
                     }
                 }

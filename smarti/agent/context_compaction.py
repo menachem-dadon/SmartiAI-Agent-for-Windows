@@ -108,7 +108,7 @@ class ContextCompactionMixin:
     def _record_context_token_usage(self, messages, current_model, usage_dict):
         """Calibrate the heuristic against provider-reported prompt usage when available."""
         try:
-            actual = int((usage_dict or {}).get("prompt", 0) or 0)
+            actual = int((usage_dict or {}).get("context_prompt", (usage_dict or {}).get("prompt", 0)) or 0)
         except Exception:
             actual = 0
         if actual <= 0:
@@ -127,11 +127,10 @@ class ContextCompactionMixin:
         calibration[calibration_key] = (old_factor * 0.65) + (observed_factor * 0.35)
 
     def _context_compaction_limits(self, current_model=None):
-        window = max(8_192, self._model_context_window_tokens(current_model))
-        try:
-            trigger_ratio = float(self.settings.get("agent_context_compaction_trigger_ratio", 0.82) or 0.82)
-        except Exception:
-            trigger_ratio = 0.82
+        window = max(1, self._model_context_window_tokens(current_model))
+        # Product policy: 85% of the model window, including profiles saved
+        # before the old 128K working-set cap was removed.
+        trigger_ratio = 0.85
         try:
             target_ratio = float(self.settings.get("agent_context_compaction_target_ratio", 0.55) or 0.55)
         except Exception:
@@ -140,24 +139,14 @@ class ContextCompactionMixin:
             configured_reserve = int(self.settings.get("agent_context_output_reserve_tokens", 16_384) or 16_384)
         except Exception:
             configured_reserve = 16_384
-        trigger_ratio = min(0.95, max(0.50, trigger_ratio))
         target_ratio = min(trigger_ratio - 0.05, max(0.25, target_ratio))
-        output_reserve = min(max(2_048, configured_reserve), max(2_048, int(window * 0.20)))
-        # A large supported window is capacity, not a reason to replay hundreds
-        # of thousands of old tool tokens on every inexpensive browser step.
-        try:
-            working_set = int(self.settings.get("agent_context_working_set_tokens", 128000) or 0)
-        except (TypeError, ValueError):
-            working_set = 128000
-        if working_set > 0:
-            window = min(window, max(8192, working_set))
-            output_reserve = min(output_reserve, max(2048, int(window * 0.20)))
-        trigger = min(int(window * trigger_ratio), window - output_reserve)
-        target = min(int(window * target_ratio), max(4_096, trigger - output_reserve))
+        trigger = max(1, int(window * trigger_ratio))
+        output_reserve = min(max(2_048, configured_reserve), window - trigger)
+        target = min(int(window * target_ratio), max(1, trigger - output_reserve))
         return {
             "window": window,
-            "trigger": max(4_096, trigger),
-            "target": max(2_048, target),
+            "trigger": trigger,
+            "target": max(1, target),
             "output_reserve": output_reserve,
         }
 
@@ -452,8 +441,6 @@ class ContextCompactionMixin:
         if not current_messages or not isinstance(task_state, dict):
             return False
         if getattr(self, "_context_compaction_in_progress", False):
-            return False
-        if self.settings.get("preserve_current_task_tool_context", False) and not force:
             return False
         current_model = str(current_model or self.settings.get(f"selected_{self.mode}_model") or provider_default_model(self.mode) or "Local")
         pressure = self._context_pressure(current_messages, current_model)

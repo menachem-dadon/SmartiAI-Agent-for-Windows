@@ -17,7 +17,8 @@ def isolated_overrides(environment):
                  "features.code_mode_host": False, "features.apps": False,
                  "features.hooks": False, "features.skill_search": False,
                  "features.skill_mcp_dependency_install": False,
-                 "features.skip_host_skill_discovery": True}
+                 "features.skip_host_skill_discovery": True,
+                 "memories.use_memories": False, "memories.generate_memories": False}
     home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
     for path in [home / "config.toml", *home.glob("*.config.toml")]:
         try:
@@ -68,10 +69,16 @@ class CodexStreamSession:
                 if pipe:
                     pipe.close()
 
-    def _launch(self):
+    def _launch(self, context_window_tokens=None):
         environment = self.provider._environment()
         command = [self.provider._find_executable(), "app-server", "--stdio"]
-        for name, value in isolated_overrides(environment).items():
+        overrides = isolated_overrides(environment)
+        if context_window_tokens:
+            window = max(1, int(context_window_tokens))
+            overrides.update(model_context_window=window,
+                model_auto_compact_token_limit=int(window * 0.85),
+                model_auto_compact_token_limit_scope="total")
+        for name, value in overrides.items():
             command.extend(("--config", f"{name}={_toml_override(value)}"))
         self.provider.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.process = subprocess.Popen(command, cwd=str(self.provider.workspace_dir), env=environment,
@@ -147,7 +154,7 @@ class CodexStreamSession:
         import hashlib
         return tuple(hashlib.sha256(json.dumps(m, ensure_ascii=False, sort_keys=True).encode()).digest() for m in messages)
 
-    def complete(self, messages, model, timeout, effort, cancel_event, live, schema):
+    def complete(self, messages, model, timeout, effort, cancel_event, live, schema, context_window_tokens=None):
         import tempfile
         from .codex_signin import CodexSignInError
         with self.lock:
@@ -167,7 +174,7 @@ class CodexStreamSession:
             deadline = time.monotonic() + timeout
             self.model = model
             if not self.thread_id:
-                self._launch()
+                self._launch(context_window_tokens)
                 self._request("initialize", {"clientInfo": {"name": "SmartiAI", "version": "1.0"}, "capabilities": {}}, deadline, cancel_event)
                 self.send({"method": "initialized"})
                 params = {"cwd": str(self.provider.workspace_dir.resolve()), "ephemeral": True,
@@ -199,7 +206,7 @@ class CodexStreamSession:
             return result
 
 
-def complete_stream(provider, messages, model, timeout, effort, cancel_event, live, schema, session_key=None):
+def complete_stream(provider, messages, model, timeout, effort, cancel_event, live, schema, session_key=None, context_window_tokens=None):
     with provider._stream_sessions_lock:
         session = provider._stream_sessions.get(session_key) if session_key else None
         if session is None:
@@ -207,7 +214,7 @@ def complete_stream(provider, messages, model, timeout, effort, cancel_event, li
             if session_key:
                 provider._stream_sessions[session_key] = session
     try:
-        return session.complete(messages, model, timeout, effort, cancel_event, live, schema)
+        return session.complete(messages, model, timeout, effort, cancel_event, live, schema, context_window_tokens)
     except BaseException:
         provider.close_stream_session(session_key, session)
         raise
@@ -274,6 +281,10 @@ def _read_turn(provider, process, incoming, send, deadline, thread_id, cancel_ev
             usage = {"prompt": totals.get("inputTokens", 0), "completion": totals.get("outputTokens", 0),
                      "total": totals.get("totalTokens", 0), "cached_prompt": totals.get("cachedInputTokens", 0),
                      "reasoning": totals.get("reasoningOutputTokens", 0)}
+            if (token_usage.get("last") or {}).get("inputTokens"):
+                # Billing sums all inference requests; context calibration must
+                # use the last request, not that sum.
+                usage["context_prompt"] = token_usage["last"]["inputTokens"]
         elif kind == "turn/completed":
             turn = params.get("turn") or {}
             if turn.get("status") != "completed":

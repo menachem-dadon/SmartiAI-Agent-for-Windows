@@ -133,7 +133,7 @@ class ProviderRuntimeTests(unittest.TestCase):
             text, _usage = core.call(model="gpt-5.6", retries=[])
             self.assertEqual(text, "done")
             self.assertEqual(len(bodies), 1)
-            self.assertEqual(bodies[0]["prompt_cache_options"], {"mode": "explicit"})
+            self.assertEqual(bodies[0]["prompt_cache_options"], {"mode": "implicit"})
         finally:
             client.close()
 
