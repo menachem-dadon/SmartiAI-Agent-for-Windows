@@ -9,16 +9,14 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import type { PendingAttachment, ReasoningOption } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
-import { DesignSystemProvider, HoverLabel, Icon, Menu, Switch } from "./design-system";
+import { DesignSystemProvider, Icon, Menu, Switch } from "./design-system";
 import "./chat.css";
-import { DismissibleDetails } from "./popupDismissal";
+import { ComposerModelPicker } from "./ComposerModelPicker";
 import { autonomyLabels, autonomyProfiles } from "./autonomyProfiles";
 import { coreApi } from "./coreApi";
-import { useModelMenuPosition } from "./modelMenuPosition";
 
 interface ComposerProps {
   draft?: string;
@@ -67,28 +65,6 @@ async function pastedFile(file: File): Promise<PendingAttachment> {
       : undefined,
   };
 }
-const modelLabel = (value: string) =>
-  value.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
-const providerLabels: Record<string, string> = {
-  gemini: "Google Gemini",
-  openai: "OpenAI",
-  openai_codex_signin: "OpenAI Codex Sign-in",
-  anthropic: "Anthropic",
-  openrouter: "OpenRouter",
-  groq: "Groq",
-  nvidia: "NVIDIA",
-  cerebras: "Cerebras",
-  huggingface: "Hugging Face",
-  deepseek: "DeepSeek",
-  qwen: "Qwen",
-  zhipu: "Zhipu AI",
-  moonshot: "Moonshot AI",
-  mistral: "Mistral",
-  together: "Together AI",
-  perplexity: "Perplexity",
-  xai: "xAI",
-  local: "מודל מקומי",
-};
 type QuotaWindow = {
   remaining_percent: number;
   resets_at?: number;
@@ -166,10 +142,6 @@ export function Composer({
   const quotaFetchedAt = useRef(0);
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
-  const modelMenu = useRef<HTMLDetailsElement>(null);
-  const modelPopup = useRef<HTMLDivElement>(null);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [browsedProvider, setBrowsedProvider] = useState(provider);
   const voiceSession = useRef("");
   const voiceConsumed = useRef("");
   const owner = useRef(conversationId);
@@ -380,119 +352,33 @@ export function Composer({
     window.addEventListener("smarti:voice-hotkey", activate);
     return () => window.removeEventListener("smarti:voice-hotkey", activate);
   }, []);
-  // Keep the active model accessible even when no favorites have been saved.
-  const menuModels = provider && model && !favoriteModels.some(
-    (item) => item.provider === provider && item.model === model,
-  ) ? [{ provider, model }, ...favoriteModels] : favoriteModels;
-  const modelProviders = Array.from(new Set(menuModels.map(item => item.provider)));
-  const shownProvider = modelProviders.includes(browsedProvider) ? browsedProvider : modelProviders[0] || "";
-  const footerHeight = (reasoningOptions.length ? 42 : 0) +
-    (provider === "openai_codex_signin" ? 96 : 0) + (!favoriteModels.length ? 32 : 0);
-  const modelBounds = useModelMenuPosition(modelMenuOpen, modelMenu, Math.min(300, Math.max(120, menuModels.length * 44)) + 48 + footerHeight);
+  const canSend = Boolean(text.trim() || attachments.length);
   const quotaStatus = quotaError ? "לא ניתן לטעון את המכסה כרגע"
     : !quota ? "טוען נתוני מכסה…"
     : !quota.available ? "נתוני המכסה אינם זמינים כרגע"
     : `${quota.plan_type ? `תוכנית ${quota.plan_type} · ` : ""}${quotaLoading ? "מתעדכן…" : "מעודכן כעת"}`;
-  const closeModelMenu = () => {
-    modelMenu.current?.removeAttribute("open");
-    setModelMenuOpen(false);
-  };
-  const canSend = Boolean(text.trim() || attachments.length);
-  const menuKey = (
-    event: KeyboardEvent<HTMLElement>,
-    menu: HTMLDetailsElement | null,
-  ) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      menu?.removeAttribute("open");
-      (menu?.querySelector("summary") as HTMLElement | null)?.focus();
-    }
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-      if ((event.target as HTMLElement).closest("select")) return;
-      const target = event.key === "ArrowLeft"
-        ? modelPopup.current?.querySelector<HTMLElement>('.model-menu-models [role="menuitemradio"]')
-        : modelPopup.current?.querySelector<HTMLElement>('.model-menu-providers [aria-pressed="true"]');
-      if (target) {
-        event.preventDefault();
-        target.focus();
-      }
-    }
-  };
-  const modelPopupContent = (
-    <DesignSystemProvider theme={theme}><div ref={modelPopup} className={`quick-pill-menu model-quick-menu${modelBounds && modelBounds.height < 250 ? " is-compact" : ""}`}
-      hidden={!modelMenuOpen}
-      role="dialog" aria-label="מודלים מועדפים" dir="rtl"
-      style={modelBounds || undefined}
-    >
-      <header className="model-menu-title">
-        <strong>מודלים מועדפים</strong>
-        {onManageModels && <button type="button" role="menuitem" className="model-menu-settings"
-          aria-label="הגדרות מודלים ומועדפים"
-          onClick={() => { const trigger = modelMenu.current?.querySelector("summary"); closeModelMenu(); onManageModels(trigger || undefined); }}><Icon name="settings" /></button>}
-      </header>
-      <div className="model-menu-columns">
-        <section className="model-menu-models" aria-label="מודלים של הספק">
-          <div className="model-menu-list" role="menu" aria-label={providerLabels[shownProvider] || shownProvider || "מודלים"} key={shownProvider}>
-            {menuModels.filter(item => item.provider === shownProvider).map(item => (
-              <button type="button" role="menuitemradio"
-                aria-checked={item.provider === provider && item.model === model}
-                className={item.provider === provider && item.model === model ? "is-selected" : ""}
-                key={`${item.provider}:${item.model}`} title={item.model}
-                onClick={() => { closeModelMenu(); void onFavoriteModel(item); }}>
-                <HoverLabel text={modelLabel(item.model)} /><Icon name="check" className="model-menu-check" />
-              </button>
-            ))}
+  const quotaSummary = provider === "openai_codex_signin" ? (
+    <section className="codex-quota-summary" aria-label="מכסת Codex שנותרה" title={quotaStatus}>
+      {(["five_hour", "weekly"] as const).map(key => {
+        const windowData = quota?.[key];
+        const value = windowData?.remaining_percent;
+        const remaining = typeof value === "number" && Number.isFinite(value)
+          ? Math.max(0, Math.min(100, Math.round(value))) : null;
+        const label = key === "five_hour" ? "5 שעות" : "שבוע";
+        const reset = resetText(windowData?.resets_at);
+        const detail = remaining === null ? quotaStatus : reset || "זמן האיפוס אינו זמין";
+        const tone = remaining === null ? "" : remaining < 20 ? "is-low" : remaining < 50 ? "is-medium" : "is-good";
+        return (
+          <div className={`quota-window ${tone}`} key={key} title={`${quotaStatus} · ${detail}`}
+            aria-label={`${label}: ${remaining === null ? "המכסה אינה זמינה" : `${remaining}% נותרו`}. ${detail}`}>
+            <p><b>{label}</b><em>{remaining === null ? "—" : `${remaining}% נותרו`}</em></p>
+            <i aria-hidden="true"><span style={{ width: `${remaining ?? 0}%` }} /></i>
+            <small>{detail}</small>
           </div>
-        </section>
-        <section className="model-menu-providers" aria-label="ספקים">
-          <div className="model-menu-list">
-            {modelProviders.map(favoriteProvider => (
-              <button type="button" key={favoriteProvider} aria-pressed={shownProvider === favoriteProvider}
-                onMouseEnter={() => setBrowsedProvider(favoriteProvider)}
-                onFocus={() => setBrowsedProvider(favoriteProvider)}
-                onClick={() => setBrowsedProvider(favoriteProvider)}>
-                <HoverLabel text={providerLabels[favoriteProvider] || favoriteProvider} />
-                <Icon name="chevron" size={16} />
-              </button>
-            ))}
-          </div>
-        </section>
-      </div>
-      {!!footerHeight && <div className="model-menu-footer">
-        {!!reasoningOptions.length && (
-          <label className="model-menu-reasoning">עוצמת חשיבה
-            <select aria-label="עוצמת חשיבה" value={reasoningEffort}
-              onChange={event => void onReasoningEffort(event.target.value)}>
-              {reasoningOptions.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
-            </select>
-          </label>
-        )}
-        {provider === "openai_codex_signin" && (
-          <section className="codex-quota-summary" aria-label="מכסת Codex שנותרה" title={quotaStatus}>
-            {(["five_hour", "weekly"] as const).map(key => {
-              const windowData = quota?.[key];
-              const value = windowData?.remaining_percent;
-              const remaining = typeof value === "number" && Number.isFinite(value)
-                ? Math.max(0, Math.min(100, Math.round(value))) : null;
-              const label = key === "five_hour" ? "5 שעות" : "שבוע";
-              const reset = resetText(windowData?.resets_at);
-              const detail = remaining === null ? quotaStatus : reset || "זמן האיפוס אינו זמין";
-              const tone = remaining === null ? "" : remaining < 20 ? "is-low" : remaining < 50 ? "is-medium" : "is-good";
-              return (
-                <div className={`quota-window ${tone}`} key={key} title={`${quotaStatus} · ${detail}`}
-                  aria-label={`${label}: ${remaining === null ? "המכסה אינה זמינה" : `${remaining}% נותרו`}. ${detail}`}>
-                  <p><b>{label}</b><em>{remaining === null ? "—" : `${remaining}% נותרו`}</em></p>
-                  <i aria-hidden="true"><span style={{ width: `${remaining ?? 0}%` }} /></i>
-                  <small>{detail}</small>
-                </div>
-              );
-            })}
-          </section>
-        )}
-        {!favoriteModels.length && <p className="model-menu-empty">אפשר להוסיף מודלים מועדפים בהגדרות</p>}
-      </div>}
-    </div></DesignSystemProvider>
-  );
+        );
+      })}
+    </section>
+  ) : undefined;
   return (
     <DesignSystemProvider theme={theme} className="composer-design"><div
       className={`composer ${running ? "is-running" : ""}`}
@@ -598,21 +484,10 @@ export function Composer({
         <div className="composer-controls">
           <div className="composer-selectors">
             <div className="composer-model-controls">
-            <DismissibleDetails
-              ref={modelMenu} popupRef={modelPopup}
-              className="quick-pill model-quick-pill"
-              onToggle={event => {
-                const open = event.currentTarget.open;
-                setModelMenuOpen(open);
-                if (open) { setBrowsedProvider(provider); void refreshQuota(15); }
-              }}
-              onKeyDown={event => menuKey(event, modelMenu.current)}
-            >
-              <summary aria-label="בחירת מודל" aria-haspopup="dialog">
-                <Icon name="chevron" size={16} /><HoverLabel text={modelLabel(model || provider || "מודל")} />
-              </summary>
-              {modelMenuOpen ? createPortal(modelPopupContent, document.body) : modelPopupContent}
-            </DismissibleDetails>
+            <ComposerModelPicker theme={theme} provider={provider} model={model} favoriteModels={favoriteModels}
+              reasoningEffort={reasoningEffort} reasoningOptions={reasoningOptions} quota={quotaSummary}
+              onOpen={() => void refreshQuota(15)} onFavoriteModel={onFavoriteModel}
+              onReasoningEffort={onReasoningEffort} onManageModels={onManageModels} />
             {provider.toLowerCase() === "local" && (
               <label className="local-fast-mode" dir="rtl" title="FastMode"><span className="local-fast-mode-caption">FastMode</span><Switch label="FastMode" checked={localFastMode} onCheckedChange={value => void onLocalFastMode(value)} /></label>
             )}

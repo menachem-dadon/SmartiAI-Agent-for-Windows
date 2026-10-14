@@ -9,9 +9,9 @@ export function modelMenuContentViewport(viewport: Viewport, titlebarBottom: num
   return { ...viewport, top, height: bottom - top };
 }
 
-export function modelMenuBounds(anchor: Anchor, viewport: Viewport, preferredHeight: number) {
+export function modelMenuBounds(anchor: Anchor, viewport: Viewport, preferredHeight: number, preferredWidth = 460) {
   const gap = 8;
-  const width = Math.min(460, Math.max(0, viewport.width - gap * 2));
+  const width = Math.min(preferredWidth, Math.max(0, viewport.width - gap * 2));
   const minTop = viewport.top + gap;
   const maxBottom = viewport.top + viewport.height - gap;
   const above = Math.max(0, Math.min(maxBottom, anchor.top - gap) - minTop);
@@ -27,12 +27,12 @@ export function modelMenuBounds(anchor: Anchor, viewport: Viewport, preferredHei
 }
 
 export function useModelMenuPosition(
-  open: boolean, anchor: RefObject<HTMLDetailsElement | null>, preferredHeight: number,
+  open: boolean, anchor: RefObject<HTMLElement | null>, preferredHeight: number, preferredWidth = 460,
 ) {
   const [bounds, setBounds] = useState<ReturnType<typeof modelMenuBounds> | null>(null);
   useLayoutEffect(() => {
     if (!open) return;
-    const trigger = anchor.current?.querySelector("summary");
+    const trigger = anchor.current?.matches("button, summary") ? anchor.current : anchor.current?.querySelector("summary");
     if (!trigger) return;
     const update = () => {
       const viewport = window.visualViewport;
@@ -40,7 +40,7 @@ export function useModelMenuPosition(
         left: viewport?.offsetLeft || 0, top: viewport?.offsetTop || 0,
         width: viewport?.width || window.innerWidth, height: viewport?.height || window.innerHeight,
       }, document.querySelector(".window-titlebar")?.getBoundingClientRect().bottom || 0);
-      const next = modelMenuBounds(trigger.getBoundingClientRect(), contentViewport, preferredHeight);
+      const next = modelMenuBounds(trigger.getBoundingClientRect(), contentViewport, preferredHeight, preferredWidth);
       setBounds(current => current && Object.keys(next).every(
         key => current[key as keyof typeof next] === next[key as keyof typeof next],
       ) ? current : next);
@@ -64,6 +64,6 @@ export function useModelMenuPosition(
       window.visualViewport?.removeEventListener("resize", update);
       window.visualViewport?.removeEventListener("scroll", update);
     };
-  }, [open, anchor, preferredHeight]);
+  }, [open, anchor, preferredHeight, preferredWidth]);
   return bounds;
 }

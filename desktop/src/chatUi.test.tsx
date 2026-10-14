@@ -302,7 +302,7 @@ describe("rich daily chat UI", () => {
     expect(html).toContain("עצירה");
   });
 
-  test("keeps the dropdown pills with a unified two-column model menu", () => {
+  test("renders the closed picker with the model and English reasoning level", () => {
     const html = renderToStaticMarkup(
       <Composer
         attachments={[]}
@@ -322,18 +322,16 @@ describe("rich daily chat UI", () => {
     );
     expect(html).toContain("model-quick-pill");
     expect(html).toContain("gemini 2.5 pro");
-    expect(html).toContain("model-menu-columns");
-    expect(html).toContain("model-menu-providers");
-    expect(html).toContain("Google Gemini");
+    expect(html).not.toContain("model-menu-columns");
+    expect(html).toContain("High");
     expect(html).toContain('aria-haspopup="dialog"');
-    expect(html).toContain("עוצמת חשיבה");
-    expect(html).toContain('aria-checked="true"');
+    expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("autonomy-quick-pill");
     expect(html).toContain("בטוח");
     expect(html).toContain('aria-label="פרופיל בטיחות"');
   });
 
-  test("keeps a compact Codex quota summary inside the unified favorite-model menu", () => {
+  test("keeps the closed Codex trigger compact without mounting the quota popup", () => {
     const html = renderToStaticMarkup(
       <Composer
         attachments={[]}
@@ -348,10 +346,8 @@ describe("rich daily chat UI", () => {
         onCancel={() => undefined}
       />,
     );
-    expect(html).toContain("codex-quota-summary");
-    expect(html).toContain("מכסת Codex שנותרה");
-    expect(html).toContain("טוען נתוני מכסה");
-    expect(html).toContain("OpenAI Codex Sign-in");
-    expect(html).toContain("Google Gemini");
+    expect(html).not.toContain("codex-quota-summary");
+    expect(html).not.toContain('role="dialog"');
+    expect(html).toContain("Codex default");
   });
 });

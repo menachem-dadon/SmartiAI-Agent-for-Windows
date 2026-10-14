@@ -24,6 +24,7 @@ vi.mock("./Composer", () => ({ Composer: (props: any) => <div>
   })}</output>
   <button onClick={props.onManageModels}>manage-models</button>
   <button onClick={() => props.onFavoriteModel({ provider: "openai", model: "openai-b" })}>chat-model</button>
+  <button onClick={() => props.onReasoningEffort("high")}>chat-reasoning</button>
 </div> }));
 
 function deferred() {
@@ -303,8 +304,26 @@ describe("settings synchronization through the real API client", () => {
     await screen.findByRole("button", { name: "ספק המודל: OpenAI" });
     expect(await screen.findByRole("button", { name: "openai-b" })).toBeTruthy();
     fireEvent.click(await screen.findByRole("button", { name: "עוצמת חשיבה" }));
-    fireEvent.click(screen.getByRole("option", { name: "גבוהה" }));
+    fireEvent.click(screen.getByRole("option", { name: "High" }));
     await waitFor(() => expect(composer().reasoning).toBe("high"));
+  });
+
+  test("an old model's delayed reasoning response does not overwrite the newly selected model", async () => {
+    await start();
+    const gate = deferred(), baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+      if (command === "core_api" && args.request.method === "POST" && args.request.path.includes("/reasoning")) {
+        await gate.promise;
+        return { status: 200, body: { data: { reasoning_effort: "high" } } } as any;
+      }
+      return baseInvoke(command, args);
+    });
+    fireEvent.click(screen.getByText("chat-reasoning"));
+    await waitFor(() => expect(composer().reasoning).toBe("high"));
+    fireEvent.click(screen.getByText("chat-model"));
+    await waitFor(() => expect(composer()).toMatchObject({ model: "openai-b", reasoning: "auto" }));
+    await act(async () => gate.resolve());
+    expect(composer()).toMatchObject({ provider: "openai", model: "openai-b", reasoning: "auto" });
   });
 
   test("refreshes favorites, safety, FastMode, native preferences and theme, preserving them in later chat writes and resetting them", async () => {

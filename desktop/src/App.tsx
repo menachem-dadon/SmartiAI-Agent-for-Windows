@@ -307,6 +307,8 @@ export default function App() {
   const [bootstrapReady, setBootstrapReady] = useState(false);
   const restoredModelOwner = useRef("");
   const modelOperations = useRef<Promise<unknown>>(Promise.resolve());
+  const reasoningSelection = useRef({ provider, model, effort: reasoningEffort });
+  reasoningSelection.current = { provider, model, effort: reasoningEffort };
   const [restoringModel, setRestoringModel] = useState(false);
   useEffect(() => {
     if (!bootstrapReady || restoredModelOwner.current === activeId) return;
@@ -1124,8 +1126,10 @@ export default function App() {
     return operation;
   };
   const changeReasoning = async (effort: string) => {
-    const previous = reasoningEffort;
-    setReasoningEffort(effort);
+    const owner = activeId;
+    const ownsSelection = () => owner === activeIdRef.current && provider === reasoningSelection.current.provider && model === reasoningSelection.current.model;
+    const previous = reasoningSelection.current.effort;
+    if (ownsSelection()) setReasoningEffort(effort);
     try {
       const data = await coreApi<{ reasoning_effort: string }>(
         "POST",
@@ -1133,11 +1137,15 @@ export default function App() {
         { model, effort },
         true,
       );
-      setReasoningEffort(data.reasoning_effort);
-      drafts.setSelection({ provider, model, effort: data.reasoning_effort });
+      if (ownsSelection()) {
+        setReasoningEffort(data.reasoning_effort);
+        drafts.setSelection({ provider, model, effort: data.reasoning_effort });
+      }
     } catch (reason) {
-      setReasoningEffort(previous);
-      setError(`לא ניתן לעדכן עוצמת חשיבה: ${String(reason)}`);
+      if (ownsSelection()) {
+        setReasoningEffort(previous);
+        setError(`לא ניתן לעדכן עוצמת חשיבה: ${String(reason)}`);
+      }
     }
   };
   const changeAutonomy = async (next: string) => {

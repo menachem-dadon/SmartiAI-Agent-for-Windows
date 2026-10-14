@@ -582,14 +582,14 @@ MODEL_REASONING_CONTRACTS = {
 }
 
 MODEL_REASONING_LEVEL_LABELS = {
-    "auto": "אוטומטית — ברירת הספק",
-    "none": "ללא חשיבה",
-    "minimal": "מינימלית",
-    "low": "נמוכה",
-    "medium": "בינונית",
-    "high": "גבוהה",
-    "xhigh": "גבוהה מאוד",
-    "max": "מקסימלית",
+    "auto": "Auto",
+    "none": "None",
+    "minimal": "Minimal",
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "xhigh": "Extra High",
+    "max": "Max",
 }
 
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources is deprecated.*")

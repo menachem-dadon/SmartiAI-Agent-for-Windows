@@ -79,8 +79,6 @@
 .sds-popover.source-provider-popover { padding:var(--sds-space-2); }
 .source-provider-choice { min-width:0; flex:1; display:flex; align-items:center; gap:12px; text-align:right; }
 .source-provider-choice>bdi { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.source-provider-icon { display:block; width:20px; height:20px; flex:none; object-fit:contain; }
-.source-provider-icon--mono { background:currentColor; mask-size:contain; mask-repeat:no-repeat; mask-position:center; }
 .source-provider-popup { display:grid; gap:8px; }
 .source-provider-popup>[role="listbox"] { min-width:0; display:grid; gap:2px; }
 .source-provider-option { width:100%; min-height:44px; justify-content:space-between; border:0; padding-inline:var(--sds-space-2); text-align:right; }

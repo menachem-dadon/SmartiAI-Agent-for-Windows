@@ -1,6 +1,7 @@
 import { Dialog, IconButton, Popover, PageHeader, SegmentedControl, SettingRow as SharedSettingRow, SettingsGroup, Switch, RangeField, LoadingState } from "./design-system";
 import { ManagementFeedback } from "./managementFeedback";
 import { ProviderPicker } from "./ProviderPicker";
+import { reasoningDisplayName } from "./modelPresentation";
 import { useSecretAutosave } from "./useSecretAutosave";
 import { readClipboardText } from "./clipboardText";
 import { Button, Textarea, Field, Icon, ChoiceField, SelectField, SearchField } from "./design-system";
@@ -862,12 +863,12 @@ export function ProviderWorkflow({
       {reasoning.reasoning_options?.length ? (
         <SourceSettingField
           label="עוצמת חשיבה"
-          help="קובעת את עוצמת החשיבה של המודל הפעיל. האפשרויות מותאמות אוטומטית לחוזה של משפחת המודל; בחירה באוטומטית משאירה את השדה ריק ומשתמשת בברירת הספק."
+          help="קובעת את עוצמת החשיבה של המודל הפעיל. האפשרויות מותאמות אוטומטית לחוזה של משפחת המודל; בחירה ב-Auto משאירה את השדה ריק ומשתמשת בברירת הספק."
           dataPath="provider_reasoning_effort"
         >
           <ChoiceField label="עוצמת חשיבה" hiddenLabel
             value={reasoning.reasoning_effort || "auto"}
-            options={reasoning.reasoning_options.map(option => option.value === "auto" ? { ...option, label: "אוטומטית" } : option)}
+            options={reasoning.reasoning_options.map(option => ({ ...option, label: reasoningDisplayName(option.value, reasoning.reasoning_options) }))}
             onValueChange={(next) =>
               void coreApi<typeof reasoning>(
                 "POST",
