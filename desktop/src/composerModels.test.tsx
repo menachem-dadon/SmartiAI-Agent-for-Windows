@@ -43,7 +43,7 @@ describe("composer model selection", () => {
   test("uses only the model's available reasoning stops and previews a drag before writing", async () => {
     const onReasoningEffort = vi.fn();
     render(<Composer {...callbacks} attachments={[]} provider="gemini" model="gemini-3.6-flash"
-      reasoningEffort="auto" reasoningOptions={[{ value: "auto", label: "אוטומטית" }, { value: "minimal", label: "מינימלית" }, { value: "high", label: "גבוהה" }]}
+      reasoningEffort="minimal" reasoningOptions={[{ value: "minimal", label: "מינימלית" }, { value: "medium", label: "בינונית" }, { value: "high", label: "גבוהה" }]}
       onReasoningEffort={onReasoningEffort} />);
     const popup = await openEffort();
     const slider = screen.getByRole("slider", { name: "עוצמת חשיבה" });
@@ -51,8 +51,8 @@ describe("composer model selection", () => {
     expect(popup.querySelectorAll(".model-effort-stops i")).toHaveLength(3);
     fireEvent.pointerDown(slider, { pointerId: 1 });
     fireEvent.change(slider, { target: { value: "1" } });
-    expect(slider.getAttribute("aria-valuetext")).toBe("Minimal");
-    expect(within(popup).getByText("Minimal", { selector: ".model-effort-value" })).toBeTruthy();
+    expect(slider.getAttribute("aria-valuetext")).toBe("Medium");
+    expect(within(popup).getByText("Medium", { selector: ".model-effort-value" })).toBeTruthy();
     expect(onReasoningEffort).not.toHaveBeenCalled();
     fireEvent.change(slider, { target: { value: "2" } });
     fireEvent.pointerUp(slider, { pointerId: 1 });
@@ -73,7 +73,7 @@ describe("composer model selection", () => {
     let finish!: () => void;
     const onReasoningEffort = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; })).mockResolvedValue(undefined);
     render(<Composer {...callbacks} attachments={[]} provider="openai" model="gpt-model" reasoningEffort="auto"
-      reasoningOptions={[{ value: "auto", label: "Auto" }, { value: "high", label: "High" }, { value: "max", label: "Max" }]}
+      reasoningOptions={[{ value: "medium", label: "Medium" }, { value: "high", label: "High" }, { value: "max", label: "Max" }]}
       onReasoningEffort={onReasoningEffort} />);
     await openEffort();
     fireEvent.change(screen.getByRole("slider"), { target: { value: "1" } });
@@ -84,7 +84,7 @@ describe("composer model selection", () => {
     await openEffort();
     fireEvent.change(screen.getByRole("slider"), { target: { value: "0" } });
     await act(async () => finish());
-    await waitFor(() => expect(onReasoningEffort.mock.calls.map(call => call[0])).toEqual(["high", "max", "auto"]));
+    await waitFor(() => expect(onReasoningEffort.mock.calls.map(call => call[0])).toEqual(["high", "max", "medium"]));
   });
 
   test("keeps the active model, reasoning and settings reachable without favorites", async () => {
@@ -92,12 +92,12 @@ describe("composer model selection", () => {
     const onManageModels = vi.fn();
     render(<Composer {...callbacks} attachments={[]} provider="openai_codex_signin"
       model="gpt-6-astra" favoriteModels={[]} reasoningEffort="auto"
-      reasoningOptions={[{ value: "auto", label: "אוטומטית" }, { value: "max", label: "מקסימלית" }]}
+      reasoningOptions={[{ value: "medium", label: "בינונית" }, { value: "max", label: "מקסימלית" }]}
       onReasoningEffort={onReasoningEffort} onManageModels={onManageModels} />);
     const trigger = screen.getByLabelText("בחירת מודל");
     await openEffort();
     expect(screen.queryByRole("menuitemradio")).toBeNull();
-    expect(screen.getByRole("slider", { name: "עוצמת חשיבה" }).getAttribute("aria-valuetext")).toBe("Auto");
+    expect(screen.getByRole("slider", { name: "עוצמת חשיבה" }).getAttribute("aria-valuetext")).toBe("Medium");
     fireEvent.change(screen.getByRole("slider"), { target: { value: "1" } });
     await waitFor(() => expect(onReasoningEffort).toHaveBeenCalledWith("max"));
     await waitFor(() => expect((screen.getByRole("button", { name: "פתיחת המודלים המועדפים" }) as HTMLButtonElement).disabled).toBe(false));
@@ -186,14 +186,14 @@ describe("composer model selection", () => {
     const bounds = popup.getAttribute("style");
     const summary = screen.getByRole("region", { name: "מכסת Codex שנותרה" });
     expect(within(summary).getAllByText("—")).toHaveLength(2);
-    expect(within(summary).queryByText("0% נותרו")).toBeNull();
+    expect(within(summary).queryByText("0%")).toBeNull();
     const reset = Math.floor(Date.now() / 1000) + 3600;
     await act(async () => resolveQuota({ available: true, plan_type: "plus",
       five_hour: { remaining_percent: 41, resets_at: reset }, weekly: { remaining_percent: 0, resets_at: reset + 86400 },
     }));
-    expect(within(summary).getByText("41% נותרו")).toBeTruthy();
-    expect(within(summary).getByText("0% נותרו")).toBeTruthy();
-    expect(summary.querySelectorAll('[title*="איפוס בעוד"]')).toHaveLength(2);
+    expect(within(summary).getByText("41%")).toBeTruthy();
+    expect(within(summary).getByText("0%")).toBeTruthy();
+    expect(summary.querySelectorAll('[title*="איפוס:"]')).toHaveLength(2);
     expect(summary.title).toContain("plus");
     expect(popup.getAttribute("style")).toBe(bounds);
     expect(screen.getByRole("button", { name: "הגדרות מודלים ומועדפים" }).closest("header")).toBeTruthy();
@@ -210,6 +210,6 @@ describe("composer model selection", () => {
     const popup = await openModels();
     expect(parseFloat(popup.style.top)).toBeGreaterThanOrEqual(44);
     expect(parseFloat(popup.style.top) + parseFloat(popup.style.height)).toBeLessThanOrEqual(248);
-    expect(popup.classList.contains("is-compact")).toBe(true);
+    expect(popup.getAttribute("aria-label")).toBe("מודלים מועדפים");
   });
 });

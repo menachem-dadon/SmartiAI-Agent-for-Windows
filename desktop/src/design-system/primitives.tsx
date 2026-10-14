@@ -43,7 +43,7 @@ function useFloating(anchor: RefObject<HTMLElement | null>, open: boolean, width
   return position;
 }
 
-export function Tooltip({ label, children }: { label: string; children: ReactElement<{ "aria-describedby"?: string }> }) {
+export function Tooltip({ label, children, placement = "vertical" }: { label: string; children: ReactElement<{ "aria-describedby"?: string }>; placement?: "vertical" | "right" }) {
   const id = useId();
   const anchor = useRef<HTMLSpanElement>(null);
   const [hover, setHover] = useState(false);
@@ -55,6 +55,30 @@ export function Tooltip({ label, children }: { label: string; children: ReactEle
   const open = (hover || focused) && !dismissed;
   const [width, setWidth] = useState(220);
   const position = useFloating(anchor, open, width);
+  const [sidePosition, setSidePosition] = useState<CSSProperties>({});
+  useLayoutEffect(() => {
+    if (!open || placement !== "right") return;
+    const update = () => {
+      if (!anchor.current || !bubble.current) return;
+      const rect = anchor.current.getBoundingClientRect(), box = bubble.current;
+      const viewport = window.visualViewport;
+      const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+      const right = left + (viewport?.width || window.innerWidth), bottom = top + (viewport?.height || window.innerHeight);
+      const width = Math.min(box.offsetWidth, right - left - 16), height = box.offsetHeight;
+      const x = rect.right + 8 + width <= right - 8 ? rect.right + 8 : rect.left - 8 - width;
+      setSidePosition({ left: Math.max(left + 8, Math.min(x, right - 8 - width)),
+        top: Math.max(top + 8, Math.min(rect.top + rect.height / 2 - height / 2, bottom - 8 - height)),
+        maxWidth: right - left - 16, transform: "none" });
+    };
+    update();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    if (anchor.current) observer?.observe(anchor.current);
+    if (bubble.current) observer?.observe(bubble.current);
+    window.addEventListener("resize", update); window.addEventListener("scroll", update, true);
+    window.visualViewport?.addEventListener("resize", update); window.visualViewport?.addEventListener("scroll", update);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", update); window.removeEventListener("scroll", update, true);
+      window.visualViewport?.removeEventListener("resize", update); window.visualViewport?.removeEventListener("scroll", update); };
+  }, [open, placement, label]);
   useLayoutEffect(() => { if (open && bubble.current) setWidth(bubble.current.getBoundingClientRect().width); }, [open, label]);
   useEffect(() => {
     if (!open) return;
@@ -65,7 +89,7 @@ export function Tooltip({ label, children }: { label: string; children: ReactEle
   const describedBy = [children.props["aria-describedby"], open ? id : undefined].filter(Boolean).join(" ") || undefined;
   return <span className="sds-tooltip-anchor" ref={anchor} onPointerEnter={(event) => { if (event.pointerType !== "touch") enterHover(); }} onPointerLeave={leaveHover} onFocus={(event) => { setFocused(event.target instanceof HTMLElement && event.target.matches(":focus-visible")); setDismissed(false); }} onBlur={() => setFocused(false)}>
     {cloneElement(children, { "aria-describedby": describedBy })}
-    {open && <Overlay><span ref={bubble} id={id} role="tooltip" className="sds-tooltip" style={position}>{label}</span></Overlay>}
+    {open && <Overlay><span ref={bubble} id={id} role="tooltip" className="sds-tooltip" style={placement === "right" ? sidePosition : position}>{label}</span></Overlay>}
   </span>;
 }
 

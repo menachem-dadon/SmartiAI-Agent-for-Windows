@@ -8,7 +8,7 @@ const { pathToFileURL } = require('node:url');
 
 async function main() {
   const root = path.resolve(__dirname, '..'), desktop = path.join(root, 'desktop');
-  const output = path.resolve(process.argv[2] || path.join(root, '.codex-local/model-picker'));
+  const output = path.resolve(process.argv[2] || path.join(root, '.codex-local/model-picker-refinements'));
   await fs.mkdir(output, { recursive: true });
   const favorites = [
     { provider: 'openai_codex_signin', model: 'gpt-6.1-sol' },
@@ -25,7 +25,7 @@ async function main() {
     import '/src/management.css';
     const params=new URLSearchParams(location.search), theme=params.get('theme')||'light';
     const favorites=${JSON.stringify(favorites)};
-    const levels=['auto','low','medium','high','xhigh','max'].map(value=>({value,label:value}));
+    const levels=['low','medium','high','xhigh','max'].map(value=>({value,label:value}));
     window.__qaEvents=[];
     window.__TAURI_INTERNALS__={invoke:async(cmd,args)=>({status:200,body:{data:{available:true,plan_type:'QA',five_hour:{remaining_percent:41,resets_at:Date.now()/1000+3600},weekly:{remaining_percent:0,resets_at:Date.now()/1000+86400}}}})};
     function Fixture(){
@@ -35,7 +35,7 @@ async function main() {
           <Composer theme={theme} attachments={[]} provider={item.provider} model={item.model} favoriteModels={favorites}
             reasoningEffort={effort} reasoningOptions={item.provider==='local'?[]:levels}
             onAttachments={()=>{}} onSend={async()=>{}} onCancel={()=>{}}
-            onFavoriteModel={next=>{window.__qaEvents.push(next);setItem(next);setEffort('auto');}}
+            onFavoriteModel={next=>{window.__qaEvents.push(next);setItem(next);setEffort('medium');}}
             onReasoningEffort={async next=>{window.__qaEvents.push({effort:next});await new Promise(r=>setTimeout(r,30));setEffort(next);}}
             onManageModels={()=>setSettings(true)} />
         </div>
@@ -87,22 +87,38 @@ async function main() {
       await page.getByRole('dialog', {name:'מודל ועוצמת חשיבה'}).waitFor();
       await page.waitForTimeout(180);
       record(`${label}: compact bounds`, await inside());
-      record(`${label}: reasoning stops`, await page.locator('.model-effort-stops i').count() === 6);
+      record(`${label}: complete compact content without scrolling`, await page.locator('.model-picker-surface--effort').evaluate(n=>n.scrollHeight<=n.clientHeight+1 && getComputedStyle(n).overflowY==='hidden'));
+      record(`${label}: compact header centered`, await page.locator('.model-effort-model').evaluate(n=>{
+        const r=n.getBoundingClientRect(),p=n.closest('[role=dialog]').getBoundingClientRect();return Math.abs((r.left+r.right-p.left-p.right)/2)<1;
+      }));
+      if(width===1280) record(`${label}: popup centered on trigger`, await page.locator('[role=dialog]').evaluate(n=>{
+        const p=n.getBoundingClientRect(),a=document.querySelector('.model-picker-trigger').getBoundingClientRect();return Math.abs((p.left+p.right-a.left-a.right)/2)<1;
+      }));
+      record(`${label}: reasoning stops`, await page.locator('.model-effort-stops i').count() === 5);
       const slider = page.getByRole('slider', {name:'עוצמת חשיבה'});
       await slider.focus(); await slider.press('End');
       await page.waitForFunction(()=>window.__qaEvents.some(e=>e.effort==='max'));
       await page.waitForTimeout(80);
       record(`${label}: keyboard native level`, await slider.getAttribute('aria-valuetext') === 'Max');
+      record(`${label}: short quota reset`, await page.locator('.quota-window small').evaluateAll(nodes=>nodes.every(n=>!n.textContent.includes('בעוד') && n.scrollWidth<=n.clientWidth+1)));
       await page.screenshot({path:path.join(output,`${label}-effort.png`)});
       await page.getByRole('button',{name:'פתיחת המודלים המועדפים'}).click();
       const popup = page.getByRole('dialog',{name:'מודלים מועדפים'});
       await popup.waitFor(); await page.waitForTimeout(180);
       record(`${label}: favorites bounds`, await inside());
+      if(width===1280) record(`${label}: favorites centered on trigger`, await popup.evaluate(n=>{
+        const p=n.getBoundingClientRect(),a=document.querySelector('.model-picker-trigger').getBoundingClientRect();return Math.abs((p.left+p.right-a.left-a.right)/2)<1;
+      }));
       const before = await popup.boundingBox();
       const local = page.getByRole('button',{name:'שרת מקומי',exact:true});
       await local.hover();
       await page.getByRole('tooltip',{name:'שרת מקומי',exact:true}).waitFor();
       record(`${label}: tooltip bounds`, await inside());
+      if(width===1280) {
+        const a=await local.boundingBox(),tip=await page.getByRole('tooltip',{name:'שרת מקומי',exact:true}).boundingBox();
+        record(`${label}: tooltip to the right at icon center`,tip.x>=a.x+a.width+7 && Math.abs(tip.y+tip.height/2-a.y-a.height/2)<1);
+      }
+      record(`${label}: provider has no partial border`, await local.evaluate(n=>getComputedStyle(n).boxShadow==='none'));
       const models = page.getByRole('region',{name:'מודלים של הספק'});
       record(`${label}: local basename`, !(await models.innerText()).includes('C:') && (await models.innerText()).includes('.gguf'));
       const after = await popup.boundingBox();
@@ -130,6 +146,31 @@ async function main() {
     await page.mouse.move(track.x+track.width-16,track.y+track.height/2,{steps:8}); await page.mouse.up();
     await page.waitForFunction(()=>window.__qaEvents.at(-1)?.effort==='max');
     record('native pointer drag saves final level once', await page.evaluate(()=>window.__qaEvents.length) === callsBeforeDrag+1);
+    await page.emulateMedia({reducedMotion:'no-preference'});
+    const geometry = await page.evaluate(async()=>{
+      const slider=document.querySelector('.model-effort-input');
+      const results=[],frames=[];
+      for(const value of [0,1,2,3,4]) {
+        const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(slider,String(value));
+        slider.dispatchEvent(new Event('input',{bubbles:true}));
+        for(let i=0;i<10;i++) {
+          await new Promise(requestAnimationFrame);
+          const fill=document.querySelector('.model-effort-fill').getBoundingClientRect(),thumb=document.querySelector('.model-effort-thumb').getBoundingClientRect();
+          results.push(Math.abs(fill.right-(thumb.left+thumb.right)/2));
+          const p=document.querySelector('[role=dialog]').getBoundingClientRect();frames.push({x:p.x,y:p.y,width:p.width,height:p.height});
+        }
+      }
+      return {error:Math.max(...results),stable:['x','y','width','height'].every(k=>Math.max(...frames.map(p=>p[k]))-Math.min(...frames.map(p=>p[k]))<1)};
+    });
+    record('fill and handle stay aligned during animation',geometry.error<1);
+    record('compact popup remains stable while changing effort',geometry.stable);
+    const thumb=await page.locator('.model-effort-thumb').boundingBox();
+    await page.mouse.move(thumb.x+thumb.width/2,thumb.y+thumb.height/2);await page.waitForTimeout(150);
+    const grown=await page.locator('.model-effort-thumb').boundingBox();
+    record('handle hover grows smoothly',grown.width>thumb.width+1);
+    const firstStop=await page.locator('.model-effort-stops i').first().boundingBox();
+    await page.mouse.move(firstStop.x+firstStop.width/2,firstStop.y+firstStop.height/2);await page.waitForTimeout(150);
+    record('station hover grows smoothly',(await page.locator('.model-effort-stops i').first().boundingBox()).width>firstStop.width+1);
     await page.waitForTimeout(100);
     await page.getByRole('button',{name:'פתיחת המודלים המועדפים'}).click();
     const selected = page.getByRole('menuitemradio').filter({has:page.locator('.model-menu-check')}).first();
@@ -137,6 +178,11 @@ async function main() {
     const otherModel = page.getByRole('menuitemradio').nth(1);
     await otherModel.hover(); await page.waitForTimeout(140);
     record('hover differs from actual selection', selectedColor !== await otherModel.evaluate(n=>getComputedStyle(n).backgroundColor));
+    const selectedBox=await selected.boundingBox(), hoveredBox=await otherModel.boundingBox();
+    record('adjacent highlighted models have a small gap',hoveredBox.y-selectedBox.y-selectedBox.height>=1);
+    const backBox=await page.getByRole('button',{name:'חזרה לעוצמת החשיבה'}).boundingBox();
+    const providerBox=await page.locator('.model-menu-providers button').first().boundingBox();
+    record('back and first provider have a small gap',providerBox.y-backBox.y-backBox.height>=1);
     await page.setViewportSize({width:360,height:320}); await page.waitForTimeout(200);
     record('open popup remains bounded after resize', await inside());
     await page.getByRole('button',{name:'חזרה לעוצמת החשיבה'}).click();

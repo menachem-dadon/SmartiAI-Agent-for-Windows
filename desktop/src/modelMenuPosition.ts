@@ -1,7 +1,7 @@
 import { useLayoutEffect, useState, type RefObject } from "react";
 
 type Viewport = { left: number; top: number; width: number; height: number };
-type Anchor = { left: number; top: number; bottom: number };
+type Anchor = { left: number; top: number; bottom: number; width?: number };
 
 export function modelMenuContentViewport(viewport: Viewport, titlebarBottom: number) {
   const bottom = viewport.top + viewport.height;
@@ -9,7 +9,7 @@ export function modelMenuContentViewport(viewport: Viewport, titlebarBottom: num
   return { ...viewport, top, height: bottom - top };
 }
 
-export function modelMenuBounds(anchor: Anchor, viewport: Viewport, preferredHeight: number, preferredWidth = 460) {
+export function modelMenuBounds(anchor: Anchor, viewport: Viewport, preferredHeight: number, preferredWidth = 460, fitContent = false) {
   const gap = 8;
   const width = Math.min(preferredWidth, Math.max(0, viewport.width - gap * 2));
   const minTop = viewport.top + gap;
@@ -17,17 +17,17 @@ export function modelMenuBounds(anchor: Anchor, viewport: Viewport, preferredHei
   const above = Math.max(0, Math.min(maxBottom, anchor.top - gap) - minTop);
   const below = Math.max(0, maxBottom - Math.max(minTop, anchor.bottom + gap));
   const opensAbove = above >= below;
-  const height = Math.min(preferredHeight, opensAbove ? above : below);
+  const height = Math.min(preferredHeight, fitContent ? Math.max(0, maxBottom - minTop) : opensAbove ? above : below);
   const left = Math.max(viewport.left + gap,
-    Math.min(anchor.left, viewport.left + viewport.width - width - gap));
+    Math.min(anchor.left + (anchor.width || 0) / 2 - width / 2, viewport.left + viewport.width - width - gap));
   const top = opensAbove
     ? Math.max(minTop, Math.min(maxBottom, anchor.top - gap) - height)
     : Math.min(maxBottom - height, Math.max(minTop, anchor.bottom + gap));
-  return { left, top, width, height };
+  return { left, top: Math.max(minTop, Math.min(top, maxBottom - height)), width, height };
 }
 
 export function useModelMenuPosition(
-  open: boolean, anchor: RefObject<HTMLElement | null>, preferredHeight: number, preferredWidth = 460,
+  open: boolean, anchor: RefObject<HTMLElement | null>, preferredHeight: number, preferredWidth = 460, fitContent = false,
 ) {
   const [bounds, setBounds] = useState<ReturnType<typeof modelMenuBounds> | null>(null);
   useLayoutEffect(() => {
@@ -40,7 +40,7 @@ export function useModelMenuPosition(
         left: viewport?.offsetLeft || 0, top: viewport?.offsetTop || 0,
         width: viewport?.width || window.innerWidth, height: viewport?.height || window.innerHeight,
       }, document.querySelector(".window-titlebar")?.getBoundingClientRect().bottom || 0);
-      const next = modelMenuBounds(trigger.getBoundingClientRect(), contentViewport, preferredHeight, preferredWidth);
+      const next = modelMenuBounds(trigger.getBoundingClientRect(), contentViewport, preferredHeight, preferredWidth, fitContent);
       setBounds(current => current && Object.keys(next).every(
         key => current[key as keyof typeof next] === next[key as keyof typeof next],
       ) ? current : next);
@@ -64,6 +64,6 @@ export function useModelMenuPosition(
       window.visualViewport?.removeEventListener("resize", update);
       window.visualViewport?.removeEventListener("scroll", update);
     };
-  }, [open, anchor, preferredHeight, preferredWidth]);
+  }, [open, anchor, preferredHeight, preferredWidth, fitContent]);
   return bounds;
 }

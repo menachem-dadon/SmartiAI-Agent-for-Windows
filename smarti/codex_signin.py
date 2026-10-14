@@ -22,7 +22,7 @@ import threading
 import time
 from typing import Iterable
 
-from .common import SmartiCancelled, provider_default_model
+from .common import SmartiCancelled, provider_default_model, normalize_model_reasoning_level
 from .api_errors import analyze_api_error
 
 
@@ -910,12 +910,7 @@ class CodexSignInProvider:
             if status.state != "connected":
                 raise CodexSignInError(status.message)
         selected_model = str(model or CODEX_SIGNIN_DEFAULT_MODEL).strip()
-        selected_reasoning_effort = str(reasoning_effort or "auto").strip().lower()
-        if (
-            selected_reasoning_effort != "auto"
-            and selected_reasoning_effort not in CODEX_REASONING_EFFORTS
-        ):
-            selected_reasoning_effort = "auto"
+        selected_reasoning_effort = normalize_model_reasoning_level(CODEX_SIGNIN_PROVIDER, selected_model, reasoning_effort)
         purpose = str(purpose or "agent").strip().lower()
         if purpose == "agent" and (stream is not None or session_key):
             from .agent.streaming import LiveResponse

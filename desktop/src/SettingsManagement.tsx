@@ -863,12 +863,12 @@ export function ProviderWorkflow({
       {reasoning.reasoning_options?.length ? (
         <SourceSettingField
           label="עוצמת חשיבה"
-          help="קובעת את עוצמת החשיבה של המודל הפעיל. האפשרויות מותאמות אוטומטית לחוזה של משפחת המודל; בחירה ב-Auto משאירה את השדה ריק ומשתמשת בברירת הספק."
+          help="קובעת את עוצמת החשיבה של המודל הפעיל. האפשרויות מותאמות אוטומטית לחוזה של משפחת המודל; ברירת המחדל נקבעת לפי המלצת הספק למודל, או Medium כשאין המלצה."
           dataPath="provider_reasoning_effort"
         >
           <ChoiceField label="עוצמת חשיבה" hiddenLabel
-            value={reasoning.reasoning_effort || "auto"}
-            options={reasoning.reasoning_options.map(option => ({ ...option, label: reasoningDisplayName(option.value, reasoning.reasoning_options) }))}
+            value={reasoning.reasoning_effort || "medium"}
+            options={reasoning.reasoning_options.filter(option => option.value !== "auto").map(option => ({ ...option, label: reasoningDisplayName(option.value, reasoning.reasoning_options) }))}
             onValueChange={(next) =>
               void coreApi<typeof reasoning>(
                 "POST",

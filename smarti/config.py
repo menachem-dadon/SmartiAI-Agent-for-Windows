@@ -1976,7 +1976,7 @@ DEFAULT_SETTINGS = {
     "email_trash_mailbox": "",
     "email_max_attachment_mb": 20,
     **{f"selected_{provider}_model": provider_default_model(provider) for provider in MODEL_PROVIDER_ORDER},
-    "codex_reasoning_effort": "auto",
+    "codex_reasoning_effort": "",  # Legacy field; concrete defaults and overrides are per model.
     "selected_model_source": {
         provider: MODEL_SELECTION_SOURCE_DEFAULT
         for provider in MODEL_PROVIDER_ORDER

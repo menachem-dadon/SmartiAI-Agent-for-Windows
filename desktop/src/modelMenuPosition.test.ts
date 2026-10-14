@@ -3,6 +3,17 @@ import { readFileSync } from "node:fs";
 import { modelMenuBounds, modelMenuContentViewport } from "./modelMenuPosition";
 
 describe("model menu viewport placement", () => {
+  test("centers each popup on the trigger while keeping complete compact content in a short window", () => {
+    const anchor = { left: 430, width: 160, top: 500, bottom: 540 };
+    for (const width of [280, 420]) {
+      const bounds = modelMenuBounds(anchor, { left: 0, top: 36, width: 1200, height: 700 }, 160, width, true);
+      expect(bounds.left + bounds.width / 2).toBe(anchor.left + anchor.width / 2);
+    }
+    const short = modelMenuBounds({ left: 100, width: 120, top: 140, bottom: 180 }, { left: 0, top: 36, width: 360, height: 284 }, 180, 280, true);
+    expect(short.height).toBe(180);
+    expect(short.top).toBeGreaterThanOrEqual(44);
+    expect(short.top + short.height).toBeLessThanOrEqual(312);
+  });
   test("fits narrow, short, zoomed and wide viewports at either edge", () => {
     for (const [width, height, left, top] of [
       [320, 480, 0, 0], [360, 320, 0, 0], [800, 600, 0, 0],

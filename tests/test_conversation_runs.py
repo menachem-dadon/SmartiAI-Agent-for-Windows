@@ -892,14 +892,14 @@ class LocalGatewayTests(unittest.TestCase):
                     gateway,
                     "/v2/providers/openai_codex_signin/reasoning?model=Codex%20default",
                 )
-                self.assertEqual(reasoning["data"]["reasoning_effort"], "auto")
+                self.assertEqual(reasoning["data"]["reasoning_effort"], "medium")
                 self.assertIn("high", {item["value"] for item in reasoning["data"]["reasoning_options"]})
                 _, _, selected_reasoning = self._request(
                     gateway, "/v2/providers/openai_codex_signin/reasoning", method="POST",
                     payload={"model": "Codex default", "effort": "high"},
                 )
                 self.assertEqual(selected_reasoning["data"]["reasoning_effort"], "high")
-                self.assertEqual(core.settings["codex_reasoning_effort"], "high")
+                self.assertEqual(core.settings["model_reasoning_efforts"]["openai_codex_signin"]["codex default"], "high")
 
                 _, _, settings = self._request(gateway, "/v2/settings")
                 serialized = json.dumps(settings, ensure_ascii=False)

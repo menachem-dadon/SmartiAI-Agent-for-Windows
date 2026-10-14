@@ -455,7 +455,7 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.assertIn('model_reasoning_effort="xhigh"', config_values)
         self.assertEqual(args[args.index("--model") + 1], "gpt-5.5")
 
-    def test_automatic_reasoning_omits_the_cli_config_override(self):
+    def test_legacy_automatic_reasoning_uses_concrete_model_default(self):
         self.provider.connection_status = mock.Mock(
             return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
         )
@@ -473,9 +473,7 @@ class CodexSignInProviderTests(unittest.TestCase):
             for index, value in enumerate(args[:-1])
             if value == "--config"
         ]
-        self.assertFalse(
-            any(value.startswith("model_reasoning_effort=") for value in config_values)
-        )
+        self.assertIn('model_reasoning_effort="medium"', config_values)
         self.assertNotIn("--model", args)
 
     def test_gpt_5_6_max_reasoning_effort_is_passed_to_codex(self):
@@ -497,7 +495,7 @@ class CodexSignInProviderTests(unittest.TestCase):
 
     def test_astra_reasoning_options_persist_and_reach_the_official_cli(self):
         provider, model = "openai_codex_signin", "gpt-6-astra"
-        levels = ("auto", "low", "medium", "high", "xhigh", "max")
+        levels = ("low", "medium", "high", "xhigh", "max")
         self.assertEqual(tuple(dict(model_reasoning_options(provider, model))), levels)
         self.provider.connection_status = mock.Mock(
             return_value=CodexConnectionStatus("connected", "מחובר", "chatgpt")
@@ -521,7 +519,7 @@ class CodexSignInProviderTests(unittest.TestCase):
                 self.assertEqual(reasoning, [] if effort == "auto" else [f'model_reasoning_effort="{effort}"'])
         for invalid in ("none", "minimal", "ultra"):
             with self.subTest(invalid=invalid):
-                self.assertEqual(set_model_reasoning_setting(settings, provider, model, invalid), "auto")
+                self.assertEqual(set_model_reasoning_setting(settings, provider, model, invalid), "medium")
 
     def test_noninteractive_codex_process_can_be_cancelled_during_a_long_request(self):
         provider = CodexSignInProvider(self.temp.name, executable=sys.executable)

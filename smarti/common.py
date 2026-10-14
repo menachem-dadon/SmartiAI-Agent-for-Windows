@@ -407,7 +407,7 @@ MODEL_REASONING_CONTRACTS = {
         "max_output_tokens": 65_536,
     },
 
-    # OpenAI contracts. "auto" omits effort in both Chat Completions and Responses.
+    # OpenAI contracts. Missing/legacy auto selections resolve to a concrete model default.
     "openai_current": {
         "api_field": "reasoning_effort",
         "supported_levels": ("none", "low", "medium", "high", "xhigh", "max"),
@@ -535,6 +535,7 @@ MODEL_REASONING_CONTRACTS = {
         "default_output_tokens": 64_000,
     },
     "anthropic_adaptive_47_48": {
+        "recommended_level": "xhigh",
         "api_field": "thinking.type + output_config.effort",
         "supported_levels": ("none", "low", "medium", "high", "xhigh", "max"),
         "provider_default": "none",
@@ -543,6 +544,7 @@ MODEL_REASONING_CONTRACTS = {
         "default_output_tokens": 64_000,
     },
     "anthropic_adaptive_46": {
+        "recommended_level": "medium",
         "api_field": "thinking.type + output_config.effort",
         "supported_levels": ("none", "low", "medium", "high", "max"),
         "provider_default": "none",
@@ -1167,51 +1169,88 @@ def model_reasoning_contract(provider, model):
         return _reasoning_contract("openai_current")
     return {}
 
-def normalize_model_reasoning_level(provider, model, level, fallback="auto"):
+def default_model_reasoning_level(provider, model):
+    """Resolve a supported recommendation/default; Medium is the safe fallback."""
+    provider = normalize_provider_name(provider)
     contract = model_reasoning_contract(provider, model)
     supported = tuple(contract.get("supported_levels") or ())
+    if not supported:
+        return ""
+    recommendation = model_reasoning_contract("openai", model) if provider == "openai_codex_signin" else contract
+    preferred = recommendation.get("recommended_level") or recommendation.get("provider_default")
+    if preferred in supported:
+        return preferred
+    return "medium" if "medium" in supported else supported[0]
+
+
+def normalize_model_reasoning_level(provider, model, level, fallback=None):
+    supported = tuple(model_reasoning_contract(provider, model).get("supported_levels") or ())
     value = str(level or "").strip().lower()
-    aliases = {"off": "none"}
-    value = aliases.get(value, value)
-    if value == "auto":
-        return "auto"
-    return value if value in supported else fallback
+    value = {"off": "none"}.get(value, value)
+    if value in supported:
+        return value
+    # auto is accepted only as a legacy input, never as a UI/API effort level.
+    return fallback if fallback in supported else default_model_reasoning_level(provider, model)
+
+
+def migrate_model_reasoning_settings(settings):
+    """Keep manual levels, remove obsolete auto, and bind legacy Codex to its model."""
+    settings = copy.deepcopy(settings or {})
+    before = copy.deepcopy(settings)
+    all_values = settings.get("model_reasoning_efforts", {})
+    if not isinstance(all_values, dict):
+        all_values = {}
+    for model_values in all_values.values():
+        if isinstance(model_values, dict):
+            for model, level in list(model_values.items()):
+                if str(level or "").strip().lower() == "auto":
+                    del model_values[model]
+    legacy = str(settings.get("codex_reasoning_effort", "") or "").strip().lower()
+    selected = str(settings.get("selected_openai_codex_signin_model", "") or "").strip().lower()
+    if legacy and legacy != "auto" and selected:
+        codex = all_values.setdefault("openai_codex_signin", {})
+        if isinstance(codex, dict):
+            codex.setdefault(selected, legacy)
+    if "codex_reasoning_effort" in settings:
+        settings["codex_reasoning_effort"] = ""
+    if "model_reasoning_efforts" in settings or all_values:
+        settings["model_reasoning_efforts"] = all_values
+    return settings, settings != before
+
 
 def model_reasoning_setting(settings, provider, model):
     provider = normalize_provider_name(provider)
+    all_values = (settings or {}).get("model_reasoning_efforts", {})
+    model_values = all_values.get(provider, {}) if isinstance(all_values, dict) else {}
+    name = str(model or "").strip().lower()
+    if isinstance(model_values, dict) and name in model_values:
+        return normalize_model_reasoning_level(provider, model, model_values[name])
+    # Read-only compatibility for a Core object constructed without SettingsManager.
     if provider == "openai_codex_signin":
-        return normalize_model_reasoning_level(
-            provider,
-            model,
-            (settings or {}).get("codex_reasoning_effort", "auto"),
-            fallback="auto",
-        )
-    provider_values = (settings or {}).get("model_reasoning_efforts", {})
-    if not isinstance(provider_values, dict):
-        provider_values = {}
-    model_values = provider_values.get(provider, {})
-    if not isinstance(model_values, dict):
-        model_values = {}
-    value = model_values.get(str(model or "").strip().lower(), "auto")
-    return normalize_model_reasoning_level(provider, model, value)
+        selected = str((settings or {}).get("selected_openai_codex_signin_model", "") or "").strip().lower()
+        legacy = (settings or {}).get("codex_reasoning_effort", "")
+        if not selected or selected == name:
+            return normalize_model_reasoning_level(provider, model, legacy)
+    return default_model_reasoning_level(provider, model)
+
 
 def set_model_reasoning_setting(settings, provider, model, level):
     provider = normalize_provider_name(provider)
     normalized = normalize_model_reasoning_level(provider, model, level)
     if provider == "openai_codex_signin":
-        settings["codex_reasoning_effort"] = normalized
-        return settings["codex_reasoning_effort"]
+        migrated, _ = migrate_model_reasoning_settings(settings)
+        settings.update(migrated)
     all_values = settings.setdefault("model_reasoning_efforts", {})
     model_values = all_values.setdefault(provider, {})
     model_values[str(model or "").strip().lower()] = normalized
     return normalized
+
 
 def model_reasoning_options(provider, model):
     contract = model_reasoning_contract(provider, model)
     if not contract:
         return []
     values = list(contract.get("supported_levels") or ())
-    values.insert(0, "auto")
     return [
         (value, MODEL_REASONING_LEVEL_LABELS.get(value, value))
         for value in values
@@ -1221,7 +1260,7 @@ def model_reasoning_api_parameters(provider, model, level):
     provider = normalize_provider_name(provider)
     contract = model_reasoning_contract(provider, model)
     normalized = normalize_model_reasoning_level(provider, model, level)
-    if not contract or normalized == "auto":
+    if not contract:
         return {}
     kind = contract.get("control_kind")
     if provider == "openai":

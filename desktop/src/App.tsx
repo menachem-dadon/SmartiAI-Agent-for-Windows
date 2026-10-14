@@ -274,7 +274,7 @@ export default function App() {
   const [modelSelectionSource, setModelSelectionSource] = useState<
     Record<string, unknown>
   >({});
-  const [reasoningEffort, setReasoningEffort] = useState("auto");
+  const [reasoningEffort, setReasoningEffort] = useState("");
   const [reasoningOptions, setReasoningOptions] = useState<ReasoningOption[]>(
     [],
   );
@@ -330,7 +330,7 @@ export default function App() {
           await coreApi("POST", `/v2/providers/${encodePath(selected.provider)}/reasoning`, { model: selected.model, effort: selected.effort }, true);
       }
       const latest = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
-      if (!disposed) { syncSettings(latest); drafts.setSelection({ provider: selected.provider, model: selected.model, effort: latest.chat_models.reasoning_effort || "auto" }); }
+      if (!disposed) { syncSettings(latest); drafts.setSelection({ provider: selected.provider, model: selected.model, effort: latest.chat_models.reasoning_effort || "" }); }
     })().catch(reason => { if (!disposed) setError(`לא ניתן לשחזר את בחירת המודל: ${String(reason)}`); })
       .finally(() => { if (!disposed) setRestoringModel(false); });
     return () => { disposed = true; };
@@ -451,7 +451,7 @@ export default function App() {
       : [];
     setProvider(data.chat_models.provider);
     setModel(data.chat_models.model);
-    setReasoningEffort(data.chat_models.reasoning_effort || "auto");
+    setReasoningEffort(data.chat_models.reasoning_effort || "");
     setReasoningOptions(data.chat_models.reasoning_options || []);
     setFavoriteModels(favorites);
     setModelSelectionSource(
@@ -1077,7 +1077,7 @@ export default function App() {
       `/v2/providers/${encodePath(nextProvider)}/reasoning?model=${encodeURIComponent(nextModel)}`,
     );
     if (owner === activeIdRef.current) {
-      setReasoningEffort(data.reasoning_effort || "auto");
+      setReasoningEffort(data.reasoning_effort || "");
       setReasoningOptions(data.reasoning_options || []);
     }
     return data;
@@ -1112,7 +1112,7 @@ export default function App() {
         [item.provider]: "user",
       }));
       const reasoning = await loadReasoning(item.provider, item.model, owner);
-      drafts.setSelection({ ...item, effort: reasoning.reasoning_effort || "auto" });
+      drafts.setSelection({ ...item, effort: reasoning.reasoning_effort || "" });
       return true;
     } catch (reason) {
       if (owner === activeIdRef.current) {

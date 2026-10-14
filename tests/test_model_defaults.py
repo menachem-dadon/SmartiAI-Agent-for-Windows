@@ -15,6 +15,8 @@ from smarti.common import (
     MODEL_SELECTION_PROVENANCE_VERSION,
     MODEL_SELECTION_SOURCE_DEFAULT,
     MODEL_SELECTION_SOURCE_USER,
+    default_model_reasoning_level,
+    migrate_model_reasoning_settings,
     model_reasoning_api_parameters,
     model_reasoning_contract,
     model_reasoning_options,
@@ -65,7 +67,7 @@ class ModelDefaultAndProvenanceTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_fresh_defaults_use_requested_models_and_auto_reasoning(self):
+    def test_fresh_defaults_use_requested_models_and_concrete_reasoning(self):
         self.assertEqual(DEFAULT_SETTINGS["conversation_title_generation_mode"], "ai")
         expected = {
             "gemini": "gemini-3.8-flash",
@@ -81,7 +83,7 @@ class ModelDefaultAndProvenanceTests(unittest.TestCase):
                 DEFAULT_SETTINGS["selected_model_source"][provider],
                 MODEL_SELECTION_SOURCE_DEFAULT,
             )
-            self.assertEqual(model_reasoning_setting(DEFAULT_SETTINGS, provider, model), "auto")
+            self.assertEqual(model_reasoning_setting(DEFAULT_SETTINGS, provider, model), {"gemini": "medium", "openai": "medium", "openai_codex_signin": "medium", "anthropic": "high"}.get(provider, ""))
 
     def test_only_known_automatic_selections_are_refreshed_on_load(self):
         loaded = copy.deepcopy(DEFAULT_SETTINGS)
@@ -198,7 +200,7 @@ class ProviderFamilyReasoningContractTests(unittest.TestCase):
         for provider, model in (("openai", "gpt-6.1-sol"), ("gemini", "gemini-3.8-flash")):
             self.assertNotIn("none", dict(model_reasoning_options(provider, model)))
             self.assertNotIn("minimal", dict(model_reasoning_options(provider, model)))
-            self.assertEqual(model_reasoning_api_parameters(provider, model, "auto"), {})
+            self.assertEqual(model_reasoning_api_parameters(provider, model, "auto"), model_reasoning_api_parameters(provider, model, "medium"))
         self.assertEqual(model_reasoning_api_parameters("anthropic", "claude-sonnet-5-5", "none"), {"thinking": {"type": "between_tools"}})
         self.assertEqual(model_reasoning_api_parameters("anthropic", "claude-haiku-5-5", "none"), {"thinking": {"type": "disabled"}})
         self.assertEqual(model_reasoning_contract("anthropic", "claude-haiku-5-5")["provider_default"], "medium")
@@ -319,20 +321,20 @@ class ProviderFamilyReasoningContractTests(unittest.TestCase):
         )
         self.assertEqual(
             model_reasoning_setting(settings, "openai", "gpt-5.6-sol"),
-            "auto",
+            "medium",
         )
 
-    def test_auto_is_a_ui_choice_but_never_an_api_value(self):
+    def test_legacy_auto_resolves_to_concrete_default_and_is_not_an_option(self):
         options = dict(model_reasoning_options("openai", "gpt-5.6-sol"))
-        self.assertIn("auto", options)
+        self.assertNotIn("auto", options)
         self.assertEqual(
             model_reasoning_api_parameters("openai", "gpt-5.6-sol", "auto"),
-            {},
+            {"reasoning_effort": "medium"},
         )
         codex_options = dict(
             model_reasoning_options("openai_codex_signin", "Codex default")
         )
-        self.assertIn("auto", codex_options)
+        self.assertNotIn("auto", codex_options)
         settings = copy.deepcopy(DEFAULT_SETTINGS)
         self.assertEqual(
             model_reasoning_setting(
@@ -340,7 +342,7 @@ class ProviderFamilyReasoningContractTests(unittest.TestCase):
                 "openai_codex_signin",
                 "Codex default",
             ),
-            "auto",
+            "medium",
         )
         self.assertEqual(
             set_model_reasoning_setting(
@@ -349,9 +351,39 @@ class ProviderFamilyReasoningContractTests(unittest.TestCase):
                 "Codex default",
                 "auto",
             ),
-            "auto",
+            "medium",
         )
-        self.assertEqual(settings["codex_reasoning_effort"], "auto")
+        self.assertEqual(settings["codex_reasoning_effort"], "")
+        self.assertEqual(settings["model_reasoning_efforts"]["openai_codex_signin"]["codex default"], "medium")
+
+    def test_default_levels_are_supported_and_use_the_model_recommendation(self):
+        for provider, model, expected in [
+            ("openai", "gpt-6.1-sol", "medium"), ("openai", "gpt-5-pro", "high"),
+            ("openai_codex_signin", "gpt-5.5-pro", "high"), ("openai_codex_signin", "Codex default", "medium"),
+            ("gemini", "gemini-3.8-flash", "medium"), ("gemini", "gemini-3.5-flash-lite", "minimal"),
+            ("gemini", "gemini-2.5-pro", "medium"), ("anthropic", "claude-sonnet-5-5", "high"),
+            ("anthropic", "claude-haiku-5-5", "medium"), ("anthropic", "claude-sonnet-4-6", "medium"),
+        ]:
+            with self.subTest(provider=provider, model=model):
+                self.assertEqual(default_model_reasoning_level(provider, model), expected)
+                self.assertIn(expected, dict(model_reasoning_options(provider, model)))
+                self.assertNotIn("auto", dict(model_reasoning_options(provider, model)))
+        self.assertEqual(default_model_reasoning_level("local", "model.gguf"), "")
+        self.assertEqual(default_model_reasoning_level("openai", "gpt-4.1"), "")
+
+    def test_reasoning_migration_preserves_manual_levels_and_codex_is_per_model(self):
+        loaded = {"selected_openai_codex_signin_model": "gpt-6.1-sol", "codex_reasoning_effort": "xhigh",
+                  "model_reasoning_efforts": {"openai": {"manual-model": "max", "gpt-6.1-sol": "auto"}}}
+        settings, changed = migrate_model_reasoning_settings(loaded)
+        self.assertTrue(changed)
+        self.assertEqual(settings["model_reasoning_efforts"]["openai"]["manual-model"], "max")
+        self.assertNotIn("gpt-6.1-sol", settings["model_reasoning_efforts"]["openai"])
+        self.assertEqual(model_reasoning_setting(settings, "openai_codex_signin", "gpt-6.1-sol"), "xhigh")
+        self.assertEqual(model_reasoning_setting(settings, "openai_codex_signin", "gpt-6-astra"), "medium")
+        set_model_reasoning_setting(settings, "openai_codex_signin", "gpt-6-astra", "low")
+        self.assertEqual(model_reasoning_setting(settings, "openai_codex_signin", "gpt-6.1-sol"), "xhigh")
+        self.assertEqual(model_reasoning_setting(settings, "openai_codex_signin", "gpt-6-astra"), "low")
+        self.assertEqual(migrate_model_reasoning_settings(settings), (settings, False))
 
     def test_settings_control_rebuilds_options_for_the_selected_family(self):
         settings = copy.deepcopy(DEFAULT_SETTINGS)
@@ -375,7 +407,7 @@ class ProviderFamilyReasoningContractTests(unittest.TestCase):
         SettingsPage._refresh_reasoning_effort_control(page, "gemini")
         self.assertEqual(page.reasoning_effort_combo.findData("none"), -1)
         self.assertGreaterEqual(page.reasoning_effort_combo.findData("minimal"), 0)
-        self.assertEqual(page.reasoning_effort_combo.currentData(), "auto")
+        self.assertEqual(page.reasoning_effort_combo.currentData(), "medium")
         self.assertTrue(all(visibility))
 
 
@@ -441,7 +473,7 @@ class ExactProviderPayloadTests(unittest.TestCase):
         self.assertEqual(core.generate_conversation_title("Request", "Answer"), "")
         core._handle_api_request_with_retry.assert_not_called()
 
-    def test_sol_61_uses_responses_and_auto_does_not_reach_wire(self):
+    def test_sol_61_uses_responses_and_resolves_legacy_auto_to_medium(self):
         core = _request_core("openai")
         core._native_tool_specs_for_request = lambda: [{"name": "lookup", "description": "Lookup", "parameters": {"type": "object", "properties": {}}}]
         create = mock.Mock(return_value={
@@ -452,7 +484,7 @@ class ExactProviderPayloadTests(unittest.TestCase):
         result, _ = core._handle_api_request_with_retry("gpt-6.1-sol", [{"role": "user", "content": "Request"}], retry_wait_times=[])
         self.assertEqual(result, "Answer")
         chat_create.assert_not_called()
-        self.assertNotIn("reasoning", create.call_args.kwargs)
+        self.assertEqual(create.call_args.kwargs["reasoning"], {"effort": "medium"})
         self.assertEqual(create.call_args.kwargs["tools"][0]["name"], "lookup")
 
     def test_current_default_model_context_windows(self):

@@ -23,6 +23,8 @@ const providerName = (value: string) => providerOptions.find(option => option.va
 function ReasoningSlider({ value, options, onChange, onPreviewChange }: {
   value: string; options: ReasoningOption[]; onChange: Props["onReasoningEffort"]; onPreviewChange: (value: string | null) => void;
 }) {
+  const slider = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState({ thumb: false, stop: -1 });
   const dragging = useRef(false), preview = useRef<string | null>(null), dragStart = useRef(value);
   const index = options.findIndex(option => option.value === value);
   const commitDrag = () => {
@@ -32,10 +34,23 @@ function ReasoningSlider({ value, options, onChange, onPreviewChange }: {
     if (next !== null && next !== dragStart.current) void onChange(next);
   };
   return <div className="model-effort-control" dir="ltr">
-    <div className="model-effort-slider">
-      <input className="sds-range" type="range" aria-label="עוצמת חשיבה" aria-valuetext={reasoningDisplayName(value, options)}
+    <div ref={slider} className="model-effort-slider" style={{ "--model-effort-position": options.length > 1 ? Math.max(0, index) / (options.length - 1) : 0 } as CSSProperties}
+      onPointerLeave={() => setHover({ thumb: false, stop: -1 })}
+      onPointerMove={event => {
+        if (event.pointerType === "touch" || !slider.current) return;
+        const rect = slider.current.getBoundingClientRect(), thumb = slider.current.querySelector<HTMLElement>(".model-effort-thumb")!.getBoundingClientRect();
+        const half = parseFloat(getComputedStyle(slider.current).getPropertyValue("--model-effort-thumb-size")) / 2;
+        const step = options.length > 1 ? (rect.width - 2 * half) / (options.length - 1) : 0;
+        const stop = step > 0 ? Math.max(0, Math.min(options.length - 1, Math.round((event.clientX - rect.left - half) / step))) : 0;
+        const next = { thumb: event.clientX >= thumb.left && event.clientX <= thumb.right && event.clientY >= thumb.top && event.clientY <= thumb.bottom,
+          stop: Math.abs(event.clientX - rect.left - half - stop * step) <= 10 && Math.abs(event.clientY - rect.top - rect.height / 2) <= 12 ? stop : -1 };
+        setHover(current => current.thumb === next.thumb && current.stop === next.stop ? current : next);
+      }}>
+      <span className="model-effort-track" aria-hidden="true"><span className="model-effort-fill" /></span>
+      <span className={`model-effort-thumb${hover.thumb ? " is-hovered" : ""}`} aria-hidden="true" />
+      <input className="model-effort-input" type="range" aria-label="עוצמת חשיבה" aria-valuetext={reasoningDisplayName(value, options)}
         min={0} max={Math.max(0, options.length - 1)} step={1} value={Math.max(0, index)} disabled={options.length < 2 || index < 0}
-        style={{ "--sds-range-fill": `${options.length > 1 ? Math.max(0, index) / (options.length - 1) * 100 : 0}%`, "--sds-range-direction": "to right" } as CSSProperties}
+
         onPointerDown={event => { dragging.current = true; dragStart.current = value; preview.current = null; event.currentTarget.setPointerCapture?.(event.pointerId); }}
         onPointerUp={commitDrag} onPointerCancel={commitDrag} onLostPointerCapture={commitDrag}
         onChange={event => {
@@ -45,13 +60,16 @@ function ReasoningSlider({ value, options, onChange, onPreviewChange }: {
           if (!dragging.current) void onChange(next);
         }} />
       <span className="model-effort-stops" aria-hidden="true">{options.map((option, i) =>
-        <i key={option.value} className={`${i <= index ? "is-filled" : ""}${i === index ? " is-current" : ""}`} />)}</span>
+        <i key={option.value} style={{ "--model-effort-stop-position": options.length > 1 ? i / (options.length - 1) : 0 } as CSSProperties} className={`${i <= index ? "is-filled" : ""}${i === index ? " is-current" : ""}${i === hover.stop ? " is-hovered" : ""}`} />)}</span>
     </div>
     <output className="sds-visually-hidden" aria-live="polite">{reasoningDisplayName(value, options)}</output>
   </div>;
 }
 
-export function ComposerModelPicker({ theme, provider, model, favoriteModels, reasoningEffort, reasoningOptions, quota, onOpen, onFavoriteModel, onReasoningEffort, onManageModels }: Props) {
+export function ComposerModelPicker({ theme, provider, model, favoriteModels, reasoningEffort: savedEffort, reasoningOptions: suppliedOptions, quota, onOpen, onFavoriteModel, onReasoningEffort, onManageModels }: Props) {
+  const reasoningOptions = suppliedOptions.filter(option => option.value !== "auto");
+  const reasoningEffort = reasoningOptions.some(option => option.value === savedEffort) ? savedEffort
+    : reasoningOptions.find(option => option.value === "medium")?.value || reasoningOptions[0]?.value || "";
   const root = useRef<HTMLSpanElement>(null), trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View | null>(null), [present, setPresent] = useState(false), [busy, setBusy] = useState(false);
   const [previewEffort, setPreviewEffort] = useState<string | null>(null);
@@ -80,8 +98,8 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
   const shownProvider = providers.includes(browsedProvider) ? browsedProvider : providers[0] || "";
   const rowCount = Math.min(7, Math.max(1, providers.length, ...providers.map(p => menuModels.filter(item => item.provider === p).length)));
   const preferredHeight = shownView === "effort" ? metrics.effort + (quota ? metrics.quota : 0)
-    : metrics.header + rowCount * metrics.row + 18 + (quota ? metrics.quota : 0) + (!favoriteModels.length ? metrics.note : 0);
-  const bounds = useModelMenuPosition(open || present, trigger, preferredHeight, shownView === "effort" ? 304 : metrics.width);
+    : metrics.header + rowCount * (metrics.row + 2) + 22 + (quota ? metrics.quota : 0) + (!favoriteModels.length ? metrics.note : 0);
+  const bounds = useModelMenuPosition(open || present, trigger, preferredHeight, shownView === "effort" ? 280 : metrics.width, shownView === "effort");
   const close = (restoreFocus = false) => { setView(null); if (restoreFocus) trigger.current?.focus(); };
   useDismissiblePopup({ open, roots: [root, popup], onDismiss: () => close() });
   useEffect(() => {
@@ -109,11 +127,11 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
     if (!open || !popup.current) return;
     const measure = () => {
       const node = popup.current!;
-      const widths = Array.from(node.querySelectorAll<HTMLElement>(".model-menu-width-labels bdi")).map(label => label.getBoundingClientRect().width);
-      const height = (selector: string, fallback: number) => node.querySelector<HTMLElement>(selector)?.getBoundingClientRect().height || fallback;
+      const widths = Array.from(node.querySelectorAll<HTMLElement>(".model-menu-width-labels bdi")).map(label => label.offsetWidth);
+      const height = (selector: string, fallback: number) => node.querySelector<HTMLElement>(selector)?.offsetHeight || fallback;
       const next = { width: Math.max(280, Math.min(460, Math.max(0, ...widths) + 120)),
-        row: height(".model-menu-list button", 44), header: height(".model-menu-title", 48),
-        quota: height(".model-picker-quota", 76), effort: height(".model-effort-content", 112) + 18,
+        row: Math.max(40, ...Array.from(node.querySelectorAll<HTMLElement>(".model-menu-list button")).map(button => button.offsetHeight)), header: height(".model-menu-title", 48),
+        quota: height(".model-picker-quota", 50) + (parseFloat(getComputedStyle(node.querySelector(".model-picker-quota") || node).marginTop) || 0), effort: height(".model-effort-content", 76) + 20,
         note: height(".model-menu-empty", 36) + 8 };
       setMetrics(current => Object.keys(next).every(key => current[key as keyof typeof next] === next[key as keyof typeof next]) ? current : next);
     };
@@ -151,13 +169,16 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
         if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setView("effort"); setBrowsedProvider(provider); onOpen(); }
       }}>
       <Icon name="chevron" size={16} /><span id={`${id}-selection`} className="model-picker-trigger-copy" dir="ltr"><HoverLabel text={name} />
-        {!!reasoningOptions.length && <bdi className="model-picker-effort-name">{reasoningDisplayName(previewEffort ?? reasoningEffort, reasoningOptions)}</bdi>}</span>
+        {!!reasoningOptions.length && <span className="model-picker-effort-name">
+          <span className="model-picker-effort-width-labels" aria-hidden="true">{reasoningOptions.map(option => <bdi key={option.value}>{reasoningDisplayName(option.value, reasoningOptions)}</bdi>)}</span>
+          <bdi>{reasoningDisplayName(previewEffort ?? reasoningEffort, reasoningOptions)}</bdi>
+        </span>}</span>
     </Button>
     {(open || present) && createPortal(<DesignSystemProvider theme={theme}><div ref={popup} id={id} role="dialog"
       aria-label={shownView === "effort" ? "מודל ועוצמת חשיבה" : "מודלים מועדפים"} aria-hidden={!open || undefined} inert={!open || undefined}
-      className={`model-quick-menu model-picker-frame${!open ? " is-closing" : ""}${bounds && bounds.height < 250 ? " is-compact" : ""}`}
+      className={`model-quick-menu model-picker-frame${!open ? " is-closing" : ""}${bounds && bounds.height < 190 ? " is-tight" : ""}${shownView === "effort" ? " is-effort" : ""}`}
       style={bounds || undefined} onKeyDown={keyDown}>
-      <div key={shownView} className="model-picker-surface" onAnimationEnd={event => { if (event.target === event.currentTarget && !open) setPresent(false); }}>
+      <div key={shownView} className={`model-picker-surface${shownView === "effort" ? " model-picker-surface--effort" : ""}`} onAnimationEnd={event => { if (event.target === event.currentTarget && !open) setPresent(false); }}>
         {shownView === "effort" ? <div className="model-effort-content">
           <div className="model-effort-header">
             <Button variant="ghost" className="model-effort-model" aria-label="פתיחת המודלים המועדפים" disabled={busy} onClick={() => setView("models")}>
@@ -180,7 +201,7 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
                 <HoverLabel text={modelDisplayName(item.provider, item.model)} /><Icon name="check" className="model-menu-check" /></Button>)}
             </div></section>
             <section className="model-menu-providers" aria-label="ספקים"><div className="model-menu-list">
-              {providers.map(p => <Tooltip key={p} label={providerName(p)}><Button variant="ghost" aria-label={providerName(p)} aria-pressed={shownProvider === p}
+              {providers.map(p => <Tooltip key={p} label={providerName(p)} placement="right"><Button variant="ghost" aria-label={providerName(p)} aria-pressed={shownProvider === p}
                 onMouseEnter={() => setBrowsedProvider(p)} onFocus={() => setBrowsedProvider(p)} onClick={() => setBrowsedProvider(p)}><ProviderIcon value={p} /></Button></Tooltip>)}
             </div></section>
           </div>

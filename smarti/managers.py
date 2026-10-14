@@ -22,7 +22,7 @@ class SettingsManager:
         "voice_hotkey", "keep_running_in_tray",
         "voice_sensitivity", "voice_dynamic_energy_threshold", "voice_pause_threshold",
         "voice_listen_timeout", "voice_ambient_noise_duration",
-        "voice_beep_enabled", "legal_acceptance"
+        "voice_beep_enabled", "legal_acceptance", "model_reasoning_efforts", "codex_reasoning_effort"
     } | {f"selected_{provider}_model" for provider in MODEL_PROVIDER_ORDER}
 
     def __init__(self, settings_file, defaults):
@@ -250,6 +250,7 @@ class SettingsManager:
                 migrated,
                 prior_settings=prior_loaded,
             )
+            migrated, _ = migrate_model_reasoning_settings(migrated)
             return self.sync_legacy_aliases(migrated), True
         loaded, ssl_trust_changed = self.migrate_ssl_trust(loaded)
         loaded, long_task_changed = self.migrate_long_task_defaults(loaded)
@@ -258,6 +259,7 @@ class SettingsManager:
             loaded,
             prior_settings=prior_loaded,
         )
+        loaded, reasoning_defaults_changed = migrate_model_reasoning_settings(loaded)
         context_limits_changed = False
         for key in self.DEPRECATED_CONTEXT_LIMIT_KEYS:
             if key in loaded:
@@ -271,6 +273,7 @@ class SettingsManager:
                 or memory_retrieval_changed
                 or model_provenance_changed
                 or context_limits_changed
+                or reasoning_defaults_changed
             ),
         )
 

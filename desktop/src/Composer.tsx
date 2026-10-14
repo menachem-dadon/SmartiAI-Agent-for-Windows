@@ -15,6 +15,7 @@ import type { ResolvedTheme } from "./designSystem";
 import { DesignSystemProvider, Icon, Menu, Switch } from "./design-system";
 import "./chat.css";
 import { ComposerModelPicker } from "./ComposerModelPicker";
+import { quotaResetLabel } from "./quotaPresentation";
 import { autonomyLabels, autonomyProfiles } from "./autonomyProfiles";
 import { coreApi } from "./coreApi";
 
@@ -85,20 +86,6 @@ type VoiceState = {
   error: string;
   cancelled: boolean;
 };
-function resetText(timestamp?: number): string {
-  if (!timestamp) return "";
-  const remaining = Math.max(0, Math.floor(timestamp - Date.now() / 1000));
-  if (remaining < 60) return "איפוס בקרוב";
-  const minutes = Math.max(1, Math.floor(remaining / 60));
-  if (minutes < 60) return `איפוס בעוד ${minutes} דק׳`;
-  const hours = Math.floor(minutes / 60);
-  const restMinutes = minutes % 60;
-  if (hours < 24)
-    return `איפוס בעוד ${hours} שע׳${restMinutes ? ` ו-${restMinutes} דק׳` : ""}`;
-  const days = Math.floor(hours / 24);
-  const restHours = hours % 24;
-  return `איפוס בעוד ${days} ימים${restHours ? ` ו-${restHours} שע׳` : ""}`;
-}
 export function Composer({
   draft,
   onDraftChange,
@@ -365,15 +352,15 @@ export function Composer({
         const remaining = typeof value === "number" && Number.isFinite(value)
           ? Math.max(0, Math.min(100, Math.round(value))) : null;
         const label = key === "five_hour" ? "5 שעות" : "שבוע";
-        const reset = resetText(windowData?.resets_at);
-        const detail = remaining === null ? quotaStatus : reset || "זמן האיפוס אינו זמין";
+        const reset = quotaResetLabel(windowData?.resets_at, key);
+        const detail = remaining === null ? quotaStatus : reset ? `איפוס: ${reset}` : "זמן האיפוס אינו זמין";
         const tone = remaining === null ? "" : remaining < 20 ? "is-low" : remaining < 50 ? "is-medium" : "is-good";
         return (
           <div className={`quota-window ${tone}`} key={key} title={`${quotaStatus} · ${detail}`}
             aria-label={`${label}: ${remaining === null ? "המכסה אינה זמינה" : `${remaining}% נותרו`}. ${detail}`}>
-            <p><b>{label}</b><em>{remaining === null ? "—" : `${remaining}% נותרו`}</em></p>
+            <p><b>{label}</b><em>{remaining === null ? "—" : `${remaining}%`}</em></p>
             <i aria-hidden="true"><span style={{ width: `${remaining ?? 0}%` }} /></i>
-            <small>{detail}</small>
+            <small>{remaining === null ? (quotaLoading ? "טוען…" : "לא זמין") : reset || "לא זמין"}</small>
           </div>
         );
       })}
