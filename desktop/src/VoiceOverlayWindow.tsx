@@ -5,6 +5,7 @@ import { parseThemePreference, resolveTheme, THEME_STORAGE_KEY } from "./designS
 import { Card, DesignSystemProvider, Icon, IconButton } from "./design-system";
 import "./chat.css";
 import "./App.css";
+import { interfaceReady } from "./interfaceModule";
 
 type VoiceState = {
   active: boolean;
@@ -25,6 +26,7 @@ export function VoiceOverlayWindow({ fixture = false }: { fixture?: boolean }) {
   const expanded = new URLSearchParams(location.search).get("expanded") === "1";
   const [status, setStatus] = useState("אפשר לדבר עכשיו");
   useEffect(() => {
+    interfaceReady();
     if (fixture) return;
     let stopped = false;
     const poll = async () => {

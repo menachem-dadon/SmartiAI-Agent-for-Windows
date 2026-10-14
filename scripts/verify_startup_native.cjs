@@ -1,6 +1,7 @@
 // Real isolated Tauri/Core processes. No personal app, profile or provider calls.
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const {pathToFileURL} = require('node:url');
 const net = require('node:net');
 const {spawn, execFileSync} = require('node:child_process');
 const assert = require('node:assert/strict');
@@ -13,9 +14,9 @@ async function freePort() { return new Promise(resolve => { const server=net.cre
 async function connect(port, identifier) {
   let target;
   await until(async()=>{try{const items=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();target=items.find(t=>t.type==='page'&&!t.url.includes('voice-overlay'));return !!target;}catch{return false;}});
-  const ws=new WebSocket(target.webSocketDebuggerUrl), pending=new Map(); let id=0;
+  const ws=new WebSocket(target.webSocketDebuggerUrl), pending=new Map(), listeners=new Map(); let id=0;
   await new Promise((resolve,reject)=>{ws.addEventListener('open',resolve,{once:true});ws.addEventListener('error',reject,{once:true});});
-  ws.addEventListener('message',({data})=>{const item=JSON.parse(data),task=pending.get(item.id);if(task){clearTimeout(task.timer);pending.delete(item.id);item.error?task.reject(Error(JSON.stringify(item.error))):task.resolve(item.result);}});
+  ws.addEventListener('message',({data})=>{const item=JSON.parse(data),task=pending.get(item.id);if(task){clearTimeout(task.timer);pending.delete(item.id);item.error?task.reject(Error(JSON.stringify(item.error))):task.resolve(item.result);}if(item.method)listeners.get(item.method)?.(item.params);});
   ws.addEventListener('close',()=>{for(const task of pending.values()){clearTimeout(task.timer);task.reject(Error('Owned app disconnected'));}pending.clear();});
   const send=(method,params={})=>new Promise((resolve,reject)=>{const request=++id,timer=setTimeout(()=>{pending.delete(request);reject(Error('CDP timeout: '+method));},30000);pending.set(request,{resolve,reject,timer});ws.send(JSON.stringify({id:request,method,params}));});
   const evaluate=async expression=>{const r=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.text);return r.result.value;};
@@ -23,17 +24,21 @@ async function connect(port, identifier) {
   await send('Runtime.enable'); await send('Page.enable');
   await until(()=>evaluate('!!window.__TAURI_INTERNALS__').catch(()=>false));
   assert.equal(await invoke('plugin:app|identifier'),identifier);
-  return {send,evaluate,invoke,close:()=>ws.close(),wait:expression=>until(()=>evaluate(expression).catch(()=>false)),screenshot:async name=>{const r=await send('Page.captureScreenshot');await fs.writeFile(path.join(output,name),Buffer.from(r.data,'base64'));}};
+  return {send,evaluate,invoke,on:(method,listener)=>listeners.set(method,listener),close:()=>ws.close(),wait:expression=>until(()=>evaluate(expression).catch(()=>false)),screenshot:async name=>{const r=await send('Page.captureScreenshot');await fs.writeFile(path.join(output,name),Buffer.from(r.data,'base64'));}};
 }
 
 async function main() {
   await fs.mkdir(output,{recursive:true});
   const windowModeOnly=process.argv.includes('--window-mode');
-  const reportName=windowModeOnly?'window-mode-report.json':'native-report.json';
+  const moduleRecoveryOnly=process.argv.includes('--module-recovery');
+  const resumeOnly=process.argv.includes('--resume');
+  const reportName=resumeOnly?'resume-report.json':moduleRecoveryOnly?'module-recovery-report.json':windowModeOnly?'window-mode-report.json':'native-report.json';
   const build=JSON.parse((await fs.readFile(path.join(output,'native-build.json'),'utf8')).replace(/^\uFEFF/,''));
   assert.equal(build.identifier,'ai.smarti.startupqa');
   assert.equal(path.basename(build.executable),'smarti-startup-qa.exe');
   const cases=[],owned=[];
+  let frontendServer;
+  let stableFrontend;
   async function launch(name,{delay=0,missing=false,theme='light',data:reuseData,placement:seedPlacement}={}) {
     const data=reuseData||path.join(output,'data-'+name+'-'+Date.now()),project=path.join(data,'project'),isolation=path.join(data,'python');
     await fs.mkdir(project,{recursive:true}); await fs.mkdir(isolation,{recursive:true});
@@ -76,6 +81,100 @@ async function main() {
     execFileSync('pwsh',['-NoProfile','-Command',`Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public static class StartupResize {[DllImport("user32.dll",SetLastError=true)]public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int w,int height,uint flags);}';if(-not [StartupResize]::SetWindowPos([IntPtr]${info.hwnd},[IntPtr]::Zero,${position?.x||0},${position?.y||0},${Math.round(width*scale)},${Math.round(height*scale)},${position?20:22})){throw 'Owned window resize failed'}`],{windowsHide:true,encoding:'utf8'});
   }
   try {
+    if(resumeOnly) {
+      assert.ok(build.frontendUrl,'Resume QA requires a -HttpFrontend executable.');
+      const url=new URL(build.frontendUrl);assert.equal(url.hostname,'127.0.0.1');
+      const {startStableInterface}=await import(pathToFileURL(path.join(root,'scripts/run_desktop_stable.mjs')));
+      stableFrontend=await startStableInterface({port:Number(url.port),host:url.hostname,build:false});
+      const entry=await launch('resume-stable'),q=await attach(entry);
+      const baseline=await ready(q);entry.corePid=baseline.pid;
+      await q.evaluate(`document.querySelector('.legal-confirm input').click(); Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='אני מסכים').click()`);
+      await q.wait('!!document.querySelector(".chat-column")');
+      const hwnd=windowInfo(entry).hwnd;
+      const text='בדיקת חזרה משינה — טיוטה מבודדת';
+      await q.evaluate(`(()=>{const input=document.querySelector('textarea[aria-label="הודעה"]');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,${JSON.stringify(text)});input.dispatchEvent(new Event('input',{bubbles:true}));window.__smartiResumeNonce='owned-resume-test';})()`);
+      await q.wait(`JSON.parse(sessionStorage.getItem('smarti.desktop.chat-drafts.v1')).new.text===${JSON.stringify(text)}`);
+      let navigations=0,sockets=0;
+      q.on('Page.frameNavigated',({frame})=>{if(!frame.parentId)navigations++;});
+      q.on('Network.webSocketCreated',()=>sockets++);
+      await q.send('Network.enable');
+      assert.equal(await q.evaluate('performance.getEntriesByType("resource").some(r=>r.name.includes("/@vite/client"))'),false);
+      for(let cycle=0;cycle<3;cycle++) {
+        await q.send('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:0,uploadThroughput:0});
+        await q.send('Page.setWebLifecycleState',{state:'frozen'});await pause(500);
+        await q.send('Page.setWebLifecycleState',{state:'active'});
+        await q.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+        await q.invoke('desktop_focus_main');await pause(300);
+        assert.equal(await q.evaluate('window.__smartiResumeNonce'),'owned-resume-test');
+        assert.equal(await q.evaluate('document.querySelector("textarea[aria-label=הודעה]").value'),text);
+        const core=await q.invoke('core_status');assert.equal(core.pid,baseline.pid);assert.equal(core.generation,baseline.generation);
+        assert.equal(windowInfo(entry).hwnd,hwnd);assert.equal(navigations,0);assert.equal(sockets,0);
+        cases.push({name:'connection loss, frozen renderer and resume '+(cycle+1),sameDocument:true,sameDraft:true,sameCore:true,sameWindow:true,noDevelopmentSocket:true});
+      }
+      await q.screenshot('resume-stable.png');
+      await q.invoke('desktop_quit').catch(()=>{});await gone(entry);
+      await fs.writeFile(path.join(output,reportName),JSON.stringify({ok:true,cases,scope:'Real isolated Tauri/Core, normal immutable frontend server, CDP connection loss and renderer freeze/resume. No physical system sleep, personal UI, provider call or installer.'},null,2));
+      console.log(JSON.stringify({ok:true,cases},null,2));return;
+    }
+    if(moduleRecoveryOnly) {
+      assert.ok(build.frontendUrl,'Module interception requires -HttpFrontend; WebView2 bypasses CDP Fetch for the embedded custom protocol.');
+      const url=new URL(build.frontendUrl);
+      assert.equal(url.hostname,'127.0.0.1');
+      try {await fetch(build.frontendUrl,{signal:AbortSignal.timeout(1500)});throw Error('QA frontend port already in use');}catch(error){if(error.message==='QA frontend port already in use')throw error;}
+      frontendServer=spawn(build.python,['-m','http.server',url.port,'--bind',url.hostname,'--directory',build.frontend],{windowsHide:true,stdio:'ignore'});
+      const expected=await fs.readFile(path.join(build.frontend,'index.html'),'utf8');
+      await until(async()=>{try{return await(await fetch(build.frontendUrl,{signal:AbortSignal.timeout(1500)})).text()===expected;}catch{return false;}});
+      const entry=await launch('module-recovery'),q=await attach(entry);
+      const baseline=await ready(q);entry.corePid=baseline.pid;
+      const hwnd=windowInfo(entry).hwnd,size=await q.invoke('plugin:window|inner_size',{label:'main'});
+      let chunk='main',extension='js',failures=0,requests=0,navigations=0,evaluation=false,interceptionError;
+      const assetRequests=[];
+      q.on('Network.requestWillBeSent',({request})=>{if(request.url.includes('/assets/'))assetRequests.push(new URL(request.url).pathname);});
+      q.on('Page.frameNavigated',({frame})=>{if(!frame.parentId)navigations++;});
+      q.on('Fetch.requestPaused',({requestId,request})=>{
+        const matched=new RegExp('/assets/'+chunk+'-[^/]+\\.'+extension+'(?:\\?|$)').test(request.url);
+        let action;
+        if(matched) {
+          requests++;
+          if(evaluation)action=q.send('Fetch.fulfillRequest',{requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/javascript'}],body:Buffer.from('throw new Error("private diagnostic must not reach UI")').toString('base64')});
+          else if(requests<=failures)action=q.send('Fetch.failRequest',{requestId,errorReason:'ConnectionClosed'});
+        }
+        (action||q.send('Fetch.continueRequest',{requestId})).catch(error=>{interceptionError=String(error);});
+      });
+      await q.send('Network.enable');await q.send('Network.setCacheDisabled',{cacheDisabled:true});
+      await q.send('Fetch.enable',{patterns:[{urlPattern:'*/assets/*',requestStage:'Request'}]});
+      const preserved=async()=>{
+        const core=await q.invoke('core_status');assert.equal(core.pid,baseline.pid);assert.equal(core.generation,baseline.generation);
+        assert.equal(windowInfo(entry).hwnd,hwnd);assert.deepEqual(await q.invoke('plugin:window|inner_size',{label:'main'}),size);
+        assert.equal(interceptionError,undefined);
+      };
+      for(const [target,type,count] of [['main','js',2],['App','js',1],['main','css',1]]) {
+        chunk=target;extension=type;failures=count;requests=0;navigations=0;
+        await q.send('Page.reload',{ignoreCache:true});
+        await q.wait('!!document.querySelector("#smarti-startup:not([hidden])")');
+        await ready(q);assert.equal(requests,count+1,JSON.stringify({assets:assetRequests,location:await q.evaluate('location.href')}));assert.equal(navigations,count+1);await preserved();
+        assert.equal(await q.evaluate('sessionStorage.getItem("smarti.desktop.interface-retry.main")'),null);
+        cases.push({name:target+' '+type+' fetch recovers automatically',failedRequests:count,requests,sameCore:true,sameWindow:true});
+      }
+      chunk='main';extension='js';failures=99;requests=0;
+      await q.send('Page.reload',{ignoreCache:true});await q.wait('!!document.querySelector(".startup-failure [role=alert]")');
+      assert.equal(requests,3);await pause(1800);assert.equal(requests,3);await preserved();
+      await q.screenshot('module-recovery-exhausted.png');
+      cases.push({name:'persistent fetch failure stops after two automatic reloads',requests,sameCore:true});
+      failures=0;requests=0;
+      await q.evaluate('document.querySelector(".startup-failure button").click()');await ready(q);
+      assert.equal(requests,1);await preserved();
+      cases.push({name:'explicit reload resets the retry budget and recovers',sameCore:true});
+      evaluation=true;requests=0;
+      await q.send('Page.reload',{ignoreCache:true});await q.wait('!!document.querySelector(".startup-failure [role=alert]")');
+      await pause(1800);assert.equal(requests,1);await preserved();
+      assert.equal(await q.evaluate('document.body.innerText.includes("private diagnostic")'),false);
+      cases.push({name:'module evaluation failure remains visible without a reload loop or private error text',requests:1});
+      await q.send('Fetch.disable');
+      await q.invoke('desktop_quit').catch(()=>{});await gone(entry);
+      await fs.writeFile(path.join(output,reportName),JSON.stringify({ok:true,cases,scope:'Fresh source QA executable with production Web over a private loopback server and real isolated Core; CDP injects only owned module requests. Embedded custom protocol bypasses Fetch interception. No personal app, model call or installer.'},null,2));
+      console.log(JSON.stringify({ok:true,cases},null,2));return;
+    }
     if(windowModeOnly) {
       const geometry=[];
       const state=async q=>{
@@ -217,6 +316,8 @@ async function main() {
     await fs.writeFile(path.join(output,reportName),JSON.stringify({ok:false,cases,error:String(error)},null,2));throw error;
   } finally {
     for(const entry of owned){entry.connection?.close();if(alive(entry.child.pid)){entry.child.kill();await until(()=>!alive(entry.child.pid),15000).catch(()=>{});}if(entry.corePid&&alive(entry.corePid))process.kill(entry.corePid);}
+    frontendServer?.kill();
+    await stableFrontend?.close();
   }
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

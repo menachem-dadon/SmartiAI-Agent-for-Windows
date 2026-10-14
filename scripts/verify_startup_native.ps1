@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$BuildOnly)
+param([switch]$BuildOnly, [switch]$HttpFrontend)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $qaRoot = Join-Path $taskRoot '.codex-local\startup'
@@ -22,6 +22,7 @@ $config = Get-Content -LiteralPath (Join-Path $source 'tauri.conf.json') -Raw | 
 $config.identifier = 'ai.smarti.startupqa'
 $config.app.windows[0].title = 'SmartiAI - Startup QA'
 $config.build.frontendDist = '../frontend'
+if ($HttpFrontend) { $config.build.devUrl = 'http://127.0.0.1:1499' }
 $config.bundle.active = $false
 $config.bundle.PSObject.Properties.Remove('resources')
 $config | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $qaApp 'tauri.conf.json') -Encoding utf8
@@ -30,12 +31,15 @@ $target = Join-Path $source 'target'
 $previousTarget = $env:CARGO_TARGET_DIR
 try {
     $env:CARGO_TARGET_DIR = $target
-    & cargo build --locked --manifest-path (Join-Path $qaApp 'Cargo.toml') --bin smarti-startup-qa --features custom-protocol
+    $buildArguments = @('build','--locked','--manifest-path',(Join-Path $qaApp 'Cargo.toml'),'--bin','smarti-startup-qa')
+    if (-not $HttpFrontend) { $buildArguments += @('--features','custom-protocol') }
+    & cargo @buildArguments
     if ($LASTEXITCODE -ne 0) { throw 'Startup QA build failed.' }
 } finally { $env:CARGO_TARGET_DIR = $previousTarget }
 $exe = Join-Path $target 'debug\smarti-startup-qa.exe'
-@{ executable=$exe; python=(Get-Command python).Source; identifier=$config.identifier; frontend=$front; source=$qaApp; sha256=(Get-FileHash -LiteralPath $exe).Hash } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $qaRoot 'native-build.json') -Encoding utf8
+@{ executable=$exe; python=(Get-Command python).Source; identifier=$config.identifier; frontend=$front; frontendUrl=$(if ($HttpFrontend) { $config.build.devUrl } else { $null }); source=$qaApp; sha256=(Get-FileHash -LiteralPath $exe).Hash } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $qaRoot 'native-build.json') -Encoding utf8
 if (-not $BuildOnly) {
-    & node (Join-Path $PSScriptRoot 'verify_startup_native.cjs')
+    if ($HttpFrontend) { & node (Join-Path $PSScriptRoot 'verify_startup_native.cjs') --module-recovery }
+    else { & node (Join-Path $PSScriptRoot 'verify_startup_native.cjs') }
     if ($LASTEXITCODE -ne 0) { throw 'Startup native verification failed; see .codex-local/startup/native-report.json.' }
 }

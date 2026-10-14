@@ -25,14 +25,20 @@ From the repository root:
 .\scripts\run_tauri_dev.ps1
 ```
 
-The command installs the exact `package-lock.json` dependency graph, launches
-Vite/Tauri, and lets the Rust supervisor start `smarti_core_service.py`. A
+The command installs the exact `package-lock.json` dependency graph, builds the
+Web interface, serves an immutable per-launch snapshot, launches Tauri, and lets
+the Rust supervisor start `smarti_core_service.py`. Normal source runs have no
+Vite HMR socket: waking a sleeping computer does not trigger a development
+connection reload. Other Web builds cannot replace the running snapshot. A
 WebView reload does not restart the Core. Closing the Tauri process asks the
 Core to stop through its inherited stdin pipe and force-terminates it only after
 the bounded grace period.
 
 Development overrides:
 
+- `-LiveReload`: opt into Vite HMR for active frontend coding. This mode reloads
+  the document when its development socket reconnects; it is not the daily-run
+  default. Restart normal source runs to load subsequent UI edits.
 - `SMARTI_PYTHON`: explicit Python executable.
 - `SMARTI_PROJECT_ROOT`: checkout containing `smarti_core_service.py`.
 - `SMARTI_CORE_BINARY`: packaged `smarti-core.exe` override.

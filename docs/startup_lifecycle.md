@@ -11,6 +11,20 @@ background before importing React. React keeps that surface until the Core
 health check, legal state and required first-screen bootstrap have succeeded.
 The handoff changes content without replacing or resizing the native window.
 
+## Source runs and returning from sleep
+
+`scripts/run_tauri_dev.ps1` uses built Web files by default. It builds them
+before startup and `run_desktop_stable.mjs` serves an immutable private snapshot
+for that launch. There is no Vite HMR client or development WebSocket in this
+mode. The running Web files remain available even if another build replaces
+`desktop/dist`. The native host and Core supervision are unchanged.
+
+Vite's development client reloads the entire document after its WebSocket
+disconnects and the server responds again. That connection can be interrupted
+during sleep. Opt into this behavior with `-LiveReload` only for frontend coding;
+normal source runs load UI changes on their next complete launch. Packaged
+applications already use embedded built files and do not need this local server.
+
 ## Optional loading artwork
 
 The loading artwork follows the resolved startup theme, including System mode:
@@ -50,8 +64,16 @@ invalidate stale frozen build inputs.
 - The Core watches the parent pipe before initialization. EOF requests shutdown
   and bounds cleanup even if construction has stalled. A generation/state check
   also prevents a delayed launch becoming active after an ordinary quit/restart.
-- Interface/module failures retain a visible reload action while Core remains
-  active. A missing initial document is bounded by a native 30-second guard.
+- Transient interface module/CSS fetch failures automatically reload only the
+  WebView, at most twice (400ms and 1200ms after failure), while Core remains
+  active. A failed ES module import is cached in the current document, so merely
+  calling the same import again does not recover it. The counter is stored in
+  sessionStorage per main/voice surface and cleared only when the first screen
+  is ready or the user explicitly retries. Storage failure disables automatic
+  navigation. Evaluation/render errors and exhausted retries retain the visible
+  manual reload action. Console diagnostics contain only fixed stage/category
+  and retry metadata, never exception messages, URLs, stacks or user content.
+  A missing initial document is bounded by a native 30-second guard.
   Real failures are distinct from the icon-only normal loading state.
 
 First-run consent uses the shared native HTML `Dialog`, buttons and checkbox,
@@ -68,6 +90,20 @@ executable from current source and runs `verify_startup_native.cjs`. Its fresh
 data, keyring/account isolation, evidence and screenshots live under
 `.codex-local/startup/`. It does not control a personal instance or build an
 installer. Native source QA and installer/portable acceptance stay separate.
+
+For module-fetch recovery, build with `-BuildOnly -HttpFrontend`, then run
+`node scripts/verify_startup_native.cjs --module-recovery`. It injects failed
+requests in the owned QA WebView and checks automatic entry/App recovery,
+bounded retries, explicit retry, evaluation errors and unchanged Core/window.
+This mode serves the production Web build on a private loopback server because
+WebView2's embedded custom protocol bypasses CDP Fetch interception. It leaves
+the normal embedded frontend and the personal development server untouched.
+
+`node scripts/verify_startup_native.cjs --resume` uses the normal snapshot server
+with the isolated `-HttpFrontend` QA executable. It freezes and resumes the
+renderer and interrupts/restores its connection, checking the same document,
+draft, native window and Core. These controlled cases do not put the user's
+computer to sleep and are separate from physical system-sleep evidence.
 
 For focused window-mode regression checks, run the build with `-BuildOnly`,
 then `node scripts/verify_startup_native.cjs --window-mode`. This verifies

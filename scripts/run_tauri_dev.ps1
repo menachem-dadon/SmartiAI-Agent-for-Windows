@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [switch]$LiveReload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,6 +36,7 @@ $env:SMARTI_PROJECT_ROOT = $repoRoot
 $env:SMARTI_PYTHON = $pythonCommand.Source
 $env:RUST_BACKTRACE = '1'
 
+$stableConfigPath = $null
 Push-Location $desktopRoot
 try {
     if (-not $SkipInstall) {
@@ -43,8 +45,18 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE" }
     }
     Write-Host 'Starting SmartiAI Tauri and its supervised Python Core...'
-    npm run tauri dev
+    if ($LiveReload) {
+        npm run tauri dev
+    } else {
+        # Daily source runs use a built, per-launch Web snapshot. Vite HMR
+        # reloads an existing document when its socket reconnects after sleep.
+        $stableConfig = @{build=@{beforeDevCommand='npm run dev:stable'}} | ConvertTo-Json -Compress
+        $stableConfigPath = Join-Path ([IO.Path]::GetTempPath()) ('smarti-desktop-dev-' + [Guid]::NewGuid().ToString('N') + '.json')
+        Set-Content -LiteralPath $stableConfigPath -Value $stableConfig -Encoding utf8
+        npm run tauri dev -- --config $stableConfigPath
+    }
     if ($LASTEXITCODE -ne 0) { throw "Tauri development app exited with code $LASTEXITCODE" }
 } finally {
     Pop-Location
+    if ($stableConfigPath -and (Test-Path -LiteralPath $stableConfigPath)) { Remove-Item -LiteralPath $stableConfigPath }
 }

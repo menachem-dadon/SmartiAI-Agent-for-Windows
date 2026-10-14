@@ -66,6 +66,7 @@ import { ConversationApprovals, useApprovalQueue } from "./conversationApprovals
 import { useReplyNavigation, type ReplyNavigation } from "./replyNavigation";
 import { WindowTitleBar } from "./WindowTitleBar";
 import { StartupFailure, useStartupWatchdog } from "./InterfaceRecovery";
+import { interfaceReady } from "./interfaceModule";
 import { setStartupVisible, updateStartupTheme } from "./startup";
 
 const initialCore: CoreSnapshot = {
@@ -1319,7 +1320,10 @@ export default function App() {
   useLayoutEffect(() => {
     updateStartupTheme(resolved);
     setStartupVisible(startupPending && !startupRecovery);
-    if (!startupPending) void invoke("desktop_finish_startup").catch(() => setStartupError(true));
+    if (!startupPending) {
+      interfaceReady();
+      void invoke("desktop_finish_startup").catch(() => setStartupError(true));
+    }
   }, [resolved, startupPending, startupRecovery]);
   if (startupPending) return startupRecovery ? <StartupFailure theme={resolved} failed={startupError} /> : null;
 

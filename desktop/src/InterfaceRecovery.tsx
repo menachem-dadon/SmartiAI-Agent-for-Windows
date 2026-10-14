@@ -2,6 +2,7 @@ import { Component, useEffect, useLayoutEffect, useState, type ReactNode } from 
 import { Alert, Button, DesignSystemProvider } from "./design-system";
 import { type ResolvedTheme } from "./designSystem";
 import { setStartupVisible, startupTheme } from "./startup";
+import { reloadInterface } from "./interfaceModule";
 
 function Surface({ children, theme = startupTheme() }: { children: ReactNode; theme?: ResolvedTheme }) {
   useLayoutEffect(() => { setStartupVisible(false); }, []);
@@ -25,7 +26,7 @@ export function useStartupWatchdog(pending: boolean) {
 }
 
 export function StartupRecovery({ failed = false }: { failed?: boolean }) {
-  return <Alert tone={failed ? "danger" : "warning"} title={failed ? "הממשק לא נטען" : "טעינת הממשק מתעכבת"}><p>אפשר לטעון את הממשק מחדש בלי להפעיל את מנוע העבודה מחדש.</p><Button onClick={() => window.location.reload()}>טעינת הממשק מחדש</Button></Alert>;
+  return <Alert tone={failed ? "danger" : "warning"} title={failed ? "הממשק לא נטען" : "טעינת הממשק מתעכבת"}><p>אפשר לטעון את הממשק מחדש בלי להפעיל את מנוע העבודה מחדש.</p><Button onClick={reloadInterface}>טעינת הממשק מחדש</Button></Alert>;
 }
 
 export function StartupFailure({ theme, failed }: { theme: ResolvedTheme; failed: boolean }) {
@@ -33,7 +34,7 @@ export function StartupFailure({ theme, failed }: { theme: ResolvedTheme; failed
 }
 
 // Covers module-load and React render failures. Core and its background owners
-// remain in Rust; only an explicit user reload retries the interface.
+// remain in Rust; transient module fetches recover before reaching this boundary.
 export class InterfaceRecovery extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
@@ -43,7 +44,7 @@ export class InterfaceRecovery extends Component<{ children: ReactNode }, { fail
   }
   render() {
     return this.state.failed
-      ? <Surface><Alert tone="danger" title="הממשק לא נטען"><p>אפשר לטעון את הממשק מחדש. הפעילות ברקע ממשיכה לפעול.</p><Button onClick={() => window.location.reload()}>טעינת הממשק מחדש</Button></Alert></Surface>
+      ? <Surface><Alert tone="danger" title="הממשק לא נטען"><p>אפשר לטעון את הממשק מחדש. הפעילות ברקע ממשיכה לפעול.</p><Button onClick={reloadInterface}>טעינת הממשק מחדש</Button></Alert></Surface>
       : this.props.children;
   }
 }

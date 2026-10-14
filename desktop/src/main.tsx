@@ -4,8 +4,9 @@ import { InterfaceLoading, InterfaceRecovery } from "./InterfaceRecovery";
 import { VoiceOverlayWindow } from "./VoiceOverlayWindow";
 import "./interfaceRecovery.css";
 import { setStartupVisible } from "./startup";
+import { loadInterfaceModule } from "./interfaceModule";
 
-const App = lazy(() => import("./App"));
+const App = lazy(() => loadInterfaceModule(() => import("./App"), "app"));
 const Point16AVisualFixture = import.meta.env.DEV ? lazy(() => import("./Point16AVisualFixture").then(module => ({ default: module.Point16AVisualFixture }))) : null;
 const Point16BVisualFixture = import.meta.env.DEV ? lazy(() => import("./Point16BVisualFixture").then(module => ({ default: module.Point16BVisualFixture }))) : null;
 
