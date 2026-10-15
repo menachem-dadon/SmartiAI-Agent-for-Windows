@@ -13,6 +13,8 @@ import type { BrowserActivity } from "./BrowserPanel";
 import { BrowserPreviewCard } from "./BrowserPreviewCard";
 import {
   ACTIVE_RUN_STATES,
+  loadRunEventHistory,
+  mergeActivityEvents,
   mergeMessages,
   pendingApiKeyRequest,
   type ApiKeyRequest,
@@ -747,22 +749,16 @@ export default function App() {
   }, [newUserRun, messages]);
   useEffect(() => {
     if (!activeRunId || core.state !== "ready") return;
-    void coreApi<{ items: RunEvent[] }>(
-      "GET",
-      `/v2/runs/${encodePath(activeRunId)}/events?after_sequence=0&limit=500`,
-    )
-      .then((data) =>
-        setEvents((current) => {
-          const merged = new Map<number, RunEvent>();
-          for (const item of [...current, ...data.items])
-            merged.set(item.event_id, item);
-          return [...merged.values()]
-            .sort((left, right) => left.event_id - right.event_id)
-            .slice(-500);
-        }),
-      )
-      .catch(() => undefined);
-  }, [activeRunId, core.state]);
+    let stopped = false;
+    let timer = 0;
+    const load = () => loadRunEventHistory(
+      after => coreApi<{ items: RunEvent[] }>("GET", `/v2/runs/${encodePath(activeRunId)}/events?after_sequence=${after}&limit=500`),
+      items => setEvents(current => mergeActivityEvents(current, items)),
+      () => !stopped,
+    ).catch(() => { if (!stopped) timer = window.setTimeout(() => void load(), 1000); });
+    void load();
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [activeRunId, core.state, core.generation]);
   useEffect(() => {
     if (core.state !== "ready") return;
     let stopped = false;
@@ -799,7 +795,7 @@ export default function App() {
             return next;
           });
           const structural = data.items.filter(item => item.event_type !== "run_stream");
-          if (structural.length) setEvents((current) => [...new Map([...current, ...structural].map(item => [item.event_id, item])).values()].slice(-500));
+          if (structural.length) setEvents((current) => mergeActivityEvents(current, structural));
           conversationData = structural.length ? await refreshLists() : null;
         } else conversationData = await refreshConversations();
         if (stopped) return;
@@ -895,7 +891,7 @@ export default function App() {
   const observedReplies = useRef<Record<string, string>>({});
   if (activeRun) observedReplies.current[activeId] = activeRun.id;
   const terminalReply = runs.find(run => run.id === observedReplies.current[activeId] &&
-    ["completed", "failed"].includes(run.status));
+    ["completed", "failed", "cancelled", "interrupted"].includes(run.status));
   const displayRun = activeRun || terminalReply;
   const activeAssistantRecorded = Boolean(displayRun && messages.some(message =>
     message.role === "assistant" && message.metadata?.run_id === displayRun.id));

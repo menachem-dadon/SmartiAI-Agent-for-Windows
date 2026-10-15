@@ -1,13 +1,35 @@
 import { describe, expect, test } from "vitest";
 import {
   ACTIVE_RUN_STATES,
+  loadRunEventHistory,
+  mergeActivityEvents,
   mergeMessages,
   pendingApiKeyRequest,
   recentConversations,
   semanticStep,
 } from "./chatState";
+import type { RunEvent } from "./chatTypes";
 
 describe("durable chat state", () => {
+  test("restores every page of a long run while preserving live results and excluding token traffic", async () => {
+    const event = (id: number, event_type = "run_step"): RunEvent => ({ event_id: id, sequence: id, event_type, run_id: "r", session_id: "s", payload: {}, created_at: "" });
+    const all = Array.from({ length: 1203 }, (_, index) => event(index + 1, index % 3 === 0 ? "run_stream" : "run_step"));
+    let merged = [event(1204)];
+    const cursors: number[] = [];
+    await loadRunEventHistory(async after => {
+      cursors.push(after); return { items: all.filter(event => event.sequence > after).slice(0, 500) };
+    }, items => { merged = mergeActivityEvents(merged, items); });
+    expect(cursors).toEqual([0, 500, 1000]);
+    expect(merged.length).toBe(803);
+    expect(merged[0].event_id).toBe(2); expect(merged[merged.length - 1]?.event_id).toBe(1204);
+    expect(mergeActivityEvents(merged, merged)).toEqual(merged);
+  });
+
+  test("a late page from a different conversation or Core generation cannot update the current view", async () => {
+    let current = true, consumed = false;
+    await loadRunEventHistory(async () => { current = false; return { items: [{ sequence: 1 } as RunEvent] }; }, () => { consumed = true; }, () => current);
+    expect(consumed).toBe(false);
+  });
   test("keeps concurrent active states scoped by run", () => {
     expect(ACTIVE_RUN_STATES.has("running")).toBe(true);
     expect(ACTIVE_RUN_STATES.has("waiting_for_approval")).toBe(true);

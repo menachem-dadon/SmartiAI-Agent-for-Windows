@@ -760,13 +760,11 @@ class ExecutionPolicyMixin:
                 pass
 
     def _emit_agent_process_event(self, event_type, **payload):
-        event = {"type": str(event_type or ""), "user_language": getattr(self, "_current_user_language", "he"), **(payload or {})}
+        event = {"id": uuid.uuid4().hex, "type": str(event_type or ""), "user_language": getattr(self, "_current_user_language", "he"), **(payload or {})}
         events = getattr(self, "_current_agent_process_events", None)
         # "thinking" is a live shimmer cue, not durable process content.
         if isinstance(events, list) and event.get("type") != "thinking":
             events.append(self._json_safe_checkpoint_value(event))
-            if len(events) > 120:
-                del events[:-120]
         
         if self._is_background_context() and getattr(self, "background_task_step_callback", None):
             try:
@@ -816,7 +814,7 @@ class ExecutionPolicyMixin:
         if output_text is None:
             output_text = message
         if output_text is not None:
-            item["output_text"] = redact_sensitive_text(str(output_text or ""), self.settings)[:30000]
+            item["output_text"] = redact_sensitive_text(str(output_text), self.settings)[:30000]
         if feedback:
             item["feedback"] = redact_sensitive_text(str(feedback or ""), self.settings)[:12000]
         if message:

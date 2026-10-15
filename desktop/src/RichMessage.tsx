@@ -13,10 +13,9 @@ import { AttachmentLightbox } from "./AttachmentLightbox";
 import { preserveDisclosure } from "./chatScroll";
 import type { StreamState } from "./chatStreaming";
 import { revealRange, streamReveal, type RevealRange } from "./streamReveal";
-import {
-  agentToolIconName,
-  type AgentToolIconName,
-} from "./agentToolIcons";
+import type { AgentToolIconName } from "./agentToolIcons";
+import { eventFromRun, mergeProcessEvents, processRows, processCaption, INTERFACE_LANGUAGE, type AgentEvent, type AgentProcessMetadata, type ProcessLanguage, type ToolView } from "./agentProcess";
+export { processRows } from "./agentProcess";
 
 function contentIdentity(text: string) { let hash = 0; for (const character of text) hash = (hash * 31 + character.charCodeAt(0)) | 0; return String(hash); }
 
@@ -176,39 +175,6 @@ function SentImage({
   </button>{enlarged && <AttachmentLightbox source={source} name={name} onClose={() => setEnlarged(false)} />}</>;
 }
 
-type AgentEvent = {
-  type: string;
-  user_language?: "he" | "en";
-  liveEventId?: number;
-  text?: string;
-  tools?: unknown[];
-  results?: unknown[];
-  group?: Record<string, unknown>;
-};
-type ToolView = {
-  key: string;
-  name: string;
-  icon: AgentToolIconName;
-  status: "preparing" | "waiting" | "running" | "finished" | "error";
-  query: string;
-  output: string;
-};
-type ProcessRow =
-  | { kind: "report"; key: string; text: string }
-  | {
-      kind: "tools";
-      key: string;
-      standalone: boolean;
-      label: string;
-      icon: AgentToolIconName;
-      tools: ToolView[];
-      running: boolean;
-    };
-type ProcessLanguage = "he" | "en";
-// Fixed captions follow the application's Hebrew UI, not conversation metadata.
-const INTERFACE_LANGUAGE: ProcessLanguage = "he";
-type AgentProcessMetadata = { elapsed_seconds?: number; events?: AgentEvent[]; user_language?: ProcessLanguage };
-const processCaption = (language: ProcessLanguage, hebrew: string, english: string) => language === "en" ? english : hebrew;
 function StreamLetter({ node, ...props }: ComponentProps<"span"> & ExtraProps) {
   const started = Number(node?.properties?.["data-reveal-started"]);
   // Set the elapsed offset once per glyph. Updating it again on every token
@@ -227,219 +193,6 @@ function StreamingReport({ text, active }: { text: string; active: boolean }) {
       : [revealRange(0, text.length)] };
   }
   return <ReactMarkdown components={reportComponents} rehypePlugins={active ? [[streamReveal, { ranges: revealed.current.ranges }]] : []}>{text}</ReactMarkdown>;
-}
-
-const payloadText = (value: unknown) =>
-  typeof value === "string"
-    ? value
-    : value == null
-      ? ""
-      : JSON.stringify(value, null, 2);
-const toolName = (item: Record<string, unknown>) =>
-  String(
-    item.effective_action || item.action || item.tool || item.name || "כלי",
-  );
-const toolKey = (item: Record<string, unknown>, fallback: string) =>
-  String(
-    item.event_id ||
-      item.tool_call_id ||
-      item.call_id ||
-      `${toolName(item)}:${fallback}`,
-  );
-function toolFrom(
-  item: unknown,
-  status: ToolView["status"],
-  fallback: string,
-): ToolView {
-  const value =
-    item && typeof item === "object"
-      ? (item as Record<string, unknown>)
-      : { action: String(item || "כלי") };
-  return {
-    key: toolKey(value, fallback),
-    name: toolName(value),
-    icon: agentToolIconName(value),
-    status,
-    query: payloadText(
-      value.arguments_text ||
-        value.arguments ||
-        value.args ||
-        value.input ||
-        value.query,
-    ),
-    output: payloadText(
-      value.output_text ||
-        value.output ||
-        value.result ||
-        value.feedback ||
-        value.message ||
-        value.error,
-    ),
-  };
-}
-function eventFromRun(event: RunEvent): AgentEvent | null {
-  if (event.event_type === "run_step") {
-    const value = event.payload.value;
-    if (value && typeof value === "object")
-      return { ...(value as AgentEvent), liveEventId: event.event_id };
-    const text = String(value || event.payload.step || "").trim();
-    return text ? { type: "report", text, liveEventId: event.event_id } : null;
-  }
-  if (event.event_type === "tool_started")
-    return {
-      type: "tool_start",
-      liveEventId: event.event_id,
-      tools: [
-        { ...event.payload, action: event.payload.tool || event.payload.name },
-      ],
-    };
-  if (event.event_type === "tool_finished")
-    return {
-      type: "tool_finish",
-      liveEventId: event.event_id,
-      results: [
-        { ...event.payload, action: event.payload.tool || event.payload.name },
-      ],
-    };
-  if (event.event_type === "api_key_required")
-    return { type: "api_key_wait", liveEventId: event.event_id };
-  return null;
-}
-export function processRows(agentEvents: AgentEvent[], language: ProcessLanguage = INTERFACE_LANGUAGE): ProcessRow[] {
-  const text = (he: string, en: string) => processCaption(language, he, en);
-  const rows: ProcessRow[] = [];
-  let current: Extract<ProcessRow, { kind: "tools" }> | null = null;
-  for (const [index, event] of agentEvents.entries()) {
-    if (event.type === "api_key_wait") {
-      rows.push({ kind: "report", key: `report-${index}`, text: text("ממתין למפתח API", "Waiting for an API key") });
-      current = null;
-    } else if (event.type === "report") {
-      const text = String(event.text || "").trim();
-      // Older clients projected approval waits into process history. Permission
-      // state is now owned by the durable approval queue, including on replay.
-      if (/^(?:ממתין לאישור(?: משתמש)?|Waiting for user approval)\.{0,3}$/iu.test(text)) continue;
-      if (text) rows.push({ kind: "report", key: `report-${index}`, text });
-      current = null;
-    } else if (["tool_start", "tool_preparing", "tool_waiting"].includes(event.type)) {
-      if (!current || current.standalone) {
-        current = {
-          kind: "tools",
-          key: `tools-${index}`,
-          standalone: false,
-          label: text("מריץ כלים", "Running tools"),
-          icon: "row_status",
-          tools: [],
-          running: true,
-        };
-        rows.push(current);
-      }
-      for (const [toolIndex, tool] of (event.tools || []).entries()) {
-        const next = toolFrom(tool, event.type === "tool_preparing" ? "preparing" : event.type === "tool_waiting" ? "waiting" : "running", `${index}-${toolIndex}`);
-        const existing = rows.flatMap(row => row.kind === "tools" ? row.tools : []).find(item => item.key === next.key);
-        if (existing) Object.assign(existing, next); else current.tools.push(next);
-      }
-    } else if (event.type === "tool_finish") {
-      for (const [resultIndex, result] of (event.results || []).entries()) {
-        const record =
-          result && typeof result === "object"
-            ? (result as Record<string, unknown>)
-            : {};
-        const status = String(record.status || "").toLowerCase();
-        const failed =
-          Boolean(record.error) ||
-          ["error", "failed", "crashed", "cancelled", "denied", "expired"].includes(status);
-        const finished = toolFrom(
-          result,
-          failed ? "error" : "finished",
-          `${index}-${resultIndex}`,
-        );
-        // A report can arrive while tools are running. Match their original
-        // rows, and finish only the reported calls (including parallel calls
-        // to the same tool that complete out of order).
-        const identity = record.event_id || record.tool_call_id || record.call_id;
-        const existing = rows
-          .flatMap((row) => row.kind === "tools" ? row.tools : [])
-          .reverse()
-          .find(
-            (tool) =>
-              identity
-                ? tool.key === finished.key
-                : tool.name === finished.name && tool.status === "running",
-          );
-        if (existing) {
-          Object.assign(existing, finished, {
-            key: existing.key,
-            query: finished.query || existing.query,
-            icon: finished.icon === "row_status" ? existing.icon : finished.icon,
-          });
-        } else {
-          if (!current || current.standalone) {
-            current = {
-              kind: "tools",
-              key: `tools-${index}`,
-              standalone: false,
-              label: text("כלים הסתיימו", "Tools finished"),
-              icon: "row_status",
-              tools: [],
-              running: false,
-            };
-            rows.push(current);
-          }
-          current.tools.push(finished);
-        }
-      }
-    } else if (
-      event.type === "tool_group_start" ||
-      event.type === "tool_group_finish"
-    ) {
-      const group = event.group || {};
-      const running = event.type === "tool_group_start";
-      const label = String(
-        event.text ||
-          group.label ||
-          group.title ||
-          group.action ||
-          (running ? text("מבצע פעילות", "Working") : text("הפעילות הסתיימה", "Activity finished")),
-      );
-      const identity = String(
-        group.id || group.event_id || group.action || index,
-      );
-      const existing = [...rows]
-        .reverse()
-        .find(
-          (row): row is Extract<ProcessRow, { kind: "tools" }> =>
-            row.kind === "tools" &&
-            row.standalone &&
-            row.key === `group-${identity}`,
-        );
-      if (existing) {
-        existing.label = label;
-        existing.icon = agentToolIconName(group);
-        existing.running = running;
-      } else
-        rows.push({
-          kind: "tools",
-          key: `group-${identity}`,
-          standalone: true,
-          label,
-          icon: agentToolIconName(group),
-          tools: [],
-          running,
-        });
-      current = null;
-    }
-  }
-  for (const row of rows) {
-    if (row.kind !== "tools" || row.standalone) continue;
-    const running = row.tools.filter((tool) => ["running", "preparing", "waiting"].includes(tool.status));
-    row.running = running.length > 0;
-    row.label = running.length
-      ? running.length === 1
-        ? `${running[0].status === "preparing" ? text("מכין כלי", "Preparing tool") : running[0].status === "waiting" ? text("ממתין לאישור הפעלת כלי", "Waiting for tool approval") : text("מריץ כלי", "Running tool")} ${running[0].name}`
-        : text(`מריץ ${running.length} כלים במקביל`, `Running ${running.length} tools in parallel`)
-      : row.tools.length === 1 ? text("הורץ כלי 1", "Ran 1 tool") : text(`הורצו ${row.tools.length} כלים`, `Ran ${row.tools.length} tools`);
-  }
-  return rows;
 }
 
 function AgentStatusText({ active, children }: { active: boolean; children: ReactNode }) {
@@ -557,31 +310,25 @@ export const RichMessage = memo(function RichMessage({
       : null;
   const agentEvents = useMemo(() => {
     if (message.role !== "assistant") return [];
-    if (storedProcess?.events?.length) return storedProcess.events;
     // Initial run loading and replay polling can deliver the same event.
     // Count each tool call once so a duplicate start cannot keep it running.
-    return [...new Map(events.map((event) => [event.event_id, event])).values()]
+    const live = [...new Map(events.map((event) => [event.event_id, event])).values()]
+      .sort((left, right) => left.event_id - right.event_id)
       .map(eventFromRun)
       .filter((item): item is AgentEvent => Boolean(item));
-  }, [events, message.role, storedProcess]);
+    if (!storedProcess?.events?.length) return live;
+    if (!active) return storedProcess.events;
+    const identity = ({ liveEventId: _live, ...event }: AgentEvent) => event.id || JSON.stringify(event);
+    const saved = new Set(storedProcess.events.map(identity));
+    return [...storedProcess.events, ...live.filter(event => !saved.has(identity(event)))];
+  }, [events, message.role, storedProcess, active]);
   const processText = (he: string, en: string) => processCaption(INTERFACE_LANGUAGE, he, en);
   const rows = useMemo(() => {
     // A user's message shares the run ID but never owns its activity. Saved
     // execution is authoritative; stream preparation includes unexecuted calls
     // from rejected attempts or batches that Core deliberately did not admit.
     if (message.role !== "assistant") return [];
-    const recordedExecution = Boolean(storedProcess?.events?.length);
-    const pending: AgentEvent[] = [];
-    const reports = Object.values(stream?.blocks || {}).filter(block => block.kind === "text" && block.role === "report" && block.text?.trim());
-    const normalized = (text: string) => text.replace(/\s+/g, " ").replace(/\.\.\.$/, "").trim();
-    const renderedEvents = agentEvents.map(event => event.type === "report"
-      ? { ...event, text: reports.find(block => normalized(block.text || "").startsWith(normalized(event.text || "")))?.text || event.text } : event);
-    const existingIds = new Set(agentEvents.flatMap(event => [...event.tools || [], ...event.results || []]).map(item => toolKey(item as Record<string, unknown>, "")));
-    for (const [id, block] of Object.entries(stream?.blocks || {})) {
-      if (block.kind === "tool" && !recordedExecution && (!stream?.request_id || (block.call_id || id).startsWith(`${stream.request_id}:`)) && !existingIds.has(block.call_id || id)) pending.push({ type: "tool_preparing", tools: [{ call_id: block.call_id || id, action: block.name, arguments_text: block.arguments_text }] });
-      if (block.kind === "text" && block.role === "report" && block.text?.trim() && !agentEvents.some(event => event.type === "report" && normalized(block.text || "").startsWith(normalized(event.text || "")))) pending.push({ type: "report", text: block.text });
-    }
-    const result = processRows([...renderedEvents, ...pending]);
+    const result = processRows(mergeProcessEvents(agentEvents, stream, active));
     if (runStatus === "waiting_for_approval" && !agentEvents.some(event => event.type === "tool_waiting")) for (const row of result) if (row.kind === "tools") { for (const tool of row.tools) if (tool.status === "running") tool.status = "waiting"; const waiting = row.tools.find(tool => tool.status === "waiting"); if (waiting) row.label = processText(`ממתין לאישור הפעלת כלי ${waiting.name}`, `Waiting for tool approval ${waiting.name}`); }
     if (!active) for (const row of result) if (row.kind === "tools" && row.tools.some(tool => ["preparing", "running", "waiting"].includes(tool.status))) {
       for (const tool of row.tools) if (["preparing", "running", "waiting"].includes(tool.status)) tool.status = "error";
@@ -593,6 +340,7 @@ export const RichMessage = memo(function RichMessage({
   const ownerRow = activeRows.find(row => row.kind === "tools" && preferences[row.key]) || activeRows[0];
   const ownerTool = ownerRow?.kind === "tools" && preferences[ownerRow.key] ? ownerRow.tools.find(tool => ["running", "preparing", "waiting"].includes(tool.status))?.key : undefined;
   const canThink = active && message.role === "assistant" && !message.content &&
+    stream?.stage !== "retry" &&
     (providerMode !== "local" || stream?.stage === "prefill" || stream?.stage === "thinking") &&
     (!runStatus || runStatus === "queued" || runStatus === "running") &&
     !rows.some((row) => row.kind === "tools" && row.running);
@@ -605,6 +353,13 @@ export const RichMessage = memo(function RichMessage({
     (active && firstLiveAt
       ? Math.max(0, Math.floor((Date.now() - firstLiveAt) / 1000))
       : 0);
+  const retryLabel = active && stream?.stage === "retry" ? stream.status_text : undefined;
+  // Announce semantic transitions, never report tokens, elapsed ticks or the
+  // retry countdown. Native summary semantics continue to own disclosure.
+  const toolRows = rows.filter(row => row.kind === "tools");
+  const announcement = message.role !== "assistant" ? "" : retryLabel
+    ? "בקשת המודל לא הושלמה. ממתין לניסיון נוסף."
+    : (ownerRow?.kind === "tools" ? ownerRow.label : toolRows[toolRows.length - 1]?.label) || "";
   useLayoutEffect(() => {
     const node = contentRef.current;
     if (!node || message.role !== "user") {
@@ -847,6 +602,8 @@ export const RichMessage = memo(function RichMessage({
           </div>
         </details>
       )}
+      {message.role === "assistant" && <span className="sds-visually-hidden" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>}
+      {retryLabel && <WaitingIndicator immediate shimmer={!rows.length || processOpen && !ownerRow} label={retryLabel}/>}
       {canThink && <WaitingIndicator key={agentEvents.filter(event => event.type === "report").slice(-1)[0]?.liveEventId || "initial"} immediate={stream?.stage === "prefill" || stream?.stage === "thinking"} shimmer={!rows.length || processOpen && !ownerRow} label={stream?.stage === "prefill" ? `${processText("מעבד הנחיה", "Processing prompt")}${stream.percent == null ? "…" : `: ${stream.percent}%`}` : processText("חושב...", "Thinking...")}/>}
       {attachmentStrip}
       {message.role === "user" ? !!message.content && <UserBubble isNew={isNew}>

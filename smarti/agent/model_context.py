@@ -2465,6 +2465,14 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
         return ui_text(self, api_retry_status_message(analysis, seconds, attempt),
                        f"{analysis.provider or 'AI provider'}: Request failed ({analysis.reason}). Retrying in {seconds:g} s (attempt {attempt}).")
 
+    def _report_api_retry(self, analysis, seconds, attempt, report_status):
+        text = self._api_retry_user_status(analysis, seconds, attempt)
+        live = getattr(self, "_current_stream", None)
+        if live:
+            live.event("retry_wait", text=text)
+        if report_status:
+            report_status(text)
+
     def _log_api_request_success(self, request_id, provider, model, purpose, attempt, started_at, result):
         response_text = ""
         usage = {}
@@ -3157,8 +3165,8 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         "API RETRY | request_id=%s | action=immediate | next_attempt=%s | category=%s",
                         request_log_id, attempt_number + 1, analysis.category,
                     )
-                    if report_status:
-                        report_status(self._api_retry_user_status(analysis, 0, attempt_number + 1))
+                    if stream_enabled or report_status:
+                        self._report_api_retry(analysis, 0, attempt_number + 1, report_status)
                     continue
                 if analysis.retryable and retries < max_retries:
                     wait_seconds = analysis.retry_after if analysis.retry_after is not None else wait_times[retries]
@@ -3176,11 +3184,11 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         "next_attempt=%s | category=%s",
                         request_log_id, wait_seconds, attempt_number + 1, analysis.category,
                     )
-                    if report_status:
-                        report_status(self._api_retry_user_status(analysis, wait_seconds, attempt_number + 1))
+                    if stream_enabled or report_status:
+                        self._report_api_retry(analysis, wait_seconds, attempt_number + 1, report_status)
                     def tick_retry_status(remaining, analysis=analysis, attempt=attempt_number + 1):
-                        if report_status:
-                            report_status(self._api_retry_user_status(analysis, remaining, attempt))
+                        if stream_enabled or report_status:
+                            self._report_api_retry(analysis, remaining, attempt, report_status)
                     if wait_seconds > 0 and not self._sleep_with_cancel(wait_seconds, tick_retry_status):
                         raise Exception("CANCELLED_BY_USER")
                     retries += 1

@@ -163,6 +163,7 @@ class LiveResponse:
         first = str(index) not in self.calls
         call = self.calls.setdefault(str(index), {"call_id": f"{self.request_id}:{index}", "name": "", "arguments": ""})
         call["name"] = call["name"] + name if name_delta else (name or call["name"])
+        call["name_complete"] = bool(call["name"]) and (call.get("name_complete", False) or not name_delta or bool(arguments))
         call["arguments_length"] = call.get("arguments_length", 0) + len(arguments)
         header = call.get("argument_header", "") + arguments
         if re.search(r'(?:\\?"|\b)(?:[\w-]*(?:password|secret|token|api[_-]?key|authorization)[\w-]*)(?:\\?"|\b)\s*:', header, re.I):
@@ -172,7 +173,7 @@ class LiveResponse:
         if provider_id:
             call["provider_call_id"] = provider_id
         self.event("tool_preparing", block_id=call["call_id"], call_id=call["call_id"],
-                   name=call["name"], arguments_length=call["arguments_length"])
+                   name=call["name"], name_complete=call["name_complete"], arguments_length=call["arguments_length"])
         if first:
             self.role = "report"
             self.event("text_role", block_id=self.request_id, role="report")
@@ -310,6 +311,9 @@ class LiveResponse:
 
     def finish(self, text="", has_tools=False):
         self.text("", final=True)
+        for index, call in list(self.calls.items()):
+            if call["name"] and not call.get("name_complete"):
+                self.tool(index, call["name"])
         self.event("request_end", block_id=self.request_id, role="report" if has_tools else self.role)
         self.flush()
 

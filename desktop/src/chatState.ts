@@ -1,6 +1,30 @@
 import type { ChatMessage, Conversation, RunEvent } from "./chatTypes";
 
 export const ACTIVE_RUN_STATES = new Set(["queued", "running", "waiting_for_approval", "waiting_for_input", "cancelling"]);
+
+export function mergeActivityEvents(previous: RunEvent[], incoming: RunEvent[]) {
+  // Stream blocks have their own snapshot. Never discard tool starts/results
+  // based on unrelated token traffic or another conversation's activity.
+  return [...new Map([...previous, ...incoming].filter(event => event.event_type !== "run_stream").map(event => [event.event_id, event])).values()]
+    .sort((left, right) => left.event_id - right.event_id);
+}
+
+export async function loadRunEventHistory(
+  readPage: (afterSequence: number) => Promise<{ items: RunEvent[] }>,
+  consume: (events: RunEvent[]) => void,
+  current: () => boolean = () => true,
+) {
+  let after = 0;
+  while (current()) {
+    const page = await readPage(after);
+    if (!current() || !page.items.length) return;
+    consume(page.items);
+    const next = Math.max(...page.items.map(event => event.sequence));
+    if (next <= after) throw new Error("רצף אירועי הריצה לא התקדם.");
+    after = next;
+    if (page.items.length < 500) return;
+  }
+}
 export type ApiKeyRequest = {
   runId: string;
   secretKey: string;

@@ -568,7 +568,9 @@ class MessagingMixin:
                 )
                 if not normalized_report:
                     return False
-                self._emit_agent_process_event("report", text=normalized_report, source=source)
+                live = getattr(self, "_current_stream", None)
+                identity = {"report_id": live.request_id, "request_id": live.request_id} if live and source in {"model", "tool_parser"} else {}
+                self._emit_agent_process_event("report", text=normalized_report, source=source, **identity)
                 last_process_report = normalized_report
                 process_report_count += 1
                 return True

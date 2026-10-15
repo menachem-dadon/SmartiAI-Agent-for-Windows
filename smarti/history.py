@@ -1394,13 +1394,16 @@ class ChatSessionStore:
                     request_id = event.get("request_id", "")
                     kind = event.get("kind")
                     if kind == "request_start":
-                        state.update(request_id=request_id, stage="waiting", percent=None)
+                        state.update(request_id=request_id, stage="waiting", percent=None, status_text=None)
                         # Execution history is owned by run_step / agent_process.
                         # Preparation from a skipped/rejected request is not a
                         # tool execution waiting for a result.
                         state["blocks"] = {key: block for key, block in state["blocks"].items() if block.get("kind") == "text" and block.get("role") == "report"}
                     elif request_id == state.get("request_id"):
-                        if kind == "stage":
+                        if kind == "retry_wait":
+                            state.update(stage="retry", status_text=event.get("text", ""), percent=None)
+                            state["blocks"] = {key: block for key, block in state["blocks"].items() if block.get("kind") != "tool"}
+                        elif kind == "stage":
                             state.update(stage=event.get("provider_stage"), percent=event.get("percent"))
                         elif kind in {"text_delta", "text_replace"}:
                             block = state["blocks"].setdefault(event["block_id"], {"kind": "text", "text": "", "role": event.get("role", "answer")})

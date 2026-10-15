@@ -122,6 +122,66 @@ class ChatStreamingTests(unittest.TestCase):
             self.assertEqual(blocks[first.request_id]["role"], "report")
             self.assertEqual(blocks[retry.request_id]["role"], "answer")
 
+    def test_fragmented_native_name_is_not_complete_until_arguments_start(self):
+        live, batches = self.live()
+        live.tool(0, "browser_auto", name_delta=True)
+        live.flush()
+        self.assertFalse(live.calls["0"]["name_complete"])
+        live.tool(0, "mation_manager", name_delta=True)
+        live.flush()
+        self.assertFalse(live.calls["0"]["name_complete"])
+        live.tool(0, arguments='{"action":', name_delta=True)
+        live.flush()
+        events = [e for batch in batches for e in batch["events"] if e["kind"] == "tool_preparing"]
+        self.assertEqual(events[-1]["name"], "browser_automation_manager")
+        self.assertTrue(events[-1]["name_complete"])
+        self.assertTrue(all(not e["name_complete"] for e in events[:-1]))
+
+    def test_retry_snapshot_retires_only_preparation_and_resets_on_next_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "history.sqlite"))
+            run = store.create_run(store.create_session(set_active=False)["id"])
+            emit = lambda value: store.append_run_event(run, "run_stream", {"value": value})
+            live = LiveResponse(emit)
+            live.report("פותח אתר", "commentary")
+            live.tool(0, "browser_automation_manager")
+            core = RequestCore("gemini")
+            core._current_stream = live
+            analysis = NS(provider="Gemini", reason="malformed_tool_call", user_message="קריאה פגומה", status_code=None)
+            # Exercise the actual retry publisher while keeping error wording
+            # independent of provider-specific diagnostic formatting.
+            core._api_retry_user_status = lambda _analysis, seconds, attempt: f"retry {attempt} in {seconds}"
+            status = Mock()
+            core._report_api_retry(analysis, 33, 3, status)
+            snapshot = store.run(run)["metadata"]["stream"]
+            self.assertEqual(snapshot["stage"], "retry")
+            self.assertEqual(snapshot["status_text"], "retry 3 in 33")
+            self.assertTrue(all(block["kind"] == "text" for block in snapshot["blocks"].values()))
+            self.assertEqual(snapshot["blocks"]["commentary"]["text"], "פותח אתר")
+            status.assert_called_once_with("retry 3 in 33")
+            LiveResponse(emit)
+            self.assertIsNone(store.run(run)["metadata"]["stream"]["status_text"])
+
+    def test_durable_process_keeps_more_than_120_events_with_stable_ids(self):
+        from smarti.agent.execution_policy import ExecutionPolicyMixin
+        class ProcessCore(ExecutionPolicyMixin):
+            _json_safe_checkpoint_value = staticmethod(lambda value: value)
+            _is_background_context = staticmethod(lambda: False)
+        core = ProcessCore()
+        core._current_agent_process_events = []
+        core._current_agent_process_started_at = 0
+        core.step_callback = None
+        for i in range(145):
+            core._emit_agent_process_event("report", text=str(i), report_id=f"request:{i}")
+        metadata = core._current_agent_process_metadata()
+        self.assertEqual(len(metadata["events"]), 145)
+        self.assertEqual(metadata["events"][0]["text"], "0")
+        self.assertEqual(len({event["id"] for event in metadata["events"]}), 145)
+        core.settings = {}
+        core._effective_tool_action = lambda action, args: (action, args)
+        for value in (0, False):
+            self.assertEqual(core._agent_tool_event_item("browser_automation_manager", output=value)["output_text"], str(value))
+
     def raw_response(self, frames, *, newline="\n", bom=False):
         # Match requests' actual default for SSE without a charset. Decoded
         # string fixtures cannot catch corruption before the SSE parser runs.
