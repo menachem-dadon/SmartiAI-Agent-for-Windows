@@ -1527,8 +1527,8 @@ export default function App() {
               <div className="chat-welcome">
                 <h2>
                   {displayName
-                    ? `היי ${displayName}, במה תרצה שאתמקד?`
-                    : "במה תרצה שאתמקד?"}
+                    ? `היי ${displayName}, במה אוכל לעזור?`
+                    : "היי, במה אוכל לעזור?"}
                 </h2>
               </div>
             ) : (
