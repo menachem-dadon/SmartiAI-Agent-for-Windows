@@ -20,6 +20,26 @@ export { processRows } from "./agentProcess";
 function contentIdentity(text: string) { let hash = 0; for (const character of text) hash = (hash * 31 + character.charCodeAt(0)) | 0; return String(hash); }
 
 const copy = async (text: string) => navigator.clipboard.writeText(text);
+
+function MessageCopyButton({ text, onError }: { text: string; onError: (reason: unknown) => void }) {
+  const [copyCount, setCopyCount] = useState(0);
+  useEffect(() => {
+    if (!copyCount) return;
+    const timer = setTimeout(() => setCopyCount(0), 2500);
+    return () => clearTimeout(timer);
+  }, [copyCount]);
+  return <IconButton
+    tooltip={false}
+    icon={copyCount ? "check" : "copy"}
+    label={copyCount ? "הועתק" : "העתק"}
+    variant="ghost"
+    onClick={() => void copy(text).then(() => setCopyCount(count => count + 1)).catch(reason => {
+      setCopyCount(0);
+      onError(reason);
+    })}
+  />;
+}
+
 const WINDOWS_PATH = /^[A-Za-z]:[\\/]/;
 function localHref(value: string): string {
   const normalized = WINDOWS_PATH.test(value)
@@ -509,7 +529,7 @@ export const RichMessage = memo(function RichMessage({
           </div>
         )} actions={actionsAvailable && (
         <div className="message-actions">
-          <IconButton tooltip={false} icon="copy" label="העתק" variant="ghost" onClick={() => void copy(message.content).catch(reason => setLinkError(`ההעתקה נכשלה: ${String(reason)}`))} />
+          <MessageCopyButton text={message.content} onError={reason => setLinkError(`ההעתקה נכשלה: ${String(reason)}`)} />
           {message.role === "assistant" && (
             <IconButton
               tooltip={false}
