@@ -59,7 +59,7 @@
 .composer textarea { width:100%; min-width:0; min-height:64px; max-height:150px; padding:4px 8px 10px; resize:none; border:0; border-radius:6px; outline-offset:0; background:transparent; color:var(--sds-color-text); font-size:var(--sds-font-body); line-height:1.6; scrollbar-gutter:stable; }
 .chat-design .composer textarea:focus-visible { outline:0; box-shadow:none; }
 .composer:focus-within { border-color:var(--sds-color-focus); }
-.composer-actions { display:grid; grid-template-columns:40px minmax(0,1fr) 40px; align-items:end; gap:8px; margin-top:8px; }
+.composer-actions { display:grid; grid-template-columns:40px minmax(0,1fr) 40px; align-items:center; gap:8px; margin-top:8px; }
 .composer-primary,.composer-tool { width:40px; height:40px; display:grid; place-items:center; border:0; padding:8px; border-radius:50%; cursor:pointer; }
 .composer-primary { background:var(--sds-color-action); color:var(--sds-color-on-action); }
 .composer-primary:hover { background:var(--sds-color-action-hover); }
@@ -77,7 +77,7 @@
 .autonomy-quick-pill { flex:none; direction:rtl; }
 .autonomy-quick-pill .sds-button { border:0; background:transparent; padding:8px; color:var(--sds-color-text-muted); gap:6px; }
 .autonomy-quick-pill .sds-button .sds-icon { order:-1; }
-.local-fast-mode { direction:rtl; display:flex; align-items:center; gap:4px; padding:4px; font-size:13px; white-space:nowrap; flex:none; }
+.local-fast-mode { direction:rtl; display:flex; align-items:center; gap:4px; padding:0 4px; font-size:13px; white-space:nowrap; flex:none; }
 .attachment-picker { display:none; }
 .pending-attachments { display:flex; gap:8px; overflow:auto; padding:4px; margin-bottom:8px; }
 .pending-image,.pending-file { position:relative; flex:none; width:148px; min-height:64px; border:1px solid var(--sds-color-border); border-radius:12px; padding:8px 44px 8px 8px; background:var(--sds-color-surface-muted); display:grid; gap:4px; }
