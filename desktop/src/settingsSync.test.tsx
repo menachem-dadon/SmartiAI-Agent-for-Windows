@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import App from "./App";
 import { coreApi } from "./coreApi";
 import { subscribeSettingsChanges } from "./settingsChanges";
+import { RunSubmission } from "./runSubmission";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({
@@ -19,12 +20,18 @@ vi.mock("./Composer", () => ({ Composer: (props: any) => <div>
   <output data-testid="composer">{JSON.stringify({
     conversationId: props.conversationId, draft: props.draft,
     provider: props.provider, model: props.model, reasoning: props.reasoningEffort,
+    reasoningOptions: props.reasoningOptions,
     autonomy: props.autonomyMode, fast: props.localFastMode, favorites: props.favoriteModels,
     disabled: props.disabled,
   })}</output>
   <button onClick={props.onManageModels}>manage-models</button>
   <button onClick={() => props.onFavoriteModel({ provider: "openai", model: "openai-b" })}>chat-model</button>
+  <button onClick={() => props.onFavoriteModel({ provider: "gemini", model: "gemini-b" })}>chat-model-gemini</button>
+  <button onClick={() => props.onFavoriteModel({ provider: "gemini", model: "gemini-a" })}>chat-model-original</button>
   <button onClick={() => props.onReasoningEffort("high")}>chat-reasoning</button>
+  <button onClick={() => props.onReasoningEffort("max")}>chat-reasoning-max</button>
+  <button onClick={() => props.onReasoningEffort("medium")}>chat-reasoning-medium</button>
+  <button onClick={() => void props.onSend("QA request").catch(() => {})}>chat-send</button>
 </div> }));
 
 function deferred() {
@@ -37,13 +44,14 @@ let patchGate: ReturnType<typeof deferred> | null;
 let bootstrapGate: ReturnType<typeof deferred> | null;
 let failPatch: boolean;
 let failUpdateCheck: boolean;
+let reasoningContracts: Record<string, { reasoning_effort: string; reasoning_options: { value: string; label: string }[] }>;
 const defaults = () => ({
   api_mode: "gemini", selected_gemini_model: "gemini-a", selected_openai_model: "openai-a",
   favorite_models: [], autonomy_mode: "balanced", local_fast_mode_enabled: false,
   updates_auto_check: false, ui_preferences: { theme_mode: "dark", keep: "saved" },
   voice_hotkey: "Ctrl+Shift+Space", keep_running_in_tray: true,
 });
-const reasoning = () => ({
+const reasoning = (provider = values.api_mode, model = values[`selected_${provider}_model`]) => reasoningContracts[`${provider}:${model}`] || ({
   reasoning_effort: values.effort || "auto",
   reasoning_options: [{ value: "auto", label: "אוטומטית" }, { value: "high", label: "גבוהה" }],
 });
@@ -51,6 +59,7 @@ const composer = () => JSON.parse(screen.getByTestId("composer").textContent!);
 
 beforeEach(() => {
   values = defaults(); patchGate = null; bootstrapGate = null; failPatch = false; failUpdateCheck = false;
+  reasoningContracts = {};
   localStorage.clear(); sessionStorage.clear();
   vi.stubGlobal("innerWidth", 1800);
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
@@ -92,8 +101,15 @@ beforeEach(() => {
       data = { models: [`${provider}-a`, `${provider}-b`] };
     }
     if (path.includes("/reasoning")) {
-      if (method === "POST") values.effort = body.effort;
-      data = reasoning();
+      const provider = path.split("/")[3], model = method === "POST" ? body.model : new URLSearchParams(path.split("?")[1]).get("model");
+      const contract = reasoningContracts[`${provider}:${model}`];
+      if (method === "POST") {
+        if (contract && !contract.reasoning_options.some(option => option.value === body.effort))
+          return { status: 400, body: { error: "unsupported_reasoning_effort" } } as any;
+        if (contract) contract.reasoning_effort = body.effort;
+        else values.effort = body.effort;
+      }
+      data = structuredClone(reasoning(provider, model));
     }
     if (path === "/v2/management/settings/actions" && body.action === "reset") {
       values = defaults(); data = structuredClone({ values, secrets: {} });
@@ -109,6 +125,15 @@ async function start() {
 }
 async function patch(next: Record<string, unknown>) {
   await act(async () => { await coreApi("PATCH", "/v2/settings", { values: next }, true); });
+}
+function distinctReasoningContracts() {
+  const contract = (effort: string, levels: string[]) => ({ reasoning_effort: effort,
+    reasoning_options: levels.map(value => ({ value, label: value })) });
+  reasoningContracts = {
+    "gemini:gemini-a": contract("medium", ["minimal", "medium", "high"]),
+    "openai:openai-b": contract("medium", ["medium", "high", "max"]),
+    "gemini:gemini-b": contract("high", ["low", "high"]),
+  };
 }
 
 test("a fresh launch opens a blank chat while retaining existing history and its drafts", async () => {
@@ -306,6 +331,161 @@ describe("settings synchronization through the real API client", () => {
     fireEvent.click(await screen.findByRole("button", { name: "עוצמת חשיבה" }));
     fireEvent.click(screen.getByRole("option", { name: "High" }));
     await waitFor(() => expect(composer().reasoning).toBe("high"));
+  });
+
+  test("loads the new provider's contract before its slow save and orders immediate reasoning behind that save", async () => {
+    distinctReasoningContracts(); await start();
+    const gate = deferred(); patchGate = gate;
+    fireEvent.click(screen.getByText("chat-model"));
+    await waitFor(() => expect(composer()).toMatchObject({ provider: "openai", model: "openai-b", reasoning: "medium" }));
+    expect(composer().reasoningOptions.map((option: any) => option.value)).toEqual(["medium", "high", "max"]);
+    expect(values.api_mode).toBe("gemini");
+    fireEvent.click(screen.getByText("chat-reasoning"));
+    expect(composer().reasoning).toBe("high");
+    const posts = () => vi.mocked(invoke).mock.calls.filter(([command, args]: any) =>
+      command === "core_api" && args.request.method === "POST" && args.request.path.includes("/reasoning"));
+    expect(posts()).toHaveLength(0);
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect((posts()[0][1] as any).request).toMatchObject({ path: "/v2/providers/openai/reasoning", body: { model: "openai-b", effort: "high" } });
+    await waitFor(() => expect(reasoningContracts["openai:openai-b"].reasoning_effort).toBe("high"));
+    expect(screen.queryByText(/unsupported_reasoning_effort/)).toBeNull();
+  });
+
+  test("hides old stops during a slow contract read and ignores that read after a second model selection", async () => {
+    distinctReasoningContracts(); await start();
+    const gate = deferred(), baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+      if (command === "core_api" && args.request.method === "GET" && args.request.path.includes("/providers/openai/reasoning")) {
+        const result = await baseInvoke(command, args); await gate.promise; return result;
+      }
+      return baseInvoke(command, args);
+    });
+    fireEvent.click(screen.getByText("chat-model"));
+    expect(composer()).toMatchObject({ model: "openai-b", reasoning: "", reasoningOptions: [] });
+    fireEvent.click(screen.getByText("chat-reasoning"));
+    fireEvent.click(screen.getByText("chat-model-gemini"));
+    await waitFor(() => expect(composer()).toMatchObject({ provider: "gemini", model: "gemini-b", reasoning: "high" }));
+    await act(async () => gate.resolve());
+    expect(composer().reasoningOptions.map((option: any) => option.value)).toEqual(["low", "high"]);
+    expect(composer().model).toBe("gemini-b");
+  });
+
+  test("keeps the latest reasoning optimistic and skips superseded unsent levels", async () => {
+    distinctReasoningContracts(); await start();
+    fireEvent.click(screen.getByText("chat-model"));
+    await waitFor(() => expect(composer().reasoning).toBe("medium"));
+    const gate = deferred(), baseInvoke = vi.mocked(invoke).getMockImplementation()!, writes: string[] = [];
+    vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+      if (command === "core_api" && args.request.method === "POST" && args.request.path.includes("/reasoning")) {
+        writes.push(args.request.body.effort); if (writes.length === 1) await gate.promise;
+      }
+      return baseInvoke(command, args);
+    });
+    fireEvent.click(screen.getByText("chat-reasoning"));
+    await waitFor(() => expect(writes).toEqual(["high"]));
+    fireEvent.click(screen.getByText("chat-reasoning-max"));
+    fireEvent.click(screen.getByText("chat-reasoning-medium"));
+    expect(composer().reasoning).toBe("medium");
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(writes).toEqual(["high", "medium"]));
+    await waitFor(() => expect(reasoningContracts["openai:openai-b"].reasoning_effort).toBe("medium"));
+    expect(composer().reasoning).toBe("medium");
+  });
+
+  test("a settings refresh received during a reasoning save cannot erase the latest intent", async () => {
+    distinctReasoningContracts(); await start();
+    const refreshGate = deferred(), writeGate = deferred(), baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+    let refreshStarted = false;
+    vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+      if (command === "core_api" && args.request.method === "POST" && args.request.path.includes("/reasoning")) await writeGate.promise;
+      if (command === "core_api" && args.request.path === "/v2/bootstrap" && !refreshStarted) {
+        const result = await baseInvoke(command, args); refreshStarted = true; await refreshGate.promise; return result;
+      }
+      return baseInvoke(command, args);
+    });
+    await patch({ local_fast_mode_enabled: true });
+    await waitFor(() => expect(refreshStarted).toBe(true));
+    fireEvent.click(screen.getByText("chat-reasoning"));
+    expect(composer().reasoning).toBe("high");
+    await act(async () => refreshGate.resolve());
+    expect(composer()).toMatchObject({ model: "gemini-a", reasoning: "high", fast: true });
+    await act(async () => writeGate.resolve());
+    await waitFor(() => expect(reasoningContracts["gemini:gemini-a"].reasoning_effort).toBe("high"));
+  });
+
+  test("sending immediately after choosing an effort waits for that effort to be saved", async () => {
+    distinctReasoningContracts(); await start();
+    const submittedEfforts: string[] = [];
+    vi.spyOn(RunSubmission.prototype, "submit").mockImplementation(async () => {
+      submittedEfforts.push(reasoningContracts["gemini:gemini-a"].reasoning_effort);
+      return { session_id: "qa-session", run_id: "qa-run" };
+    });
+    const gate = deferred(), baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+      if (command === "core_api" && args.request.method === "POST" && args.request.path.includes("/reasoning")) await gate.promise;
+      return baseInvoke(command, args);
+    });
+    fireEvent.click(screen.getByText("chat-reasoning"));
+    fireEvent.click(screen.getByText("chat-send"));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+    expect(submittedEfforts).toEqual([]);
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(submittedEfforts).toEqual(["high"]));
+  });
+
+  test("rolls a failed model save back to its complete confirmed contract", async () => {
+    distinctReasoningContracts(); await start();
+    failPatch = true;
+    fireEvent.click(screen.getByText("chat-model"));
+    await waitFor(() => expect(screen.getByText(/לא ניתן להחליף מודל/)).toBeTruthy());
+    expect(composer()).toMatchObject({ provider: "gemini", model: "gemini-a", reasoning: "medium" });
+    expect(composer().reasoningOptions.map((option: any) => option.value)).toEqual(["minimal", "medium", "high"]);
+    failPatch = false;
+    fireEvent.click(screen.getByText("chat-reasoning"));
+    await waitFor(() => expect(reasoningContracts["gemini:gemini-a"].reasoning_effort).toBe("high"));
+  });
+
+  test("a failed effort after a pending model save rolls back to the saved effort, not its optimistic value", async () => {
+    distinctReasoningContracts(); await start();
+    const gate = deferred(); patchGate = gate;
+    const baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+      if (command === "core_api" && args.request.method === "POST" && args.request.path.includes("/reasoning"))
+        return { status: 500, body: { error: "save failed" } } as any;
+      return baseInvoke(command, args);
+    });
+    fireEvent.click(screen.getByText("chat-model"));
+    await waitFor(() => expect(composer().reasoning).toBe("medium"));
+    fireEvent.click(screen.getByText("chat-reasoning"));
+    expect(composer().reasoning).toBe("high");
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(screen.getByText(/לא ניתן לעדכן עוצמת חשיבה/)).toBeTruthy());
+    expect(composer()).toMatchObject({ model: "openai-b", reasoning: "medium" });
+  });
+
+  test("returning to a model preserves its pending effort even if its contract read arrives after the write", async () => {
+    distinctReasoningContracts(); await start();
+    const writeGate = deferred(), readGate = deferred(), baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+    let readStarted = false;
+    vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+      if (command === "core_api" && args.request.method === "POST" && args.request.path.includes("/reasoning")) await writeGate.promise;
+      if (command === "core_api" && args.request.method === "GET" && args.request.path.includes("model=gemini-a")) {
+        const result = await baseInvoke(command, args); readStarted = true; await readGate.promise; return result;
+      }
+      return baseInvoke(command, args);
+    });
+    fireEvent.click(screen.getByText("chat-reasoning"));
+    await waitFor(() => expect(composer().reasoning).toBe("high"));
+    fireEvent.click(screen.getByText("chat-model"));
+    await waitFor(() => expect(composer()).toMatchObject({ model: "openai-b", reasoning: "medium" }));
+    fireEvent.click(screen.getByText("chat-model-original"));
+    await waitFor(() => expect(readStarted).toBe(true));
+    await act(async () => writeGate.resolve());
+    await waitFor(() => expect(reasoningContracts["gemini:gemini-a"].reasoning_effort).toBe("high"));
+    await act(async () => readGate.resolve());
+    expect(composer()).toMatchObject({ provider: "gemini", model: "gemini-a", reasoning: "high" });
+    expect(composer().reasoningOptions.map((option: any) => option.value)).toEqual(["minimal", "medium", "high"]);
   });
 
   test("an old model's delayed reasoning response does not overwrite the newly selected model", async () => {

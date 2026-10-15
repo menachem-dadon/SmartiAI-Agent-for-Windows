@@ -71,20 +71,19 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
   const reasoningEffort = reasoningOptions.some(option => option.value === savedEffort) ? savedEffort
     : reasoningOptions.find(option => option.value === "medium")?.value || reasoningOptions[0]?.value || "";
   const root = useRef<HTMLSpanElement>(null), trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<View | null>(null), [present, setPresent] = useState(false), [busy, setBusy] = useState(false);
+  const [view, setView] = useState<View | null>(null), [present, setPresent] = useState(false);
   const [previewEffort, setPreviewEffort] = useState<string | null>(null);
-  const effortWrites = useRef<Promise<unknown>>(Promise.resolve()), effortRevision = useRef(0), mounted = useRef(true);
+  const effortRevision = useRef(0), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => { setPreviewEffort(null); }, [provider, model]);
+  useEffect(() => { ++effortRevision.current; setPreviewEffort(null); }, [provider, model]);
   const saveEffort = (effort: string) => {
     const revision = ++effortRevision.current, change = onReasoningEffort;
-    setPreviewEffort(effort); setBusy(true);
-    // Keep writes ordered across closing/reopening the popup. Each callback
-    // captures the original conversation/model owner; Core IDs stay unchanged.
-    const operation = effortWrites.current.catch(() => undefined).then(() => change(effort));
-    effortWrites.current = operation;
+    setPreviewEffort(effort);
+    // App owns persistence order. Deliver every intent immediately so a pending
+    // write never delays the next optimistic selection or captures another model.
+    const operation = Promise.resolve().then(() => change(effort));
     return operation.finally(() => {
-      if (mounted.current && revision === effortRevision.current) { setPreviewEffort(null); setBusy(false); }
+      if (mounted.current && revision === effortRevision.current) setPreviewEffort(null);
     });
   };
   const lastView = useRef<View>("effort"), [browsedProvider, setBrowsedProvider] = useState(provider);
@@ -181,7 +180,7 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
       <div key={shownView} className={`model-picker-surface${shownView === "effort" ? " model-picker-surface--effort" : ""}`} onAnimationEnd={event => { if (event.target === event.currentTarget && !open) setPresent(false); }}>
         {shownView === "effort" ? <div className="model-effort-content">
           <div className="model-effort-header">
-            <Button variant="ghost" className="model-effort-model" aria-label="פתיחת המודלים המועדפים" disabled={busy} onClick={() => setView("models")}>
+            <Button variant="ghost" className="model-effort-model" aria-label="פתיחת המודלים המועדפים" onClick={() => setView("models")}>
               {!!reasoningOptions.length && <bdi className="model-effort-value">{reasoningDisplayName(previewEffort ?? reasoningEffort, reasoningOptions)}</bdi>}
               <span className="model-effort-model-name"><HoverLabel text={name} /><Icon name="chevron" size={14} /></span>
             </Button>

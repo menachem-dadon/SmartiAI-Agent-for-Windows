@@ -69,7 +69,7 @@ describe("composer model selection", () => {
     expect(screen.getByRole("dialog", { name: "מודל ועוצמת חשיבה" })).toBeTruthy();
   });
 
-  test("finishes queued reasoning writes in order after dismissal and reopening", async () => {
+  test("delivers reasoning intents immediately and keeps model navigation enabled during a save", async () => {
     let finish!: () => void;
     const onReasoningEffort = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; })).mockResolvedValue(undefined);
     render(<Composer {...callbacks} attachments={[]} provider="openai" model="gpt-model" reasoningEffort="auto"
@@ -78,13 +78,16 @@ describe("composer model selection", () => {
     await openEffort();
     fireEvent.change(screen.getByRole("slider"), { target: { value: "1" } });
     await waitFor(() => expect(onReasoningEffort).toHaveBeenCalledOnce());
+    expect((screen.getByRole("button", { name: "פתיחת המודלים המועדפים" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.change(screen.getByRole("slider"), { target: { value: "2" } });
+    await waitFor(() => expect(onReasoningEffort.mock.calls.map(call => call[0])).toEqual(["high", "max"]));
     fireEvent.pointerDown(document.body);
     await waitFor(() => expect(document.querySelector(".model-picker-frame")).toBeNull());
     await openEffort();
-    fireEvent.change(screen.getByRole("slider"), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("slider"), { target: { value: "1" } });
+    await waitFor(() => expect(onReasoningEffort.mock.calls.map(call => call[0])).toEqual(["high", "max", "high"]));
     await act(async () => finish());
-    await waitFor(() => expect(onReasoningEffort.mock.calls.map(call => call[0])).toEqual(["high", "max", "medium"]));
+    await waitFor(() => expect(onReasoningEffort.mock.calls.map(call => call[0])).toEqual(["high", "max", "high"]));
   });
 
   test("keeps the active model, reasoning and settings reachable without favorites", async () => {

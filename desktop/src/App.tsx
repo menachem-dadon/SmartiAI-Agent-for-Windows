@@ -267,17 +267,23 @@ export default function App() {
   const [foreground, setForeground] = useState(() => !document.hidden && document.hasFocus());
   const [availableUpdateVersion, setAvailableUpdateVersion] = useState("");
   const [reconnecting, setReconnecting] = useState(false);
-  const [provider, setProvider] = useState("");
-  const [model, setModel] = useState("");
+  const [modelSelection, setModelSelection] = useState({
+    provider: "", model: "", reasoningEffort: "", reasoningOptions: [] as ReasoningOption[],
+  });
+  const { provider, model, reasoningEffort, reasoningOptions } = modelSelection;
+  const selectionRef = useRef(modelSelection);
+  const confirmedSelection = useRef(modelSelection);
+  const selectionVersion = useRef(0), modelGeneration = useRef(0), pendingSelectionWrites = useRef(0);
+  const selectionSave = useRef<Promise<boolean>>(Promise.resolve(true));
+  const renderedSelectionSave = selectionSave.current;
+  const renderedModelGeneration = modelGeneration.current;
+  const applySelection = useCallback((next: typeof modelSelection) => {
+    selectionRef.current = next;
+    setModelSelection(next);
+  }, []);
   const [displayName, setDisplayName] = useState("");
   const [favoriteModels, setFavoriteModels] = useState<FavoriteModel[]>([]);
-  const [modelSelectionSource, setModelSelectionSource] = useState<
-    Record<string, unknown>
-  >({});
-  const [reasoningEffort, setReasoningEffort] = useState("");
-  const [reasoningOptions, setReasoningOptions] = useState<ReasoningOption[]>(
-    [],
-  );
+  const modelSelectionSource = useRef<Record<string, unknown>>({});
   const [autonomyMode, setAutonomyMode] = useState("balanced");
   const [localFastMode, setLocalFastMode] = useState(false);
   const [narrowWorkspace, setNarrowWorkspace] = useState(() =>
@@ -306,9 +312,10 @@ export default function App() {
   }, [workspace.workbenchOpen]);
   const [bootstrapReady, setBootstrapReady] = useState(false);
   const restoredModelOwner = useRef("");
-  const modelOperations = useRef<Promise<unknown>>(Promise.resolve());
-  const reasoningSelection = useRef({ provider, model, effort: reasoningEffort });
-  reasoningSelection.current = { provider, model, effort: reasoningEffort };
+  const modelOperations = useRef<Promise<boolean>>(Promise.resolve(true));
+  const reasoningOperations = useRef<Promise<unknown>>(Promise.resolve());
+  const latestReasoningWrites = useRef(new Map<string, number>());
+  const pendingReasoning = useRef(new Map<string, { effort: string; previous: string; settled: boolean }>());
   const [restoringModel, setRestoringModel] = useState(false);
   useEffect(() => {
     if (!bootstrapReady || restoredModelOwner.current === activeId) return;
@@ -329,8 +336,9 @@ export default function App() {
         if (available.reasoning_options.some(option => option.value === selected.effort))
           await coreApi("POST", `/v2/providers/${encodePath(selected.provider)}/reasoning`, { model: selected.model, effort: selected.effort }, true);
       }
+      const selectionTicket = selectionVersion.current;
       const latest = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
-      if (!disposed) { syncSettings(latest); drafts.setSelection({ provider: selected.provider, model: selected.model, effort: latest.chat_models.reasoning_effort || "" }); }
+      if (!disposed && selectionTicket === selectionVersion.current) { syncSettings(latest, selectionTicket); drafts.setSelection({ provider: selected.provider, model: selected.model, effort: latest.chat_models.reasoning_effort || "" }); }
     })().catch(reason => { if (!disposed) setError(`לא ניתן לשחזר את בחירת המודל: ${String(reason)}`); })
       .finally(() => { if (!disposed) setRestoringModel(false); });
     return () => { disposed = true; };
@@ -437,7 +445,7 @@ export default function App() {
     },
     [refreshConversations, approvalQueue.replace],
   );
-  const syncSettings = useCallback((data: Bootstrap) => {
+  const syncSettings = useCallback((data: Bootstrap, selectionTicket = selectionVersion.current) => {
     const values = data.settings?.values || {};
     const favorites = Array.isArray(values.favorite_models)
       ? values.favorite_models.filter((item): item is FavoriteModel =>
@@ -449,17 +457,19 @@ export default function App() {
           ),
         )
       : [];
-    setProvider(data.chat_models.provider);
-    setModel(data.chat_models.model);
-    setReasoningEffort(data.chat_models.reasoning_effort || "");
-    setReasoningOptions(data.chat_models.reasoning_options || []);
+    // A refresh started before a local intent must not undo its optimistic UI,
+    // even if its response arrives after the save has completed.
+    if (!pendingSelectionWrites.current && selectionTicket === selectionVersion.current) {
+      ++selectionVersion.current; ++modelGeneration.current;
+      const next = { provider: data.chat_models.provider, model: data.chat_models.model,
+        reasoningEffort: data.chat_models.reasoning_effort || "", reasoningOptions: data.chat_models.reasoning_options || [] };
+      confirmedSelection.current = next;
+      selectionSave.current = Promise.resolve(true);
+      applySelection(next);
+      modelSelectionSource.current = values.selected_model_source && typeof values.selected_model_source === "object"
+        ? values.selected_model_source as Record<string, unknown> : {};
+    }
     setFavoriteModels(favorites);
-    setModelSelectionSource(
-      values.selected_model_source &&
-        typeof values.selected_model_source === "object"
-        ? (values.selected_model_source as Record<string, unknown>)
-        : {},
-    );
     setAutonomyMode(
       typeof values.autonomy_mode === "string"
         ? values.autonomy_mode
@@ -483,16 +493,17 @@ export default function App() {
       themeMode === "light" || themeMode === "dark" ? themeMode : "system",
     );
     setAvailableUpdateVersion(String(values.updates_last_available_version || ""));
-  }, [setPreference]);
+  }, [setPreference, applySelection]);
   useEffect(() => {
     if (core.state !== "ready") return;
     let request = 0;
     let disposed = false;
     const unsubscribe = subscribeSettingsChanges(() => {
       const current = ++request;
+      const selectionTicket = selectionVersion.current;
       void coreApi<Bootstrap>("GET", "/v2/bootstrap")
         .then((data) => {
-          if (!disposed && current === request) syncSettings(data);
+          if (!disposed && current === request) syncSettings(data, selectionTicket);
         })
         .catch((reason) => {
           if (!disposed && current === request) setError(String(reason));
@@ -504,13 +515,14 @@ export default function App() {
     setBootstrapReady(false);
     setReconnecting(false);
     const revision = settingsRevision();
+    const selectionTicket = selectionVersion.current;
     const data = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
     const values = data.settings?.values || {};
     const preferences =
       values.ui_preferences && typeof values.ui_preferences === "object"
         ? (values.ui_preferences as Record<string, unknown>)
         : {};
-    if (revision === settingsRevision()) syncSettings(data);
+    if (revision === settingsRevision()) syncSettings(data, selectionTicket);
     setConversations(data.conversations);
     approvalQueue.replace(data.pending_approvals);
     setDisplayName(data.display_name || "");
@@ -988,6 +1000,8 @@ export default function App() {
   const send = async (text: string, isVoice = false) => {
     setError("");
     const submittedAttachments = [...attachments];
+    if (!await renderedSelectionSave) throw new Error("בחירת המודל לא נשמרה. יש לבחור מודל לפני השליחה.");
+    await reasoningOperations.current;
     const submitted = await runSubmission.submit({
       sessionId: activeId, text, attachments: submittedAttachments, provider, model, isVoice,
     });
@@ -1005,6 +1019,8 @@ export default function App() {
   };
   const sendCanvasAction = async (text: string, owner: string) => {
     if (!owner) throw new Error("חסרה השיחה שאליה שייך הקנבס.");
+    if (!await renderedSelectionSave) throw new Error("בחירת המודל לא נשמרה. יש לבחור מודל לפני השליחה.");
+    await reasoningOperations.current;
     await runSubmission.submit({ sessionId: owner, text, attachments: [], provider, model });
     await refreshLists();
     if (activeIdRef.current === owner) await loadMessages(owner);
@@ -1069,6 +1085,8 @@ export default function App() {
     await refreshLists().catch((reason) => setError(String(reason)));
   };
   const loadReasoning = async (nextProvider: string, nextModel: string, owner = activeIdRef.current) => {
+    const ticket = selectionVersion.current;
+    const key = JSON.stringify([nextProvider, nextModel]), pendingAtRead = pendingReasoning.current.get(key);
     const data = await coreApi<{
       reasoning_effort: string;
       reasoning_options: ReasoningOption[];
@@ -1076,20 +1094,35 @@ export default function App() {
       "GET",
       `/v2/providers/${encodePath(nextProvider)}/reasoning?model=${encodeURIComponent(nextModel)}`,
     );
-    if (owner === activeIdRef.current) {
-      setReasoningEffort(data.reasoning_effort || "");
-      setReasoningOptions(data.reasoning_options || []);
+    const current = selectionRef.current;
+    const requested = pendingReasoning.current.get(key) || pendingAtRead;
+    const requestedSupported = requested && data.reasoning_options.some(option => option.value === requested.effort);
+    const acknowledged = requestedSupported && requested.settled ? requested.effort : data.reasoning_effort || "";
+    if (owner === activeIdRef.current && ticket === selectionVersion.current &&
+        current.provider === nextProvider && current.model === nextModel) {
+      const effort = requestedSupported ? requested.effort : acknowledged;
+      const next = { ...current, reasoningEffort: effort, reasoningOptions: data.reasoning_options || [] };
+      applySelection(next);
+      if (confirmedSelection.current.provider === nextProvider && confirmedSelection.current.model === nextModel)
+        confirmedSelection.current = { ...next, reasoningEffort: acknowledged };
     }
-    return data;
+    return { ...data, reasoning_effort: acknowledged };
   };
   const selectFavoriteModel = async (item: FavoriteModel) => {
     const owner = activeId;
+    const generation = ++modelGeneration.current;
+    ++selectionVersion.current;
+    const ownsSelection = () => owner === activeIdRef.current && generation === modelGeneration.current;
+    // Replace the complete contract at once; never offer the previous model's
+    // stops under the new name. Read its local contract before the slower save.
+    applySelection({ ...item, reasoningEffort: "", reasoningOptions: [] });
+    ++pendingSelectionWrites.current;
+    let loadedContract: Awaited<ReturnType<typeof loadReasoning>> | undefined;
+    const contract = loadReasoning(item.provider, item.model, owner).then(data => { loadedContract = data; }).catch(reason => {
+      if (ownsSelection()) setError(`לא ניתן לטעון אפשרויות חשיבה: ${String(reason)}`);
+    });
     const operation = modelOperations.current.catch(() => undefined).then(async () => {
     if (owner !== activeIdRef.current) return false;
-    const previousProvider = provider;
-    const previousModel = model;
-    setProvider(item.provider);
-    setModel(item.model);
     try {
       await coreApi(
         "PATCH",
@@ -1099,7 +1132,7 @@ export default function App() {
             api_mode: item.provider,
             [`selected_${item.provider}_model`]: item.model,
             selected_model_source: {
-              ...modelSelectionSource,
+              ...modelSelectionSource.current,
               [item.provider]: "user",
             },
             model_selection_provenance_version: 1,
@@ -1107,29 +1140,55 @@ export default function App() {
         },
         true,
       );
-      setModelSelectionSource((current) => ({
-        ...current,
-        [item.provider]: "user",
-      }));
-      const reasoning = await loadReasoning(item.provider, item.model, owner);
-      drafts.setSelection({ ...item, effort: reasoning.reasoning_effort || "" });
+      modelSelectionSource.current = { ...modelSelectionSource.current, [item.provider]: "user" };
+      confirmedSelection.current = { ...item, reasoningEffort: loadedContract?.reasoning_effort || "",
+        reasoningOptions: loadedContract?.reasoning_options || [] };
       return true;
     } catch (reason) {
-      if (owner === activeIdRef.current) {
-        setProvider(previousProvider); setModel(previousModel);
+      if (ownsSelection()) {
+        ++selectionVersion.current; ++modelGeneration.current;
+        const previous = confirmedSelection.current;
+        selectionSave.current = Promise.resolve(true);
+        applySelection(previous);
+        if (!previous.reasoningOptions.length && previous.model)
+          void loadReasoning(previous.provider, previous.model, owner).catch(() => {});
         setError(`לא ניתן להחליף מודל: ${String(reason)}`);
       }
       return false;
     }
     });
     modelOperations.current = operation;
-    return operation;
+    selectionSave.current = operation;
+    return Promise.all([operation, contract]).then(([accepted]) => {
+      if (accepted && ownsSelection()) drafts.setSelection({ ...item, effort: selectionRef.current.reasoningEffort });
+      return accepted;
+    }).finally(() => { --pendingSelectionWrites.current; });
   };
   const changeReasoning = async (effort: string) => {
     const owner = activeId;
-    const ownsSelection = () => owner === activeIdRef.current && provider === reasoningSelection.current.provider && model === reasoningSelection.current.model;
-    const previous = reasoningSelection.current.effort;
-    if (ownsSelection()) setReasoningEffort(effort);
+    const generation = renderedModelGeneration;
+    const ownsSelection = () => owner === activeIdRef.current && generation === modelGeneration.current &&
+      provider === selectionRef.current.provider && model === selectionRef.current.model;
+    if (!reasoningOptions.some(option => option.value === effort)) return;
+    const ticket = ++selectionVersion.current, key = JSON.stringify([provider, model]);
+    latestReasoningWrites.current.set(key, ticket);
+    const requested = { effort, previous: pendingReasoning.current.get(key)?.previous || reasoningEffort, settled: false };
+    pendingReasoning.current.set(key, requested);
+    const ownsModel = () => owner === activeIdRef.current && provider === selectionRef.current.provider && model === selectionRef.current.model;
+    if (ownsSelection()) {
+      applySelection({ ...selectionRef.current, reasoningEffort: effort });
+      drafts.setSelection({ provider, model, effort });
+    }
+    const modelSave = renderedSelectionSave;
+    ++pendingSelectionWrites.current;
+    const operation = reasoningOperations.current.catch(() => undefined).then(async () => {
+    // Model selection and effort writes share a persistence barrier. Keep the
+    // newest unsent effort per model instead of writing every intermediate stop.
+    if (!await modelSave) {
+      if (latestReasoningWrites.current.get(key) === ticket) pendingReasoning.current.delete(key);
+      return;
+    }
+    if (latestReasoningWrites.current.get(key) !== ticket) return;
     try {
       const data = await coreApi<{ reasoning_effort: string }>(
         "POST",
@@ -1137,16 +1196,31 @@ export default function App() {
         { model, effort },
         true,
       );
-      if (ownsSelection()) {
-        setReasoningEffort(data.reasoning_effort);
+      if (confirmedSelection.current.provider === provider && confirmedSelection.current.model === model)
+        confirmedSelection.current = { ...confirmedSelection.current, reasoningEffort: data.reasoning_effort };
+      requested.effort = data.reasoning_effort;
+      requested.settled = true;
+      const pending = pendingReasoning.current.get(key);
+      if (pending) pending.previous = data.reasoning_effort;
+      if (latestReasoningWrites.current.get(key) === ticket) pendingReasoning.current.delete(key);
+      if (ownsModel() && latestReasoningWrites.current.get(key) === ticket) {
+        applySelection({ ...selectionRef.current, reasoningEffort: data.reasoning_effort });
         drafts.setSelection({ provider, model, effort: data.reasoning_effort });
       }
     } catch (reason) {
-      if (ownsSelection()) {
-        setReasoningEffort(previous);
+      requested.effort = requested.previous;
+      requested.settled = true;
+      if (latestReasoningWrites.current.get(key) === ticket) pendingReasoning.current.delete(key);
+      if (ownsModel() && latestReasoningWrites.current.get(key) === ticket) {
+        const previous = requested.previous;
+        applySelection({ ...selectionRef.current, reasoningEffort: previous });
+        drafts.setSelection({ provider, model, effort: previous });
         setError(`לא ניתן לעדכן עוצמת חשיבה: ${String(reason)}`);
       }
     }
+    }).finally(() => { --pendingSelectionWrites.current; });
+    reasoningOperations.current = operation;
+    return operation;
   };
   const changeAutonomy = async (next: string) => {
     const previous = autonomyMode;

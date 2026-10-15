@@ -36,7 +36,7 @@ async function main() {
             reasoningEffort={effort} reasoningOptions={item.provider==='local'?[]:levels}
             onAttachments={()=>{}} onSend={async()=>{}} onCancel={()=>{}}
             onFavoriteModel={next=>{window.__qaEvents.push(next);setItem(next);setEffort('medium');}}
-            onReasoningEffort={async next=>{window.__qaEvents.push({effort:next});await new Promise(r=>setTimeout(r,30));setEffort(next);}}
+            onReasoningEffort={async next=>{window.__qaEvents.push({effort:next});await window.__qaEffortGate;await new Promise(r=>setTimeout(r,30));setEffort(next);}}
             onManageModels={()=>setSettings(true)} />
         </div>
         {settings&&<DesignSystemProvider theme={theme}><div style={{position:'fixed',top:60,left:16}}><ProviderPicker value={item.provider} onSelect={async provider=>{window.__qaEvents.push({provider});setItem({provider,model:'qa-model'});}} /></div></DesignSystemProvider>}
@@ -146,6 +146,18 @@ async function main() {
     await page.mouse.move(track.x+track.width-16,track.y+track.height/2,{steps:8}); await page.mouse.up();
     await page.waitForFunction(()=>window.__qaEvents.at(-1)?.effort==='max');
     record('native pointer drag saves final level once', await page.evaluate(()=>window.__qaEvents.length) === callsBeforeDrag+1);
+    await page.evaluate(()=>{window.__qaEffortGate=new Promise(resolve=>{window.__qaReleaseEffort=resolve;});});
+    await dragSlider.press('Home');
+    await page.waitForFunction(()=>window.__qaEvents.at(-1)?.effort==='low');
+    record('model heading stays enabled while reasoning save is pending',await page.getByRole('button',{name:'פתיחת המודלים המועדפים'}).isEnabled());
+    await page.getByRole('button',{name:'פתיחת המודלים המועדפים'}).click();
+    record('favorites remain accessible during a pending reasoning save',await page.getByRole('button',{name:'חזרה לעוצמת החשיבה'}).isVisible());
+    await page.getByRole('button',{name:'חזרה לעוצמת החשיבה'}).click();
+    await page.getByRole('slider',{name:'עוצמת חשיבה'}).press('End');
+    await page.waitForFunction(()=>window.__qaEvents.at(-1)?.effort==='max');
+    record('next reasoning intent is delivered before the prior save completes',await page.evaluate(()=>!!window.__qaReleaseEffort));
+    await page.evaluate(()=>{window.__qaReleaseEffort();delete window.__qaEffortGate;delete window.__qaReleaseEffort;});
+    await page.waitForTimeout(100);
     await page.emulateMedia({reducedMotion:'no-preference'});
     const geometry = await page.evaluate(async()=>{
       const slider=document.querySelector('.model-effort-input');
