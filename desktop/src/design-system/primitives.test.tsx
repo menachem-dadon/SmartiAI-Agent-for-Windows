@@ -12,6 +12,13 @@ beforeAll(() => {
 });
 const wrap = (children: React.ReactNode) => <DesignSystemProvider theme="light">{children}</DesignSystemProvider>;
 describe("UX-2 shared interaction contracts", () => {
+  test("dialogs can omit the close button while retaining their accessible name and native cancellation", () => {
+    const close = vi.fn();
+    render(wrap(<Dialog open title="חיפוש" showCloseButton={false} onClose={close}><Field label="שאילתה" /></Dialog>));
+    const dialog = screen.getByRole("dialog", { name: "חיפוש" });
+    expect(screen.queryByRole("button", { name: "סגירה" })).toBeNull();
+    fireEvent(dialog, new Event("cancel", { cancelable: true })); expect(close).toHaveBeenCalledOnce();
+  });
   test("dialog Escape stays inside the dialog before native cancellation", () => {
     const ancestor = vi.fn(), close = vi.fn();
     window.addEventListener("keydown", ancestor);

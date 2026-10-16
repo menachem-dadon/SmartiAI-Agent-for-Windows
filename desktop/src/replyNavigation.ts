@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 
-export interface ReplyNavigation { sessionId: string; revision: number; runId?: string; alignReply?: boolean; }
+export interface ReplyNavigation { sessionId: string; revision: number; runId?: string; alignReply?: boolean; messageOrdinal?: number; }
 
 /** Align once after the requested conversation has rendered, never on polling. */
 export function useReplyNavigation(
@@ -13,12 +13,14 @@ export function useReplyNavigation(
   useLayoutEffect(() => {
     const container = viewport.current;
     if (!container || !ready || !request || request === applied.current ||
-        request.sessionId !== loadedSessionId || (!request.runId && !request.alignReply)) return;
+        request.sessionId !== loadedSessionId || (!request.runId && !request.alignReply && request.messageOrdinal === undefined)) return;
     applied.current = request;
     const align = () => {
       const replies = container.querySelectorAll<HTMLElement>(".chat-message-row--assistant");
-      const reply = (request.runId && Array.from(replies).find((row) => row.dataset.runId === request.runId))
-        || replies[replies.length - 1];
+      const reply = request.messageOrdinal !== undefined
+        ? Array.from(container.querySelectorAll<HTMLElement>("[data-message-ordinal]")).find(row => Number(row.dataset.messageOrdinal) === request.messageOrdinal)
+        : (request.runId && Array.from(replies).find((row) => row.dataset.runId === request.runId)) || replies[replies.length - 1];
+      if (request.messageOrdinal !== undefined && !reply) return;
       const target = reply?.querySelector<HTMLElement>(".message-content") || reply;
       container.scrollTop = target
         ? Math.max(0, container.scrollTop + target.getBoundingClientRect().top -

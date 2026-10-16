@@ -194,10 +194,10 @@ export function Menu({ label, icon = "more", items, children, onOpenChange, fitC
   </>;
 }
 
-export function Dialog({ open, title, description, children, onClose, initialFocus, role = "dialog", className = "" }: { open: boolean; title: string; description?: string; children: ReactNode; onClose: () => void; initialFocus?: RefObject<HTMLElement | null>; role?: "dialog" | "alertdialog"; className?: string }) {
-  return open ? <DialogContent title={title} description={description} onClose={onClose} initialFocus={initialFocus} role={role} className={className}>{children}</DialogContent> : null;
+export function Dialog({ open, title, description, children, onClose, initialFocus, role = "dialog", className = "", showCloseButton = true }: { open: boolean; title: string; description?: string; children: ReactNode; onClose: () => void; initialFocus?: RefObject<HTMLElement | null>; role?: "dialog" | "alertdialog"; className?: string; showCloseButton?: boolean }) {
+  return open ? <DialogContent title={title} description={description} onClose={onClose} initialFocus={initialFocus} role={role} className={className} showCloseButton={showCloseButton}>{children}</DialogContent> : null;
 }
-function DialogContent({ title, description, children, onClose, initialFocus, role, className }: Omit<Parameters<typeof Dialog>[0], "open">) {
+function DialogContent({ title, description, children, onClose, initialFocus, role, className, showCloseButton }: Omit<Parameters<typeof Dialog>[0], "open">) {
   const dialog = useRef<HTMLDialogElement>(null); const titleId = useId(); const descId = useId();
   const design = useContext(DesignContext);
   const [host, setHost] = useState<HTMLDivElement | null>(null);
@@ -219,7 +219,7 @@ function DialogContent({ title, description, children, onClose, initialFocus, ro
     else if (event.shiftKey && (document.activeElement === first || document.activeElement === node)) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && (document.activeElement === last || document.activeElement === node)) { event.preventDefault(); first.focus(); }
   }} onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); if (event.target === event.currentTarget && (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom)) onClose(); }}>
-    <header><h2 id={titleId}>{title}</h2><IconButton tooltip={false} variant="ghost" icon="close" label="סגירה" onClick={onClose} /></header>{description && <p className="sds-hint" id={descId}>{description}</p>}{children}
+    <header><h2 id={titleId}>{title}</h2>{showCloseButton && <IconButton tooltip={false} variant="ghost" icon="close" label="סגירה" onClick={onClose} />}</header>{description && <p className="sds-hint" id={descId}>{description}</p>}{children}
     <div ref={setHost} className="sds-overlay-host" />
   </dialog></DesignContext.Provider>;
 }

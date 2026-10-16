@@ -68,6 +68,11 @@ def _search_preview(value, query, limit=210):
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     needle = re.sub(r"\s+", " ", str(query or "")).strip()
     match = re.search(re.escape(needle), text, re.IGNORECASE) if needle else None
+    if not match:
+        # Multi-word queries can match words in a different order.
+        terms = re.findall(r"\w+", needle, flags=re.UNICODE)
+        matches = [found for term in terms if (found := re.search(re.escape(term), text, re.IGNORECASE))]
+        match = min(matches, key=lambda found: found.start()) if matches else None
     start = max(0, match.start() - 32) if match else 0
     # Keep the whole match visible even for a query longer than the preview.
     end = min(len(text), max(start + limit, match.end() if match else 0))
@@ -115,6 +120,27 @@ def _fuzzy_score(query, target):
             best = max(best, difflib.SequenceMatcher(None, word, candidate).ratio())
         scores.append(best)
     return sum(scores) / max(1, len(scores))
+
+
+def _search_match_score(query, target, title=False):
+    """Deterministic phrase/token ranking; no model request or hidden context."""
+    needle, text = str(query).casefold().strip(), str(target).casefold().strip()
+    if not needle or not text:
+        return 0
+    if needle == text:
+        return 100 if title else 84
+    if text.startswith(needle):
+        return 96 if title else 80
+    if needle in text:
+        return 90 if title else 78
+    normalized, source = _normalize_search_text(query), _normalize_search_text(target)
+    if not normalized or not source:
+        return 0
+    if normalized in source:
+        return 88 if title else 76
+    if all(term in source for term in normalized.split()):
+        return 82 if title else 70
+    return 0
 
 
 def _json_object(value):
@@ -1000,6 +1026,70 @@ class ChatSessionStore:
                 )
             )
             return self._enrich_session_records(db, records)
+
+    def search_messages(self, query, limit=9):
+        """Return separately addressable title/message hits, ranked across chats.
+
+        Legacy list_sessions stays one record per conversation. This projection
+        searches only visible message text/attachment names and never returns raw
+        metadata. A small repeat penalty lets other strong conversations compete.
+        """
+        query = str(query or "").strip()
+        limit = max(1, min(9, int(limit)))
+        if not query:
+            return []
+        with self._lock, self._connect() as db:
+            sessions = {
+                str(row["id"]): {**dict(row), "pinned": bool(row["pinned"])} for row in db.execute("""
+                    SELECT s.id, s.title, s.created_at, s.updated_at, s.pinned,
+                           COUNT(m.ordinal) AS message_count
+                    FROM sessions s JOIN messages m ON m.session_id=s.id GROUP BY s.id
+                """).fetchall()
+            }
+            candidates = []
+            for identifier, session in sessions.items():
+                score = _search_match_score(query, session["title"], title=True)
+                if score:
+                    candidates.append({**session, "match_id": f"{identifier}:title", "match_kind": "title",
+                                       "search_preview": "", "_score": score, "_time": _time_score(session["updated_at"])})
+            # SQL narrows candidates using the phrase and individual words. The
+            # final score uses _message_text, excluding raw metadata/UI-only text.
+            terms = list(dict.fromkeys([query, *re.findall(r"\w+", query, flags=re.UNICODE)]))[:16]
+            clause = " OR ".join("(m.content LIKE ? ESCAPE '\\' OR (m.metadata_json LIKE '%\"attachments\"%' AND m.metadata_json LIKE ? ESCAPE '\\'))" for _ in terms)
+            patterns = []
+            for term in terms:
+                pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                patterns.extend([pattern, pattern])
+            rows = db.execute(f"""
+                SELECT m.* FROM messages m WHERE m.role IN ('user','assistant') AND ({clause})
+                ORDER BY m.created_at DESC, m.session_id, m.ordinal DESC
+            """, patterns).fetchall()
+            for row in rows:
+                identifier = str(row["session_id"])
+                text = _message_text(self._row_message(row))
+                score = _search_match_score(query, text)
+                if score and identifier in sessions:
+                    candidates.append({**sessions[identifier], "match_id": f"{identifier}:message:{row['ordinal']}",
+                                       "match_kind": "content", "match_ordinal": int(row["ordinal"]),
+                                       "search_preview": _search_preview(text, query),
+                                       "_score": score, "_time": _time_score(row["created_at"])})
+            if not candidates and len(_normalize_search_text(query)) >= 4:
+                for identifier, session in sessions.items():
+                    quality = _fuzzy_score(query, session["title"])
+                    if quality >= 0.78:
+                        candidates.append({**session, "match_id": f"{identifier}:title", "match_kind": "title",
+                                           "search_preview": "", "_score": 35 + 15 * quality,
+                                           "_time": _time_score(session["updated_at"])})
+            selected, counts = [], {}
+            while candidates and len(selected) < limit:
+                best = max(candidates, key=lambda item: (
+                    item["_score"] - 8 * counts.get(item["id"], 0), item["_time"],
+                    _time_score(item["updated_at"]), bool(item["pinned"]), item.get("match_ordinal", -1), item["match_id"],
+                ))
+                candidates.remove(best)
+                counts[best["id"]] = counts.get(best["id"], 0) + 1
+                selected.append({key: value for key, value in best.items() if not key.startswith("_")})
+            return self._enrich_session_records(db, selected)
 
     def should_generate_title_for_next_turn(self, session_id=None):
         with self._lock, self._connect() as db:

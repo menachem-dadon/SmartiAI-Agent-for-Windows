@@ -22,9 +22,9 @@
 .drawer-expanded-content { min-height:0; flex:1; display:flex; flex-direction:column; border-top:1px solid transparent; }
 .drawer-expanded-content.is-scrolled { border-top-color:var(--sds-color-border); }
 .recent-conversations-toggle { display:flex; align-items:center; gap:var(--sds-space-1); width:100%; min-height:36px; margin-bottom:var(--sds-space-1); padding:var(--sds-space-2); border:0; background:transparent; color:var(--sds-color-text-muted); text-align:right; font-size:var(--sds-font-caption); cursor:pointer; }
-.recent-conversations-toggle>.sds-icon { opacity:0; transition:opacity var(--sds-motion-fast),transform var(--sds-motion-fast); }
-.recent-conversations-toggle[aria-expanded="false"]>.sds-icon { transform:rotate(90deg); }
-.conversation-list:is(:hover,:focus-within) .recent-conversations-toggle>.sds-icon { opacity:1; }
+.recent-conversations-toggle>.sds-icon { opacity:0; transition:transform var(--sds-motion-fast); }
+.recent-conversations-toggle[aria-expanded="false"]>.sds-icon { opacity:1; transform:rotate(90deg); }
+.conversation-list:hover .recent-conversations-toggle>.sds-icon,.recent-conversations-toggle:focus-visible>.sds-icon { opacity:1; }
 @media (hover:none) { .recent-conversations-toggle>.sds-icon { opacity:1; } }
 .conversation-list { flex:1; min-height:0; overflow:auto; overscroll-behavior:none; scrollbar-gutter:stable; }
 .conversation-row { position:relative; display:flex; align-items:center; gap:4px; height:40px; margin-bottom:2px; border-radius:var(--sds-radius-control); padding:0 4px; }

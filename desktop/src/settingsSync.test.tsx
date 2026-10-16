@@ -136,13 +136,15 @@ test("search opens an older conversation outside the sidebar page and keeps its 
     if (command !== "core_api") return response;
     const { method, path, body } = args.request;
     if (path.startsWith("/v2/conversations?q=") && new URLSearchParams(path.split("?")[1]).get("q"))
-      response.body.data = { items: [old()], attention_items: [] };
+      response.body.data = { items: [{ ...old(), match_kind: "content", match_ordinal: 0 }], attention_items: [] };
     if (path === "/v2/conversations/older-search-chat") {
       if (method === "PATCH") pinned = body.pinned;
       response.body.data = { conversation: old() };
     }
     if (path.startsWith("/v2/conversations/older-search-chat/messages"))
-      response.body.data = { session_id: "older-search-chat", messages: [], total_count: 2, has_older: false };
+      response.body.data = path.includes("before=")
+        ? { session_id: "older-search-chat", messages: [{ role: "user", content: "הודעה תואמת ישנה", message_id: "older-search-chat:0" }], total_count: 70, has_older: false, next_before_ordinal: null }
+        : { session_id: "older-search-chat", messages: [{ role: "assistant", content: "תשובה אחרונה", message_id: "older-search-chat:69" }], total_count: 70, has_older: true, next_before_ordinal: 68 };
     return response;
   });
   await start();
@@ -150,6 +152,7 @@ test("search opens an older conversation outside the sidebar page and keeps its 
   fireEvent.change(screen.getByRole("combobox"), { target: { value: "ישנה" } });
   fireEvent.click(await screen.findByRole("option"));
   await screen.findByRole("heading", { name: "שיחה ישנה מהחיפוש" });
+  await screen.findByText("הודעה תואמת ישנה");
   await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) => command === "core_api" && args.request.path === "/v2/conversations/older-search-chat")).toBe(true));
   fireEvent.click(screen.getByRole("button", { name: "פעולות שיחה" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "הצמד שיחה" }));

@@ -29,24 +29,33 @@ export function suggestedConversations(conversations: Conversation[]) {
     if (!conversation || seen.has(item.id)) return [];
     seen.add(item.id);
     return [conversation];
-  }).slice(0, 8);
+  }).slice(0, 9);
 }
 
 export function highlightParts(text: string, query: string): { text: string; match: boolean }[] {
-  const needle = query.trim().toLocaleLowerCase();
+  const needle = query.trim();
   if (!needle) return [{ text, match: false }];
-  const source = text.toLocaleLowerCase();
-  const parts = [];
+  const terms = text.toLocaleLowerCase().includes(needle.toLocaleLowerCase()) ? [needle] : needle.match(/[\p{L}\p{N}_]+/gu) || [needle];
+  const pattern = [...new Set(terms)].sort((a, b) => b.length - a.length).map(term => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const parts: { text: string; match: boolean }[] = [];
   let cursor = 0;
-  let index = source.indexOf(needle);
-  while (index >= 0) {
+  for (const match of text.matchAll(new RegExp(pattern, "giu"))) {
+    const index = match.index!;
     if (index > cursor) parts.push({ text: text.slice(cursor, index), match: false });
-    parts.push({ text: text.slice(index, index + needle.length), match: true });
-    cursor = index + needle.length;
-    index = source.indexOf(needle, cursor);
+    parts.push({ text: match[0], match: true });
+    cursor = index + match[0].length;
   }
   if (cursor < text.length) parts.push({ text: text.slice(cursor), match: false });
   return parts;
 }
 
 export type SearchFile = { name: string; path: string; size: number; modified_at: string };
+
+export function rankSearchFiles(items: SearchFile[], query: string) {
+  const needle = query.trim().toLocaleLowerCase();
+  const score = (item: SearchFile) => {
+    const name = item.name.toLocaleLowerCase();
+    return name === needle ? 4 : name.startsWith(needle) ? 3 : name.includes(needle) ? 2 : 1;
+  };
+  return [...items].sort((a, b) => score(b) - score(a) || b.modified_at.localeCompare(a.modified_at) || a.path.localeCompare(b.path)).slice(0, 9);
+}

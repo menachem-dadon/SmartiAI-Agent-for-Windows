@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import unittest
@@ -7,9 +8,78 @@ from unittest import mock
 
 from smarti.desktop_services import WorkspaceScope
 from smarti.history import ChatSessionStore, _search_preview
+from smarti.local_gateway import SmartiLocalGateway
 
 
 class DesktopSearchTests(unittest.TestCase):
+    def test_gateway_message_projection_keeps_legacy_conversation_list_and_limits_separate_hits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "chats.json"))
+            store.add_turn("budget first", "budget second")
+            gateway = object.__new__(SmartiLocalGateway)
+            gateway.core = SimpleNamespace(chat_store=store)
+            gateway._ok = lambda request, data: data
+            legacy = asyncio.run(gateway._conversations(SimpleNamespace(method="GET", query={"q": "budget"})))
+            separate = asyncio.run(gateway._conversations(SimpleNamespace(method="GET", query={"q": "budget", "matches": "messages", "limit": "9"})))
+            self.assertEqual(len(legacy["items"]), 1)
+            self.assertEqual(len(separate["items"]), 2)
+            self.assertEqual(separate["attention_items"], [])
+            self.assertEqual({row["match_ordinal"] for row in separate["items"]}, {0, 1})
+
+    def test_message_search_returns_separate_hits_with_addressable_ordinals_and_title_only_hit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "chats.json"))
+            session = store.active_session()["id"]
+            store.rename_session(session, "תקציב")
+            store.add_turn("תקציב לרבעון הראשון", "בנינו תקציב חדש", session_id=session)
+            store.add_turn("עוד תקציב להמשך", "סיכום", session_id=session)
+            with mock.patch.object(store, "_session", side_effect=AssertionError("search must not load whole sessions")):
+                rows = store.search_messages("תקציב")
+            self.assertEqual(len(rows), 4)
+            self.assertEqual(rows[0]["match_kind"], "title")
+            self.assertIsInstance(rows[0]["pinned"], bool)
+            self.assertEqual(rows[0]["search_preview"], "")
+            messages = [row for row in rows if row["match_kind"] == "content"]
+            self.assertEqual({row["match_ordinal"] for row in messages}, {0, 1, 2})
+            self.assertEqual(len({row["match_id"] for row in rows}), 4)
+            self.assertEqual(len(store.list_sessions("תקציב")), 1)
+
+    def test_message_search_caps_at_nine_prioritizes_exact_titles_and_diversifies_equal_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "chats.json"))
+            exact = store.active_session()["id"]
+            store.rename_session(exact, "budget")
+            for index in range(8):
+                store.add_turn(f"budget item {index}", f"budget result {index}", session_id=exact)
+            other = store.create_session(False)["id"]
+            store.rename_session(other, "Other conversation")
+            store.add_turn("budget for a different project", "ready", session_id=other)
+            rows = store.search_messages("budget", limit=100)
+            self.assertEqual(len(rows), 9)
+            self.assertEqual(rows[0]["id"], exact)
+            self.assertEqual(rows[0]["match_kind"], "title")
+            self.assertIn(other, [row["id"] for row in rows[:3]])
+            self.assertEqual(store.search_messages(""), [])
+
+    def test_message_search_matches_reordered_words_and_uses_conservative_title_typo_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "chats.json"))
+            store.rename_session(store.active_session()["id"], "Release planning")
+            store.add_turn("פתיחה " * 80 + "תקציב לפרויקט שנתי", "הושלם")
+            rows = store.search_messages("שנתי תקציב")
+            self.assertEqual(rows[0]["match_kind"], "content")
+            self.assertIn("תקציב", rows[0]["search_preview"])
+            self.assertEqual(store.search_messages("plannng")[0]["match_kind"], "title")
+            self.assertEqual(store.search_messages("z"), [])
+
+    def test_message_search_does_not_return_matches_from_internal_metadata_or_ui_only_messages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "chats.json"))
+            store.add_turn("visible", "reply", user_metadata={"internal": "private-needle-725"})
+            store.add_turn("ui-only-needle-729", "reply", user_metadata={"ui_only": True})
+            self.assertEqual(store.search_messages("private-needle-725"), [])
+            self.assertEqual(store.search_messages("ui-only-needle-729"), [])
+
     def test_search_preview_finds_older_content_without_changing_last_message_preview(self):
         with tempfile.TemporaryDirectory() as directory:
             store = ChatSessionStore(str(Path(directory) / "chats.json"))

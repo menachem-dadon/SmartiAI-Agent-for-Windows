@@ -445,6 +445,10 @@ class SmartiLocalGateway:
     async def _conversations(self, request):
         store = self.core.chat_store
         if request.method == "GET":
+            if request.query.get("matches") == "messages":
+                items = await asyncio.to_thread(store.search_messages, request.query.get("q", ""),
+                                               self._query_int(request, "limit", 9, 1, 9))
+                return self._ok(request, {"items": items, "total": len(items), "attention_items": []})
             items = await asyncio.to_thread(store.list_sessions, request.query.get("q", ""), include_empty="latest")
             limit = self._query_int(request, "limit", 50, 1, 200)
             offset = self._query_int(request, "offset", 0, 0, 1000000)

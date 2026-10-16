@@ -1,6 +1,7 @@
 export interface Conversation {
   id: string; title: string; preview?: string; search_preview?: string; updated_at?: string; message_count?: number;
   unread_count?: number; needs_input?: boolean; is_busy?: boolean; runtime_status?: string; active_run_count?: number; pinned?: boolean;
+  match_id?: string; match_kind?: "title" | "content"; match_ordinal?: number;
 }
 export interface AttachmentMeta { handle?: string; name: string; kind?: string; mime_type?: string; size?: number; path?: string; }
 export interface ChatMessage { role: "user" | "assistant" | "system"; content: string; message_id?: string; created_at?: string; attachments?: AttachmentMeta[]; metadata?: Record<string, unknown>; }

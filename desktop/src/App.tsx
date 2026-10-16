@@ -235,6 +235,7 @@ export default function App() {
   const runtimeListRequest = useRef(0);
   const navigationRevision = useRef(0);
   const navigationTarget = useRef("");
+  const navigationOrdinal = useRef<number | undefined>(undefined);
   const [navigation, setNavigation] = useState<ReplyNavigation | null>(null);
   const [loadedNavigationRevision, setLoadedNavigationRevision] = useState(0);
   const [readyNavigationRevision, setReadyNavigationRevision] = useState(0);
@@ -393,6 +394,7 @@ export default function App() {
     const request = ++messageRequest.current;
     const revision = navigationRevision.current;
     const targetRun = navigationTarget.current;
+    const targetOrdinal = navigationOrdinal.current;
     const value = await coreApi<MessagePage>(
       "GET",
       `/v2/conversations/${encodePath(sessionId)}/messages?limit=48`,
@@ -404,6 +406,7 @@ export default function App() {
     const savedAnchorRun = savedChatPosition(sessionId)?.anchorRun;
     while (value.has_older && value.next_before_ordinal !== null &&
         ((targetRun && !value.messages.some(message => message.metadata?.run_id === targetRun)) ||
+          (targetOrdinal !== undefined && !value.messages.some(message => message.message_id === `${sessionId}:${targetOrdinal}`)) ||
           value.messages.length < savedCount || (savedAnchorRun && !value.messages.some(message => message.metadata?.run_id === savedAnchorRun)))) {
       const older = await coreApi<MessagePage>("GET",
         `/v2/conversations/${encodePath(sessionId)}/messages?limit=48&before=${value.next_before_ordinal}`,
@@ -415,6 +418,7 @@ export default function App() {
       value.next_before_ordinal = older.next_before_ordinal;
     }
     navigationTarget.current = "";
+    navigationOrdinal.current = undefined;
     setLoadedNavigationRevision(revision);
     loadedAttentionIds.current = new Set(value.unread_attention_ids || []);
     setPage(value);
@@ -927,13 +931,14 @@ export default function App() {
       setError(String(reason));
     }
   };
-  const selectConversation = async (id: string, runId?: string, alignReply = false) => {
+  const selectConversation = async (id: string, runId?: string, alignReply = false, messageOrdinal?: number) => {
     rememberConversationVisit(id);
     if (!restoringModel && provider && model) drafts.setSelection({ provider, model, effort: reasoningEffort });
     setManagementSection(null);
     setManagementOpen(false);
     navigationTarget.current = runId || "";
-    setNavigation({ sessionId: id, revision: ++navigationRevision.current, runId, alignReply });
+    navigationOrdinal.current = messageOrdinal;
+    setNavigation({ sessionId: id, revision: ++navigationRevision.current, runId, alignReply, messageOrdinal });
     setActiveId(id);
     if (narrowWorkspaceRef.current)
       dispatch({ type: "set-conversations", open: false });
@@ -1691,7 +1696,7 @@ export default function App() {
       <SearchDialog open={searchOpen} conversations={conversations} onClose={() => setSearchOpen(false)}
         onSelect={item => {
           setConversations(current => current.some(conversation => conversation.id === item.id) ? current : [...current, item]);
-          void selectConversation(item.id);
+          void selectConversation(item.id, undefined, false, item.match_ordinal);
           void refreshConversations().catch(reason => setError(String(reason)));
         }} onCreate={() => void createConversation()}
         onFile={path => { workbenchRef.current?.openFile(path); setWorkbenchOpen(true); }} />
