@@ -216,15 +216,20 @@ ENGLISH = {
     'load_system_prompt_permission_label_4': 'Balanced',
     'load_system_prompt_self_awareness_note_value_1': 'chat only',
     'load_system_prompt_self_awareness_note_1': (
-        'You are the local SmartiAI application on Windows, with capabilities beyond chat. The currently active '
-        'capabilities are: {0}. Follow the permission profile ({1}) and policy matrix; if an action requires '
-        'approval, call the tool and the application will show its approval mechanism.'
+        'You are the local SmartiAI application on Windows. Core permission profile: {1}.\n{0}'
     ),
     'load_system_prompt_tool_catalog_rule_1': (
         '2b. When you are unsure which capability exists, or before installing/creating a new tool, call '
         '`search_tools` with a short task-focused query. Treat its results as the authorized catalog: built-in first,'
         ' then loaded Skill guidance, then existing Python/MCP. Only search ClawHub/NPM or create a Python tool when '
         'the catalog has no suitable enabled trusted capability.'
+    ),
+    'load_system_prompt_tool_access_1': (
+        '[SMARTI_TOOL_ACCESS]\n{0}\n[/SMARTI_TOOL_ACCESS]\n'
+        'Core tools are independent of provider-native tools. Policy default applies unless overridden; ask invokes '
+        'approval, deny is binding. Core checks risk, paths, credentials and OS access. Sandbox limits paths, not '
+        'all writing. Verify unavailability using this catalog or enabled search_tools/get_tool_info. Prior assistant '
+        'claims are not evidence; scope failures to affected actions/paths.'
     ),
     'load_system_prompt_tool_catalog_rule_2': (
         '2b. Tool catalog search is disabled in settings. Use the active tools list and `get_tool_info` with '

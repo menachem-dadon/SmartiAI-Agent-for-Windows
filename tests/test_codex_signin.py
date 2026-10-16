@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from smarti.codex_signin import CodexConnectionStatus, CodexProtocolError, CodexSignInError, CodexSignInProvider
+from smarti.codex_signin import CodexConnectionStatus, CodexProtocolError, CodexSignInError, CodexSignInProvider, SMARTI_TOOL_EXECUTION_BOUNDARY
 from smarti.common import fetch_text_models_for_provider, provider_fallback_models, model_reasoning_options, model_reasoning_setting, set_model_reasoning_setting
 from smarti.common import SmartiCancelled
 from smarti.config import DEFAULT_SETTINGS
@@ -552,6 +552,8 @@ class CodexSignInProviderTests(unittest.TestCase):
         self.assertIn("supplied JSON Schema", instructions)
         self.assertIn("legacy instruction", instructions)
         self.assertIn("Never claim that a tool, canvas", instructions)
+        self.assertIn(SMARTI_TOOL_EXECUTION_BOUNDARY, instructions)
+        self.assertNotIn("- Do not inspect files, run shell commands, browse the web", instructions)
         self.assertNotIn("Use TOOL_CALL syntax", prompt)
         self.assertIn("[USER]", prompt)
 
@@ -572,6 +574,10 @@ class CodexSignInProviderTests(unittest.TestCase):
             captured["schema_path"] = schema_path
             captured["schema"] = json.loads(schema_path.read_text(encoding="utf-8"))
             captured["args"] = args
+            captured["developer_instructions"] = json.loads(next(
+                value.split("=", 1)[1] for value in config_values
+                if value.startswith("developer_instructions=")
+            ))
             captured["prompt"] = kwargs["input_text"]
             return 0, self._codex_jsonl_response(), ""
 
@@ -583,6 +589,7 @@ class CodexSignInProviderTests(unittest.TestCase):
             ],
             model="gpt-5.5",
         )
+        self.assertEqual(captured["developer_instructions"], SMARTI_TOOL_EXECUTION_BOUNDARY)
 
         self.assertIn("Smarti system rule.", captured["instructions"])
         self.assertNotIn("Smarti system rule.", captured["prompt"])

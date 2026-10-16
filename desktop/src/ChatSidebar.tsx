@@ -28,7 +28,7 @@ export function ChatSidebar({ open, logo, conversations, activeId, query, loadin
     <div className="drawer-brand-row"><button className="drawer-brand" type="button" aria-label={open ? "כיווץ תפריט הצד" : "פתיחת תפריט הצד"} onClick={onToggle}>
       <span className="drawer-brand-mark"><img src={logo} alt="" /><Icon name="panel" size={24} /></span>
     </button>{open && <strong>SmartiAI</strong>}</div>
-    <button className="new-chat-button" type="button" aria-label="שיחה חדשה" onClick={onCreate}><Icon name="newChat" size={24} />{open && <span>שיחה חדשה</span>}</button>
+    <button className="new-chat-button" type="button" aria-label="שיחה חדשה" onClick={onCreate}><Icon name="newChat" />{open && <span>שיחה חדשה</span>}</button>
     {open && <div className="drawer-expanded-content">
       <SearchField label="חיפוש בשיחות" placeholder="חיפוש לפי שם או תוכן" value={query} onChange={event => onQuery(event.target.value)} />
       <div className="conversation-list">

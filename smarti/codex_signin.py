@@ -30,6 +30,21 @@ CODEX_SIGNIN_PROVIDER = "openai_codex_signin"
 CODEX_SIGNIN_DEFAULT_MODEL = provider_default_model(CODEX_SIGNIN_PROVIDER)
 CODEX_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 CODEX_MODEL_CATALOG_MIN_VERSION = (0, 159, 0)
+SMARTI_TOOL_EXECUTION_BOUNDARY = (
+    "SMARTIAI TOOL EXECUTION BOUNDARY:\n"
+    "- Codex is the inference transport only. Its read-only sandbox, approvalPolicy=never, disabled native "
+    "tools, and native tool count describe only direct execution inside the Codex process. They do not "
+    "describe the availability or permissions of SmartiAI tools executed by the separate SmartiAI Core.\n"
+    "- Do not execute actions through native Codex shell, filesystem, browser, MCP, or app tools. "
+    "Request supported actions through the supplied SmartiAI tool_calls JSON schema instead. "
+    "This includes file writes/edits, system commands, and browsing when the active SmartiAI catalog "
+    "and Core policy permit them; Core performs its own sandbox and approval checks.\n"
+    "- Use the current SmartiAI tool-access snapshot and active catalog for capability claims. "
+    "A previous assistant claim, missing native Codex tool, or Codex sandbox restriction is not evidence "
+    "that a SmartiAI tool is unavailable. When uncertain, request search_tools or get_tool_info if enabled. "
+    "Report only restrictions supported by current Core policy, catalog discovery, or an actual tool result; "
+    "keep a failure scoped to the specific tool/action/path. Never bypass a real denial.\n"
+)
 SMARTI_TURN_OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -684,8 +699,8 @@ class CodexSignInProvider:
             "You are the reasoning model inside SmartiAI. The SmartiAI system instructions below are binding.\n\n"
             "SMARTIAI AGENT CONTRACT:\n"
             "- SmartiAI exclusively owns all tool execution and the agent loop.\n"
-            "- Do not inspect files, run shell commands, browse the web, or invoke native Codex tools.\n"
-            "- Your entire response is constrained by the supplied JSON Schema. Return one object only.\n"
+            + SMARTI_TOOL_EXECUTION_BOUNDARY
+            + "- Your entire response is constrained by the supplied JSON Schema. Return one object only.\n"
             "- For SmartiAI tool calls, use kind=tool_calls and put one or more name/arguments_json objects in tool_calls; "
             "arguments_json must be a JSON object encoded as a string, and final_answer must be null.\n"
             "- For the first tool call in an agentic turn, progress_report should contain one short, natural, "
@@ -943,6 +958,7 @@ class CodexSignInProvider:
                     f'model_reasoning_effort="{selected_reasoning_effort}"',
                 ))
             if purpose == "agent":
+                args.extend(("--config", f"developer_instructions={self._toml_string(SMARTI_TOOL_EXECUTION_BOUNDARY)}"))
                 output_schema_path = self._write_temporary_output_schema()
                 args.extend(("--output-schema", str(output_schema_path)))
             if selected_model and selected_model.lower() not in {"codex default", "default"}:

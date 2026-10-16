@@ -156,7 +156,7 @@ class CodexStreamSession:
 
     def complete(self, messages, model, timeout, effort, cancel_event, live, schema, context_window_tokens=None):
         import tempfile
-        from .codex_signin import CodexSignInError
+        from .codex_signin import CodexSignInError, SMARTI_TOOL_EXECUTION_BOUNDARY
         with self.lock:
             instructions = self.provider._build_model_instructions(messages, purpose="agent") + "\nFor streaming tool turns, serialize fields in this order: kind, progress_report, tool_calls, final_answer. Emit each tool name before arguments_json."
             conversation = [m for m in messages if str(m.get("role", "")).lower() != "system"]
@@ -178,7 +178,8 @@ class CodexStreamSession:
                 self._request("initialize", {"clientInfo": {"name": "SmartiAI", "version": "1.0"}, "capabilities": {}}, deadline, cancel_event)
                 self.send({"method": "initialized"})
                 params = {"cwd": str(self.provider.workspace_dir.resolve()), "ephemeral": True,
-                          "sandbox": "read-only", "approvalPolicy": "never", "baseInstructions": instructions}
+                          "sandbox": "read-only", "approvalPolicy": "never", "baseInstructions": instructions,
+                          "developerInstructions": SMARTI_TOOL_EXECUTION_BOUNDARY}
                 if model.lower() not in {"codex default", "default", ""}:
                     params["model"] = model
                 result = self._request("thread/start", params, deadline, cancel_event)

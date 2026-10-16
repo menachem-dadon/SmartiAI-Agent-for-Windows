@@ -12,8 +12,8 @@
 .drawer-brand-mark .sds-icon { position:absolute; opacity:0; transition:opacity var(--sds-motion-fast); }
 .drawer-brand:is(:hover,:focus-visible) img { opacity:0; }
 .drawer-brand:is(:hover,:focus-visible) .sds-icon { opacity:1; }
-.new-chat-button { flex:none; margin:12px 0; background:var(--sds-color-surface); border:1px solid var(--sds-color-border); }
-.drawer-management button:hover,.new-chat-button:hover { background:var(--sds-color-surface); }
+.new-chat-button { flex:none; margin:12px 0; }
+.drawer-management button:hover:not(:disabled),.new-chat-button:hover:not(:disabled) { background:var(--sds-color-surface); }
 .drawer-expanded-content { min-height:0; flex:1; display:flex; flex-direction:column; gap:12px; }
 .drawer-expanded-content .sds-field-group>label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 .conversation-list { flex:1; min-height:0; overflow:auto; overscroll-behavior:none; scrollbar-gutter:stable; }
@@ -33,7 +33,7 @@
 .drawer-management { margin-top:auto; padding-top:16px; display:grid; gap:4px; }
 .drawer-management> :last-child { margin-top:12px; }
 .conversation-drawer.is-rail .drawer-management { justify-items:center; }
-.conversation-drawer.is-rail .new-chat-button { width:40px; justify-content:center; padding:0; }
+.conversation-drawer.is-rail .new-chat-button { align-self:center; width:40px; justify-content:center; padding:0; }
 .chat-column { grid-column:2; grid-row:1; display:flex; flex-direction:column; min-height:0; min-width:0; position:relative; padding:0 24px 20px; container-type:inline-size; background:var(--sds-color-surface); }
 .chat-toolbar { flex:none; display:flex; align-items:center; gap:12px; min-height:64px; direction:ltr; }
 .chat-toolbar h1 { font-size:var(--sds-font-control); min-width:0; flex:1; direction:rtl; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

@@ -1709,6 +1709,34 @@ class ModelContextMixin(RequestBudgetMixin):
                 
         return self._prompt_text('get_tool_info_text_12', tool_name)
 
+    def _tool_access_context(self):
+        """Describe Core's effective policy, independently of inference-provider tools."""
+        sandbox_enabled = self._sandbox_enabled()
+        decisions = {
+            capability: self._policy_decision(capability) for capability in DEFAULT_POLICY_MATRIX
+        }
+        default = max(("allow", "ask", "deny"), key=lambda value: list(decisions.values()).count(value))
+        snapshot = {
+            "executor": "SmartiAI Core",
+            "enabled_builtin_tools": [
+                name for name in PUBLIC_BUILTIN_TOOLS if self._builtin_tool_context_enabled(name)
+            ],
+            "policy_baseline": {
+                "default": default,
+                "overrides": {name: value for name, value in decisions.items() if value != default},
+            },
+            "filesystem_scope": {"sandbox_enabled": sandbox_enabled},
+        }
+        if sandbox_enabled:
+            snapshot["filesystem_scope"].update(
+                root=self._sandbox_root(),
+                allow_read_outside=bool(self.settings.get("sandbox_allow_read_outside", False)),
+            )
+        return self._prompt_text(
+            "load_system_prompt_tool_access_1",
+            json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")),
+        )
+
     def _load_system_prompt(self, memory_query="", log_memory_usage=False):
         tool_schemas = self._prompt_tool_schemas()
         tool_descriptions = self._prompt_tool_descriptions()
@@ -1935,7 +1963,7 @@ class ModelContextMixin(RequestBudgetMixin):
             if self._builtin_tool_context_enabled(name)
         ]
         self_awareness_note = (
-            self._prompt_text('load_system_prompt_self_awareness_note_1', ', '.join(enabled_manager_names) or self._prompt_text('load_system_prompt_self_awareness_note_value_1'), permission_label)
+            self._prompt_text('load_system_prompt_self_awareness_note_1', self._tool_access_context(), permission_label)
         )
         tool_catalog_rule = (
             self._prompt_text('load_system_prompt_tool_catalog_rule_1')

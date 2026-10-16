@@ -23,6 +23,7 @@ tests/*
 !tests/test_context_efficiency.py
 !tests/test_prompt_cache.py
 !tests/test_prompt_language.py
+!tests/test_tool_access_context.py
 !tests/test_english_tool_layer.py
 !tests/test_attachments.py
 !tests/test_history_sqlite.py

@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from smarti.agent.streaming import LiveResponse
-from smarti.codex_signin import CodexSignInProvider, SMARTI_TURN_OUTPUT_SCHEMA
+from smarti.codex_signin import CodexSignInProvider, SMARTI_TURN_OUTPUT_SCHEMA, SMARTI_TOOL_EXECUTION_BOUNDARY
 from smarti.codex_stream import complete_stream, _read_turn
 from smarti.common import SmartiCancelled
 
@@ -131,6 +131,16 @@ class CodexSessionTests(unittest.TestCase):
                 turn = next(r for r in self.requests(-1) if r.get("method") == "turn/start")
                 self.assertIn(changed[1]["content"], turn["params"]["input"][0]["text"])
                 self.cleanup_sessions()
+
+    def test_core_tool_boundary_is_sent_without_relaxing_native_isolation(self):
+        self.turn()
+        params = next(r["params"] for r in self.requests() if r.get("method") == "thread/start")
+        self.assertEqual(params["sandbox"], "read-only")
+        self.assertEqual(params["approvalPolicy"], "never")
+        self.assertEqual(params["developerInstructions"], SMARTI_TOOL_EXECUTION_BOUNDARY)
+        self.assertIn(SMARTI_TOOL_EXECUTION_BOUNDARY, params["baseInstructions"])
+        self.assertIn("features.shell_tool=false", self.commands[0])
+        self.assertIn('web_search="disabled"', self.commands[0])
 
     def test_model_window_and_85_percent_threshold_are_local_process_overrides(self):
         complete_stream(self.provider, self.messages, 'test-model', 5, 'low', None,
