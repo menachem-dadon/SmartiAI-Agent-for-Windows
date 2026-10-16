@@ -43,6 +43,8 @@ import {
 import { RichMessage } from "./RichMessage";
 import { Alert, Button, DesignSystemProvider, Dialog, Field, Icon, IconButton, Menu } from "./design-system";
 import { ChatSidebar, conversationActions } from "./ChatSidebar";
+import { SearchDialog } from "./SearchDialog";
+import { rememberConversationVisit } from "./searchState";
 import { useChatDrafts, readActiveConversation, rememberActiveConversation, restoreActiveConversation } from "./chatDrafts";
 import { savedChatPosition, useChatFooterFlow, useChatScroll } from "./chatScroll";
 import { reduceStream, streamAnswer, type StreamState } from "./chatStreaming";
@@ -257,9 +259,7 @@ export default function App() {
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [streams, setStreams] = useState<Record<string, StreamState>>({});
   const approvalQueue = useApprovalQueue();
-  const [query, setQuery] = useState("");
-  const queryRef = useRef(query);
-  queryRef.current = query;
+  const [searchOpen, setSearchOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const drafts = useChatDrafts(activeId, setError);
@@ -420,18 +420,29 @@ export default function App() {
     setPage(value);
     setMessages(mergeMessages(messagesRef.current, value.messages));
   }, []);
-  const refreshConversations = useCallback(async (search = queryRef.current) => {
+  const refreshConversations = useCallback(async (search = "") => {
     const request = ++listRequest.current;
     const data = await coreApi<ConversationList>(
       "GET", `/v2/conversations?q=${encodeURIComponent(search)}&limit=100`,
     );
+    if (request !== listRequest.current) return null;
+    // A search can open a conversation beyond the sidebar's first page.
+    // Keep its title and actions backed by current Core metadata on refresh.
+    const selected = activeIdRef.current;
+    if (selected && !data.items.some(item => item.id === selected)) {
+      try {
+        const detail = await coreApi<{ conversation: Conversation | null }>("GET", `/v2/conversations/${encodePath(selected)}`);
+        if (request !== listRequest.current) return null;
+        if (selected === activeIdRef.current && detail.conversation) data.items.push(detail.conversation);
+      } catch (reason) { if (!(reason instanceof CoreApiError && reason.status === 404)) throw reason; }
+    }
     if (request !== listRequest.current) return null;
     setConversations(data.items);
     attention.replace(data.attention_items);
     return data;
   }, [attention.replace]);
   const refreshLists = useCallback(
-    async (search = queryRef.current) => {
+    async (search = "") => {
       const request = ++runtimeListRequest.current;
       const [conversationData, runData, approvalData] = await Promise.all([
         refreshConversations(search),
@@ -640,7 +651,7 @@ export default function App() {
       if (core.state === "ready") {
         setHistoryLoading(true);
         setHistoryError("");
-        void refreshLists(query)
+        void refreshLists()
           .catch((reason) => {
             setHistoryError(`לא ניתן לטעון את השיחות: ${String(reason)}`);
             setReconnecting(true);
@@ -649,7 +660,7 @@ export default function App() {
       }
     }, legacyUi.historySearchDebounceMs);
     return () => clearTimeout(timer);
-  }, [query, core.state]);
+  }, [core.state]);
   useEffect(() => {
     if (core.state !== "ready" || !bootstrapReady) return;
     let stopped = false;
@@ -917,6 +928,7 @@ export default function App() {
     }
   };
   const selectConversation = async (id: string, runId?: string, alignReply = false) => {
+    rememberConversationVisit(id);
     if (!restoringModel && provider && model) drafts.setSelection({ provider, model, effort: reasoningEffort });
     setManagementSection(null);
     setManagementOpen(false);
@@ -1468,11 +1480,11 @@ export default function App() {
           onClick={dismissWorkspaceOverlay}
         />
         <ChatSidebar open={workspace.conversationDrawerOpen} logo={icons.logo}
-          conversations={conversations} activeId={activeId} query={query}
+          conversations={conversations} activeId={activeId}
           loading={historyLoading} error={historyError}
           unread={id => attention.items.filter(item => item.session_id === id).length}
           onToggle={() => void toggleConversationDrawer()} onCreate={() => void createConversation()}
-          onQuery={setQuery} onSelect={id => void selectConversation(id)}
+          onSearch={() => setSearchOpen(true)} onSelect={id => void selectConversation(id)}
           onManagement={openManagement} actions={item => conversationActions(item, {
             pin: item => void togglePinned(item).catch(reason => setError(String(reason))),
             rename: item => void renameConversation(item),
@@ -1676,6 +1688,13 @@ export default function App() {
           )}
         </aside>
       </section>
+      <SearchDialog open={searchOpen} conversations={conversations} onClose={() => setSearchOpen(false)}
+        onSelect={item => {
+          setConversations(current => current.some(conversation => conversation.id === item.id) ? current : [...current, item]);
+          void selectConversation(item.id);
+          void refreshConversations().catch(reason => setError(String(reason)));
+        }} onCreate={() => void createConversation()}
+        onFile={path => { workbenchRef.current?.openFile(path); setWorkbenchOpen(true); }} />
       {managementSection && (
         <ManagementCenter
           initial={managementSection}

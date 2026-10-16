@@ -27,6 +27,7 @@ tests/*
 !tests/test_english_tool_layer.py
 !tests/test_attachments.py
 !tests/test_history_sqlite.py
+!tests/test_desktop_search.py
 !tests/test_memory_profile_policy.py
 !tests/test_memory_management.py
 !tests/test_memory_quality_v2.py

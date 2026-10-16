@@ -445,7 +445,7 @@ class SmartiLocalGateway:
     async def _conversations(self, request):
         store = self.core.chat_store
         if request.method == "GET":
-            items = store.list_sessions(request.query.get("q", ""), include_empty="latest")
+            items = await asyncio.to_thread(store.list_sessions, request.query.get("q", ""), include_empty="latest")
             limit = self._query_int(request, "limit", 50, 1, 200)
             offset = self._query_int(request, "offset", 0, 0, 1000000)
             return self._ok(request, {
@@ -1105,7 +1105,8 @@ class SmartiLocalGateway:
         return self._ok(request, value)
 
     async def _artifacts(self, request):
-        return self._ok(request, self._workspace.artifacts())
+        value = await asyncio.to_thread(self._workspace.artifacts, request.query.get("q", ""))
+        return self._ok(request, value)
 
     async def _workspace_open(self, request):
         payload = await self._body(request, "openWorkspaceFile")

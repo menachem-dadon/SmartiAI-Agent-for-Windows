@@ -123,6 +123,41 @@ async function start() {
   render(<App />);
   await waitFor(() => expect(composer().model).toBe("gemini-a"));
 }
+
+test("search opens an older conversation outside the sidebar page and keeps its current title and actions", async () => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  let pinned = false;
+  const old = () => ({ id: "older-search-chat", title: "שיחה ישנה מהחיפוש", message_count: 2, pinned });
+  const baseInvoke = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+    const response = await baseInvoke(command, args) as any;
+    if (command !== "core_api") return response;
+    const { method, path, body } = args.request;
+    if (path.startsWith("/v2/conversations?q=") && new URLSearchParams(path.split("?")[1]).get("q"))
+      response.body.data = { items: [old()], attention_items: [] };
+    if (path === "/v2/conversations/older-search-chat") {
+      if (method === "PATCH") pinned = body.pinned;
+      response.body.data = { conversation: old() };
+    }
+    if (path.startsWith("/v2/conversations/older-search-chat/messages"))
+      response.body.data = { session_id: "older-search-chat", messages: [], total_count: 2, has_older: false };
+    return response;
+  });
+  await start();
+  fireEvent.click(screen.getByRole("button", { name: "חיפוש בשיחות ובקבצים" }));
+  fireEvent.change(screen.getByRole("combobox"), { target: { value: "ישנה" } });
+  fireEvent.click(await screen.findByRole("option"));
+  await screen.findByRole("heading", { name: "שיחה ישנה מהחיפוש" });
+  await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) => command === "core_api" && args.request.path === "/v2/conversations/older-search-chat")).toBe(true));
+  fireEvent.click(screen.getByRole("button", { name: "פעולות שיחה" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "הצמד שיחה" }));
+  await waitFor(() => expect(pinned).toBe(true));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+  fireEvent.click(screen.getByRole("button", { name: "פעולות שיחה" }));
+  await screen.findByRole("menuitem", { name: "בטל הצמדה" });
+});
 async function patch(next: Record<string, unknown>) {
   await act(async () => { await coreApi("PATCH", "/v2/settings", { values: next }, true); });
 }

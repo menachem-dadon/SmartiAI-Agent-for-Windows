@@ -64,6 +64,16 @@ def _preview_text(value, limit=170):
     return text
 
 
+def _search_preview(value, query, limit=210):
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    needle = re.sub(r"\s+", " ", str(query or "")).strip()
+    match = re.search(re.escape(needle), text, re.IGNORECASE) if needle else None
+    start = max(0, match.start() - 32) if match else 0
+    # Keep the whole match visible even for a query longer than the preview.
+    end = min(len(text), max(start + limit, match.end() if match else 0))
+    return ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+
+
 def _time_score(value):
     try:
         return datetime.fromisoformat(str(value or "")).timestamp()
@@ -726,6 +736,7 @@ class ChatSessionStore:
         title_score = _fuzzy_score(query, session.get("title", "")) if query else 0.0
         content_blob = "\n".join(_message_text(message) for message in messages)
         content_score = _fuzzy_score(query, content_blob) if query else 0.0
+        best_message = max(messages, key=lambda message: _fuzzy_score(query, _message_text(message)), default={}) if query else {}
         return {
             "id": session.get("id", ""),
             "title": session.get("title", DEFAULT_CHAT_TITLE),
@@ -735,6 +746,7 @@ class ChatSessionStore:
             "message_count": len(messages),
             "preview": preview,
             "preview_source": _message_text(last_message),
+            "search_preview": _search_preview(_message_text(best_message), query) if query else "",
             "title_score": title_score,
             "content_score": content_score,
             "match_kind": "title" if title_score >= max(0.55, content_score) else "content",
@@ -927,6 +939,20 @@ class ChatSessionStore:
                         str(item["session_id"]): self._row_message(item)
                         for item in last_rows
                     }
+                match_messages = db.execute(
+                    f"""
+                    SELECT m.* FROM messages m
+                    JOIN (
+                        SELECT session_id, MAX(ordinal) AS ordinal FROM messages
+                        WHERE session_id IN ({placeholders})
+                          AND (content LIKE ? ESCAPE '\\' OR metadata_json LIKE ? ESCAPE '\\')
+                        GROUP BY session_id
+                    ) hit ON hit.session_id=m.session_id AND hit.ordinal=m.ordinal
+                    """, [*matched_ids, pattern, pattern],
+                ).fetchall() if include_preview else []
+                match_by_session = {
+                    str(item["session_id"]): self._row_message(item) for item in match_messages
+                }
                 records = []
                 for row in matched_rows:
                     session_id = str(row["id"])
@@ -945,6 +971,7 @@ class ChatSessionStore:
                             if include_preview else ""
                         ),
                         "preview_source": _message_text(last_message) if include_preview else "",
+                        "search_preview": _search_preview(_message_text(match_by_session.get(session_id, last_message)), query) if include_preview else "",
                         "title_score": 1.0 if title_match else 0.0,
                         "content_score": 0.0 if title_match else 1.0,
                         "match_kind": "title" if title_match else "content",

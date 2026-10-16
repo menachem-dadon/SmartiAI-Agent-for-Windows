@@ -14,7 +14,7 @@ import { forgetPanelSession } from "./workbenchSession";
 
 const launcherKinds: WorkbenchTab[] = ["browser", "files", "terminal", "artifacts"];
 const icons: Record<WorkbenchTab, IconName> = { browser: "browser", files: "folder", terminal: "terminal", canvas: "canvas", artifacts: "file" };
-export type WorkbenchHandle = { openBrowser: (workspaceId: string) => void; activateTab: (id: string) => void; openCanvas: (sessionId: string, canvasId: string) => void };
+export type WorkbenchHandle = { openBrowser: (workspaceId: string) => void; activateTab: (id: string) => void; openCanvas: (sessionId: string, canvasId: string) => void; openFile: (path: string) => void };
 
 export function WorkbenchSurface({ ref, initial, visible, motionRevision, restored, onStateChange, onBrowserActivity, onClose, showCloseControl = true, sessionId, onCanvasAction, owner = "", expanded = false, onToggleExpanded }: {
   ref?: Ref<WorkbenchHandle>; initial: WorkbenchTab | null; visible: boolean; motionRevision?: boolean | string;
@@ -92,6 +92,10 @@ export function WorkbenchSurface({ ref, initial, visible, motionRevision, restor
     openBrowser: workspaceId => adoptBrowser(workspaceId, true),
     activateTab: id => setSnapshot(current => current.tabs.some(tab => tab.id === id) ? { ...current, active: id } : current),
     openCanvas: (source, target) => add("canvas", false, { sessionId: source, targetId: target }),
+    openFile: path => {
+      const id = `${owner ? `${owner}:` : ""}files-${++counter.current}`;
+      setSnapshot(current => openWorkbenchTab(current, { id, kind: "files", title: path.split("/").pop() || "קובץ", targetId: path }, true));
+    },
   }), [owner, sessionId]);
   const reportBrowserActivity = useCallback((activity: BrowserActivity | null) => {
     onBrowserActivity?.(activity?.agent || current?.kind === "browser" && activity?.workspaceId === current.id ? activity : null);
@@ -133,7 +137,7 @@ export function WorkbenchSurface({ ref, initial, visible, motionRevision, restor
         <BrowserPanel sessionId={sessionId} workspaceTabId={current?.kind === "browser" ? current.id : ""} visible={visible && current?.kind === "browser" && !closingIds.has(current.id)} obscured={overlay || modal} geometryRevision={motionRevision} onActivity={reportBrowserActivity} />
       </section>}
       {tabs.filter(tab => tab.kind !== "browser").map(tab => <section className="workbench-panel" role="tabpanel" id={`workbench-panel-${tab.id}`} aria-labelledby={`workbench-tab-${tab.id}`} hidden={tab.id !== active} key={tab.id} aria-label={tab.title}>
-        {tab.kind === "files" && <WorkbenchFiles id={tab.id} />}
+        {tab.kind === "files" && <WorkbenchFiles id={tab.id} initialPath={tab.targetId} />}
         {tab.kind === "terminal" && <WorkbenchTerminal tabId={tab.id} />}
         {tab.kind === "artifacts" && <WorkbenchFiles id={tab.id} artifacts />}
         {tab.kind === "canvas" && <CanvasPanel sessionId={tab.sessionId || sessionId} canvasId={tab.targetId} onAction={text => onCanvasAction(text, tab.sessionId || sessionId)} />}

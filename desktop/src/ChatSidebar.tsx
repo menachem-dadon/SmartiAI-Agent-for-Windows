@@ -1,8 +1,9 @@
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import type { Conversation } from "./chatTypes";
 import type { ManagementSection } from "./managementCatalog";
 import { activityState } from "./legacyUiParity";
 import { recentConversations } from "./chatState";
-import { HoverLabel, Icon, IconButton, Menu, SearchField, type MenuItem } from "./design-system";
+import { HoverLabel, Icon, IconButton, Menu, type MenuItem } from "./design-system";
 
 export function conversationActions(item: Conversation, handlers: {
   pin: (item: Conversation) => void; rename: (item: Conversation) => void;
@@ -16,24 +17,34 @@ export function conversationActions(item: Conversation, handlers: {
   ];
 }
 
-export function ChatSidebar({ open, logo, conversations, activeId, query, loading, error, unread,
-  onToggle, onCreate, onQuery, onSelect, actions, onManagement }: {
+export function ChatSidebar({ open, logo, conversations, activeId, loading, error, unread,
+  onToggle, onCreate, onSearch, onSelect, actions, onManagement }: {
   open: boolean; logo: string; conversations: Conversation[]; activeId: string;
-  query: string; loading: boolean; error: string; unread: (id: string) => number;
-  onToggle: () => void; onCreate: () => void; onQuery: (query: string) => void;
+  loading: boolean; error: string; unread: (id: string) => number;
+  onToggle: () => void; onCreate: () => void; onSearch: () => void;
   onSelect: (id: string) => void; actions: (item: Conversation) => MenuItem[];
   onManagement: (section: ManagementSection, trigger?: HTMLElement) => void;
 }) {
+  const [expanded, setExpanded] = useState(true);
+  const [scrolled, setScrolled] = useState(false);
+  const list = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const recent = recentConversations(conversations);
+  useLayoutEffect(() => { setScrolled((list.current?.scrollTop || 0) > 0); }, [open, expanded, recent.length]);
   return <aside className={`conversation-drawer ${open ? "is-open" : "is-rail"}`} aria-label="שיחות">
     <div className="drawer-brand-row"><button className="drawer-brand" type="button" aria-label={open ? "כיווץ תפריט הצד" : "פתיחת תפריט הצד"} onClick={onToggle}>
       <span className="drawer-brand-mark"><img src={logo} alt="" /><Icon name="panel" size={24} /></span>
-    </button>{open && <strong>SmartiAI</strong>}</div>
+    </button>{open && <><strong>SmartiAI</strong><IconButton className="drawer-search" icon="search" label="חיפוש בשיחות ובקבצים" variant="ghost" onClick={onSearch} /></>}</div>
+    {!open && <div className="drawer-rail-search"><IconButton icon="search" label="חיפוש בשיחות ובקבצים" variant="ghost" onClick={onSearch} /></div>}
     <button className="new-chat-button" type="button" aria-label="שיחה חדשה" onClick={onCreate}><Icon name="newChat" />{open && <span>שיחה חדשה</span>}</button>
-    {open && <div className="drawer-expanded-content">
-      <SearchField label="חיפוש בשיחות" placeholder="חיפוש לפי שם או תוכן" value={query} onChange={event => onQuery(event.target.value)} />
-      <div className="conversation-list">
+    {open && <div className={`drawer-expanded-content ${scrolled ? "is-scrolled" : ""}`}>
+      <div className="conversation-list" ref={list} onScroll={event => setScrolled(event.currentTarget.scrollTop > 0)}>
+        <button className="recent-conversations-toggle" type="button" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(value => !value)}>
+          <span>שיחות אחרונות</span><Icon name="chevron" size={16} />
+        </button>
+        <div id={listId} hidden={!expanded}>
         {loading && <p role="status">טוען שיחות…</p>}{error && <p role="alert">{error}</p>}
-        {recentConversations(conversations).map(item => {
+        {recent.map(item => {
           const state = activityState({ ...item, unread_count: unread(item.id) });
           const title = state === "running" ? "סמארטי עובד בשיחה הזאת" : state === "waiting_for_approval" ? item.runtime_status === "waiting_for_input" ? "סמארטי ממתין למפתח API" : "סמארטי ממתין לאישור" : "התקבלה תשובה חדשה";
           return <div className={`conversation-row ${item.id === activeId ? "is-active" : ""}`} key={item.id}>
@@ -43,7 +54,8 @@ export function ChatSidebar({ open, logo, conversations, activeId, query, loadin
             <span className="history-actions"><Menu fitContent icon="more" label={`פעולות עבור ${item.title}`} items={actions(item)} /></span>
           </div>;
         })}
-        {!recentConversations(conversations).length && <p className="drawer-empty">{query ? "לא נמצאו שיחות" : "עדיין אין שיחות"}</p>}
+        {!recent.length && !loading && !error && <p className="drawer-empty">עדיין אין שיחות</p>}
+        </div>
       </div>
     </div>}
     <nav className="drawer-management" aria-label="ניהול והגדרות">

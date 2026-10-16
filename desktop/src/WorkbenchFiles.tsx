@@ -31,8 +31,8 @@ function Preview({ preview, loading, selected, openExternal }: { preview: FilePr
   return <EmptyState icon="file" title={preview.name} description="אין תצוגה מקדימה בטוחה לסוג קובץ זה." action={<Button onClick={openExternal} icon="external">פתח באמצעות</Button>} />;
 }
 
-export function WorkbenchFiles({ id, artifacts = false }: { id: string; artifacts?: boolean }) {
-  const saved = useRef(readPanelSession(id, { selected: "", directory: "", treeWidth: 240, treeVisible: true, scroll: 0 }));
+export function WorkbenchFiles({ id, artifacts = false, initialPath = "" }: { id: string; artifacts?: boolean; initialPath?: string }) {
+  const saved = useRef(readPanelSession(id, { selected: initialPath, directory: directoryOf(initialPath), treeWidth: 240, treeVisible: true, scroll: 0 }));
   const [root, setRoot] = useState({ name: "Smarti", path: "" });
   const [draftRoot, setDraftRoot] = useState("");
   const [items, setItems] = useState<TreeItem[]>([]);

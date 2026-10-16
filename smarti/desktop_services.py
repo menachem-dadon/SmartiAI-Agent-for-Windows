@@ -638,21 +638,41 @@ class WorkspaceScope:
             opened = True
         return {"opened": opened, "path": os.path.relpath(path, self.root()).replace("\\", "/")}
 
-    def artifacts(self):
+    def artifacts(self, query=""):
         root = self.root()
+        query = str(query or "").strip().casefold()
         rows = []
+        scanned = 0
+        directories = 0
+        truncated = False
         for directory, names, files in os.walk(root):
-            names[:] = [name for name in names if not os.path.islink(os.path.join(directory, name))][:50]
-            for name in files[:500]:
+            directories += 1
+            if directories > 10000:
+                truncated = True
+                break
+            names[:] = [name for name in names if not os.path.islink(os.path.join(directory, name)) and not bool(getattr(os.path, "isjunction", lambda _path: False)(os.path.join(directory, name)))]
+            if not query:
+                names[:] = names[:50]
+            for name in files:
                 path = os.path.join(directory, name)
+                scanned += 1
+                if scanned > (10000 if query else 500):
+                    truncated = True
+                    break
+                relative = os.path.relpath(path, root).replace("\\", "/")
+                if query and query not in relative.casefold():
+                    continue
                 try:
+                    if os.path.islink(path):
+                        continue
+                    self.resolve(relative)
                     stat = os.stat(path, follow_symlinks=False)
-                    rows.append({"name": name, "path": os.path.relpath(path, root).replace("\\", "/"), "size": stat.st_size, "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")})
-                except OSError:
+                    rows.append({"name": name, "path": relative, "size": stat.st_size, "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")})
+                except (OSError, ValueError):
                     pass
-            if len(rows) >= 500: break
+            if truncated: break
         rows.sort(key=lambda item: item["modified_at"], reverse=True)
-        return {"items": rows[:200], "root": self.root_info()}
+        return {"items": rows[:200], "root": self.root_info(), "truncated": truncated or len(rows) > 200}
 
 
 class TerminalRegistry:
