@@ -26,14 +26,17 @@ async function main() {
     const params=new URLSearchParams(location.search), theme=params.get('theme')||'light';
     const favorites=${JSON.stringify(favorites)};
     const levels=['low','medium','high','xhigh','max'].map(value=>({value,label:value}));
+    const localMode=params.get('local')||'';
+    const localLevels=['low','medium','xhigh'].map(value=>({value,label:value}));
+    const budgetLevels=['none','minimal','low','medium','high','xhigh','max'].map(value=>({value:'budget:'+value,label:value==='xhigh'?'XHigh':value[0].toUpperCase()+value.slice(1)}));
     window.__qaEvents=[];
     window.__TAURI_INTERNALS__={invoke:async(cmd,args)=>({status:200,body:{data:{available:true,plan_type:'QA',five_hour:{remaining_percent:41,resets_at:Date.now()/1000+3600},weekly:{remaining_percent:0,resets_at:Date.now()/1000+86400}}}})};
     function Fixture(){
-      const [item,setItem]=React.useState(favorites[0]),[effort,setEffort]=React.useState('xhigh'),[settings,setSettings]=React.useState(false);
+      const [item,setItem]=React.useState(localMode?favorites[2]:favorites[0]),[effort,setEffort]=React.useState(localMode?'budget:max':'xhigh'),[settings,setSettings]=React.useState(false);
       return <><header className="window-titlebar" style={{height:36,position:'fixed',top:0,left:0,right:0}}>Smarti</header>
         <div style={{position:'fixed',bottom:12,left:12,right:12,maxWidth:697,margin:'auto'}}>
           <Composer theme={theme} attachments={[]} provider={item.provider} model={item.model} favoriteModels={favorites}
-            reasoningEffort={effort} reasoningOptions={item.provider==='local'?[]:levels}
+            reasoningEffort={effort} reasoningOptions={item.provider==='local'?(localMode==='both'?[...localLevels,...budgetLevels]:localMode==='budget'?budgetLevels:[]):levels}
             onAttachments={()=>{}} onSend={async()=>{}} onCancel={()=>{}}
             onFavoriteModel={next=>{window.__qaEvents.push(next);setItem(next);setEffort('medium');}}
             onReasoningEffort={async next=>{window.__qaEvents.push({effort:next});await window.__qaEffortGate;await new Promise(r=>setTimeout(r,30));setEffort(next);}}
@@ -45,7 +48,7 @@ async function main() {
     document.body.style.margin='0';document.body.style.background=theme==='light'?'#f3f4f6':'#101319';
     createRoot(document.getElementById('root')).render(<Fixture/>);`;
   const { createServer, transformWithEsbuild } = await import(pathToFileURL(path.join(desktop, 'node_modules/vite/dist/node/index.js')).href);
-  const server = await createServer({ root: desktop, server: { port: 1497, strictPort: true, host: '127.0.0.1' },
+  const server = await createServer({ root: desktop, cacheDir: path.join(output,'vite-cache'), optimizeDeps: { entries: ['index.html'] }, server: { port: 1497, strictPort: true, host: '127.0.0.1' },
     plugins: [{ name: 'isolated-model-picker-qa',
       resolveId(id) { if (id === '/model-picker-qa.tsx') return '\0model-picker-qa.tsx'; },
       async load(id) { if (id === '\0model-picker-qa.tsx') return (await transformWithEsbuild(fixture, 'model-picker-qa.tsx', {loader:'tsx',jsx:'automatic'})).code; },
@@ -62,6 +65,7 @@ async function main() {
     browser = await chromium.launch({ channel: 'msedge', headless: true });
     const context = await browser.newContext();
     const page = await context.newPage();
+    page.setDefaultNavigationTimeout(60000);
     page.setDefaultTimeout(15000); page.setDefaultNavigationTimeout(20000);
     page.on('pageerror', error => errors.push(error.message));
     const record = (name, value) => { assert.ok(value, name); results.push(name); };
@@ -216,6 +220,37 @@ async function main() {
     await touch.getByRole('button',{name:'בחירת מודל',exact:true}).tap();
     record('local model without reasoning omits slider', await touch.getByRole('slider').count() === 0);
     await touchContext.close();
+    for (const theme of ['light','dark']) for (const [width,height] of [[1280,900],[360,640],[360,320]]) for (const scale of [1,1.5]) {
+      const label=`local-${theme}-${width}x${height}-text${scale}`;
+      await page.setViewportSize({width,height});
+      await page.goto(`http://127.0.0.1:1497/__model-picker-qa?theme=${theme}&local=both`);
+      if(scale>1) await page.addStyleTag({content:'.sds-root { --sds-font-control:21px!important; --sds-font-body:24px!important; --sds-font-caption:19.5px!important; }'});
+      await page.getByRole('button',{name:'בחירת מודל',exact:true}).click();
+      await page.waitForTimeout(220);
+      record(`${label}: seven budget stops`,await page.locator('.model-effort-stops i').count()===7);
+      record(`${label}: bounds`,await inside());
+      record(`${label}: footer visible without scroll`,await page.locator('.model-picker-surface--effort').evaluate(n=>n.scrollHeight<=n.clientHeight+1));
+      const toggle=page.getByRole('switch',{name:'תקציב חשיבה קשיח',exact:true});
+      record(`${label}: shared small switch dimensions`,await toggle.evaluate(n=>{const r=n.nextElementSibling.getBoundingClientRect();return r.width===28&&r.height===16&&n.parentElement.classList.contains('sds-switch--small');}));
+      record(`${label}: footer physically below slider`,await page.locator('.model-picker-local-controls').evaluate(n=>{const slider=document.querySelector('.model-effort-slider').getBoundingClientRect(),r=n.getBoundingClientRect();return r.top>=slider.bottom&&getComputedStyle(n).borderTopWidth==='1px';}));
+      record(`${label}: physical RTL switch`,await toggle.evaluate(n=>{const row=n.closest('label'),text=row.querySelector(':scope>span').getBoundingClientRect(),r=n.getBoundingClientRect();return r.right<=text.left&&getComputedStyle(row).direction==='rtl';}));
+      await page.screenshot({path:path.join(output,`${label}.png`)});
+      await toggle.click();
+      await page.waitForFunction(()=>window.__qaEvents.some(e=>e.effort==='xhigh'));
+      await page.waitForTimeout(100);
+      record(`${label}: Max maps to native XHigh`,await page.getByRole('slider').evaluate(n=>n.max==='2'&&n.value==='2'&&!n.disabled));
+      record(`${label}: native mode has no budget hint`,await page.locator('.reasoning-budget-hint').count()===0);
+      await toggle.focus();await toggle.press('Space');
+      await page.waitForFunction(()=>window.__qaEvents.some(e=>e.effort==='budget:xhigh'));
+      record(`${label}: keyboard switch maps XHigh to 16384`,(await page.locator('.reasoning-budget-hint').innerText()).includes('16,384'));
+      await page.getByRole('slider').focus();await page.getByRole('slider').press('Home');
+      await page.waitForFunction(()=>window.__qaEvents.some(e=>e.effort==='budget:none'));
+      record(`${label}: None reachable with keyboard`,(await page.locator('.reasoning-budget-hint').innerText()).includes('0'));
+      await page.keyboard.press('Escape');
+      await page.goto(`http://127.0.0.1:1497/__model-picker-qa?theme=${theme}&local=budget`);
+      await page.getByRole('button',{name:'בחירת מודל',exact:true}).click();
+      record(`${label}: budget-only has no redundant mode switch`,await page.getByRole('switch',{name:'תקציב חשיבה קשיח',exact:true}).count()===0);
+    }
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(output,'report.json'),JSON.stringify({ scope:'isolated Web product components, synthetic callbacks; no live native/Core acceptance', passed:results.length, results, errors },null,2));
     console.log(JSON.stringify({passed:results.length,errors:errors.length,output}));

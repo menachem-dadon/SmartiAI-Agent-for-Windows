@@ -31,6 +31,8 @@ vi.mock("./Composer", () => ({ Composer: (props: any) => <div>
   <button onClick={() => props.onReasoningEffort("high")}>chat-reasoning</button>
   <button onClick={() => props.onReasoningEffort("max")}>chat-reasoning-max</button>
   <button onClick={() => props.onReasoningEffort("medium")}>chat-reasoning-medium</button>
+  <button onClick={() => props.onReasoningEffort("budget:max")}>chat-reasoning-budget-max</button>
+  <button onClick={() => props.onReasoningEffort("xhigh")}>chat-reasoning-native-xhigh</button>
   <button onClick={() => void props.onSend("QA request").catch(() => {})}>chat-send</button>
 </div> }));
 
@@ -123,6 +125,31 @@ async function start() {
   render(<App />);
   await waitFor(() => expect(composer().model).toBe("gemini-a"));
 }
+
+test("local mode writes remain ordered and include the discovered endpoint", async () => {
+  values.api_mode = "local"; values.selected_local_model = "local-a";
+  const endpoint = "http://localhost:1234/v1";
+  reasoningContracts["local:local-a"] = { reasoning_effort: "xhigh", reasoning_options: [
+    {value:"xhigh",label:"XHigh",endpoint}, {value:"budget:max",label:"Max",endpoint},
+  ] } as any;
+  render(<App />);
+  await waitFor(() => expect(composer().reasoning).toBe("xhigh"));
+  const gate = deferred(), baseInvoke = vi.mocked(invoke).getMockImplementation()!, writes: any[] = [];
+  vi.mocked(invoke).mockImplementation(async (command,args:any) => {
+    if(command === "core_api" && args.request.method === "POST" && args.request.path.includes("/reasoning")) {
+      writes.push(args.request.body); if(writes.length === 1) await gate.promise;
+    }
+    return baseInvoke(command,args);
+  });
+  fireEvent.click(screen.getByText("chat-reasoning-budget-max"));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  fireEvent.click(screen.getByText("chat-reasoning-native-xhigh"));
+  expect(composer().reasoning).toBe("xhigh");
+  await act(async () => gate.resolve());
+  await waitFor(() => expect(writes).toHaveLength(2));
+  expect(writes.map(item=>[item.effort,item.endpoint])).toEqual([["budget:max",endpoint],["xhigh",endpoint]]);
+  await waitFor(() => expect(reasoningContracts["local:local-a"].reasoning_effort).toBe("xhigh"));
+});
 
 test("search opens an older conversation outside the sidebar page and keeps its current title and actions", async () => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };

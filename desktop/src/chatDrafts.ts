@@ -17,7 +17,7 @@ export function restoreActiveConversation(conversations: readonly { id: string }
   // a deleted selection) starts with a blank chat, regardless of saved history.
   return conversations.some(item => item.id === wanted) ? wanted : "";
 }
-export type DraftModel = { provider: string; model: string; effort: string };
+export type DraftModel = { provider: string; model: string; effort: string; endpoint?: string };
 export type ChatDraft = { text: string; attachments: PendingAttachment[]; selection?: DraftModel };
 const empty = (): ChatDraft => ({ text: "", attachments: [] });
 

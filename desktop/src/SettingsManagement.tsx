@@ -1,7 +1,9 @@
 import { Dialog, IconButton, Popover, PageHeader, SegmentedControl, SettingRow as SharedSettingRow, SettingsGroup, Switch, RangeField, LoadingState } from "./design-system";
 import { ManagementFeedback } from "./managementFeedback";
 import { ProviderPicker } from "./ProviderPicker";
-import { reasoningDisplayName } from "./modelPresentation";
+import { reasoningDisplayName, reasoningModeOptions } from "./modelPresentation";
+import { ReasoningBudgetControl } from "./ReasoningBudgetControl";
+import type { ReasoningOption } from "./chatTypes";
 import { useSecretAutosave } from "./useSecretAutosave";
 import { readClipboardText } from "./clipboardText";
 import { Button, Textarea, Field, Icon, ChoiceField, SelectField, SearchField } from "./design-system";
@@ -552,8 +554,33 @@ export function ProviderWorkflow({
   const favoriteOnLoadProvider = useRef("");
   const [reasoning, setReasoning] = useState<{
     reasoning_effort?: string;
-    reasoning_options?: Array<{ value: string; label: string }>;
+    reasoning_options?: ReasoningOption[];
   }>({});
+  const confirmedReasoning = useRef(reasoning);
+  const reasoningOwner = JSON.stringify([provider, selectedModel, values.local_server_url]);
+  const reasoningOwnerRef = useRef(reasoningOwner), reasoningRevision = useRef(0);
+  reasoningOwnerRef.current = reasoningOwner;
+  const reasoningSaves = useRef<Promise<unknown>>(Promise.resolve());
+  const saveReasoning = (next: string) => {
+    const owner = reasoningOwner, revision = ++reasoningRevision.current;
+    const option = reasoning.reasoning_options?.find(item => item.value === next);
+    if (!option) return Promise.resolve();
+    setReasoning({ ...reasoning, reasoning_effort: next });
+    const operation = reasoningSaves.current.catch(() => undefined).then(async () => {
+      try {
+        const saved = await coreApi<typeof reasoning>("POST", `/v2/providers/${encodePath(provider)}/reasoning`,
+          { model: selectedModel, effort: next, ...(option.endpoint ? { endpoint: option.endpoint } : {}) }, true);
+        if (reasoningOwnerRef.current === owner) confirmedReasoning.current = saved;
+        if (reasoningOwnerRef.current === owner && reasoningRevision.current === revision) setReasoning(saved);
+      } catch (reason) {
+        if (reasoningOwnerRef.current === owner && reasoningRevision.current === revision) {
+          setReasoning(confirmedReasoning.current); setStatus(`שמירת החשיבה נכשלה: ${String(reason)}`);
+        }
+      }
+    });
+    reasoningSaves.current = operation;
+    return operation;
+  };
   const favorites = asRows(values.favorite_models);
   const secretKey = providerSecretKeys[provider];
   const providerMetadata = schema.providers.find(
@@ -639,14 +666,19 @@ export function ProviderWorkflow({
     void save("favorite_models", [{ provider, model }, ...favorites].slice(0, 60)).catch(reason => setStatus(`שמירת המועדף נכשלה: ${String(reason)}`));
   }, [favorites, models, modelsLoading, provider, save, selectedModel]);
   useEffect(() => {
+    let disposed = false;
+    const revision = ++reasoningRevision.current;
+    setReasoning({});
+    confirmedReasoning.current = {};
     if (selectedModel)
       void coreApi<typeof reasoning>(
         "GET",
         `/v2/providers/${encodePath(provider)}/reasoning?model=${encodeURIComponent(selectedModel)}`,
       )
-        .then(setReasoning)
-        .catch(() => setReasoning({}));
-  }, [provider, selectedModel]);
+        .then(next => { if (!disposed && revision === reasoningRevision.current) { confirmedReasoning.current = next; setReasoning(next); } })
+        .catch(() => { if (!disposed) setReasoning({}); });
+    return () => { disposed = true; };
+  }, [provider, selectedModel, values.local_server_url]);
   const editKey = (next: string) => {
     setStatus("");
     keySave.edit(next);
@@ -868,16 +900,11 @@ export function ProviderWorkflow({
         >
           <ChoiceField label="עוצמת חשיבה" hiddenLabel
             value={reasoning.reasoning_effort || "medium"}
-            options={reasoning.reasoning_options.filter(option => option.value !== "auto").map(option => ({ ...option, label: reasoningDisplayName(option.value, reasoning.reasoning_options) }))}
-            onValueChange={(next) =>
-              void coreApi<typeof reasoning>(
-                "POST",
-                `/v2/providers/${encodePath(provider)}/reasoning`,
-                { model: selectedModel, effort: next },
-                true,
-              ).then(setReasoning).catch(reason => setStatus(`שמירת החשיבה נכשלה: ${String(reason)}`))
-            }
+            options={reasoningModeOptions(reasoning.reasoning_effort || "", reasoning.reasoning_options).map(option => ({ ...option, label: reasoningDisplayName(option.value, reasoning.reasoning_options) }))}
+            onValueChange={next => void saveReasoning(next)}
           />
+          {provider === "local" && <ReasoningBudgetControl value={reasoning.reasoning_effort || ""} options={reasoning.reasoning_options}
+            onChange={saveReasoning} />}
         </SourceSettingField>
       ) : null}
     </div>

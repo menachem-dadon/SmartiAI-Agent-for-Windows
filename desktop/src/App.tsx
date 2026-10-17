@@ -318,7 +318,7 @@ export default function App() {
   const modelOperations = useRef<Promise<boolean>>(Promise.resolve(true));
   const reasoningOperations = useRef<Promise<unknown>>(Promise.resolve());
   const latestReasoningWrites = useRef(new Map<string, number>());
-  const pendingReasoning = useRef(new Map<string, { effort: string; previous: string; settled: boolean }>());
+  const pendingReasoning = useRef(new Map<string, { effort: string; previous: string; settled: boolean; endpoint?: string }>());
   const [restoringModel, setRestoringModel] = useState(false);
   useEffect(() => {
     if (!bootstrapReady || restoredModelOwner.current === activeId) return;
@@ -336,12 +336,13 @@ export default function App() {
       if (!disposed && selected.effort !== "auto") {
         const available = await loadReasoning(selected.provider, selected.model, activeId);
         if (disposed) return;
-        if (available.reasoning_options.some(option => option.value === selected.effort))
-          await coreApi("POST", `/v2/providers/${encodePath(selected.provider)}/reasoning`, { model: selected.model, effort: selected.effort }, true);
+        const option = available.reasoning_options.find(option => option.value === selected.effort);
+        if (option && (selected.provider !== "local" || selected.endpoint === option.endpoint))
+          await coreApi("POST", `/v2/providers/${encodePath(selected.provider)}/reasoning`, { model: selected.model, effort: selected.effort, ...(option.endpoint ? { endpoint: option.endpoint } : {}) }, true);
       }
       const selectionTicket = selectionVersion.current;
       const latest = await coreApi<Bootstrap>("GET", "/v2/bootstrap");
-      if (!disposed && selectionTicket === selectionVersion.current) { syncSettings(latest, selectionTicket); drafts.setSelection({ provider: selected.provider, model: selected.model, effort: latest.chat_models.reasoning_effort || "" }); }
+      if (!disposed && selectionTicket === selectionVersion.current) { syncSettings(latest, selectionTicket); drafts.setSelection({ provider: selected.provider, model: selected.model, effort: latest.chat_models.reasoning_effort || "", endpoint: latest.chat_models.reasoning_options?.[0]?.endpoint }); }
     })().catch(reason => { if (!disposed) setError(`לא ניתן לשחזר את בחירת המודל: ${String(reason)}`); })
       .finally(() => { if (!disposed) setRestoringModel(false); });
     return () => { disposed = true; };
@@ -933,7 +934,7 @@ export default function App() {
   };
   const selectConversation = async (id: string, runId?: string, alignReply = false, messageOrdinal?: number) => {
     rememberConversationVisit(id);
-    if (!restoringModel && provider && model) drafts.setSelection({ provider, model, effort: reasoningEffort });
+    if (!restoringModel && provider && model) drafts.setSelection({ provider, model, effort: reasoningEffort, endpoint: reasoningOptions.find(option => option.value === reasoningEffort)?.endpoint });
     setManagementSection(null);
     setManagementOpen(false);
     navigationTarget.current = runId || "";
@@ -1109,7 +1110,7 @@ export default function App() {
     );
     const current = selectionRef.current;
     const requested = pendingReasoning.current.get(key) || pendingAtRead;
-    const requestedSupported = requested && data.reasoning_options.some(option => option.value === requested.effort);
+    const requestedSupported = requested && data.reasoning_options.some(option => option.value === requested.effort && (nextProvider !== "local" || option.endpoint === requested.endpoint));
     const acknowledged = requestedSupported && requested.settled ? requested.effort : data.reasoning_effort || "";
     if (owner === activeIdRef.current && ticket === selectionVersion.current &&
         current.provider === nextProvider && current.model === nextModel) {
@@ -1173,7 +1174,7 @@ export default function App() {
     modelOperations.current = operation;
     selectionSave.current = operation;
     return Promise.all([operation, contract]).then(([accepted]) => {
-      if (accepted && ownsSelection()) drafts.setSelection({ ...item, effort: selectionRef.current.reasoningEffort });
+      if (accepted && ownsSelection()) drafts.setSelection({ ...item, effort: selectionRef.current.reasoningEffort, endpoint: selectionRef.current.reasoningOptions[0]?.endpoint });
       return accepted;
     }).finally(() => { --pendingSelectionWrites.current; });
   };
@@ -1182,15 +1183,18 @@ export default function App() {
     const generation = renderedModelGeneration;
     const ownsSelection = () => owner === activeIdRef.current && generation === modelGeneration.current &&
       provider === selectionRef.current.provider && model === selectionRef.current.model;
-    if (!reasoningOptions.some(option => option.value === effort)) return;
+    const requestedOption = reasoningOptions.find(option => option.value === effort);
+    if (!requestedOption) return;
     const ticket = ++selectionVersion.current, key = JSON.stringify([provider, model]);
     latestReasoningWrites.current.set(key, ticket);
-    const requested = { effort, previous: pendingReasoning.current.get(key)?.previous || reasoningEffort, settled: false };
+    const pendingPrevious = pendingReasoning.current.get(key);
+    const requested = { effort, previous: pendingPrevious?.endpoint === requestedOption.endpoint ? pendingPrevious?.previous || reasoningEffort : reasoningEffort, settled: false, endpoint: requestedOption.endpoint };
     pendingReasoning.current.set(key, requested);
-    const ownsModel = () => owner === activeIdRef.current && provider === selectionRef.current.provider && model === selectionRef.current.model;
+    const ownsModel = () => owner === activeIdRef.current && provider === selectionRef.current.provider && model === selectionRef.current.model &&
+      (provider !== "local" || requestedOption.endpoint === selectionRef.current.reasoningOptions[0]?.endpoint);
     if (ownsSelection()) {
       applySelection({ ...selectionRef.current, reasoningEffort: effort });
-      drafts.setSelection({ provider, model, effort });
+      drafts.setSelection({ provider, model, effort, endpoint: requestedOption.endpoint });
     }
     const modelSave = renderedSelectionSave;
     ++pendingSelectionWrites.current;
@@ -1206,10 +1210,11 @@ export default function App() {
       const data = await coreApi<{ reasoning_effort: string }>(
         "POST",
         `/v2/providers/${encodePath(provider)}/reasoning`,
-        { model, effort },
+        { model, effort, ...(requestedOption.endpoint ? { endpoint: requestedOption.endpoint } : {}) },
         true,
       );
-      if (confirmedSelection.current.provider === provider && confirmedSelection.current.model === model)
+      if (confirmedSelection.current.provider === provider && confirmedSelection.current.model === model &&
+          (provider !== "local" || requestedOption.endpoint === confirmedSelection.current.reasoningOptions[0]?.endpoint))
         confirmedSelection.current = { ...confirmedSelection.current, reasoningEffort: data.reasoning_effort };
       requested.effort = data.reasoning_effort;
       requested.settled = true;
@@ -1218,7 +1223,7 @@ export default function App() {
       if (latestReasoningWrites.current.get(key) === ticket) pendingReasoning.current.delete(key);
       if (ownsModel() && latestReasoningWrites.current.get(key) === ticket) {
         applySelection({ ...selectionRef.current, reasoningEffort: data.reasoning_effort });
-        drafts.setSelection({ provider, model, effort: data.reasoning_effort });
+        drafts.setSelection({ provider, model, effort: data.reasoning_effort, endpoint: requestedOption.endpoint });
       }
     } catch (reason) {
       requested.effort = requested.previous;
@@ -1227,7 +1232,7 @@ export default function App() {
       if (ownsModel() && latestReasoningWrites.current.get(key) === ticket) {
         const previous = requested.previous;
         applySelection({ ...selectionRef.current, reasoningEffort: previous });
-        drafts.setSelection({ provider, model, effort: previous });
+        drafts.setSelection({ provider, model, effort: previous, endpoint: requestedOption.endpoint });
         setError(`לא ניתן לעדכן עוצמת חשיבה: ${String(reason)}`);
       }
     }

@@ -1987,6 +1987,7 @@ DEFAULT_SETTINGS = {
         "openai": {},
         "anthropic": {},
     },
+    "local_model_reasoning": {},
     "local_server_url": "http://localhost:1234/v1",
     # Generate a concise, distinctive title as soon as the first turn starts.
     # "local" remains available for users who prefer zero extra model calls.

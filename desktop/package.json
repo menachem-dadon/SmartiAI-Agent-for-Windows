@@ -4,6 +4,7 @@
   "version": "0.87.0",
   "type": "module",
   "scripts": {
+    "prebuild": "node ../scripts/build_local_model_bridge.mjs",
     "dev": "vite",
     "dev:stable": "node ../scripts/run_desktop_stable.mjs",
     "dev:ux1": "vite --port 1432 --host 127.0.0.1",
@@ -26,6 +27,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@lmstudio/sdk": "2.1.0",
     "@tauri-apps/cli": "^2",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.6",

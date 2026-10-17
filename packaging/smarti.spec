@@ -12,6 +12,8 @@ app_manifest = repo_root / "packaging" / "smarti.manifest"
 datas = [
     (str(repo_root / "assets"), "assets"),
     (str(repo_root / "sitecustomize.py"), "."),
+    (str(repo_root / "smarti" / "local_lmstudio_sdk.cjs"), "smarti"),
+    (str(repo_root / "smarti" / "local_lmstudio_sdk.NOTICES.txt"), "smarti"),
 ]
 
 for package in ("certifi", "keyring", "truststore"):

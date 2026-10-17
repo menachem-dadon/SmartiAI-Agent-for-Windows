@@ -24,6 +24,8 @@ def source_inputs(root: Path = ROOT) -> dict[str, str]:
         "desktop/src-tauri/build.rs", "requirements-core.txt", "requirements-build.txt", "smarti_core_service.py",
         "scripts/build_tauri_release.ps1", "scripts/prepare_runtime.ps1", "scripts/build_and_package.ps1",
         "scripts/prepare_tauri_package.py", "scripts/tauri_source_manifest.py",
+        "scripts/lmstudio_bridge.mjs", "scripts/build_local_model_bridge.mjs",
+        "smarti/local_lmstudio_sdk.cjs", "smarti/local_lmstudio_sdk.NOTICES.txt",
     ) if (root / p).is_file())
     return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted(set(files), key=lambda item: item.relative_to(root).as_posix())}

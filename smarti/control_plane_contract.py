@@ -88,6 +88,7 @@ REQUEST_SCHEMAS = {
     "setModelReasoning": _object({
         "model": {"type": "string", "minLength": 1, "maxLength": 300},
         "effort": {"type": "string", "minLength": 1, "maxLength": 40},
+        "endpoint": {"type": "string", "minLength": 1, "maxLength": 4096},
     }, ("model", "effort")),
     "registerAttachment": _object({
         "path": {"type": "string", "minLength": 1, "maxLength": 32767},

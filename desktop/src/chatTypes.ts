@@ -11,7 +11,7 @@ export interface MessagePage { session_id: string; messages: ChatMessage[]; tota
 export interface RunRecord { id: string; session_id: string; status: string; user_text: string; response_text?: string; error_text?: string; updated_at?: string; metadata?: { provider_mode?: string; user_language?: "he" | "en"; stream?: import("./chatStreaming").StreamState }; }
 export interface RunEvent { event_id: number; sequence: number; event_type: string; session_id: string; run_id: string; payload: Record<string, unknown>; created_at: string; }
 export interface Approval { id: string; run_id: string; session_id: string; title: string; prompt: string; risk_level: string; created_at: string; }
-export interface ReasoningOption { value: string; label: string; }
+export interface ReasoningOption { value: string; label: string; endpoint?: string; }
 export interface ChatModels { providers: string[]; provider: string; model: string; reasoning_effort?: string; reasoning_options?: ReasoningOption[]; }
 export interface SafeSettings { values?: Record<string, unknown>; }
 export interface Bootstrap { conversations: Conversation[]; pending_approvals: Approval[]; unread_count: number; chat_models: ChatModels; display_name?: string; settings?: SafeSettings; }

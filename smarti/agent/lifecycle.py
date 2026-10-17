@@ -240,6 +240,9 @@ class LifecycleMixin:
                 snapshot["codex_signin_provider"] = CodexSignInProvider(USER_DATA_DIR)
             except Exception:
                 logging.exception("Could not prepare the submitted Codex runtime")
+        if provider_mode == "local":
+            from smarti.local_reasoning import request_control
+            snapshot["local_reasoning_snapshot"] = request_control(self, snapshot["model_name"])
         return snapshot
 
     def _build_run_values(
@@ -257,6 +260,7 @@ class LifecycleMixin:
         )
         values = {
             "mode": run_mode,
+            "local_reasoning_snapshot": copy.deepcopy(snapshot.get("local_reasoning_snapshot")),
             "universal_client": snapshot.get("universal_client"),
             "_universal_client_key": str(snapshot.get("_universal_client_key") or ""),
             "codex_signin_provider": snapshot.get("codex_signin_provider"),

@@ -28,6 +28,7 @@ from .common import (
 )
 from .config import DEFAULT_SETTINGS, PUBLIC_BUILTIN_TOOLS
 from .history import DEFAULT_CHAT_TITLE
+from . import local_reasoning
 from .control_plane_contract import CONTRACT_VERSION, contract_document, validate_request
 from .canvas_model import (
     canvas_artifacts_from_messages,
@@ -225,8 +226,8 @@ class SmartiLocalGateway:
             raise RequestValidationError(errors[0].message, fields)
         return payload
 
-    async def _idempotent(self, request, schema_name, action):
-        payload = await self._body(request, schema_name)
+    async def _idempotent(self, request, schema_name, action, *, payload=None):
+        payload = await self._body(request, schema_name) if payload is None else payload
         key = str(request.headers.get("Idempotency-Key") or "").strip()[:200]
         creates_task = schema_name == "taskAction" and str(payload.get("action") or "").lower() == "create"
         if (schema_name == "submitRun" or creates_task) and not key:
@@ -405,6 +406,10 @@ class SmartiLocalGateway:
     async def _v2_bootstrap(self, request):
         current_provider = normalize_provider_name(self.core.settings.get("api_mode") or getattr(self.core, "mode", "") or "gemini")
         current_model = str(self.core.settings.get(f"selected_{current_provider}_model") or "")
+        reasoning = await asyncio.to_thread(local_reasoning.describe, self.core, current_model) if current_provider == "local" and current_model else {
+            "reasoning_effort": model_reasoning_setting(self.core.settings, current_provider, current_model),
+            "reasoning_options": [{"value": value, "label": label} for value, label in model_reasoning_options(current_provider, current_model)],
+        }
         return self._ok(request, {
             "version": {"product": APP_VERSION, "contract": CONTRACT_VERSION},
             "health": self._health_payload(), "conversations": self.core.chat_store.list_sessions(include_empty="latest")[:50],
@@ -416,11 +421,7 @@ class SmartiLocalGateway:
                 "providers": list(MODEL_PROVIDER_ORDER),
                 "provider": current_provider,
                 "model": current_model,
-                "reasoning_effort": model_reasoning_setting(self.core.settings, current_provider, current_model),
-                "reasoning_options": [
-                    {"value": value, "label": label}
-                    for value, label in model_reasoning_options(current_provider, current_model)
-                ],
+                **reasoning,
             },
         })
 
@@ -1234,6 +1235,8 @@ class SmartiLocalGateway:
 
     async def _discover_models(self, request):
         result = await asyncio.to_thread(self._provider_models, request.match_info["provider"])
+        if normalize_provider_name(request.match_info["provider"]) == "local":
+            local_reasoning.invalidate(self.core)
         return self._ok(request, result)
 
     async def _set_model_reasoning(self, request):
@@ -1243,6 +1246,8 @@ class SmartiLocalGateway:
             model = str(request.query.get("model") or "").strip()
             if not model:
                 return self._error(request, 400, "missing_model", "model")
+            if provider == "local":
+                return self._ok(request, await asyncio.to_thread(local_reasoning.describe, self.core, model))
             options = model_reasoning_options(provider, model)
             return self._ok(request, {
                 "provider": provider,
@@ -1253,13 +1258,25 @@ class SmartiLocalGateway:
                 ],
             })
 
+        local_contract = None
+        validated_payload = None
+        if provider == "local":
+            payload = await self._body(request, "setModelReasoning")
+            validated_payload = payload
+            if payload.get("endpoint") and payload["endpoint"] != local_reasoning.endpoint_key(local_reasoning.endpoint(self.core.settings)):
+                raise RequestValidationError("local_server_changed", ["endpoint"])
+            if isinstance(payload, dict) and isinstance(payload.get("model"), str):
+                local_contract = await asyncio.to_thread(local_reasoning.discover, self.core, payload["model"])
+
         def update(payload):
             model = str(payload["model"]).strip()
-            available = dict(model_reasoning_options(provider, model))
+            if local_contract and local_reasoning.endpoint_key(local_contract["base"]) != local_reasoning.endpoint_key(local_reasoning.endpoint(self.core.settings)):
+                raise RequestValidationError("local_server_changed", ["endpoint"])
+            available = {item["value"]: item["label"] for item in local_reasoning.options(local_contract)} if local_contract else dict(model_reasoning_options(provider, model))
             effort = str(payload["effort"]).strip().lower()
             if effort not in available:
                 raise RequestValidationError("unsupported_reasoning_effort", ["effort"])
-            selected = set_model_reasoning_setting(self.core.settings, provider, model, effort)
+            selected = local_reasoning.save(self.core, model, effort, local_contract) if provider == "local" else set_model_reasoning_setting(self.core.settings, provider, model, effort)
             save_settings = getattr(self.core, "_save_settings", None)
             if callable(save_settings):
                 save_settings()
@@ -1268,11 +1285,11 @@ class SmartiLocalGateway:
                 "model": model,
                 "reasoning_effort": selected,
                 "reasoning_options": [
-                    {"value": value, "label": label} for value, label in available.items()
+                    {"value": value, "label": label, **({"endpoint": local_reasoning.endpoint_key(local_contract["base"])} if local_contract else {})} for value, label in available.items()
                 ],
             }, 200
 
-        return await self._idempotent(request, "setModelReasoning", update)
+        return await self._idempotent(request, "setModelReasoning", update, payload=validated_payload)
 
     async def _codex_quota(self, request):
         from .codex_signin import CodexSignInProvider

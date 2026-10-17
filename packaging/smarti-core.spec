@@ -10,6 +10,8 @@ repo_root = spec_path.parent.parent
 datas = [
     (str(repo_root / "assets"), "assets"),
     (str(repo_root / "sitecustomize.py"), "."),
+    (str(repo_root / "smarti" / "local_lmstudio_sdk.cjs"), "smarti"),
+    (str(repo_root / "smarti" / "local_lmstudio_sdk.NOTICES.txt"), "smarti"),
 ]
 for package in ("certifi", "keyring", "truststore"):
     try:

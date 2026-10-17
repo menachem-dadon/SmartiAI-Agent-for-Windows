@@ -12,6 +12,7 @@ tests/
 !tests/
 tests/*
 !tests/test_chat_streaming.py
+!tests/test_local_reasoning.py
 !tests/__init__.py
 !tests/README.md
 !tests/test_profile_isolation.py

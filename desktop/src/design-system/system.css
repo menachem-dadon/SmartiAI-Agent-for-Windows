@@ -89,10 +89,11 @@
 .sds-switch input { position:absolute; inset:0; opacity:0; z-index:1; width:100%; height:100%; margin:0; cursor:pointer; }
 .sds-switch input:focus-visible+.sds-switch-track { outline:var(--sds-size-focus) solid var(--sds-color-focus); outline-offset:3px; }
 .sds-switch-track { position:relative; width:var(--sds-size-switch-width); height:var(--sds-size-switch-height); border:1px solid var(--sds-color-control-border); border-radius:var(--sds-radius-pill); background:var(--sds-color-surface-muted); pointer-events:none; }
-.sds-switch-thumb { position:absolute; top:3px; inset-inline-start:3px; width:var(--sds-size-switch-thumb); height:var(--sds-size-switch-thumb); border-radius:var(--sds-radius-pill); background:var(--sds-color-text-muted); transition:transform var(--sds-motion-fast) var(--sds-motion-ease); }
+.sds-switch-thumb { position:absolute; top:var(--sds-switch-inset,3px); inset-inline-start:var(--sds-switch-inset,3px); width:var(--sds-size-switch-thumb); height:var(--sds-size-switch-thumb); border-radius:var(--sds-radius-pill); background:var(--sds-color-text-muted); transition:transform var(--sds-motion-fast) var(--sds-motion-ease); }
 .sds-switch input:checked+.sds-switch-track { background:var(--sds-color-accent); }
-.sds-switch input:checked+.sds-switch-track .sds-switch-thumb { transform:translateX(18px); background:var(--sds-color-on-accent); }
-.sds-switch:dir(rtl) input:checked+.sds-switch-track .sds-switch-thumb { transform:translateX(-18px); }
+.sds-switch input:checked+.sds-switch-track .sds-switch-thumb { transform:translateX(var(--sds-switch-travel,18px)); background:var(--sds-color-on-accent); }
+.sds-switch:dir(rtl) input:checked+.sds-switch-track .sds-switch-thumb { transform:translateX(calc(-1 * var(--sds-switch-travel,18px))); }
+.sds-switch--small { --sds-size-switch-width:var(--sds-size-switch-small-width); --sds-size-switch-height:var(--sds-size-switch-small-height); --sds-size-switch-thumb:var(--sds-size-switch-small-thumb); --sds-switch-inset:2px; --sds-switch-travel:12px; height:24px; }
 .sds-switch input:disabled+.sds-switch-track { opacity:.5; }
 .sds-switch input:disabled { opacity:0; }
 .sds-range-field { display:flex; flex-direction:column; gap:var(--sds-space-2); min-width:0; }

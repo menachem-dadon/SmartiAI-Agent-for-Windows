@@ -7,7 +7,8 @@ import { providerOptions } from "./managementCatalog";
 import { ProviderIcon } from "./ProviderIcon";
 import { useDismissiblePopup } from "./popupDismissal";
 import { useModelMenuPosition } from "./modelMenuPosition";
-import { modelDisplayName, reasoningDisplayName } from "./modelPresentation";
+import { modelDisplayName, reasoningDisplayName, reasoningModeOptions } from "./modelPresentation";
+import { ReasoningBudgetControl } from "./ReasoningBudgetControl";
 
 type Favorite = { provider: string; model: string };
 type View = "effort" | "models";
@@ -67,12 +68,12 @@ function ReasoningSlider({ value, options, onChange, onPreviewChange }: {
 }
 
 export function ComposerModelPicker({ theme, provider, model, favoriteModels, reasoningEffort: savedEffort, reasoningOptions: suppliedOptions, quota, onOpen, onFavoriteModel, onReasoningEffort, onManageModels }: Props) {
-  const reasoningOptions = suppliedOptions.filter(option => option.value !== "auto");
-  const reasoningEffort = reasoningOptions.some(option => option.value === savedEffort) ? savedEffort
-    : reasoningOptions.find(option => option.value === "medium")?.value || reasoningOptions[0]?.value || "";
   const root = useRef<HTMLSpanElement>(null), trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View | null>(null), [present, setPresent] = useState(false);
   const [previewEffort, setPreviewEffort] = useState<string | null>(null);
+  const reasoningOptions = reasoningModeOptions(previewEffort ?? savedEffort, suppliedOptions);
+  const reasoningEffort = reasoningOptions.some(option => option.value === savedEffort) ? savedEffort
+    : reasoningOptions.find(option => option.value === "medium" || option.value === "budget:medium")?.value || reasoningOptions[0]?.value || "";
   const effortRevision = useRef(0), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { ++effortRevision.current; setPreviewEffort(null); }, [provider, model]);
@@ -87,7 +88,7 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
     });
   };
   const lastView = useRef<View>("effort"), [browsedProvider, setBrowsedProvider] = useState(provider);
-  const [metrics, setMetrics] = useState({ width: 360, row: 44, header: 48, quota: 76, effort: 128, note: 44 });
+  const [metrics, setMetrics] = useState({ width: 360, row: 44, header: 48, quota: 76, effort: 128, local: 0, note: 44 });
   const id = useId(), open = view !== null;
   if (view) lastView.current = view;
   const shownView = view || lastView.current;
@@ -96,7 +97,7 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
   const providers = Array.from(new Set(menuModels.map(item => item.provider)));
   const shownProvider = providers.includes(browsedProvider) ? browsedProvider : providers[0] || "";
   const rowCount = Math.min(7, Math.max(1, providers.length, ...providers.map(p => menuModels.filter(item => item.provider === p).length)));
-  const preferredHeight = shownView === "effort" ? metrics.effort + (quota ? metrics.quota : 0)
+  const preferredHeight = shownView === "effort" ? metrics.effort + metrics.local + (quota ? metrics.quota : 0)
     : metrics.header + rowCount * (metrics.row + 2) + 22 + (quota ? metrics.quota : 0) + (!favoriteModels.length ? metrics.note : 0);
   const bounds = useModelMenuPosition(open || present, trigger, preferredHeight, shownView === "effort" ? 280 : metrics.width, shownView === "effort");
   const close = (restoreFocus = false) => { setView(null); if (restoreFocus) trigger.current?.focus(); };
@@ -131,12 +132,12 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
       const next = { width: Math.max(280, Math.min(460, Math.max(0, ...widths) + 120)),
         row: Math.max(40, ...Array.from(node.querySelectorAll<HTMLElement>(".model-menu-list button")).map(button => button.offsetHeight)), header: height(".model-menu-title", 48),
         quota: height(".model-picker-quota", 50) + (parseFloat(getComputedStyle(node.querySelector(".model-picker-quota") || node).marginTop) || 0), effort: height(".model-effort-content", 76) + 20,
-        note: height(".model-menu-empty", 36) + 8 };
+        local: node.querySelector(".model-picker-local-controls") ? height(".model-picker-local-controls", 0) + 4 : 0, note: height(".model-menu-empty", 36) + 8 };
       setMetrics(current => Object.keys(next).every(key => current[key as keyof typeof next] === next[key as keyof typeof next]) ? current : next);
     };
     measure();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    for (const node of popup.current.querySelectorAll(".model-menu-width-labels, .model-effort-content, .model-menu-title, .model-picker-quota")) observer?.observe(node);
+    for (const node of popup.current.querySelectorAll(".model-menu-width-labels, .model-effort-content, .model-menu-title, .model-picker-quota, .model-picker-local-controls")) observer?.observe(node);
     return () => observer?.disconnect();
   }, [open, shownView, provider, model, favoriteModels, reasoningOptions.length, quota]);
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -207,6 +208,9 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
           <div className="model-menu-width-labels" aria-hidden="true">{menuModels.map(item => <bdi key={`${item.provider}:${item.model}`}>{modelDisplayName(item.provider, item.model)}</bdi>)}</div>
           {!favoriteModels.length && <p className="model-menu-empty">אפשר להוסיף מודלים מועדפים בהגדרות</p>}
         </>}
+        {shownView === "effort" && provider === "local" && suppliedOptions.some(option => option.value.startsWith("budget:")) && <div className="model-picker-local-controls">
+          <ReasoningBudgetControl value={previewEffort ?? reasoningEffort} options={suppliedOptions} onChange={saveEffort} />
+        </div>}
         {quota && <div className="model-picker-quota">{quota}</div>}
       </div>
     </div></DesignSystemProvider>, document.body)}

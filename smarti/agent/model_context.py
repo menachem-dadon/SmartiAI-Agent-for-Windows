@@ -2171,6 +2171,9 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
             else self._ensure_secret_loaded(provider_secret_key(request_mode))
         )
         base_url = provider_base_url(request_mode, self.settings.get("local_server_url", "http://localhost:1234/v1"))
+        if request_mode == "local":
+            from smarti.local_reasoning import run_base
+            base_url = run_base(self)
         if request_mode == "qwen":
             base_url = provider_base_url(request_mode, settings=self.settings)
         if not self._valid_provider_base_url(base_url):
@@ -2599,7 +2602,15 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
         request_system_prompt = str(
             request_options.get("system_prompt", getattr(self, "system_prompt", "")) or ""
         )
-        if "reasoning_effort" in request_options:
+        local_control = None
+        if request_mode == "local":
+            from smarti.local_reasoning import request_control
+            local_control = request_control(self, current_model, request_options.get("reasoning_effort"))
+            if request_options.get("purpose") == "title":
+                from smarti.local_reasoning import closest, options as local_reasoning_options
+                local_control["effort"] = closest("none", [item["value"] for item in local_reasoning_options(local_control["contract"])])
+            request_reasoning = local_control["effort"]
+        elif "reasoning_effort" in request_options:
             request_reasoning = normalize_model_reasoning_level(
                 request_mode,
                 current_model,
@@ -2814,13 +2825,18 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         attempt_number, attempt_started, result,
                     )
                 elif request_mode == "local" or is_openai_compatible_provider(request_mode):
-                    if request_mode == "local" and self._current_stream:
+                    if local_control and local_control["contract"]["kind"] == "lmstudio" and request_reasoning.startswith("budget:"):
+                        from smarti.lmstudio_prediction import predict
+                        result = self._run_cancelable_callable(lambda: predict(self, local_control, request_messages, request_system_prompt, request_options))
+                        return self._log_api_request_success(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, result)
+                    if request_mode == "local" and (self._current_stream or local_control["contract"]["kind"] == "ollama"):
                         from .local_streaming import local_progress_response
                         local_options = dict(request_options)
+                        local_options["local_reasoning_control"] = local_control
                         if request_options.get("max_output_tokens"):
                             local_options["max_output_tokens"] = self._model_output_token_limit(request_mode, current_model, request_messages, request_options)
                         result = self._run_cancelable_callable(lambda: local_progress_response(
-                            self, provider_base_url("local", self.settings.get("local_server_url", "http://localhost:1234/v1")),
+                            self, local_control["base"],
                             current_model, request_messages, request_system_prompt, local_options, request_reasoning))
                         if result is not None:
                             return self._log_api_request_success(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, result)
@@ -2867,6 +2883,22 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         "messages": request_messages,
                         "timeout": self._sdk_transport_timeout(request_mode),
                     }
+                    if local_control and request_reasoning:
+                        from smarti.local_reasoning import parameters
+                        local_parameters = parameters(local_control)
+                        if local_control["contract"]["kind"] == "lmstudio":
+                            # The native LM Studio route supports its reasoning
+                            # vocabulary; the compatible route has no equivalent
+                            # documented contract. Do not drop a selected level.
+                            from .local_streaming import local_progress_response
+                            local_options = {**request_options, "local_reasoning_control": local_control}
+                            result = self._run_cancelable_callable(lambda: local_progress_response(self, local_control["base"], current_model, request_messages, request_system_prompt, local_options, request_reasoning))
+                            if result is None:
+                                raise RuntimeError("שרת LM Studio אינו מאפשר את הגדרת החשיבה שנבחרה במסלול זה.")
+                            return self._log_api_request_success(request_log_id, request_mode, current_model, request_purpose, attempt_number, attempt_started, result)
+                        completion_kwargs["extra_body"] = local_parameters
+                        if local_control["contract"]["kind"] == "llamacpp" and self._current_stream:
+                            completion_kwargs["extra_body"]["return_progress"] = True
                     if self._current_stream:
                         completion_kwargs.update(stream=True, stream_options={"include_usage": True})
                     openai_reasoning_model = (

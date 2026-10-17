@@ -89,7 +89,10 @@ class ProviderRuntimeTests(unittest.TestCase):
                 self.assertEqual(result, "answer")
                 self.assertEqual(create.call_args.kwargs["model"], "test-model")
                 self.assertNotIn("temperature", create.call_args.kwargs)
-                self.assertNotIn("reasoning_effort", create.call_args.kwargs)
+                if provider == "openai":
+                    self.assertEqual(create.call_args.kwargs["reasoning_effort"], "medium")
+                else:
+                    self.assertNotIn("reasoning_effort", create.call_args.kwargs)
 
     def test_sdk_does_not_add_its_own_hidden_retries(self):
         core = RequestCore("groq")

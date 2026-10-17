@@ -62,6 +62,7 @@ export interface ValidateProviderRequest {
 export interface SetModelReasoningRequest {
   model: string;
   effort: string;
+  endpoint?: string;
 }
 export interface RegisterAttachmentRequest {
   path: string;

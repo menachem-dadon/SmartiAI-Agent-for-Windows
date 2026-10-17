@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { Composer } from "./Composer";
 import { coreApi } from "./coreApi";
+import { useState } from "react";
 
 vi.mock("./coreApi", () => ({ coreApi: vi.fn(async () => ({ available: false })) }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -10,6 +11,38 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const callbacks = {
   onAttachments: () => {}, onSend: async () => {}, onCancel: () => {},
 };
+
+const localNative = ["low", "medium", "xhigh"].map(value => ({ value, label: value }));
+const localBudgets = ["none", "minimal", "low", "medium", "high", "xhigh", "max"].map(value => ({ value: `budget:${value}`, label: value === "xhigh" ? "XHigh" : value[0].toUpperCase() + value.slice(1) }));
+
+test("local budget switch converts Max to supported XHigh and preserves a valid slider", async () => {
+  const changed = vi.fn();
+  function Fixture() {
+    const [effort, setEffort] = useState("budget:max");
+    return <Composer {...callbacks} attachments={[]} provider="local" model="Qwen3.8-27B" reasoningEffort={effort}
+      reasoningOptions={[...localNative, ...localBudgets]} onReasoningEffort={async next => { changed(next); setEffort(next); }} />;
+  }
+  render(<Fixture />);
+  await openEffort();
+  expect(screen.getByText("תקציב חשיבה קשיח: ללא תקרה נוספת")).toBeTruthy();
+  expect(screen.getByRole("slider").getAttribute("max")).toBe("6");
+  fireEvent.click(screen.getByRole("switch", { name: "תקציב חשיבה קשיח" }));
+  await waitFor(() => expect(changed).toHaveBeenLastCalledWith("xhigh"));
+  expect(screen.getByRole("slider").getAttribute("max")).toBe("2");
+  expect(screen.getByRole("slider").getAttribute("value")).toBe("2");
+  expect(screen.queryByText(/תקציב חשיבה קשיח:/)).toBeNull();
+  fireEvent.click(screen.getByRole("switch", { name: "תקציב חשיבה קשיח" }));
+  await waitFor(() => expect(changed).toHaveBeenLastCalledWith("budget:xhigh"));
+  expect(screen.getByText("תקציב חשיבה קשיח: עד 16,384 טוקנים")).toBeTruthy();
+});
+
+test("budget-only local models have seven named stops and a hint without a redundant switch", async () => {
+  render(<Composer {...callbacks} attachments={[]} provider="local" model="reasoning-model" reasoningEffort="budget:medium" reasoningOptions={localBudgets} />);
+  await openEffort();
+  expect(screen.queryByRole("switch", { name: "תקציב חשיבה קשיח" })).toBeNull();
+  expect(screen.getByRole("slider").getAttribute("aria-valuetext")).toBe("Medium");
+  expect(screen.getByText("תקציב חשיבה קשיח: עד 4,096 טוקנים")).toBeTruthy();
+});
 
 async function openEffort() {
   fireEvent.click(screen.getByLabelText("בחירת מודל"));
