@@ -11,7 +11,7 @@ from .runtime import SMARTI_RUNTIME
 
 
 def predict(core, control, messages, system, options):
-    node = SMARTI_RUNTIME.resolve_executable("node")
+    node = SMARTI_RUNTIME.which("node")
     bridge = Path(__file__).with_name("local_lmstudio_sdk.cjs")
     if not node or not bridge.is_file():
         raise RuntimeError("מתאם תקציב החשיבה של LM Studio אינו זמין. יש להכין את סביבת Smarti מחדש.")

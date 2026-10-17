@@ -10,6 +10,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from smarti import local_reasoning as lr
+from smarti import lmstudio_prediction
 from smarti.agent.local_streaming import local_progress_response, ollama_response
 from smarti.local_gateway import SmartiLocalGateway
 from smarti.run_manager import ConversationRunManager
@@ -174,6 +175,45 @@ class LocalReasoningTests(unittest.TestCase):
         self.assertNotIn("options", payload)
         self.core._current_stream.text.assert_called_with("תשובה")
         response.close.assert_called_once()
+
+    @unittest.skipUnless(shutil.which("node"), "Node runtime required for prediction process test")
+    def test_prediction_launches_node_through_real_runtime_and_reads_frames(self):
+        # Keep the real runtime and Python process/stream lifecycle. Only the
+        # SDK-facing bridge is replaced, so a nonexistent runtime method cannot hide
+        # behind a mocked predict() or a direct Node invocation.
+        source = r'''
+require('node:readline').createInterface({input:process.stdin}).once('line', line => {
+  const input = JSON.parse(line);
+  const emit = value => process.stdout.write(JSON.stringify(value)+'\n');
+  if (input.budget !== 256 || input.messages[0].content !== 'hello' || 'maxTokens' in input) {
+    emit({type:'error',message:'incorrect prediction payload'}); process.exit(1);
+  }
+  emit({type:'prefill',percent:50});
+  emit({type:'thinking'});
+  emit({type:'text',content:'answer'});
+  emit({type:'done',stats:{stopReason:'eosFound',promptTokensCount:3,predictedTokensCount:5}});
+  process.exit(0);
+});
+'''
+        core = NS(_raise_if_cancelled=Mock(), _provider_transport_timeout=lambda _: 5,
+                  _check_generated_response=Mock(), _current_stream=Mock(),
+                  _register_active_process=Mock(), _unregister_active_process=Mock())
+        control = {"contract": contract("lmstudio"), "model": "model", "effort": "budget:minimal"}
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = Path(directory) / "bridge.cjs"
+            bridge.write_text(source, encoding="utf-8")
+            with patch.object(lmstudio_prediction, "Path", return_value=NS(with_name=lambda _: bridge)):
+                text, usage = lmstudio_prediction.predict(core, control, [{"role": "user", "content": "hello"}], "system", {})
+        self.assertEqual(text, "answer")
+        self.assertEqual(usage, {"prompt": 3, "completion": 5, "total": 8})
+        core._current_stream.text.assert_called_once_with("answer")
+        core._current_stream.status.assert_any_call("prefill", 50)
+        core._current_stream.status.assert_any_call("thinking")
+        core._check_generated_response.assert_called_once_with("local", "model", "answer", [])
+        process = core._register_active_process.call_args.args[0]
+        core._unregister_active_process.assert_called_once_with(process)
+        self.assertIsNotNone(process.poll())
+        self.assertTrue(process.stdin.closed and process.stdout.closed)
 
     @unittest.skipUnless(shutil.which("node"), "Node runtime required for SDK bridge protocol test")
     def test_sdk_bridge_preserves_roles_separates_reasoning_and_sets_budget_only(self):
