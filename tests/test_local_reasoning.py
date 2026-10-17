@@ -216,7 +216,7 @@ require('node:readline').createInterface({input:process.stdin}).once('line', lin
         self.assertTrue(process.stdin.closed and process.stdout.closed)
 
     @unittest.skipUnless(shutil.which("node"), "Node runtime required for SDK bridge protocol test")
-    def test_sdk_bridge_preserves_roles_separates_reasoning_and_sets_budget_only(self):
+    def test_sdk_bridge_consolidates_systems_preserves_turns_images_and_budget(self):
         source = (Path(__file__).resolve().parents[1] / "scripts/lmstudio_bridge.mjs").read_text(encoding="utf-8")
         # Exercise the real adapter against the public SDK shape. This is not
         # an LM Studio inference test and does not load a personal model.
@@ -228,7 +228,8 @@ class LMStudioClient {
     this.system = { getLMStudioVersion: async () => ({ version:'0.4.24' }) };
     this.files = { prepareImageBase64: async () => ({}) };
     this.llm = { createDynamicHandle: () => ({ getModelInfo: async () => ({}), respond: (chat,opts) => {
-      process.stdout.write(JSON.stringify({type:'observed', budget:opts.reasoningBudget, enabled:opts.enableThinking, hasMaxTokens:'maxTokens' in opts, roles:messages.map(m=>m.role)})+'\n');
+      if (messages.some((m,i) => m.role === 'system' && i !== 0)) throw new Error('System message must be at the beginning.');
+      process.stdout.write(JSON.stringify({type:'observed', budget:opts.reasoningBudget, enabled:opts.enableThinking, hasMaxTokens:'maxTokens' in opts, messages})+'\n');
       opts.onPromptProcessingProgress(.5);
       const result=Promise.resolve({stats:{stopReason:'eosFound',promptTokensCount:3,predictedTokensCount:5}});
       result[Symbol.asyncIterator]=async function*(){yield {reasoningType:'reasoning',content:'PRIVATE'};yield {reasoningType:'none',content:'תשובה'};};return result;
@@ -243,13 +244,20 @@ class LMStudioClient {
             for budget, expected, enabled in [(4096, 4096, True), (0, 0, False), (-1, False, True)]:
                 with self.subTest(budget=budget):
                     payload = {"root": "http://localhost:1234", "model": "model", "budget": budget, "system": "system",
-                               "messages": [{"role": "assistant", "content": "prior"}, {"role": "user", "content": "hello"}]}
+                               "messages": [{"role": "system", "content": "system"},
+                                            {"role": "system", "content": [{"type": "text", "text": "stream contract"}]},
+                                            {"role": "assistant", "content": "prior"},
+                                            {"role": "system", "content": "turn context"},
+                                            {"role": "user", "content": [{"type": "text", "text": "hello"},
+                                                {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}]}]}
                     result = subprocess.run([shutil.which("node"), str(path)], input=json.dumps(payload)+"\n", capture_output=True,
                                             text=True, encoding="utf-8", timeout=5, creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     frames = [json.loads(line) for line in result.stdout.splitlines()]
                     self.assertEqual(frames[0], {"type": "observed", "budget": expected, "enabled": enabled, "hasMaxTokens": False,
-                                                 "roles": ["system", "assistant", "user"]})
+                                                 "messages": [{"role": "system", "content": "system\n\nstream contract\n\nturn context", "images": 0},
+                                                              {"role": "assistant", "content": "prior", "images": 0},
+                                                              {"role": "user", "content": "hello", "images": 1}]})
                     self.assertNotIn("PRIVATE", result.stdout)
                     self.assertTrue(any(frame.get("content") == "תשובה" for frame in frames))
 

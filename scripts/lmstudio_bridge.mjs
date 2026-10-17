@@ -22,8 +22,13 @@ lines.on('line', async line => {
     if (major === 0 && (minor < 4 || minor === 4 && patch < 19)) throw new Error('תקציב חשיבה קשיח דורש LM Studio 0.4.19 ומעלה ומנוע GGUF תומך.');
     const model = client.llm.createDynamicHandle(input.identifier || input.model);
     if (!await model.getModelInfo()) throw new Error('המודל המקומי אינו טעון ב-LM Studio.');
-    const chat = Chat.empty();
-    chat.append('system', input.system);
+    // Smarti supplies a base prompt plus system entries for streaming and
+    // context. Templates such as Qwen require one system message at index 0.
+    const systemParts = [], systemImages = [], turns = [];
+    const addSystem = content => {
+      if (content.trim() && !systemParts.includes(content)) systemParts.push(content);
+    };
+    addSystem(String(input.system || ''));
     for (const message of input.messages) {
       const images = [], text = [];
       if (Array.isArray(message.content)) for (const part of message.content) {
@@ -35,8 +40,15 @@ lines.on('line', async line => {
         }
       }
       const role = message.role === 'system' ? 'system' : message.role === 'assistant' ? 'assistant' : 'user';
-      chat.append(role, Array.isArray(message.content) ? text.join('\n') : String(message.content || ''), { images });
+      const content = Array.isArray(message.content) ? text.join('\n') : String(message.content || '');
+      if (role === 'system') {
+        addSystem(content);
+        systemImages.push(...images);
+      } else turns.push({ role, content, images });
     }
+    const chat = Chat.empty();
+    if (systemParts.length || systemImages.length) chat.append('system', systemParts.join('\n\n'), { images: systemImages });
+    for (const { role, content, images } of turns) chat.append(role, content, { images });
     const opts = { reasoningBudget: input.budget < 0 ? false : input.budget,
       enableThinking: input.budget !== 0, signal: abort.signal,
       onPromptProcessingProgress: progress => emit({ type: 'prefill', percent: progress * 100 }) };
