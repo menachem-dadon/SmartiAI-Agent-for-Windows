@@ -3,10 +3,10 @@
 .chat-design { height:100%; --rail-width:72px; --drawer-width:240px; --chat-reading-width:697px; --motion-panel: var(--sds-motion-panel); --ease-premium: var(--sds-motion-ease); }
 .smarti-app { height:100%; display:flex; flex-direction:column; overflow:hidden; background:var(--sds-color-background); color:var(--sds-color-text); }
 .workspace { flex:1; min-height:0; position:relative; display:grid; direction:rtl; overflow:hidden; }
-.conversation-drawer { grid-column:1; grid-row:1; min-width:0; min-height:0; display:flex; flex-direction:column; padding:12px 8px; background:var(--sds-color-background); border-inline-end:1px solid var(--sds-color-border); z-index:65; overflow:hidden; }
+/* Reuse the rail's inner width to keep the icon axis fixed through toggles. */
+.conversation-drawer { --drawer-icon-column:calc(var(--rail-width) - 2 * var(--sds-space-2) - 1px); grid-column:1; grid-row:1; min-width:0; min-height:0; display:flex; flex-direction:column; padding:12px var(--sds-space-2); background:var(--sds-color-background); border-inline-end:1px solid var(--sds-color-border); z-index:65; overflow:hidden; }
 .drawer-brand,.new-chat-button,.drawer-management button { display:flex; align-items:center; gap:12px; min-height:40px; width:100%; padding:8px; border:0; border-radius:var(--sds-radius-control); color:var(--sds-color-text); background:transparent; cursor:pointer; text-align:right; }
-.drawer-brand-row { flex:none; height:44px; display:flex; align-items:center; gap:12px; }
-.conversation-drawer.is-rail .drawer-brand-row { justify-content:center; }
+.drawer-brand-row { flex:none; height:44px; display:flex; align-items:center; gap:12px; padding-inline-start:calc((var(--drawer-icon-column) - var(--sds-size-target)) / 2); }
 .drawer-brand-row>strong { flex:1; min-width:0; }
 .drawer-brand-row>.sds-tooltip-anchor { margin-inline-start:auto; }
 .drawer-rail-search { align-self:center; order:2; }
@@ -45,6 +45,7 @@
 .drawer-management> :last-child { margin-top:12px; }
 .conversation-drawer.is-rail .drawer-management { justify-items:center; }
 .conversation-drawer.is-rail .new-chat-button { align-self:center; width:40px; justify-content:center; padding:0; }
+.conversation-drawer.is-open .new-chat-button,.conversation-drawer.is-open .drawer-management button { padding-inline-start:calc((var(--drawer-icon-column) - var(--sds-size-icon)) / 2); }
 .chat-column { grid-column:2; grid-row:1; display:flex; flex-direction:column; min-height:0; min-width:0; position:relative; padding:0 24px 20px; container-type:inline-size; background:var(--sds-color-surface); }
 .chat-toolbar { flex:none; display:flex; align-items:center; gap:12px; min-height:64px; direction:ltr; }
 .chat-toolbar h1 { font-size:var(--sds-font-control); min-width:0; flex:1; direction:rtl; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
