@@ -6,6 +6,7 @@ import { coreApi } from "./coreApi";
 import type { WorkbenchSnapshot } from "./workspaceState";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => true) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("./coreApi", () => ({ coreApi: vi.fn(), encodePath: encodeURIComponent }));
 vi.mock("./BrowserPanel", () => ({ BrowserPanel: () => <input aria-label="browser state" defaultValue="open page" />, forgetBrowserWorkspaceSession: vi.fn() }));
 vi.mock("./CanvasPanel", () => ({ CanvasPanel: () => null }));

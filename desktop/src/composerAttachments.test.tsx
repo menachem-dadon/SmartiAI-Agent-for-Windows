@@ -83,8 +83,8 @@ test("repeated send events cannot submit one draft twice and failures retain it"
   send.mockRejectedValueOnce(new Error("offline"));
   fireEvent.change(input, { target: { value: "retry draft" } });
   fireEvent.keyDown(input, { key: "Enter" });
-  await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe("retry draft"));
-  expect(screen.getByRole("alert").textContent).toContain("ההודעה לא נשלחה: Error: offline");
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("ההודעה לא נשלחה: Error: offline"));
+  expect((input as HTMLTextAreaElement).value).toBe("retry draft");
   const retry = deferred<void>();
   send.mockImplementationOnce(() => retry.promise);
   fireEvent.keyDown(input, { key: "Enter" });

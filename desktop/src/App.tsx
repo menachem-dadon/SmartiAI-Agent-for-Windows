@@ -33,6 +33,7 @@ import type {
 import { Composer } from "./Composer";
 import { CoreApiError, coreApi, encodePath } from "./coreApi";
 import { RunSubmission } from "./runSubmission";
+import { composerInteractionRevision } from "./composerFocus";
 import { type CoreSnapshot } from "./coreState";
 import {
   parseThemePreference,
@@ -45,7 +46,7 @@ import { Alert, Button, DesignSystemProvider, Dialog, Field, Icon, IconButton, M
 import { ChatSidebar, conversationActions } from "./ChatSidebar";
 import { SearchDialog } from "./SearchDialog";
 import { rememberConversationVisit } from "./searchState";
-import { useChatDrafts, readActiveConversation, rememberActiveConversation, restoreActiveConversation } from "./chatDrafts";
+import { useChatDrafts, readActiveConversation, rememberActiveConversation, restoreActiveConversation, beginChatLaunch } from "./chatDrafts";
 import { savedChatPosition, useChatFooterFlow, useChatScroll } from "./chatScroll";
 import { reduceStream, streamAnswer, type StreamState } from "./chatStreaming";
 import { legacyAssets } from "./legacyAssets";
@@ -89,9 +90,11 @@ type FavoriteModel = { provider: string; model: string };
 export function ApiKeyRequiredDialog({
   request,
   onCancel,
+  onResolved,
 }: {
   request: ApiKeyRequest;
   onCancel: () => Promise<void>;
+  onResolved?: (interaction: number) => void;
 }) {
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState("");
@@ -101,6 +104,7 @@ export function ApiKeyRequiredDialog({
     const value = draft.trim();
     if (!value || providing.current) return;
     providing.current = true; setValidating(true);
+    const interaction = composerInteractionRevision();
     setStatus("בודק את המפתח לפני שמירה…");
     try {
       await validateProviderKey({ provider: request.provider, secret: value });
@@ -113,6 +117,7 @@ export function ApiKeyRequiredDialog({
       if (!result.accepted) throw new Error("הבקשה אינה ממתינה עוד למפתח");
       setDraft("");
       setStatus("");
+      onResolved?.(interaction);
     } catch (reason) {
       setDraft(value);
       setStatus(
@@ -123,7 +128,8 @@ export function ApiKeyRequiredDialog({
   const cancelRequest = async () => {
     if (providing.current) return;
     providing.current = true; setValidating(true);
-    try { await onCancel(); } catch (reason) { setStatus(`לא ניתן לבטל: ${String(reason)}`); }
+    const interaction = composerInteractionRevision();
+    try { await onCancel(); onResolved?.(interaction); } catch (reason) { setStatus(`לא ניתן לבטל: ${String(reason)}`); }
     finally { providing.current = false; setValidating(false); }
   };
   return (
@@ -227,6 +233,8 @@ export default function App() {
   const { resolved, setPreference } = useTheme();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [error, setError] = useState("");
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const requestComposerFocus = useCallback(() => setComposerFocusRequest(value => value + 1), []);
   const [activeId, setActiveIdState] = useState(readActiveConversation);
   const activeIdRef = useRef(activeId);
   const messageRequest = useRef(0);
@@ -257,6 +265,7 @@ export default function App() {
     if (!rememberActiveConversation(id)) setError("לא ניתן לשמור את השיחה הפעילה לרענון. הטיוטות נשארות בבעלות השיחות שלהן.");
   }, []);
   const [runs, setRuns] = useState<RunRecord[]>([]);
+  const [syncingSubmissions, setSyncingSubmissions] = useState<Set<string>>(() => new Set());
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [streams, setStreams] = useState<Record<string, StreamState>>({});
   const approvalQueue = useApprovalQueue();
@@ -439,13 +448,16 @@ export default function App() {
         const detail = await coreApi<{ conversation: Conversation | null }>("GET", `/v2/conversations/${encodePath(selected)}`);
         if (request !== listRequest.current) return null;
         if (selected === activeIdRef.current && detail.conversation) data.items.push(detail.conversation);
-      } catch (reason) { if (!(reason instanceof CoreApiError && reason.status === 404)) throw reason; }
+      } catch (reason) {
+        if (!(reason instanceof CoreApiError && reason.status === 404)) throw reason;
+        if (selected === activeIdRef.current) { setActiveId(""); requestComposerFocus(); }
+      }
     }
     if (request !== listRequest.current) return null;
-    setConversations(data.items);
+    setConversations(data.items.filter(item => item.message_count !== 0 || item.is_busy));
     attention.replace(data.attention_items);
     return data;
-  }, [attention.replace]);
+  }, [attention.replace, setActiveId, requestComposerFocus]);
   const refreshLists = useCallback(
     async (search = "") => {
       const request = ++runtimeListRequest.current;
@@ -541,7 +553,7 @@ export default function App() {
         ? (values.ui_preferences as Record<string, unknown>)
         : {};
     if (revision === settingsRevision()) syncSettings(data, selectionTicket);
-    setConversations(data.conversations);
+    setConversations(data.conversations.filter(item => item.message_count !== 0 || item.is_busy));
     approvalQueue.replace(data.pending_approvals);
     setDisplayName(data.display_name || "");
     const restoredWorkbench = initialWorkbench.snapshot;
@@ -558,8 +570,10 @@ export default function App() {
       workbench: initialWorkbench.open,
       tab: restoredTab,
     });
-    const first = restoreActiveConversation(data.conversations, activeIdRef.current);
+    const freshLaunch = beginChatLaunch(await invoke<string | null>("desktop_launch_id"));
+    const first = restoreActiveConversation(data.conversations, freshLaunch ? "" : activeIdRef.current);
     setActiveId(first);
+    requestComposerFocus();
     if (first) await loadMessages(first);
     await refreshLists();
     setBootstrapReady(true);
@@ -709,7 +723,7 @@ export default function App() {
     };
   }, [bootstrapReady, core.state]);
   useEffect(() => {
-    if (!activeId || core.state !== "ready") return;
+    if (!bootstrapReady || !activeId || core.state !== "ready") return;
     let cancelled = false;
     const revision = navigationRevision.current;
     void Promise.all([
@@ -721,7 +735,7 @@ export default function App() {
       })
       .catch((reason) => setError(String(reason)));
     return () => { cancelled = true; };
-  }, [activeId, core.state, navigation, loadMessages, refreshLists]);
+  }, [activeId, bootstrapReady, core.state, navigation, loadMessages, refreshLists]);
   useEffect(() => {
     let alive = true;
     const update = () => setForeground(!document.hidden && document.hasFocus());
@@ -776,7 +790,7 @@ export default function App() {
     return () => { stopped = true; window.clearTimeout(timer); };
   }, [activeRunId, core.state, core.generation]);
   useEffect(() => {
-    if (core.state !== "ready") return;
+    if (core.state !== "ready" || !bootstrapReady) return;
     let stopped = false;
     let polling = false;
     let liveEvents = true;
@@ -837,7 +851,7 @@ export default function App() {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [core.generation, core.state, activeId, foreground, refreshConversations, refreshLists, loadMessages]);
+  }, [core.generation, core.state, bootstrapReady, activeId, foreground, refreshConversations, refreshLists, loadMessages]);
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
       // Management and its dialogs own keyboard navigation while the chat is inert.
@@ -866,7 +880,7 @@ export default function App() {
       }
       if (event.ctrlKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        void createConversation();
+        void desktopActions.current.createConversation();
       }
     };
     window.addEventListener("keydown", keyboard);
@@ -894,6 +908,11 @@ export default function App() {
     `${activeId}:${activeApprovals.length}:${scroll.hasNewContent}:${workspaceWindowReady}:${managementSection}`);
   const activeApiKeyRequest = pendingApiKeyRequest(activeEvents.filter(event =>
     runs.some(run => run.id === event.run_id && run.status === "waiting_for_input")));
+  const promptNavigationRevision = navigationRevision.current;
+  const restorePromptFocus = (interaction: number) => {
+    if (activeIdRef.current === activeId && navigationRevision.current === promptNavigationRevision &&
+        interaction === composerInteractionRevision()) requestComposerFocus();
+  };
   const messageEvents = useMemo(() => {
     const grouped = new Map<string, RunEvent[]>();
     for (const event of events) if (event.session_id === activeId) {
@@ -913,24 +932,15 @@ export default function App() {
     message.role === "assistant" && message.metadata?.run_id === displayRun.id));
 
   const createConversation = async () => {
-    try {
-      const empty = conversations.find(item => !item.message_count && !item.is_busy);
-      if (empty) { await selectConversation(empty.id); return; }
-      const data = await coreApi<{ conversation: Conversation }>(
-        "POST",
-        "/v2/conversations",
-        {},
-        true,
-      );
-      setConversations((current) => [data.conversation, ...current]);
-      setActiveId(data.conversation.id);
-      setMessages([]);
-      setPage(null);
-      if (narrowWorkspace)
-        dispatch({ type: "set-conversations", open: false });
-    } catch (reason) {
-      setError(String(reason));
-    }
+    if (!restoringModel && provider && model) drafts.setSelection({ provider, model, effort: reasoningEffort, endpoint: reasoningOptions.find(option => option.value === reasoningEffort)?.endpoint });
+    ++navigationRevision.current;
+    navigationTarget.current = ""; navigationOrdinal.current = undefined;
+    setNavigation(null);
+    setManagementSection(null); setManagementOpen(false); setSearchOpen(false);
+    setActiveId(""); setMessages([]); setPage(null);
+    if (narrowWorkspaceRef.current) dispatch({ type: "set-conversations", open: false });
+    if (narrowWorkspaceRef.current || workbenchExpanded) dispatch({ type: "close-workbench" });
+    requestComposerFocus();
   };
   const selectConversation = async (id: string, runId?: string, alignReply = false, messageOrdinal?: number) => {
     rememberConversationVisit(id);
@@ -941,6 +951,8 @@ export default function App() {
     navigationOrdinal.current = messageOrdinal;
     setNavigation({ sessionId: id, revision: ++navigationRevision.current, runId, alignReply, messageOrdinal });
     setActiveId(id);
+    if (narrowWorkspaceRef.current || workbenchExpanded) dispatch({ type: "close-workbench" });
+    requestComposerFocus();
     if (narrowWorkspaceRef.current)
       dispatch({ type: "set-conversations", open: false });
   };
@@ -948,6 +960,8 @@ export default function App() {
     setRenameValue(item.title);
     setDialogError(""); setConversationDialog({ kind: "rename", item });
   };
+  const desktopActions = useRef({ createConversation, selectConversation });
+  desktopActions.current = { createConversation, selectConversation };
   const togglePinned = async (item: Conversation) => {
     await coreApi(
       "PATCH",
@@ -1003,6 +1017,7 @@ export default function App() {
       if (activeId === item.id) {
         setActiveId("");
         setMessages([]);
+        requestComposerFocus();
       }
       drafts.remove(item.id);
     }
@@ -1013,29 +1028,43 @@ export default function App() {
   };
   const send = async (text: string, isVoice = false) => {
     setError("");
-    const submittedAttachments = [...attachments];
+    const sourceId = activeIdRef.current, revision = navigationRevision.current;
+    const intent = composerInteractionRevision();
+    const submittedDraft = drafts.snapshot(sourceId);
+    const submittedAttachments = [...submittedDraft.attachments];
+    const unavailable = submittedAttachments.find(item => item.error);
+    if (unavailable) throw new Error(`${unavailable.name}: ${unavailable.error}`);
     if (!await renderedSelectionSave) throw new Error("בחירת המודל לא נשמרה. יש לבחור מודל לפני השליחה.");
     await reasoningOperations.current;
     const submitted = await runSubmission.submit({
-      sessionId: activeId, text, attachments: submittedAttachments, provider, model, isVoice,
+      sessionId: sourceId, text, attachments: submittedAttachments, provider, model, isVoice,
     });
     const sessionId = submitted.session_id;
-    setNewUserRun(submitted.run_id || "");
-    setAttachments((current) => current.filter(item => !submittedAttachments.includes(item)));
-    if (!activeId) { drafts.transfer("", sessionId); setActiveId(sessionId); }
+    setSyncingSubmissions(current => new Set(current).add(sessionId));
+    const follow = activeIdRef.current === sourceId && navigationRevision.current === revision;
+    const saved = drafts.accept(sourceId, sessionId, submittedDraft, text, follow);
+    if (saved) runSubmission.acknowledge(submitted);
+    if (follow) {
+      setNewUserRun(submitted.run_id || "");
+      if (!sourceId) setActiveId(sessionId);
+      if (intent === composerInteractionRevision()) requestComposerFocus();
+    }
     // A refresh failure must not restore a draft whose run was already accepted.
-    try {
+    void (async () => { try {
       await refreshLists();
       if (activeIdRef.current === sessionId) await loadMessages(sessionId);
     } catch (reason) {
       setError(`ההודעה נשלחה, אך רענון התצוגה נכשל: ${String(reason)}`);
-    }
+    } finally {
+      setSyncingSubmissions(current => { const next = new Set(current); next.delete(sessionId); return next; });
+    } })();
   };
   const sendCanvasAction = async (text: string, owner: string) => {
     if (!owner) throw new Error("חסרה השיחה שאליה שייך הקנבס.");
     if (!await renderedSelectionSave) throw new Error("בחירת המודל לא נשמרה. יש לבחור מודל לפני השליחה.");
     await reasoningOperations.current;
-    await runSubmission.submit({ sessionId: owner, text, attachments: [], provider, model });
+    const result = await runSubmission.submit({ sessionId: owner, text, attachments: [], provider, model });
+    runSubmission.acknowledge(result);
     await refreshLists();
     if (activeIdRef.current === owner) await loadMessages(owner);
   };
@@ -1095,7 +1124,8 @@ export default function App() {
     );
   };
   const resolveApproval = async (approval: Approval, approved: boolean) => {
-    await approvalQueue.resolve(approval, approved);
+    const interaction = composerInteractionRevision();
+    if (await approvalQueue.resolve(approval, approved)) restorePromptFocus(interaction);
     await refreshLists().catch((reason) => setError(String(reason)));
   };
   const loadReasoning = async (nextProvider: string, nextModel: string, owner = activeIdRef.current) => {
@@ -1272,7 +1302,8 @@ export default function App() {
   };
   const setWorkbenchOpen = useCallback(
     (open: boolean, tab: WorkbenchTab | null = null) => {
-      if (!open) requestAnimationFrame(() => workbenchTrigger.current?.focus());
+      if (!open && (narrowWorkspace || workbenchExpanded)) requestComposerFocus();
+      else if (!open) requestAnimationFrame(() => workbenchTrigger.current?.focus());
       dispatch(
         open
           ? narrowWorkspace
@@ -1281,7 +1312,7 @@ export default function App() {
           : { type: "close-workbench" },
       );
     },
-    [narrowWorkspace],
+    [narrowWorkspace, workbenchExpanded, requestComposerFocus],
   );
   const openMessageCanvas = useCallback((canvasId: string) => {
     workbenchRef.current?.openCanvas(activeId, canvasId);
@@ -1371,8 +1402,8 @@ export default function App() {
       "desktop://activation",
       ({ payload }) => {
         if (!alive) return;
-        if (payload.sessionId) void selectConversation(payload.sessionId, payload.runId, payload.command === "notification");
-        if (payload.command === "new-chat") void createConversation();
+        if (payload.sessionId) void desktopActions.current.selectConversation(payload.sessionId, payload.runId, payload.command === "notification");
+        if (payload.command === "new-chat") void desktopActions.current.createConversation();
         if (payload.command === "voice")
           window.dispatchEvent(new Event("smarti:voice-hotkey"));
         if (payload.command === "update-shutdown") void invoke("desktop_quit");
@@ -1599,6 +1630,7 @@ export default function App() {
               key={`${activeApiKeyRequest.runId}:${activeApiKeyRequest.secretKey}`}
               request={activeApiKeyRequest}
               onCancel={() => cancel(activeApiKeyRequest.runId)}
+              onResolved={restorePromptFocus}
             />
           )}
           <Dialog open={!!conversationDialog}
@@ -1617,9 +1649,12 @@ export default function App() {
           {scroll.hasNewContent && <button type="button" className={`chat-new-content ${activeRun ? "is-generating" : ""}`} aria-label="גלילה לסוף התשובה" onClick={scroll.follow}><span className="chat-down-arrow"><Icon name="arrow" /></span>{activeRun && <span className="chat-stream-dots" aria-hidden="true"><i/><i/><i/></span>}</button>}
           <Composer
             theme={resolved}
+            focusRequest={composerFocusRequest}
+            focusAllowed={!managementSection && !searchOpen && !conversationDialog && !activeApiKeyRequest && !activeApprovals.length && !(workspace.workbenchOpen && (workbenchExpanded || narrowWorkspace)) && !(narrowWorkspace && workspace.conversationDrawerOpen)}
             conversationId={activeId} draft={drafts.draft.text} onDraftChange={drafts.setText}
             disabled={reconnecting || restoringModel}
             running={Boolean(activeRun)}
+            sendPending={syncingSubmissions.has(activeId)}
             attachments={attachments}
             provider={provider}
             model={model}
@@ -1709,7 +1744,8 @@ export default function App() {
         <ManagementCenter
           initial={managementSection}
           returnFocus={managementReturnFocus.current}
-          onClose={() => setManagementSection(null)}
+          restoreFocus={false}
+          onClose={() => { setManagementSection(null); requestComposerFocus(); }}
           onOpenWorkbench={(tab) => {
             setManagementSection(null);
             openWorkbench(tab);

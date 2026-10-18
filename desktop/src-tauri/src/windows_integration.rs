@@ -13,6 +13,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
 pub struct DesktopState {
+    launch_id: String,
     quitting: AtomicBool,
     close_to_tray: AtomicBool,
     workspace_ready: AtomicBool,
@@ -25,6 +26,7 @@ pub struct DesktopState {
 impl Default for DesktopState {
     fn default() -> Self {
         Self {
+            launch_id: crate::launch_token(),
             quitting: AtomicBool::new(false),
             close_to_tray: AtomicBool::new(true),
             workspace_ready: AtomicBool::new(false),
@@ -34,6 +36,11 @@ impl Default for DesktopState {
             unread_count: AtomicU32::new(u32::MAX),
         }
     }
+}
+
+#[tauri::command]
+pub fn desktop_launch_id(state: tauri::State<'_, DesktopState>) -> String {
+    state.launch_id.clone()
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,11 +1,46 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { useChatDrafts, readDrafts, readActiveConversation, rememberActiveConversation, restoreActiveConversation } from "./chatDrafts";
+import { useChatDrafts, readDrafts, readActiveConversation, rememberActiveConversation, restoreActiveConversation, beginChatLaunch } from "./chatDrafts";
 import { mergeMessages } from "./chatState";
-beforeEach(() => sessionStorage.clear());
+beforeEach(() => { sessionStorage.clear(); localStorage.clear(); });
 afterEach(cleanup);
 describe("UX-3 conversation recovery", () => {
+  test("native relaunch resets selection but preserves existing and shared new drafts", () => {
+    const view = renderHook(() => useChatDrafts("", () => {}));
+    act(() => { view.result.current.setText("פתיחה\nנשמרת"); view.result.current.setAttachments([{ name: "a.png", path: "C:/durable/a.png", kind: "image" }]); });
+    expect(beginChatLaunch("first")).toBe(true);
+    rememberActiveConversation("existing");
+    expect(beginChatLaunch("first")).toBe(false);
+    expect(readActiveConversation()).toBe("existing");
+    view.unmount(); sessionStorage.clear();
+    expect(beginChatLaunch("second")).toBe(true);
+    const recovered = renderHook(() => useChatDrafts("", () => {}));
+    expect(recovered.result.current.draft.text).toBe("פתיחה\nנשמרת");
+    expect(recovered.result.current.draft.attachments[0].path).toBe("C:/durable/a.png");
+    expect(readActiveConversation()).toBe("");
+  });
+  test("acceptance clears only the submitted revision and files, including after navigation", () => {
+    const view = renderHook(({ id }) => useChatDrafts(id, () => {}), { initialProps: { id: "" } });
+    const first = { name: "a", path: "C:/a", draftId: "a" }, second = { name: "b", path: "C:/b", draftId: "b" };
+    act(() => { view.result.current.setText("submitted"); view.result.current.setAttachments([first]); });
+    const submitted = view.result.current.snapshot("");
+    act(() => { view.result.current.setText("newer"); view.result.current.setAttachments([first, second]); });
+    view.rerender({ id: "other" });
+    act(() => { view.result.current.setText("other draft"); view.result.current.accept("", "accepted", submitted, "submitted", false); });
+    expect(readDrafts().new.text).toBe("newer");
+    expect(readDrafts().new.attachments.map(item => item.path)).toEqual(["C:/b"]);
+    expect(view.result.current.draft.text).toBe("other draft");
+  });
+  test("accepted first send starts the next shared draft empty and preserves newer typing in the real chat", () => {
+    const view = renderHook(() => useChatDrafts("", () => {}));
+    act(() => view.result.current.setText("first"));
+    const submitted = view.result.current.snapshot("");
+    act(() => view.result.current.setText("next message"));
+    act(() => view.result.current.accept("", "real", submitted, "first", true));
+    expect(readDrafts().real.text).toBe("next message");
+    expect(readDrafts().new.text).toBe("");
+  });
   test("reload retains the selected draft owner when a newer conversation exists, with safe deletion fallback", () => {
     const view = renderHook(() => useChatDrafts("older", () => {}));
     act(() => view.result.current.setText("older owned draft"));

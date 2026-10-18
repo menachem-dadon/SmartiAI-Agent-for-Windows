@@ -18,14 +18,18 @@ import { ComposerModelPicker } from "./ComposerModelPicker";
 import { quotaResetLabel } from "./quotaPresentation";
 import { autonomyLabels, autonomyProfiles } from "./autonomyProfiles";
 import { coreApi } from "./coreApi";
+import { composerInteractionRevision, useComposerFocus } from "./composerFocus";
 
 interface ComposerProps {
   draft?: string;
   onDraftChange?: (text: string) => void;
   conversationId?: string;
+  focusRequest?: number;
+  focusAllowed?: boolean;
   theme?: ResolvedTheme;
   disabled?: boolean;
   running?: boolean;
+  sendPending?: boolean;
   attachments: PendingAttachment[];
   provider?: string;
   model?: string;
@@ -56,6 +60,7 @@ async function pastedFile(file: File): Promise<PendingAttachment> {
     bytes,
   });
   return {
+    draftId: crypto.randomUUID(),
     name: file.name || "תמונה שהודבקה.png",
     path,
     mime_type: file.type,
@@ -86,13 +91,31 @@ type VoiceState = {
   error: string;
   cancelled: boolean;
 };
+function DraftImage({ item }: { item: PendingAttachment }) {
+  const [source, setSource] = useState(item.previewUrl || "");
+  useEffect(() => {
+    if (item.previewUrl) { setSource(item.previewUrl); return; }
+    let disposed = false, url = "";
+    setSource("");
+    void invoke<number[]>("read_attachment_preview", { path: item.path }).then(bytes => {
+      if (disposed) return;
+      url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: item.mime_type || "image/png" }));
+      setSource(url);
+    }).catch(() => undefined);
+    return () => { disposed = true; if (url) URL.revokeObjectURL(url); };
+  }, [item.path, item.previewUrl, item.mime_type]);
+  return source ? <img src={source} alt={item.name} /> : <i aria-label={`תמונה: ${item.name}`}>IMG</i>;
+}
 export function Composer({
   draft,
   onDraftChange,
   conversationId,
+  focusRequest = 0,
+  focusAllowed = true,
   theme = "dark",
   disabled,
   running,
+  sendPending = false,
   attachments,
   provider = "",
   model = "",
@@ -122,13 +145,22 @@ export function Composer({
   const [staging, setStaging] = useState(0);
   const stagingCount = useRef(0);
   const sending = useRef(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [submittingOwner, setSubmittingOwner] = useState<string | null>(null);
+  const submitting = submittingOwner === (conversationId || "new");
   const [quota, setQuota] = useState<CodexQuota | null>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [quotaError, setQuotaError] = useState("");
   const quotaFetchedAt = useRef(0);
   const area = useRef<HTMLTextAreaElement>(null);
+  const requestFocus = useComposerFocus(area, conversationId, focusRequest,
+    Boolean(disabled || listening || voiceStarting || submitting), focusAllowed);
+  const textRef = useRef(text); textRef.current = text;
   const picker = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const input = picker.current;
+    input?.addEventListener("cancel", requestFocus);
+    return () => input?.removeEventListener("cancel", requestFocus);
+  }, [requestFocus]);
   const voiceSession = useRef("");
   const voiceConsumed = useRef("");
   const owner = useRef(conversationId);
@@ -198,17 +230,20 @@ export function Composer({
     };
   }, [provider]);
   const stageFiles = async (files: File[]) => {
-    if (!files.length) return;
+    if (!files.length) { requestFocus(); return; }
+    const stageOwner = conversationId;
+    const intent = composerInteractionRevision();
     stagingCount.current += 1;
     setStaging(stagingCount.current);
     try {
       const results = await Promise.allSettled(files.map(pastedFile));
       const added = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
       onAttachments((current) => [...current, ...added]);
-      setError(results.flatMap((result) => result.status === "rejected" ? [String(result.reason)] : []).join("\n"));
+      if (owner.current === stageOwner) setError(results.flatMap((result) => result.status === "rejected" ? [String(result.reason)] : []).join("\n"));
     } finally {
       stagingCount.current -= 1;
       setStaging(stagingCount.current);
+      if (owner.current === stageOwner && intent === composerInteractionRevision()) requestFocus();
     }
   };
   const picked = async (files: FileList | null) => {
@@ -227,24 +262,26 @@ export function Composer({
     void stageFiles(files);
   };
   const send = async () => {
-    if ((!text.trim() && !attachments.length) || disabled || running || listening || startingVoice.current || sending.current || stagingCount.current) return;
+    if ((!text.trim() && !attachments.length) || disabled || running || sendPending || listening || startingVoice.current || sending.current || stagingCount.current) return;
     sending.current = true;
-    setSubmitting(true);
+    setSubmittingOwner(conversationId || "new");
     setError("");
     const value = text;
-    setText("");
+    const sendOwner = conversationId;
+    const intent = composerInteractionRevision();
     try {
       await onSend(value);
+      if (!onDraftChange && owner.current === sendOwner && textRef.current === value) setText("");
     } catch (reason) {
-      setText(value);
-      setError(`ההודעה לא נשלחה: ${String(reason)}`);
+      if (owner.current === sendOwner) setError(`ההודעה לא נשלחה: ${String(reason)}`);
     } finally {
       sending.current = false;
-      setSubmitting(false);
+      setSubmittingOwner(null);
+      if (owner.current === sendOwner && intent === composerInteractionRevision()) requestFocus();
     }
   };
   const key = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void send();
     }
@@ -253,11 +290,11 @@ export function Composer({
     try {
       await coreApi("POST", "/v2/audio/voice/stop", {}, true);
       await invoke("desktop_hide_voice_overlay");
-      setListening(false); setError(""); area.current?.focus();
+      setListening(false); setError(""); requestFocus();
     } catch (reason) { setError(`לא ניתן להפסיק הכתבה: ${String(reason)}`); }
   };
   const listen = async () => {
-    if (running || disabled || startingVoice.current || sending.current || stagingCount.current) return;
+    if (running || disabled || sendPending || startingVoice.current || sending.current || stagingCount.current) return;
     if (listening) {
       await stopListening();
       return;
@@ -302,6 +339,7 @@ export function Composer({
         setError("");
         if (state.active) return;
         setListening(false);
+        requestFocus();
         void invoke("desktop_hide_voice_overlay");
         if (state.error) {
           setError(state.error);
@@ -309,12 +347,13 @@ export function Composer({
         }
         if (state.transcript && voiceConsumed.current !== state.session_id) {
           voiceConsumed.current = state.session_id;
-          setText("");
           try {
             await onSend(state.transcript, true);
           } catch (reason) {
-            setText(state.transcript);
-            setError(`התמלול לא נשלח: ${String(reason)}`);
+            if (owner.current === conversationId) {
+              if (!textRef.current) setText(state.transcript);
+              setError(`התמלול לא נשלח: ${String(reason)}`);
+            }
           }
         }
       } catch (reason) {
@@ -377,17 +416,11 @@ export function Composer({
           {attachments.map((item, index) =>
             item.kind === "image" ? (
               <span className="pending-image" key={`${item.path}-${index}`}>
-                {item.previewUrl ? (
-                  <img src={item.previewUrl} alt="" />
-                ) : (
-                  <i>IMG</i>
-                )}
+                <DraftImage item={item} />
                 <button
                   type="button"
                   aria-label={`הסרת ${item.name}`}
-                  onClick={() =>
-                    onAttachments((current) => current.filter((attachment) => attachment !== item))
-                  }
+                  onClick={() => { onAttachments(current => current.filter(attachment => attachment !== item)); requestFocus(); }}
                 >
                   <Icon name="close" size={18} />
                 </button>
@@ -407,9 +440,7 @@ export function Composer({
                 <button
                   type="button"
                   aria-label={`הסרת ${item.name}`}
-                  onClick={() =>
-                    onAttachments((current) => current.filter((attachment) => attachment !== item))
-                  }
+                  onClick={() => { onAttachments(current => current.filter(attachment => attachment !== item)); requestFocus(); }}
                 >
                   <Icon name="close" size={18} />
                 </button>
@@ -419,6 +450,7 @@ export function Composer({
         </div>
       )}
       {error && <p className="composer-error" role="alert" dir="rtl">{error}</p>}
+      {attachments.filter(item => item.error).map(item => <p key={item.path} className="composer-error" role="alert" dir="rtl">{item.name}: {item.error}</p>)}
       <textarea
         ref={area}
         rows={1}
@@ -454,10 +486,10 @@ export function Composer({
                     : "הכתבה קולית"
             }
             aria-busy={voiceStarting || submitting || undefined}
-            disabled={!running && (disabled || voiceStarting || submitting || staging > 0)}
+            disabled={!running && (disabled || voiceStarting || submitting || sendPending || staging > 0)}
             onClick={
               running
-                ? onCancel
+                ? () => { onCancel(); requestFocus(); }
                 : listening
                   ? () => void stopListening()
                   : canSend
@@ -473,7 +505,7 @@ export function Composer({
             <div className="composer-model-controls">
             <ComposerModelPicker theme={theme} provider={provider} model={model} favoriteModels={favoriteModels}
               reasoningEffort={reasoningEffort} reasoningOptions={reasoningOptions} quota={quotaSummary}
-              onOpen={() => void refreshQuota(15)} onFavoriteModel={onFavoriteModel}
+              onOpen={() => void refreshQuota(15)} onFavoriteModel={onFavoriteModel} onSelected={requestFocus}
               onReasoningEffort={onReasoningEffort} onManageModels={onManageModels} />
             {provider.toLowerCase() === "local" && (
               <label className="local-fast-mode" dir="rtl" title="FastMode"><span className="local-fast-mode-caption">FastMode</span><Switch label="FastMode" checked={localFastMode} onCheckedChange={value => void onLocalFastMode(value)} /></label>

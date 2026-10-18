@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent};
 
 mod browser;
 mod core_process_job;
+mod draft_attachments;
 mod taskbar_badge;
 mod windows_integration;
 
@@ -777,37 +778,16 @@ fn supervisor_core_api(
 
 #[tauri::command]
 fn stage_attachment(app: AppHandle, name: String, bytes: Vec<u8>) -> Result<String, String> {
-    if bytes.is_empty() || bytes.len() > 25 * 1024 * 1024 {
-        return Err("Attachment must be between 1 byte and 25 MB".into());
-    }
-    let safe_name: String = name
-        .chars()
-        .map(|value| {
-            if value.is_alphanumeric() || matches!(value, '.' | '-' | '_') {
-                value
-            } else {
-                '_'
-            }
-        })
-        .take(120)
-        .collect();
-    let directory = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| error.to_string())?
-        .join("pending-attachments");
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let path = directory.join(format!(
-        "{}-{}",
-        &launch_token()[..12],
-        if safe_name.is_empty() {
-            "pasted-image.png"
-        } else {
-            &safe_name
-        }
-    ));
-    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    let directory = app.path().app_data_dir().map_err(|error| error.to_string())?.join("draft-attachments");
+    let path = draft_attachments::stage(&directory, &name, &bytes)?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn retain_draft_attachment(app: AppHandle, path: String) -> Result<String, String> {
+    let root = app.path().app_data_dir().map_err(|error| error.to_string())?.join("draft-attachments");
+    let legacy = app.path().app_cache_dir().map_err(|error| error.to_string())?.join("pending-attachments");
+    Ok(draft_attachments::retain(std::path::Path::new(&path), &root, &legacy)?.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -817,17 +797,8 @@ fn read_attachment_preview(app: AppHandle, path: String) -> Result<Vec<u8>, Stri
         .app_cache_dir()
         .map_err(|error| error.to_string())?
         .join("pending-attachments");
-    let canonical_root =
-        fs::canonicalize(&root).map_err(|_| "Attachment cache is unavailable".to_string())?;
-    let target = fs::canonicalize(PathBuf::from(path))
-        .map_err(|_| "Attachment preview was not found".to_string())?;
-    if !target.starts_with(&canonical_root) {
-        return Err("Attachment preview is outside the staged cache".into());
-    }
-    let metadata = fs::metadata(&target).map_err(|error| error.to_string())?;
-    if !metadata.is_file() || metadata.len() > 25 * 1024 * 1024 {
-        return Err("Attachment preview is not an allowed file".into());
-    }
+    let durable = app.path().app_data_dir().map_err(|error| error.to_string())?.join("draft-attachments");
+    let target = draft_attachments::allowed(std::path::Path::new(&path), &[root, durable])?;
     fs::read(target).map_err(|error| error.to_string())
 }
 
@@ -1484,6 +1455,7 @@ pub fn run() {
             core_api,
             desktop_open_with,
             stage_attachment,
+            retain_draft_attachment,
             read_attachment_preview,
             save_text_file,
             save_binary_file,
@@ -1491,6 +1463,7 @@ pub fn run() {
             desktop_diagnostic_snapshot,
             open_chat_link,
             windows_integration::desktop_finish_startup,
+            windows_integration::desktop_launch_id,
             windows_integration::desktop_present_startup,
             windows_integration::desktop_show_voice_overlay,
             windows_integration::desktop_hide_voice_overlay,

@@ -5,7 +5,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { WorkbenchSurface } from "./WorkbenchPanels";
 import { coreApi } from "./coreApi";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("./coreApi", () => ({ coreApi: vi.fn(), encodePath: encodeURIComponent }));
 vi.mock("./BrowserPanel", () => ({ BrowserPanel: () => null }));
 vi.mock("./CanvasPanel", () => ({ CanvasPanel: () => null }));
@@ -66,5 +67,5 @@ test("a typed path can still be applied without opening the picker", async () =>
   fireEvent.click(screen.getByRole("button", { name: "החל" }));
 
   await waitFor(() => expect(coreApi).toHaveBeenCalledWith("PATCH", "/v2/workbench/root", { path: "C:/typed" }, true));
-  expect(invoke).not.toHaveBeenCalled();
+  expect(invoke).not.toHaveBeenCalledWith("pick_management_path", expect.anything());
 });

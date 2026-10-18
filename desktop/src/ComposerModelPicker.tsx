@@ -18,6 +18,7 @@ type Props = {
   onOpen: () => void; onFavoriteModel: (item: Favorite) => void | Promise<void>;
   onReasoningEffort: (effort: string) => void | Promise<void>;
   onManageModels?: (trigger?: HTMLElement) => void;
+  onSelected?: () => void;
 };
 const providerName = (value: string) => providerOptions.find(option => option.value === value)?.label || value;
 
@@ -67,7 +68,7 @@ function ReasoningSlider({ value, options, onChange, onPreviewChange }: {
   </div>;
 }
 
-export function ComposerModelPicker({ theme, provider, model, favoriteModels, reasoningEffort: savedEffort, reasoningOptions: suppliedOptions, quota, onOpen, onFavoriteModel, onReasoningEffort, onManageModels }: Props) {
+export function ComposerModelPicker({ theme, provider, model, favoriteModels, reasoningEffort: savedEffort, reasoningOptions: suppliedOptions, quota, onOpen, onFavoriteModel, onReasoningEffort, onManageModels, onSelected }: Props) {
   const root = useRef<HTMLSpanElement>(null), trigger = useRef<HTMLButtonElement>(null), popup = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View | null>(null), [present, setPresent] = useState(false);
   const [previewEffort, setPreviewEffort] = useState<string | null>(null);
@@ -197,7 +198,7 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
             <section className="model-menu-models" aria-label="מודלים של הספק"><div className="model-menu-list" role="menu" aria-label={providerName(shownProvider) || "מודלים"} key={shownProvider}>
               {menuModels.filter(item => item.provider === shownProvider).map(item => <Button variant="ghost" role="menuitemradio"
                 aria-checked={item.provider === provider && item.model === model} className={item.provider === provider && item.model === model ? "is-selected" : ""}
-                key={`${item.provider}:${item.model}`} onClick={() => { close(true); void onFavoriteModel(item); }}>
+                key={`${item.provider}:${item.model}`} onClick={() => { close(true); void onFavoriteModel(item); onSelected?.(); }}>
                 <HoverLabel text={modelDisplayName(item.provider, item.model)} /><Icon name="check" className="model-menu-check" /></Button>)}
             </div></section>
             <section className="model-menu-providers" aria-label="ספקים"><div className="model-menu-list">

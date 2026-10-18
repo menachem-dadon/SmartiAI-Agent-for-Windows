@@ -28,7 +28,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: async (name: string, handler: 
 vi.mock("./coreApi", () => ({ coreApi: vi.fn(), encodePath: encodeURIComponent }));
 vi.mock("./Composer", () => ({ Composer: () => null }));
 vi.mock("./WorkbenchPanels", () => ({ WorkbenchSurface: () => null }));
-vi.mock("./workspaceMotion", () => ({ useChatLayoutMotion: () => ({ current: null }) }));
+vi.mock("./workspaceMotion", async importOriginal => ({ ...await importOriginal<typeof import("./workspaceMotion")>(), useChatLayoutMotion: () => ({ current: null }) }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -50,6 +50,9 @@ let messageGate: { session: string; gate: ReturnType<typeof deferred<void>> } | 
 const readCalls: Array<{ session: string; ids: string[] }> = [];
 
 beforeEach(() => {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
   focused = true; hidden = false; readGate = null; messageGate = null;
   attention = ["b", "c"].map((session) => ({ id: `unread-${session}`, session_id: session, title: `chat-${session}`, kind: "response" }));
   conversations = ["a", "b", "c"].map((id) => ({ id, title: `chat-${id}`, message_count: 3 }));
@@ -130,7 +133,7 @@ async function start() {
   await waitFor(() => expect(badge()).toEqual({ count: attention.length }));
 }
 
-test("new conversation leaves the title unset so either automatic naming mode can run", async () => {
+test("new conversation remains an unsent draft until the first message", async () => {
   await start();
   const request = vi.mocked(coreApi).getMockImplementation()!;
   vi.mocked(coreApi).mockImplementation(async (method, path, body, mutation) => {
@@ -143,7 +146,8 @@ test("new conversation leaves the title unset so either automatic naming mode ca
     return request(method, path, body, mutation);
   });
   fireEvent.click(screen.getByRole("button", { name: "שיחה חדשה" }));
-  await waitFor(() => expect(coreApi).toHaveBeenCalledWith("POST", "/v2/conversations", {}, true));
+  await screen.findByRole("heading", { name: "שיחה חדשה" });
+  expect(vi.mocked(coreApi).mock.calls.some(([method, path]) => method === "POST" && path === "/v2/conversations")).toBe(false);
 });
 
 describe("conversation read state and reply navigation", () => {
@@ -159,10 +163,12 @@ describe("conversation read state and reply navigation", () => {
     await act(async () => readGate!.resolve());
   });
 
-  test("keeps the global count while sidebar search hides unread conversations", async () => {
+  test("keeps the global count while search results exclude unread conversations", async () => {
     await start();
-    fireEvent.change(screen.getByRole("searchbox", { name: "חיפוש בשיחות" }), { target: { value: "chat-a" } });
-    await waitFor(() => expect(screen.queryByText("chat-b", { selector: ".conversation-select span" })).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "חיפוש בשיחות ובקבצים" }));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "chat-a" } });
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(1));
+    expect(screen.getByRole("option").textContent).toContain("chat-a");
     expect(badge()).toEqual({ count: 2 });
   });
 

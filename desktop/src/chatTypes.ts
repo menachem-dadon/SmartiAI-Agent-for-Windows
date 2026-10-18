@@ -15,4 +15,4 @@ export interface ReasoningOption { value: string; label: string; endpoint?: stri
 export interface ChatModels { providers: string[]; provider: string; model: string; reasoning_effort?: string; reasoning_options?: ReasoningOption[]; }
 export interface SafeSettings { values?: Record<string, unknown>; }
 export interface Bootstrap { conversations: Conversation[]; pending_approvals: Approval[]; unread_count: number; chat_models: ChatModels; display_name?: string; settings?: SafeSettings; }
-export interface PendingAttachment extends AttachmentMeta { path: string; previewUrl?: string; registering?: boolean; error?: string; }
+export interface PendingAttachment extends AttachmentMeta { path: string; draftId?: string; submissionPath?: string; previewUrl?: string; registering?: boolean; error?: string; }

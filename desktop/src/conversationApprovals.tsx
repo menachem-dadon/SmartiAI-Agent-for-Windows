@@ -17,7 +17,7 @@ export function useApprovalQueue() {
   }, []);
   const resolve = useCallback(async (approval: Approval, approved: boolean) => {
     const id = approval.id;
-    if (inFlight.current.has(id) || resolved.current.has(id)) return;
+    if (inFlight.current.has(id) || resolved.current.has(id)) return false;
     inFlight.current.add(id);
     setBusy(new Set(inFlight.current));
     setErrors((current) => { const next = { ...current }; delete next[id]; return next; });
@@ -25,8 +25,10 @@ export function useApprovalQueue() {
       await coreApi("POST", `/v2/approvals/${encodePath(id)}/resolve`, { approved }, true);
       resolved.current.add(id);
       setItems((current) => current.filter((item) => item.id !== id));
+      return true;
     } catch (reason) {
       setErrors((current) => ({ ...current, [id]: `לא ניתן לשלוח את ההחלטה: ${String(reason)}` }));
+      return false;
     } finally {
       inFlight.current.delete(id);
       setBusy(new Set(inFlight.current));

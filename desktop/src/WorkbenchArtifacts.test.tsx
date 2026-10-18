@@ -5,7 +5,8 @@ import { WorkbenchSurface } from "./WorkbenchPanels";
 import { coreApi } from "./coreApi";
 import { invoke } from "@tauri-apps/api/core";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("./coreApi", async (importOriginal) => {
   const original = await importOriginal<typeof import("./coreApi")>();
   return { ...original, coreApi: vi.fn() };
@@ -75,7 +76,11 @@ describe("artifacts panel", () => {
       if (path.startsWith("/v2/workbench/file?")) return { name: "sample.txt", path: "sample.txt", kind: "text", mime_type: "text/plain", size: 4, text: "text" } as never;
       return {} as never;
     });
-    vi.mocked(invoke).mockRejectedValueOnce(new Error("Windows Open With failed")).mockResolvedValueOnce(false);
+    let openWithCalls = 0;
+    vi.mocked(invoke).mockImplementation(async command => {
+      if (command === "desktop_open_with" && ++openWithCalls === 1) throw new Error("Windows Open With failed");
+      return false as never;
+    });
     showArtifacts();
     fireEvent.click(await within(screen.getByLabelText("רשימת תוצרים")).findByRole("button", { name: /sample.txt/ }));
     fireEvent.click(screen.getByRole("button", { name: "פתח באמצעות" }));

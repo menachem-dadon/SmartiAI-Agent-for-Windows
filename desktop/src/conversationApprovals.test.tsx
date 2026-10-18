@@ -17,7 +17,7 @@ test("deduplicates requests, prevents duplicate decisions, and ignores stale sna
   expect(result.current.items).toHaveLength(2);
   let finish!: () => void;
   vi.mocked(coreApi).mockImplementation(() => new Promise((resolve) => { finish = () => resolve({ resolved: true }); }));
-  let decision!: Promise<void>;
+  let decision!: Promise<boolean>;
   act(() => { decision = result.current.resolve(approval, true); });
   await act(async () => { await result.current.resolve(approval, false); });
   expect(coreApi).toHaveBeenCalledTimes(1);

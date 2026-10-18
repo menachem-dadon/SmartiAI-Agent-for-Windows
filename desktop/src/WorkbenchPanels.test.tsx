@@ -20,7 +20,7 @@ vi.mock("./coreApi", () => ({ coreApi: vi.fn(), encodePath: encodeURIComponent }
 vi.mock("./Composer", () => ({ Composer: () => null }));
 vi.mock("./BrowserPanel", () => ({ BrowserPanel: vi.fn(() => <div>browser-content</div>), forgetBrowserWorkspaceSession: vi.fn() }));
 vi.mock("./CanvasPanel", () => ({ CanvasPanel: () => <div>canvas-content</div> }));
-vi.mock("./workspaceMotion", () => ({ useChatLayoutMotion: () => ({ current: null }) }));
+vi.mock("./workspaceMotion", async importOriginal => ({ ...await importOriginal<typeof import("./workspaceMotion")>(), useChatLayoutMotion: () => ({ current: null }) }));
 
 let preferences: Record<string, unknown>;
 

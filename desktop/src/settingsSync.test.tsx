@@ -15,7 +15,7 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({
 }) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("./WorkbenchPanels", () => ({ WorkbenchSurface: () => null }));
-vi.mock("./workspaceMotion", () => ({ useChatLayoutMotion: () => ({ current: null }) }));
+vi.mock("./workspaceMotion", async importOriginal => ({ ...await importOriginal<typeof import("./workspaceMotion")>(), useChatLayoutMotion: () => ({ current: null }) }));
 vi.mock("./Composer", () => ({ Composer: (props: any) => <div>
   <output data-testid="composer">{JSON.stringify({
     conversationId: props.conversationId, draft: props.draft,
@@ -23,8 +23,10 @@ vi.mock("./Composer", () => ({ Composer: (props: any) => <div>
     reasoningOptions: props.reasoningOptions,
     autonomy: props.autonomyMode, fast: props.localFastMode, favorites: props.favoriteModels,
     disabled: props.disabled,
+    focusRequest: props.focusRequest,
   })}</output>
   <button onClick={props.onManageModels}>manage-models</button>
+  <button onClick={() => props.onDraftChange("new shared draft")}>edit-draft</button>
   <button onClick={() => props.onFavoriteModel({ provider: "openai", model: "openai-b" })}>chat-model</button>
   <button onClick={() => props.onFavoriteModel({ provider: "gemini", model: "gemini-b" })}>chat-model-gemini</button>
   <button onClick={() => props.onFavoriteModel({ provider: "gemini", model: "gemini-a" })}>chat-model-original</button>
@@ -203,11 +205,14 @@ function distinctReasoningContracts() {
 
 test("a fresh launch opens a blank chat while retaining existing history and its drafts", async () => {
   const previous = { id: "previous", title: "Previous conversation", message_count: 2 };
+  sessionStorage.setItem("smarti.desktop.active-conversation.v1", "previous");
+  sessionStorage.setItem("smarti.desktop.chat-launch.v1", "previous-native-host");
   sessionStorage.setItem("smarti.desktop.chat-drafts.v1", JSON.stringify({
     previous: { text: "Previous draft", attachments: [] },
   }));
   const baseInvoke = vi.mocked(invoke).getMockImplementation()!;
   vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+    if (command === "desktop_launch_id") return "fresh-native-host";
     const response = await baseInvoke(command, args) as any;
     if (command === "core_api") {
       const path = args.request.path;
@@ -222,11 +227,29 @@ test("a fresh launch opens a blank chat while retaining existing history and its
 
   await start();
   expect(composer()).toMatchObject({ conversationId: "", draft: "" });
+  expect(composer().focusRequest).toBeGreaterThan(0);
   expect(screen.getByRole("heading", { name: "שיחה חדשה" })).toBeTruthy();
   expect(screen.getByText("Previous conversation")).toBeTruthy();
   expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) =>
     command === "core_api" && args.request.path.startsWith("/v2/conversations/previous/messages"))).toBe(false);
   expect(JSON.parse(sessionStorage.getItem("smarti.desktop.chat-drafts.v1")!).previous.text).toBe("Previous draft");
+});
+
+test("every new-chat action restores the shared durable draft without creating an empty conversation", async () => {
+  localStorage.setItem("smarti.desktop.chat-drafts.v2", JSON.stringify({ new: { text: "shared", attachments: [] } }));
+  await start();
+  expect(composer().draft).toBe("shared");
+  const ticket = composer().focusRequest;
+  fireEvent.click(screen.getByRole("button", { name: "שיחה חדשה" }));
+  expect(composer().draft).toBe("shared");
+  expect(composer().focusRequest).toBeGreaterThan(ticket);
+  fireEvent.click(screen.getByText("edit-draft"));
+  fireEvent.keyDown(window, { key: "n", ctrlKey: true });
+  expect(composer().draft).toBe("new shared draft");
+  expect(vi.mocked(invoke).mock.calls.some(([command, args]: any) => command === "core_api" && args.request.method === "POST" && args.request.path === "/v2/conversations")).toBe(false);
+  cleanup(); sessionStorage.clear();
+  await start();
+  expect(composer().draft).toBe("new shared draft");
 });
 
 test.each([404, 405])("a Core without the live route (%s) uses replay and leaves the composer available", async (status) => {

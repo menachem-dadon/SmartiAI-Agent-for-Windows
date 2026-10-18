@@ -41,7 +41,8 @@ describe("durable draft submission identity", () => {
   it("a deliberate identical send after success is a new operation", async () => {
     const api = vi.fn().mockResolvedValue({ run_id: "run" });
     const sender = client(api);
-    await sender.submit({ ...input, sessionId: "owner" });
+    const result = await sender.submit({ ...input, sessionId: "owner" });
+    sender.acknowledge(result);
     await sender.submit({ ...input, sessionId: "owner" });
     expect(api.mock.calls[0][3]).not.toBe(api.mock.calls[1][3]);
   });
@@ -53,6 +54,13 @@ describe("durable draft submission identity", () => {
       await expect(sender.submit(draft)).rejects.toThrow();
     }
     expect(new Set(api.mock.calls.map(call => call[3])).size).toBe(3);
+  });
+  it("a crash before draft cleanup reuses the accepted run across restart", async () => {
+    const api = vi.fn().mockResolvedValue({ run_id: "accepted" });
+    const draft = { ...input, sessionId: "owner" };
+    const result = await client(api).submit(draft);
+    expect(await client(api).submit(draft)).toEqual(result);
+    expect(api).toHaveBeenCalledTimes(1);
   });
 
   it("a definitive validation rejection releases the pending identity", async () => {

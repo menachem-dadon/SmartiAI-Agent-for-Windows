@@ -28,6 +28,7 @@ export function ManagementCenter({
   setTheme,
   theme,
   returnFocus,
+  restoreFocus = true,
 }: {
   initial?: ManagementSection;
   onClose: () => void;
@@ -35,6 +36,7 @@ export function ManagementCenter({
   setTheme: (theme: ThemePreference) => void;
   theme: ResolvedTheme;
   returnFocus?: HTMLElement | null;
+  restoreFocus?: boolean;
 }) {
   const [section, setSection] = useState<ManagementSection>(initial);
   const [policyOpen, setPolicyOpen] = useState(false);
@@ -42,7 +44,7 @@ export function ManagementCenter({
   useEffect(() => {
     const previous = returnFocus || document.activeElement as HTMLElement | null;
     back.current?.focus();
-    return () => { if (previous?.isConnected) previous.focus(); };
+    return () => { if (restoreFocus && previous?.isConnected) previous.focus(); };
   }, []);
   const navigate = (target: ManagementSection) => {
     setPolicyOpen(false);
