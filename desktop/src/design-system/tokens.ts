@@ -30,7 +30,7 @@ export const foundations = {
   space: { "1": "4px", "2": "8px", "3": "12px", "4": "16px", "6": "24px", "8": "32px", "12": "48px" },
   radius: { control: "10px", card: "16px", dialog: "16px", composer: "24px", pill: "999px" },
   size: { target: "40px", switchWidth: "44px", switchHeight: "26px", switchThumb: "18px", switchSmallWidth: "28px", switchSmallHeight: "16px", switchSmallThumb: "10px", rangeTrack: "24px", number: "96px", icon: "18px", iconLarge: "24px", stroke: "1px", focus: "2px" },
-  motion: { fast: "120ms", menu: "160ms", dialog: "200ms", panel: "260ms", entry: "180ms", ease: "cubic-bezier(.2,.8,.2,1)", linear: "linear" },
+  motion: { fast: "120ms", menu: "160ms", dialog: "200ms", panel: "260ms", sidebar: "320ms", entry: "180ms", ease: "cubic-bezier(.2,.8,.2,1)", linear: "linear" },
   shadow: { floating: "0 16px 48px var(--sds-color-shadow-color)" },
 } as const;
 

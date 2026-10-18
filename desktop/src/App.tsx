@@ -1489,7 +1489,7 @@ export default function App() {
           }
           onClick={dismissWorkspaceOverlay}
         />
-        <ChatSidebar open={workspace.conversationDrawerOpen} logo={icons.logo}
+        <ChatSidebar open={workspace.conversationDrawerOpen} resizing={workspaceResizing} logo={icons.logo}
           conversations={conversations} activeId={activeId}
           loading={historyLoading} error={historyError}
           unread={id => attention.items.filter(item => item.session_id === id).length}
