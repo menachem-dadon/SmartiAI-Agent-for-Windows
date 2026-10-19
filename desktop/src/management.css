@@ -45,6 +45,7 @@
 .source-segmented--described>.sds-button { justify-content:flex-start; }
 .source-settings-control .sds-field-group:has(input[type="number"]) { width:120px; max-width:100%; }
 .source-settings-field:has(.sds-range) .sds-range-field>label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.source-settings-field .sds-range-field output { flex:0 0 6em; text-align:end; white-space:nowrap; }
 .secret-link-row,.source-directory-picker,.source-field-actions,.source-tts-preview,.source-email-test,.source-log-actions,.source-log-export,.inline-actions,.pagination,.diagnostic-filters,.usage-toolbar,.usage-refresh,.workspace-preferences-actions { min-width:0; display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .source-directory-picker>.sds-field-group,.source-tts-preview>.sds-field-group { flex:1 1 160px; width:auto; }
 .secret-link-row>.sds-field-group { flex:0 1 auto; width:max-content; min-width:min(32ch,100%); max-width:100%; }
