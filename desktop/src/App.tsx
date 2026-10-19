@@ -1535,12 +1535,12 @@ export default function App() {
         <section className="chat-column" ref={chatMotionRef} aria-label="צ׳אט מרכזי" inert={workspace.workbenchOpen && (workbenchExpanded || narrowWorkspace) ? true : undefined}>
           <div className="chat-toolbar">
             <div className="chat-toolbar-controls" dir="rtl">
-              <Menu fitContent label="פעולות שיחה" items={activeConversation ? conversationActions(activeConversation, {
+              {activeConversation && <Menu fitContent label="פעולות שיחה" items={conversationActions(activeConversation, {
                 pin: item => void togglePinned(item).catch(reason => setError(String(reason))),
                 rename: item => void renameConversation(item),
                 export: item => void exportConversation(item).catch(reason => setError(String(reason))),
                 remove: item => void deleteConversation(item),
-              }) : []} />
+              })} />}
               <IconButton icon="panel" variant="ghost"
                 ref={workbenchTrigger} label={workspace.workbenchOpen ? "סגירת סביבת העבודה" : "פתיחת סביבת העבודה"}
                 onClick={() => setWorkbenchOpen(!workspace.workbenchOpen)} />
