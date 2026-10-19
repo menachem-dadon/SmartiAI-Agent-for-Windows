@@ -281,6 +281,8 @@ def model_rates(model, cached, catalog):
 
 
 def usage_cost(model, stats, tokens, cached, catalog):
+    if stats.get("billing_mode") == "subscription":
+        return None, "unavailable"
     for key in ("cost_usd", "estimated_cost_usd"):
         amount = nonnegative_number(stats.get(key))
         if amount is not None:

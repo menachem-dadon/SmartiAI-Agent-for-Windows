@@ -43,6 +43,11 @@ try {
         Write-Host 'Preparing locked frontend dependencies...'
         npm ci
         if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE" }
+        Push-Location (Join-Path $repoRoot 'bridges\claude-code')
+        try {
+            npm ci --ignore-scripts --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'Claude Code bridge dependency installation failed.' }
+        } finally { Pop-Location }
     }
     Write-Host 'Starting SmartiAI Tauri and its supervised Python Core...'
     if ($LiveReload) {

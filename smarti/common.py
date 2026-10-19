@@ -115,7 +115,7 @@ URL_HUGGINGFACE = "aHR0cHM6Ly9yb3V0ZXIuaHVnZ2luZ2ZhY2UuY28vdjE="
 URL_CLAWHUB_API = "aHR0cHM6Ly9jbGF3aHViLmFpL2FwaS92MQ=="
 
 MODEL_PROVIDER_ORDER = [
-    "gemini", "openai", "openai_codex_signin", "anthropic", "openrouter", "groq", "nvidia", "cerebras", "huggingface",
+    "gemini", "openai", "openai_codex_signin", "anthropic_claude_code_signin", "google_antigravity_signin", "anthropic", "openrouter", "groq", "nvidia", "cerebras", "huggingface",
     "deepseek", "qwen", "zhipu", "moonshot", "mistral",
     "together", "perplexity", "xai", "local"
 ]
@@ -160,6 +160,16 @@ MODEL_PROVIDER_CONFIGS = {
             "gpt-5.4",
             "gpt-5.4-mini",
         ],
+    },
+    "anthropic_claude_code_signin": {
+        "label": "Claude Code", "kind": "subscription", "secret_key": None,
+        "default_model": "", "help_url": "https://code.claude.com/docs/en/quickstart",
+        "key_instructions": "כניסה דרך Claude Code הרשמי דורשת מנוי מתאים. חשבון Claude חינמי אינו כולל שימוש זה.",
+    },
+    "google_antigravity_signin": {
+        "label": "Google Antigravity", "kind": "subscription", "secret_key": None,
+        "default_model": "", "help_url": "https://antigravity.google/docs/cli-getting-started",
+        "key_instructions": "החיבור לשיחה ממתין לתמיכה רשמית בבידוד כלי הספק. אפשר לבדוק את מצב הרכיב ורשימת המודלים.",
     },
     "anthropic": {
         "label": "Anthropic",
@@ -1090,6 +1100,10 @@ def model_reasoning_contract(provider, model):
     name = str(model or "").strip().lower()
     if provider == "openai_codex_signin":
         return _reasoning_contract("codex_signin")
+    if provider in {"anthropic_claude_code_signin", "google_antigravity_signin"}:
+        from .subscription_providers.base import model_efforts
+        levels = model_efforts(provider, str(model or "").strip())
+        return {"id": "subscription_metadata", "supported_levels": levels} if levels else {}
     if provider == "gemini":
         if re.match(r"^(?:text-embedding|embedding|imagen|veo|aqa)", name):
             return {}
@@ -1533,6 +1547,18 @@ def fetch_text_models_for_provider(provider, api_key="", local_url="", ssl_setti
             raise ApiRequestError(api_error_for_reason(provider, "", "local_model_unloaded" if provider == "local" else "invalid_response", raw_message="No compatible text-generation models in catalog"))
         return _dedupe_sorted_models(models)
     try:
+        if provider in {"anthropic_claude_code_signin", "google_antigravity_signin"}:
+            from .subscription_providers.claude import ClaudeProvider
+            from .subscription_providers.antigravity import AntigravityProvider
+            from .subscription_providers.base import SubscriptionError
+            instance = (ClaudeProvider if provider == "anthropic_claude_code_signin" else AntigravityProvider)(
+                USER_DATA_DIR, (ssl_settings or {}).get("claude_code_auth_strategy", "claude_login") if provider == "anthropic_claude_code_signin" else "google_login")
+            try:
+                models = instance.read_models()
+                state = instance.connection_status()
+                return models, state["state"] == "connected" if validate_key else True, state["message"]
+            except SubscriptionError as error:
+                return [], False, str(error)
         if provider == "openai_codex_signin":
             from .codex_signin import CodexSignInError, CodexSignInProvider
 

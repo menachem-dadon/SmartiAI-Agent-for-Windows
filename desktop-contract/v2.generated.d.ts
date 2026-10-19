@@ -59,6 +59,8 @@ export interface ValidateProviderRequest {
   secret?: string;
   local_url?: string;
 }
+export interface SubscriptionConnectionRequest {
+}
 export interface SetModelReasoningRequest {
   model: string;
   effort: string;

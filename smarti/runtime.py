@@ -213,6 +213,7 @@ class SmartiRuntime:
 
     def subprocess_env(self, env=None):
         target = os.environ.copy() if env is None else dict(env)
+        target.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
         target.setdefault("PYTHONIOENCODING", "utf-8")
         target.setdefault("PYTHONUTF8", "1")
         target.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")

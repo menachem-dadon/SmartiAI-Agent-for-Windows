@@ -10,6 +10,7 @@ app_icon = repo_root / "assets" / "smarti.ico"
 app_manifest = repo_root / "packaging" / "smarti.manifest"
 
 datas = [
+    (str(repo_root / "bridges" / "claude-code"), "bridges/claude-code"),
     (str(repo_root / "assets"), "assets"),
     (str(repo_root / "sitecustomize.py"), "."),
     (str(repo_root / "smarti" / "local_lmstudio_sdk.cjs"), "smarti"),

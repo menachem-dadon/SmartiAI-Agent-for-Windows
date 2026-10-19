@@ -11,7 +11,9 @@ test("keyboard opens on the saved provider, selects from all providers and resto
   render(<ProviderPicker value="openai" onSelect={onSelect} />);
   const trigger = screen.getByRole("button", { name: "ספק המודל: OpenAI" });
   trigger.focus(); await user.keyboard("{ArrowDown}");
-  expect(screen.getAllByRole("option")).toHaveLength(18);
+  expect(screen.getAllByRole("option")).toHaveLength(20);
+  expect(screen.getByRole("option", { name: "Claude Code" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "Google Antigravity" })).toBeTruthy();
   expect(document.activeElement).toBe(screen.getByRole("option", { name: "OpenAI" }));
   await user.keyboard("{End}{Enter}");
   await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());

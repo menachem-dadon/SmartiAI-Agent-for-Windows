@@ -12,6 +12,7 @@ datas = [
     (str(repo_root / "sitecustomize.py"), "."),
     (str(repo_root / "smarti" / "local_lmstudio_sdk.cjs"), "smarti"),
     (str(repo_root / "smarti" / "local_lmstudio_sdk.NOTICES.txt"), "smarti"),
+    (str(repo_root / "bridges" / "claude-code"), "bridges/claude-code"),
 ]
 for package in ("certifi", "keyring", "truststore"):
     try:

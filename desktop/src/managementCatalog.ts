@@ -76,6 +76,7 @@ export const policyOptions = yesNo;
 
 export const providerOptions: SettingOption[] = [
   ["gemini", "Google Gemini"], ["openai", "OpenAI"], ["openai_codex_signin", "OpenAI Codex Sign-in"],
+  ["anthropic_claude_code_signin", "Claude Code"], ["google_antigravity_signin", "Google Antigravity"],
   ["anthropic", "Anthropic"], ["openrouter", "OpenRouter"], ["groq", "Groq"], ["nvidia", "NVIDIA NIM"],
   ["cerebras", "Cerebras"], ["huggingface", "Hugging Face"], ["deepseek", "DeepSeek"], ["qwen", "Qwen"],
   ["zhipu", "Zhipu AI"], ["moonshot", "Moonshot AI"], ["mistral", "Mistral AI"], ["together", "Together AI"],

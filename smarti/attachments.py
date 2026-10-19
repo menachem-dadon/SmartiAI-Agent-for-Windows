@@ -349,7 +349,7 @@ def provider_attachment_support(mode, item):
         if is_text_attachment(item):
             return True, ""
         return False, f"Gemini inline upload does not support this MIME type here: {mime_type}."
-    if mode == "anthropic":
+    if mode in {"anthropic", "anthropic_claude_code_signin"}:
         if mime_type in ANTHROPIC_IMAGE_MIME_TYPES or mime_type in ANTHROPIC_DOCUMENT_MIME_TYPES:
             return True, ""
         if is_text_attachment(item):

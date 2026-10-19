@@ -134,6 +134,7 @@ if (-not $SkipCoreBuild) {
     Invoke-Checked $python @("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
     Invoke-Checked $python @("-m", "pip", "install", "-r", (Join-Path $repo "requirements-core.txt"), "-r", (Join-Path $repo "requirements-build.txt"))
     Invoke-Checked $python @("-m", "pip", "check")
+    Invoke-Checked "npm.cmd" @("ci", "--ignore-scripts", "--no-audit", "--no-fund") (Join-Path $repo "bridges\claude-code")
     Invoke-Checked $python @("-c", "import smarti.core,sys; assert not any(x.startswith('PyQt6') for x in sys.modules); print('Qt-free Core import OK')") $repo
     Invoke-Checked $python @("-m", "PyInstaller", "--clean", "--noconfirm", "--workpath", $pyiWork, "--distpath", $dist, (Join-Path $repo "packaging\smarti-core.spec")) $repo
 }

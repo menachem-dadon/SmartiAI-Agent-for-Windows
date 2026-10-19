@@ -40,6 +40,13 @@ class UsageStatsTests(unittest.TestCase):
     def write(self, rows):
         self.path.write_text(json.dumps(rows), encoding="utf-8")
 
+    def test_subscription_receipt_never_uses_api_price_or_stale_estimate(self):
+        self.write({str(self.today): {"gemini-test": {"prompt": 100, "completion": 10,
+            "total": 110, "billing_mode": "subscription", "estimated_cost_usd": 99}}})
+        data = usage_snapshot(self.core, "all")
+        self.assertEqual(data["models"][0]["cost_status"], "unavailable")
+        self.assertIsNone(data["models"][0]["cost_usd"])
+
     def test_reads_real_runtime_log_and_prices_cache_without_double_counting(self):
         ModelContextMixin._log_usage(self.core, "gemini-test", {
             "prompt": 1000, "completion": 500, "total": 1500,

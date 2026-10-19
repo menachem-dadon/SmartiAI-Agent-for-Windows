@@ -13,6 +13,8 @@ PROVIDER_LABELS = {
     "gemini": "Google Gemini",
     "openai": "OpenAI",
     "openai_codex_signin": "OpenAI Codex / ChatGPT",
+    "anthropic_claude_code_signin": "Claude Code",
+    "google_antigravity_signin": "Google Antigravity",
     "anthropic": "Anthropic",
     "openrouter": "OpenRouter",
     "groq": "Groq",

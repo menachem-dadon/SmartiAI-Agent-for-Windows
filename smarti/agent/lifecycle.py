@@ -7,7 +7,7 @@ from smarti.user_language import conversation_language
 class LifecycleMixin:
     _RUN_LOCAL_FIELDS = frozenset({
         "mode", "universal_client", "_universal_client_key",
-        "codex_signin_provider",
+        "codex_signin_provider", "_subscription_provider",
         "system_prompt", "gemini_history", "universal_history",
         "recent_tool_observations", "tool_observations",
         "conversation_attachments", "conversation_summary",
@@ -243,6 +243,8 @@ class LifecycleMixin:
         if provider_mode == "local":
             from smarti.local_reasoning import request_control
             snapshot["local_reasoning_snapshot"] = request_control(self, snapshot["model_name"])
+        if provider_mode in SUBSCRIPTION_PROVIDERS:
+            snapshot["_subscription_provider"] = subscription_provider(self, provider_mode)
         return snapshot
 
     def _build_run_values(
@@ -264,6 +266,7 @@ class LifecycleMixin:
             "universal_client": snapshot.get("universal_client"),
             "_universal_client_key": str(snapshot.get("_universal_client_key") or ""),
             "codex_signin_provider": snapshot.get("codex_signin_provider"),
+            "_subscription_provider": snapshot.get("_subscription_provider"),
             "system_prompt": str(context.get("system_prompt") or base_prompt or ""),
             "gemini_history": [],
             "universal_history": [],

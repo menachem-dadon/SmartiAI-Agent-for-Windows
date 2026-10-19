@@ -12,7 +12,7 @@ import openai
 
 from smarti.agent.model_context import ModelContextMixin
 from smarti.api_errors import ApiRequestError
-from smarti.common import MODEL_PROVIDER_ORDER, SmartiCancelled
+from smarti.common import MODEL_PROVIDER_ORDER, SmartiCancelled, is_openai_compatible_provider
 from smarti.config import DEFAULT_SETTINGS
 from tests.test_api_errors import google_quota, response
 
@@ -80,7 +80,7 @@ class ProviderRuntimeTests(unittest.TestCase):
         self.assertFalse(core._request_counts_toward_budget("test-model", "local"))
 
     def test_every_openai_compatible_provider_uses_a_compatible_request(self):
-        providers = [p for p in MODEL_PROVIDER_ORDER if p not in {"gemini", "anthropic", "openai_codex_signin"}]
+        providers = [p for p in MODEL_PROVIDER_ORDER if p == "local" or is_openai_compatible_provider(p)]
         for provider in providers:
             with self.subTest(provider=provider):
                 create = mock.Mock(return_value=completion())

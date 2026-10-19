@@ -3,7 +3,7 @@
 - Plan ID: SMARTI-SUBSCRIPTION-PROVIDERS-2026
 - תאריך בדיקה: 2026-10-07, Asia/Jerusalem.
 - בסיס קוד שנבדק: `ee88d35`; עץ העבודה היה נקי בתחילת התכנון.
-- מצב: **תכנון הושלם; מימוש ובדיקות ספק חי טרם התחילו**.
+- מצב מעודכן 2026-10-19: **מימוש חלקי — תשתית וקלוד במקור; Antigravity חסום בעקבות בדיקת בידוד חיה.** פרטי הביצוע וגבולות הקבלה ב־§17. אין שני ספקים מוכנים לשימוש מלא.
 - היקף מוזמן: תכנון מלא של שני ספקים המתחברים לחשבון המשתמש דרך הכלים הרשמיים, עם כלי סמארטי, מודלים, התחברות, שגיאות וחיסכון בטוקנים.
 - מקור מצב הביצוע של תוספת זו: טבלת השלבים בסעיף 15 במסמך זה. [יומן UX](ui_ux_redesign_execution.md) מתעד את זיקת הממשק לתכנון; אינו מחליף את טבלת הביצוע הזאת.
 
@@ -381,17 +381,17 @@ Claude SDK כבר עשוי לכלול בינארי רשמי. בוחרים בעל
 
 ## 15. שלבי הביצוע, תלויות ומסירה
 
-מזהי SP הם של תוספת הספקים; אינם UX-N, Migration Point N או Audit Point N. השלבים כאן מתוכננים בלבד.
+מזהי SP הם של תוספת הספקים; אינם UX-N, Migration Point N או Audit Point N. מצבי הביצוע מעודכנים לפי §17; קוד שנבדק במבודד אינו ראיית מנוי חי.
 
 | שלב | תכולה ותוצר | תלות ותנאי סיום | מצב |
 |---|---|---|---|
-| SP-0 | ניסוי היתכנות מבודד לשני הספקים; גרסאות; auth, prompt, zero-tools, schema, models/effort, cancel ו־billing; השוואת claude_login מול setup_token_env, כולל metadata ובידוד | דוח נפרד לכל ספק ולמסלול Claude: GO/CONDITIONAL/NO-GO עם ראיות. Antigravity דורש הוכחה למסלול מנוי שעומד בהחלפת ההנחיות. אין עיכוב Claude בגלל שער Google או מסלול אסימון שאינו עומד בתנאים | NOT STARTED |
-| SP-1 | protocol/process/catalog/error abstractions; adapters registry; run snapshot, isolation ו־Codex compatibility | SP-0 מגדיר contracts; רגרסיות Codex ו־API עוברות; אין שינוי התנהגות ספקים אחרים | NOT STARTED |
-| SP-2 | Claude adapter ו־SDK helper, auth operations, אסטרטגיית כניסה ואסימון סביבתי לפי GO, models/effort, complete/schema, usage, attachments ו־cancel | שער Claude GO; text/tool/final ומדיניות מוכחים במבודד ובהרצה חיה מוגדרת לכל אסטרטגיה שמוצעת | NOT STARTED |
-| SP-3 | Antigravity adapter, custom agent, account routing, models/effort/quota, schema/stream/cancel וצירופים נתמכים | שער Google GO; אין builtin effects או prompt כפול. אם דרישה חסומה, עדכון ממוקד לשער עם חלופה רשמית | NOT STARTED |
-| SP-4 | חוזה v2, מסך חיבור משותף, שני אייקונים, בוררי שיחה/מועדפים, סנכרון וכשלים | adapters מוכנים; אייקוני המשתמש זמינים לסגירת מראה; UI/RTL ושמירה אמיתיים מוכחים | NOT STARTED |
-| SP-5 | cache prefix, bounded process/session reuse, delta context, compaction coordination ומדידת חיסכון | אמינות stateless הוכחה; benchmark והשוואת איכות לפני/אחרי; אין duplication/policy regression | NOT STARTED |
-| SP-6 | בדיקות שני ספקים, גרסאות/מודלים, Windows source והכנת staging/release manifest | כל היכולות המוזמנות מוכחות; gaps מסומנים; חבילה בפועל רק במשימת בנייה נפרדת שמורשית | NOT STARTED |
+| SP-0 | ניסוי היתכנות מבודד לשני הספקים; גרסאות; auth, prompt, zero-tools, schema, models/effort, cancel ו־billing; השוואת claude_login מול setup_token_env, כולל metadata ובידוד | דוח נפרד לכל ספק ולמסלול Claude: GO/CONDITIONAL/NO-GO עם ראיות. Antigravity דורש הוכחה למסלול מנוי שעומד בהחלפת ההנחיות. אין עיכוב Claude בגלל שער Google או מסלול אסימון שאינו עומד בתנאים | CONDITIONAL Claude / NO-GO Antigravity |
+| SP-1 | protocol/process/catalog/error abstractions; adapters registry; run snapshot, isolation ו־Codex compatibility | SP-0 מגדיר contracts; רגרסיות Codex ו־API עוברות; אין שינוי התנהגות ספקים אחרים | IMPLEMENTED — isolated validation |
+| SP-2 | Claude adapter ו־SDK helper, auth operations, אסטרטגיית כניסה ואסימון סביבתי לפי GO, models/effort, complete/schema, usage, attachments ו־cancel | שער Claude GO; text/tool/final ומדיניות מוכחים במבודד ובהרצה חיה מוגדרת לכל אסטרטגיה שמוצעת | IMPLEMENTED — paid live validation pending |
+| SP-3 | Antigravity adapter, custom agent, account routing, models/effort/quota, schema/stream/cancel וצירופים נתמכים | שער Google GO; אין builtin effects או prompt כפול. אם דרישה חסומה, עדכון ממוקד לשער עם חלופה רשמית | BLOCKED — native tools remain available |
+| SP-4 | חוזה v2, מסך חיבור משותף, שני אייקונים, בוררי שיחה/מועדפים, סנכרון וכשלים | adapters מוכנים; אייקוני המשתמש זמינים לסגירת מראה; UI/RTL ושמירה אמיתיים מוכחים | IMPLEMENTED — custom icons pending |
+| SP-5 | cache prefix, bounded process/session reuse, delta context, compaction coordination ומדידת חיסכון | אמינות stateless הוכחה; benchmark והשוואת איכות לפני/אחרי; אין duplication/policy regression | BASELINE ONLY — reuse/measurement pending |
+| SP-6 | בדיקות שני ספקים, גרסאות/מודלים, Windows source והכנת staging/release manifest | כל היכולות המוזמנות מוכחות; gaps מסומנים; חבילה בפועל רק במשימת בנייה נפרדת שמורשית | PARTIAL — live/package acceptance pending |
 
 אומדן ראשוני: SP-0 כ־1–3 ימי הנדסה, תשתית כ־2–4, Claude כ־3–5, Antigravity כ־3–6 לאחר GO, ממשק כ־2–3, חיסכון וקבלה כ־3–5. סך כ־14–26 ימי הנדסה, עם אי־ודאות בעיקר בבידוד Antigravity ובהתנהגות גרסאות/חשבונות. זה אומדן היקף, לא הבטחת מועד ולא תוצאה של ניסוי חי. אם SP-0 נכשל בדרישה מרכזית, מעדכנים תכנון לפני עבודת ה־production של אותו ספק.
 
@@ -409,10 +409,36 @@ Claude SDK כבר עשוי לכלול בינארי רשמי. בוחרים בעל
 
 לא נדרש מהמשתמש לבחור ארכיטקטורה או לפתור את השאלות הטכניות האלה. אלו בדיקות של שלב המימוש. האייקונים הם התלות היחידה שכבר הוקצתה למשתמש; כניסה לחשבונות לניסוי חי תידרש כשיגיע אותו שלב.
 
-## 16. מסירה לשיחת המימוש הראשונה
+## 16. מסירת התכנון המקורית לשיחת המימוש הראשונה
 
 התחילו ב־SP-0. קראו AGENTS.md, PROJECT_CONTEXT, מסמך זה ותוכנית/יומן UX הנוכחיים; בדקו Git ועבודה קיימת. שמרו על לולאת הסוכן והכלים של סמארטי. בדקו תיעוד עדכני וגרסאות רשמיות לפני שימוש בדגלים. אין bare ל־Claude subscription, ואין הסקה שה־Antigravity SDK משתמש במנוי משום שה־CLI כן. התוצר הראשון הוא דוח היתכנות מבודד עם תצורות ותוצאות, כולל שאלה פתוחה או NO-GO אם הסרת scaffold ב־Google אינה מוכחת. לאחר GO המשיכו לתשתית ולספק הרלוונטי לפי הטבלה. אל תציגו mocks/build/catalog כראיית ספק חי, ואל תשנו credentials או הגדרות אישיות.
 
 ראיות התכנון הנוכחיות: קריאת קוד ומסמכי הפרויקט, השיחה המצורפת ותיעוד רשמי. לא נשלחו בקשות הסקה ל־Claude או Google, לא הותקן רכיב, לא נבדק login חי, לא נבנתה חבילה ולא שונה קוד מוצר.
 
 עדכון 2026-10-07 בעקבות שאלת המשתמש על אסימון Claude Code: נוספו §5.4 ושילוב auth_strategy בחוזה, בקטלוג, בממשק, בחיוב ובבדיקות. ההעדפה היא כניסה רגילה לחיבור פשוט ואסימון סביבתי כאפשרות מתקדמת להרצה עם הרשאות מצומצמות, לאחר SP-0. אין הוכחת ריצה חיה או חיסכון מדוד בעקבות עדכון המסמך.
+
+## 17. ביצוע 2026-10-19 — מקור, חסמים וראיות
+
+הרשאה: המשתמש ביקש לבצע את העבודה, לשמור קומיט ולהפעיל מחדש תוך שימור שפת העיצוב וכל התנהגות קיימת. בסיס `eea1522`, עץ נקי. המשתמש הבהיר שיש מנוי Google Pro/Antigravity וחשבון Claude חינמי בלבד; לא התבקש אסימון ולא הועבר סוד לצ׳אט.
+
+### תוצאת SP-0
+
+- Claude: הותקנו בתיקיית החיבור SDK רשמי `0.3.303` ובינארי Windows רשמי `2.1.303`, עם lockfile. supportedModels/accountInfo החזירו metadata ללא generation; הכניסה מדווחת none. גילוי מאומת אינו זכאות למנוי. מסלול ההסקה במקור מותנה באימות רשמי, אפס כלים ב־init ופלט תקין; אין ראיית תשובה חיה, מנוי בתשלום או setup-token חי. המסקנה CONDITIONAL.
+- Antigravity: installer רשמי מ־antigravity.google נבדק לפני הרצה, ומאמת SHA512 מול המניפסט הרשמי. הותקן CLI `1.4.2` per-user; המתקין הוסיף את תיקיית agy ל־User PATH. `agy models` החזיר קטלוג אמיתי. שלוש בקשות קצרות ומבודדות החזירו SMARTI_READY, אך אירועי init פרסמו את כלי הקבצים/מסוף/דפדפן/MCP המובנים גם עם `tools: []`, גם עם `tools: [finish]` ו־commandExecutionPolicy="off", וגם בתיקיית Temp עצמאית עם שורש Git נפרד. ההסקה עצמה עובדת; בידוד ההקשר והכלים המבוקש לא הוכח, ולכן מסלול השיחה NO-GO. לא ניתנה למוצר דרך לעקוף את החסימה.
+- לא קיימת ראיית החלפה מלאה של מסגרת ההנחיות ב־Antigravity. לא נעשה שימוש ב־SDK מבוסס API key כתחליף למנוי, לא בוצעו פעולות קבצים/מסוף על ידי ספק במסגרת הניסוי ולא שונו credentials אישיים.
+
+### מה נוסף במקור
+
+- `smarti/subscription_providers/`: תהליכים בבעלות הריצה, ניקוז stdout/stderr במקביל, UTF-8, מגבלות פלט, deadline וביטול עץ התהליך; registry וספק מוקפא לכל ריצה. שגיאות חיבור/מנוי/מכסה/מודל/פרוטוקול מופרדות וללא fallback ל־API.
+- `bridges/claude-code/`: SDK ובינארי רשמיים ללא שינוי. הנחיית סמארטי נמסרת בקובץ; אין bare או append. tools/mcp/skills/plugins ריקים, חסימת hooks/זיכרון/חיבורי החשבון ותשובת deny לכל כלי מלבד serializer פנימי. init עם כלי בלתי צפוי עוצר את התהליך. טקסט תשובה ותיאור כלי נשלפים ממעטפת מובנית; חשיבה ו־JSON גולמי אינם תשובת משתמש.
+- כניסת Claude רגילה ואסימון סביבתי נפרדים. אין הדבקה/שמירת אסימון בסמארטי; אסימון שהוגדר מסומן configured עד הצלחת הסקה, וקיום משתנה אינו מוצג כהוכחת תוקף. סביבת כלי סמארטי מסירה אותו. חשבון חינמי שמזוהה אינו נחשב מנוי מתאים. שייכות החשבון והמכסה שאינן ידועות אינן מומצאות.
+- רשימת מודלים וחשיבה נלקחת מה־SDK הרשמי. אין מודל ברירת מחדל חדש או מועדף אוטומטי. תמונות/PDF עוברים בבלוקי הודעה נתמכים, דרך מדיניות הצירופים הקיימת. שימוש כולל cache read/write, מודל שהתבקש והופעל בפועל; החלפה שקטה נדחית. עלות מנוי נשארת לא ידועה ומחירון API אינו מוחל עליה.
+- נתיבי חיבור v2, פעולות התחברות/בדיקה ברקע, polling וביטול, רשימה, reasoning ומצב מכסה unavailable. ניתוק מסמארטי נשמר בנפרד ומותיר את הכניסה הרשמית. קריאת מצב אינה מחליפה ספק. מזהי פעולה שייכים לספק ופעולות ישנות מוגבלות בזמן ובכמות.
+- שני שמות ספקים בבוררים, בלי שדות API key. רכיב SubscriptionConnection משתמש ב־ChoiceField/Button/ManagementFeedback הקיימים, ללא CSS או פלטה חדשים. Claude מציג כניסה רגילה או הוראות לאסימון; Antigravity מציג חסימת תאימות וגילוי לצורך אבחון. האייקונים הייעודיים טרם סופקו; בינתיים משתמשים בסמל החיבור המשותף הקיים.
+- סקריפט הפיתוח והכנת חבילת Tauri מתקינים את החיבור מ־lockfile; שתי תצורות PyInstaller כוללות אותו ואת הרישיונות המקוריים. לא נבנה מתקין ולא נבדקה חבילה במסגרת זו.
+
+### גבולות החיסכון וההשלמה
+
+בסיס ההרצה stateless: קטלוג כלים/משוב מצומצמים של סמארטי, הנחיה מותאמת ונתוני cache מדווחים. לא מומש reuse מתמשך של session/process, לא נמדד חיסכון מול מנוי חי ולא הובטח אחוז. אין להעביר את SP-5 ל־COMPLETE. SP-3 נשאר חסום; SP-2 ו־SP-6 דורשים ראיית Claude בתשלום, ו־SP-4 ממתין גם לאייקונים. הבדיקות, הקומיט וההפעלה מחדש מתועדים ביומן UX §99 עם תוצאות סופיות.
+
+המשך נדרש: מסלול רשמי של Antigravity שמבטיח הסרת כלי/הנחיות הלקוח ומוכח ב־init/אבחון; מנוי Claude מתאים לבדיקת text→tool→result→final ופקיעה/אסימון אמיתיים; לאחר מכן בלבד מדידת cache/reuse והשלמת קבלת שני הספקים. אין סימון השלמה של התוכנית כולה על סמך המימוש החלקי.

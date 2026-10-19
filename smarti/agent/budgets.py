@@ -34,7 +34,7 @@ class RequestBudgetMixin:
         # Unknown prices and transports without an output contract are excluded
         # from both budget counters. General usage statistics remain available.
         from ..common import MODEL_PROVIDER_ORDER
-        if mode == "openai_codex_signin" or mode not in MODEL_PROVIDER_ORDER:
+        if mode in {"openai_codex_signin", "anthropic_claude_code_signin", "google_antigravity_signin"} or mode not in MODEL_PROVIDER_ORDER:
             return False
         if (mode, model) in getattr(self, "_budget_unbounded_routes", set()):
             return False
@@ -93,6 +93,8 @@ class RequestBudgetMixin:
                 raise RuntimeError("DAILY_COST_BUDGET_EXCEEDED")
 
     def _request_usage_cost(self, model, usage, mode):
+        if mode in {"anthropic_claude_code_signin", "google_antigravity_signin"}:
+            return None  # Subscription cost is unknown; never apply API prices.
         if mode in {"local", "openai_codex_signin"}:
             return 0.0
         cost, _source = usage_cost(model, usage, normalize_tokens(usage), pricing_cache(), bundled_pricing())

@@ -26,6 +26,8 @@ from ..api_errors import (
     api_retry_status_message,
 )
 from ..codex_signin import CODEX_SIGNIN_PROVIDER, CodexProtocolError, CodexSignInError, CodexSignInProvider
+from ..subscription_providers import PROVIDERS as SUBSCRIPTION_PROVIDERS, get_provider as subscription_provider
+from ..subscription_providers.base import SubscriptionError
 
 # ==========================================
 # ליבת המערכת - SmartiCore

@@ -1151,6 +1151,8 @@ class SmartiLocalGateway:
                 raise RequestValidationError("unknown_or_secret_setting", bad)
             for key, value in values.items():
                 default = DEFAULT_SETTINGS[key]
+                if key == "claude_code_auth_strategy" and (not isinstance(value, str) or value not in {"claude_login", "setup_token_env"}):
+                    raise RequestValidationError("unsupported_auth_strategy", [key])
                 # JSON encodes 1.0 as 1. Decimal controls must accept both,
                 # while booleans must never be accepted as numeric settings.
                 if isinstance(default, float) and type(value) in (int, float):
@@ -1220,6 +1222,18 @@ class SmartiLocalGateway:
         provider, payload = normalize_provider_name(provider), payload or {}
         if provider not in MODEL_PROVIDER_ORDER:
             raise RequestValidationError("unknown_provider", ["provider"])
+        from .subscription_providers import PROVIDERS, get_provider
+        if provider in PROVIDERS:
+            from .subscription_providers.base import SubscriptionError
+            try:
+                instance = get_provider(self.core, provider)
+                entries = instance.catalog()
+                connection = instance.connection_status()
+                return {"provider": provider, "ok": connection["state"] == "connected" if validate else True,
+                    "message": connection["message"], "models": [entry["id"] for entry in entries],
+                    "entries": entries, "connection": connection}
+            except SubscriptionError as error:
+                return {"provider": provider, "ok": False, "message": str(error), "models": []}
         supplied = sanitize_secret_value(payload.get("secret"))
         secret = supplied or (self.core.ensure_provider_secret(provider) if provider_secret_key(provider) else "")
         local_url = str(payload.get("local_url") or self.core.settings.get("local_server_url") or self.core.settings.get("local_llm_url") or "")
@@ -1238,6 +1252,46 @@ class SmartiLocalGateway:
         if normalize_provider_name(request.match_info["provider"]) == "local":
             local_reasoning.invalidate(self.core)
         return self._ok(request, result)
+
+    async def _subscription_connection(self, request):
+        from .subscription_providers import PROVIDERS
+        from .subscription_providers.connections import Connections
+        from .subscription_providers.base import SubscriptionError
+        provider = request.match_info["provider"]
+        if provider not in PROVIDERS:
+            return self._error(request, 404, "unknown_subscription_provider")
+        service = getattr(self, "_subscription_connections", None)
+        if service is None:
+            self._subscription_connections = service = Connections(self.core)
+        identifier = request.match_info.get("operation_id")
+        if request.method == "GET":
+            try:
+                result = service.operation(provider, identifier) if identifier else await asyncio.to_thread(service.status, provider)
+                return self._ok(request, result)
+            except KeyError:
+                return self._error(request, 404, "connection_operation_not_found")
+        action = request.match_info.get("action")
+        if identifier:
+            try:
+                service.operation(provider, identifier)
+            except KeyError:
+                return self._error(request, 404, "connection_operation_not_found")
+            return await self._idempotent(request, "subscriptionConnection", lambda payload: (service.cancel(provider, identifier), 200))
+        if action not in {"login", "check", "disconnect"}:
+            return self._error(request, 404, "unknown_connection_action")
+        def perform(payload):
+            try:
+                return service.action(provider, action), 200
+            except SubscriptionError as error:
+                return {"provider": provider, "state": error.reason, "message": str(error)}, 200
+        return await self._idempotent(request, "subscriptionConnection", perform)
+
+    async def _subscription_quota(self, request):
+        from .subscription_providers import PROVIDERS
+        if request.match_info["provider"] not in PROVIDERS:
+            return self._error(request, 404, "unknown_subscription_provider")
+        return self._ok(request, {"available": False, "source": "unavailable",
+            "message": "נתוני המכסה אינם זמינים דרך ממשק רשמי בחיבור זה."})
 
     async def _set_model_reasoning(self, request):
         provider = normalize_provider_name(request.match_info["provider"])
@@ -1444,9 +1498,14 @@ class SmartiLocalGateway:
         app.router.add_delete("/v2/workbench/terminals/{terminal_id}", self._terminal_item)
         app.router.add_post("/v2/providers/{provider}/validate", self._validate_provider)
         app.router.add_get("/v2/providers/{provider}/models", self._discover_models)
+        app.router.add_get("/v2/providers/{provider}/connection", self._subscription_connection)
+        app.router.add_get("/v2/providers/{provider}/connection/operations/{operation_id}", self._subscription_connection)
+        app.router.add_post("/v2/providers/{provider}/connection/operations/{operation_id}/cancel", self._subscription_connection)
+        app.router.add_post("/v2/providers/{provider}/connection/{action}", self._subscription_connection)
         app.router.add_get("/v2/providers/{provider}/reasoning", self._set_model_reasoning)
         app.router.add_post("/v2/providers/{provider}/reasoning", self._set_model_reasoning)
         app.router.add_get("/v2/providers/openai_codex_signin/quota", self._codex_quota)
+        app.router.add_get("/v2/providers/{provider}/quota", self._subscription_quota)
         app.router.add_post("/v2/attachments", self._register_attachment)
         app.router.add_get("/v2/attachments/{handle}", self._read_attachment)
         app.router.add_post("/v2/audio/tts", self._tts_start)
@@ -1522,6 +1581,9 @@ class SmartiLocalGateway:
             logging.exception("Could not write local gateway runtime metadata")
 
     def stop(self):
+        connections = getattr(self, "_subscription_connections", None)
+        if connections:
+            connections.close()
         self._terminal_sessions.close_all()
         loop, thread = self._loop, self._thread
         self._thread = None

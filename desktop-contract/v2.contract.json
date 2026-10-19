@@ -259,6 +259,12 @@
       "required": [],
       "additionalProperties": false
     },
+    "subscriptionConnection": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
     "setModelReasoning": {
       "type": "object",
       "properties": {
@@ -1023,6 +1029,34 @@
     },
     {
       "method": "GET",
+      "path": "/v2/providers/{provider}/connection",
+      "operation_id": "subscriptionConnectionStatus",
+      "summary_he": "מצב חיבור מנוי",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/providers/{provider}/connection/{action}",
+      "operation_id": "subscriptionConnectionAction",
+      "summary_he": "פעולת חיבור מנוי",
+      "request_schema": "subscriptionConnection"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/providers/{provider}/connection/operations/{operation_id}",
+      "operation_id": "subscriptionConnectionOperation",
+      "summary_he": "מצב התחברות רשמית",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/providers/{provider}/connection/operations/{operation_id}/cancel",
+      "operation_id": "subscriptionConnectionCancel",
+      "summary_he": "ביטול התחברות",
+      "request_schema": "subscriptionConnection"
+    },
+    {
+      "method": "GET",
       "path": "/v2/providers/{provider}/reasoning",
       "operation_id": "getModelReasoning",
       "summary_he": "קריאת רמות חשיבה למודל",
@@ -1040,6 +1074,13 @@
       "path": "/v2/providers/openai_codex_signin/quota",
       "operation_id": "readCodexQuota",
       "summary_he": "קריאת מכסת Codex שנותרה",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/providers/{provider}/quota",
+      "operation_id": "readSubscriptionQuota",
+      "summary_he": "זמינות מידע על מכסת מנוי",
       "request_schema": null
     },
     {

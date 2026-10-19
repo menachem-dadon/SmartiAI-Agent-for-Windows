@@ -19,6 +19,7 @@ tests/*
 !tests/test_visual_canvas.py
 !tests/test_doctor.py
 !tests/test_codex_signin.py
+!tests/test_subscription_providers.py
 !tests/test_codex_sessions.py
 !tests/test_codex_quota_ui.py
 !tests/test_context_efficiency.py

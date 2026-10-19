@@ -1,6 +1,7 @@
 import { Dialog, IconButton, Popover, PageHeader, SegmentedControl, SettingRow as SharedSettingRow, SettingsGroup, Switch, RangeField, LoadingState } from "./design-system";
 import { ManagementFeedback } from "./managementFeedback";
 import { ProviderPicker } from "./ProviderPicker";
+import { SubscriptionConnection, subscriptionProviders } from "./SubscriptionConnection";
 import { reasoningDisplayName, reasoningModeOptions } from "./modelPresentation";
 import { ReasoningBudgetControl } from "./ReasoningBudgetControl";
 import type { ReasoningOption } from "./chatTypes";
@@ -848,6 +849,15 @@ export function ProviderWorkflow({
           </div>
         </SourceSettingField>
       )}
+      {subscriptionProviders.includes(provider) && <SourceSettingField
+        label={provider === "anthropic_claude_code_signin" ? "חיבור Claude Code" : "חיבור Google Antigravity"}
+        help="החיבור משתמש בכלי הרשמי של הספק; פרטי הכניסה אינם נשמרים בסמארטי."
+        dataPath="subscription_connection">
+        <SubscriptionConnection key={provider} provider={provider}
+          strategy={String(values.claude_code_auth_strategy || "claude_login")}
+          onStrategyChange={async value => { await save("claude_code_auth_strategy", value); }}
+          onChanged={refreshModels} />
+      </SourceSettingField>}
       {provider === "openai_codex_signin" && (
         <>
           <SourceSettingField

@@ -82,6 +82,9 @@ class ModelContextMixin(RequestBudgetMixin):
         elif self.mode == CODEX_SIGNIN_PROVIDER:
             self.codex_signin_provider = CodexSignInProvider(USER_DATA_DIR)
             self.universal_history = [{"role": "system", "content": self.system_prompt}]
+        elif self.mode in SUBSCRIPTION_PROVIDERS:
+            subscription_provider(self, self.mode)
+            self.universal_history = [{"role": "system", "content": self.system_prompt}]
         elif self.mode == "local" or is_openai_compatible_provider(self.mode):
             # Never retain a client for an old endpoint after setup fails.
             self.universal_client = None
@@ -1102,6 +1105,10 @@ class ModelContextMixin(RequestBudgetMixin):
             or self.settings.get("api_mode", "gemini")
             or "gemini"
         )
+        if provider in SUBSCRIPTION_PROVIDERS:
+            state = subscription_provider(self, provider).connection_status()
+            self._subscription_connection_message = state["message"]
+            return state["state"] in {"connected", "configured"}
         if provider == CODEX_SIGNIN_PROVIDER:
             codex_provider = getattr(self, "codex_signin_provider", None)
             if codex_provider is None:
@@ -1143,6 +1150,8 @@ class ModelContextMixin(RequestBudgetMixin):
                 if today not in data:
                     data[today] = {}
                 bucket = data[today].setdefault(model_name, {})
+                if usage_dict.get("billing_mode") == "subscription":
+                    bucket["billing_mode"] = "subscription"
                 previous_cost = (
                     RequestBudgetMixin._request_usage_cost(self, model_name, bucket, "")
                     if int(bucket.get("total", 0) or 0) else 0.0
@@ -1989,7 +1998,7 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
         )
 
         provider_mode = configured_provider_mode
-        if provider_mode == CODEX_SIGNIN_PROVIDER:
+        if provider_mode == CODEX_SIGNIN_PROVIDER or provider_mode in SUBSCRIPTION_PROVIDERS:
             tool_protocol_block = (
                 self._prompt_text('load_system_prompt_tool_protocol_block_1')
             )
@@ -2698,6 +2707,19 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                     len(request_messages),
                     sum(len(self._message_text_for_budget(message)) for message in request_messages),
                 )
+                if request_mode in SUBSCRIPTION_PROVIDERS:
+                    result = subscription_provider(self, request_mode).complete(
+                        request_messages, current_model,
+                        timeout=self._bounded_task_timeout(self.DEFAULT_PROVIDER_REQUEST_TIMEOUT_SECONDS),
+                        reasoning_effort=request_reasoning,
+                        cancel_event=getattr(getattr(self, "_execution_context", None), "cancel_event", None),
+                        purpose=request_purpose, stream=self._current_stream,
+                        system_prompt=request_system_prompt,
+                    )
+                    return self._log_api_request_success(
+                        request_log_id, request_mode, current_model, request_purpose,
+                        attempt_number, attempt_started, result,
+                    )
                 if request_mode == CODEX_SIGNIN_PROVIDER:
                     codex_provider = getattr(self, "codex_signin_provider", None)
                     if codex_provider is None:
@@ -3172,6 +3194,10 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                         attempt_number, attempt_started, result,
                     )
             except SmartiCancelled:
+                raise
+            except SubscriptionError:
+                # These messages are already safe and distinguish auth, quota,
+                # policy and protocol. Never retry with another billing route.
                 raise
             except CodexProtocolError:
                 # The agent loop returns this structured validation failure to

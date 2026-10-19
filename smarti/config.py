@@ -1977,6 +1977,8 @@ DEFAULT_SETTINGS = {
     "email_max_attachment_mb": 20,
     **{f"selected_{provider}_model": provider_default_model(provider) for provider in MODEL_PROVIDER_ORDER},
     "codex_reasoning_effort": "",  # Legacy field; concrete defaults and overrides are per model.
+    "claude_code_auth_strategy": "claude_login",
+    "subscription_provider_connections": {},
     "selected_model_source": {
         provider: MODEL_SELECTION_SOURCE_DEFAULT
         for provider in MODEL_PROVIDER_ORDER
