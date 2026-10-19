@@ -3,7 +3,7 @@
 - Plan ID: SMARTI-SUBSCRIPTION-PROVIDERS-2026
 - תאריך בדיקה: 2026-10-07, Asia/Jerusalem.
 - בסיס קוד שנבדק: `ee88d35`; עץ העבודה היה נקי בתחילת התכנון.
-- מצב מעודכן 2026-10-19: **מימוש חלקי — תשתית וקלוד במקור; Antigravity חסום בעקבות בדיקת בידוד חיה.** פרטי הביצוע וגבולות הקבלה ב־§17. אין שני ספקים מוכנים לשימוש מלא.
+- מצב מעודכן 2026-10-19: **Antigravity פועל במסלול CLI רשמי לטקסט וכלי סמארטי; Claude Code ממתין לאימות מנוי חי.** המסקנה החוסמת המקורית ב־§17 תוקנה בעקבות מחקר וניסויי §18. אין הצהרת השלמה של חיסכון מתקדם, מדיה או קבלת חבילה.
 - היקף מוזמן: תכנון מלא של שני ספקים המתחברים לחשבון המשתמש דרך הכלים הרשמיים, עם כלי סמארטי, מודלים, התחברות, שגיאות וחיסכון בטוקנים.
 - מקור מצב הביצוע של תוספת זו: טבלת השלבים בסעיף 15 במסמך זה. [יומן UX](ui_ux_redesign_execution.md) מתעד את זיקת הממשק לתכנון; אינו מחליף את טבלת הביצוע הזאת.
 
@@ -385,12 +385,12 @@ Claude SDK כבר עשוי לכלול בינארי רשמי. בוחרים בעל
 
 | שלב | תכולה ותוצר | תלות ותנאי סיום | מצב |
 |---|---|---|---|
-| SP-0 | ניסוי היתכנות מבודד לשני הספקים; גרסאות; auth, prompt, zero-tools, schema, models/effort, cancel ו־billing; השוואת claude_login מול setup_token_env, כולל metadata ובידוד | דוח נפרד לכל ספק ולמסלול Claude: GO/CONDITIONAL/NO-GO עם ראיות. Antigravity דורש הוכחה למסלול מנוי שעומד בהחלפת ההנחיות. אין עיכוב Claude בגלל שער Google או מסלול אסימון שאינו עומד בתנאים | CONDITIONAL Claude / NO-GO Antigravity |
+| SP-0 | ניסוי היתכנות מבודד לשני הספקים; גרסאות; auth, prompt, zero-tools, schema, models/effort, cancel ו־billing; השוואת claude_login מול setup_token_env, כולל metadata ובידוד | דוח נפרד לכל ספק ולמסלול Claude: GO/CONDITIONAL/NO-GO עם ראיות. Antigravity דורש הוכחה למסלול מנוי שעומד בהחלפת ההנחיות. אין עיכוב Claude בגלל שער Google או מסלול אסימון שאינו עומד בתנאים | CONDITIONAL Claude / GO Antigravity text, CLI1.4.2 |
 | SP-1 | protocol/process/catalog/error abstractions; adapters registry; run snapshot, isolation ו־Codex compatibility | SP-0 מגדיר contracts; רגרסיות Codex ו־API עוברות; אין שינוי התנהגות ספקים אחרים | IMPLEMENTED — isolated validation |
 | SP-2 | Claude adapter ו־SDK helper, auth operations, אסטרטגיית כניסה ואסימון סביבתי לפי GO, models/effort, complete/schema, usage, attachments ו־cancel | שער Claude GO; text/tool/final ומדיניות מוכחים במבודד ובהרצה חיה מוגדרת לכל אסטרטגיה שמוצעת | IMPLEMENTED — paid live validation pending |
-| SP-3 | Antigravity adapter, custom agent, account routing, models/effort/quota, schema/stream/cancel וצירופים נתמכים | שער Google GO; אין builtin effects או prompt כפול. אם דרישה חסומה, עדכון ממוקד לשער עם חלופה רשמית | BLOCKED — native tools remain available |
+| SP-3 | Antigravity adapter, custom agent, account routing, models/effort/quota, schema/stream/cancel וצירופים נתמכים | שער Google GO; אין builtin effects או prompt כפול. אם דרישה חסומה, עדכון ממוקד לשער עם חלופה רשמית | IMPLEMENTED — live Core tool cycle; text only |
 | SP-4 | חוזה v2, מסך חיבור משותף, שני אייקונים, בוררי שיחה/מועדפים, סנכרון וכשלים | adapters מוכנים; אייקוני המשתמש זמינים לסגירת מראה; UI/RTL ושמירה אמיתיים מוכחים | IMPLEMENTED — custom icons pending |
-| SP-5 | cache prefix, bounded process/session reuse, delta context, compaction coordination ומדידת חיסכון | אמינות stateless הוכחה; benchmark והשוואת איכות לפני/אחרי; אין duplication/policy regression | BASELINE ONLY — reuse/measurement pending |
+| SP-5 | cache prefix, bounded process/session reuse, delta context, compaction coordination ומדידת חיסכון | אמינות stateless הוכחה; benchmark והשוואת איכות לפני/אחרי; אין duplication/policy regression | PARTIAL — live prompt reduction measured; persistent reuse pending |
 | SP-6 | בדיקות שני ספקים, גרסאות/מודלים, Windows source והכנת staging/release manifest | כל היכולות המוזמנות מוכחות; gaps מסומנים; חבילה בפועל רק במשימת בנייה נפרדת שמורשית | PARTIAL — live/package acceptance pending |
 
 אומדן ראשוני: SP-0 כ־1–3 ימי הנדסה, תשתית כ־2–4, Claude כ־3–5, Antigravity כ־3–6 לאחר GO, ממשק כ־2–3, חיסכון וקבלה כ־3–5. סך כ־14–26 ימי הנדסה, עם אי־ודאות בעיקר בבידוד Antigravity ובהתנהגות גרסאות/חשבונות. זה אומדן היקף, לא הבטחת מועד ולא תוצאה של ניסוי חי. אם SP-0 נכשל בדרישה מרכזית, מעדכנים תכנון לפני עבודת ה־production של אותו ספק.
@@ -419,6 +419,8 @@ Claude SDK כבר עשוי לכלול בינארי רשמי. בוחרים בעל
 
 ## 17. ביצוע 2026-10-19 — מקור, חסמים וראיות
 
+**רישום היסטורי:** החסימה והמסקנות על כלי Antigravity בסעיף זה הוחלפו ב־§18. אירוע init.tools הציג קטלוג כללי ולא הוכיח זמינות בפועל; בניסוי המקורי הוחמצה האפשרות הרשמית excludeDefaultComponents.
+
 הרשאה: המשתמש ביקש לבצע את העבודה, לשמור קומיט ולהפעיל מחדש תוך שימור שפת העיצוב וכל התנהגות קיימת. בסיס `eea1522`, עץ נקי. המשתמש הבהיר שיש מנוי Google Pro/Antigravity וחשבון Claude חינמי בלבד; לא התבקש אסימון ולא הועבר סוד לצ׳אט.
 
 ### תוצאת SP-0
@@ -442,3 +444,17 @@ Claude SDK כבר עשוי לכלול בינארי רשמי. בוחרים בעל
 בסיס ההרצה stateless: קטלוג כלים/משוב מצומצמים של סמארטי, הנחיה מותאמת ונתוני cache מדווחים. לא מומש reuse מתמשך של session/process, לא נמדד חיסכון מול מנוי חי ולא הובטח אחוז. אין להעביר את SP-5 ל־COMPLETE. SP-3 נשאר חסום; SP-2 ו־SP-6 דורשים ראיית Claude בתשלום, ו־SP-4 ממתין גם לאייקונים. הבדיקות, הקומיט וההפעלה מחדש מתועדים ביומן UX §99 עם תוצאות סופיות.
 
 המשך נדרש: מסלול רשמי של Antigravity שמבטיח הסרת כלי/הנחיות הלקוח ומוכח ב־init/אבחון; מנוי Claude מתאים לבדיקת text→tool→result→final ופקיעה/אסימון אמיתיים; לאחר מכן בלבד מדידת cache/reuse והשלמת קבלת שני הספקים. אין סימון השלמה של התוכנית כולה על סמך המימוש החלקי.
+
+## 18. תיקון שער Antigravity ומחקר מסלולים נוספים — 2026-10-19
+
+המשתמש ביקש לחפש פתרון גם במסלולים לא רשמיים, לבדוק את השפעת ההנחיות/הכלים המקוריים ואת אפשרות Gemini Web; Claude Code הישיר ממתין למנוי לבדיקה. הממצאים, מקורות הקוד וההשוואה מפורטים ב־[דוח המחקר](antigravity_provider_research.md).
+
+ביומן השינויים הרשמי, גרסה1.2.1, מתועדת `excludeDefaultComponents: true`, להסרת מקטעי ההנחיות והכלים המובנים. יחד עם `inheritCustomizations: false`, `inheritMcp: false` ו־`tools: [finish]`, גרסה1.4.2 סיפקה מתאם מינימלי עובד. finish הוא serializer פנימי בלבד; פעולות סמארטי מוחזרות כנתונים ואינן מבוצעות בידי ה־CLI. רשימת init.tools נשארה זהה לקטלוג הכללי גם כשכלי קבצים לא היו זמינים; הבדיקה הקודמת הסתמכה עליה יתר על המידה.
+
+המתאם יוצר סוכן, הנחיות ומבנה תשובה בתיקייה פרטית חדשה לכל בקשה, מעביר טקסט דרך stdin, ומוחק את התיקייה בסיום. אין תלות ב־Git, עריכה ידנית של תצורת החשבון, קריאת cookies או העתקת credentials. ה־CLI עדיין מנהל את תיעוד הריצות הרגיל שלו. אימות agent/model, סיום תקין ומבנה מקומי מחייבים; הופעת פעולת native שאינה finish מפסיקה את ההרצה. גרסאות ישנות מ־1.4.2 או major שונה אינן מוצעות כהתאמה מוכחת. פורמט התעבורה משתמש בערכים ריקים בשדות לא פעילים, כדי למנוע המרות null שונות בין משפחות המודלים, וממופה לחוזה Core הקפדני הקיים. שגיאת503/חוסר קיבולת מזוהה בלי fallback למודל אחר או ל־API.
+
+כניסה מתבצעת בחלון agy הרשמי; בסיומה המשתמש יוצא ממנו עם Ctrl+D. בדיקת החיבור משתמשת ב־`agy -p /usage --output-format json`, פקודת metadata עם אפס תורות/טוקני הסקה. נתוני המכסה המדווחים מוצגים לפי קבוצות נפרדות, בלי לחבר מכסות Gemini ו־Claude/GPT. המודלים נלקחים מ־agy models ורמת החשיבה כלולה במזהה המודל. נתוני usage מנורמלים כך שקלט כולל cache פעם אחת, וחשיבה אינה נוספת לפלט פעמיים. מחיר מנוי נשאר לא ידוע.
+
+ראיות חיות מבודדות: נמדדו6913 מול631 טוקני קלט לאותה בקשה ואותה הנחיית סוכן, ללא/עם הסרת רכיבי ברירת המחדל, כ־90.9% בבדיקה הזאת בלבד. בקרה עם view_file מפורש קראה קובץ canary; התצורה המינימלית לא קראה אותו והשתמשה רק ב־finish. בוצעה שיחה מלאה ב־Core אמיתי בפרופיל נפרד: אישור קריאת canary→file_manager/read_document→תוצאת כלי→תשובה מדויקת; סירוב לאישור כובד. הוכחו תשובות מובנות ממשפחות Gemini, Claude דרך Google ו־GPT-OSS, וכן כותרת בעברית; GPT-OSS הציג גם503 קיבולת, ובניסיון תקין הוסיף נקודה מעבר לבקשת הטקסט המדויק. אין טענה לאיכות אחידה בכל13 המודלים שבקטלוג.
+
+היקף נוכחי: טקסט וקבצי טקסט, schema וסטרימינג, כלי Core והרשאות, שימוש ומכסה. תמונות/PDF/אודיו/וידאו אינם נתמכים במתאם stdin הזה ומקבלים אבחון מפורש. האייקונים הייעודיים, כניסה ראשונה מחשבון מנותק, מדידת ביצועים רחבה, reuse מתמשך וקבלת חבילה נשארים פתוחים. אין חיבור לא רשמי או Gemini Web פעיל במוצר. אימות קוד/ממשק והפעלה מחדש מתועדים ביומן UX §100.

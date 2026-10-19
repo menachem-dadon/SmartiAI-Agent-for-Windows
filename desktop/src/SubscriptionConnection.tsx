@@ -5,7 +5,8 @@ import { ManagementFeedback } from "./managementFeedback";
 import { coreApi, encodePath } from "./coreApi";
 
 export const subscriptionProviders = ["anthropic_claude_code_signin", "google_antigravity_signin"];
-type Connection = { state: string; message: string; id?: string; operation_id?: string; install_url?: string; connection?: Connection };
+type Connection = { state: string; message: string; id?: string; operation_id?: string; install_url?: string; connection?: Connection;
+  quota?: { available: boolean; groups: { name: string; buckets: { window: string; remaining_fraction: number; reset_time: string }[] }[] } };
 
 export function SubscriptionConnection({ provider, strategy, onStrategyChange, onChanged }: {
   provider: string; strategy: string; onStrategyChange: (value: string) => Promise<void>; onChanged: () => Promise<void>;
@@ -77,6 +78,7 @@ export function SubscriptionConnection({ provider, strategy, onStrategyChange, o
     <ManagementFeedback message={error || connection?.message || "בודק את מצב רכיב החיבור…"} />
     <div className="inline-actions codex-actions">
       {claude && strategy === "claude_login" && <Button variant="primary" disabled={busy || Boolean(operation)} onClick={() => void action("login")}>התחבר עם Claude Code</Button>}
+      {!claude && !blocked && <Button variant="primary" disabled={busy || Boolean(operation)} onClick={() => void action("login")}>התחבר עם Antigravity</Button>}
       <Button icon="plug" disabled={busy || Boolean(operation)} onClick={() => void action("check")}>בדוק חיבור</Button>
       {operation ? <Button disabled={busy} onClick={() => void action("cancel")}>בטל התחברות</Button>
         : <Button disabled={busy} onClick={() => void action("disconnect")}>נתק מסמארטי</Button>}
@@ -89,8 +91,11 @@ export function SubscriptionConnection({ provider, strategy, onStrategyChange, o
       במסוף של Claude Code הפעל <bdi>claude setup-token</bdi> והגדר <bdi>CLAUDE_CODE_OAUTH_TOKEN</bdi> בסביבת ההפעלה.
       לאחר שינוי האסימון הפעל מחדש את סמארטי. אין להדביק אותו כאן; הוא אינו נשמר בהגדרות.
     </p>}
-    <p className="secret-instructions">{claude ? "נדרש מנוי Claude מתאים; חשבון חינמי אינו כולל חיבור זה. הכלי הרשמי מנהל את פרטי הכניסה." : blocked ? "גילוי המודלים זמין לצורך אבחון; הוא אינו מעיד שהחיבור לשיחה מוכן." : "החיבור דורש רכיב רשמי ותמיכה בבידוד כלים."}
-      {" "}מכסת המנוי אינה זמינה כאן. ניתוק מסמארטי אינו מוציא מהחשבון בכלי הרשמי.
+    {connection?.quota?.available && connection.quota.groups.map((group, index) => <p className="secret-instructions" key={index}>
+      <bdi>{group.name}</bdi>{": "}{group.buckets.map(bucket => `${bucket.window === "weekly" ? "שבועי" : bucket.window === "5h" ? "5 שעות" : bucket.window}: ${Math.round(bucket.remaining_fraction * 100)}% נותרו`).join(" · ")}
+    </p>)}
+    <p className="secret-instructions">{claude ? "נדרש מנוי Claude מתאים; חשבון חינמי אינו כולל חיבור זה. הכלי הרשמי מנהל את פרטי הכניסה." : blocked ? "גילוי המודלים זמין לצורך אבחון; הוא אינו מעיד שהחיבור לשיחה מוכן." : "החיבור הרשמי תומך בטקסט ובקבצי טקסט. רמת החשיבה נבחרת כחלק משם המודל. לאחר כניסה בחלון הרשמי יש לצאת ממנו בעזרת Ctrl+D."}
+      {" "}{!connection?.quota?.available && "מכסת המנוי אינה זמינה כאן. "}ניתוק מסמארטי אינו מוציא מהחשבון בכלי הרשמי.
     </p>
   </div>;
 }

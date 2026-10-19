@@ -40,6 +40,8 @@ def safe_failure(raw):
         return SubscriptionError("החשבון אינו מחובר או שהחיבור פג. יש להתחבר מחדש בהגדרות הספק.", "signin_required")
     if any(word in text for word in ("quota", "usage limit", "rate_limit", "rate limit", "429")):
         return SubscriptionError("מכסת החשבון או קצב הבקשות הוגבלו. יש לבדוק את המכסה אצל הספק ולנסות מאוחר יותר.", "signin_usage_limit")
+    if any(word in text for word in ("503", "no capacity", "high traffic", "temporarily unavailable", "overloaded")):
+        return SubscriptionError("שרת הספק עמוס או שאין כרגע קיבולת למודל שנבחר. אפשר לנסות שוב מאוחר יותר או לבחור מודל אחר.", "provider_overloaded")
     if any(word in text for word in ("subscription", "upgrade", "pro plan", "403", "not eligible")):
         return SubscriptionError("החשבון או המנוי אינם זכאים לבקשה. יש לבדוק את התוכנית והרשאות המודל אצל הספק.", "account_ineligible")
     if any(word in text for word in ("unknown model", "model not", "not supported")):

@@ -31,6 +31,22 @@ test("Antigravity displays the real isolation blocker and never presents a worki
   expect(screen.getByText(/גילוי המודלים זמין לצורך אבחון/)).toBeTruthy();
 });
 
+test("Antigravity offers official login and displays reported quota without a credential field", async () => {
+  api.mockResolvedValueOnce({ state: "connected", message: "Antigravity מחובר", quota: { available: true, groups: [
+    { name: "Gemini Models", buckets: [{ window: "weekly", remaining_fraction: .85, reset_time: "2026-10-26T10:00:00Z" }] },
+  ] } });
+  api.mockResolvedValueOnce({ id: "google-login", state: "running", message: "השלם כניסה בחלון הרשמי" });
+  render(<SubscriptionConnection {...props(google)} />);
+  await screen.findByText("Antigravity מחובר");
+  expect(screen.getByText(/שבועי: 85% נותרו/)).toBeTruthy();
+  expect(screen.getByText(/רמת החשיבה נבחרת כחלק משם המודל/)).toBeTruthy();
+  expect(screen.queryByText(/מכסת המנוי אינה זמינה/)).toBeNull();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "התחבר עם Antigravity" }));
+  await screen.findByText("השלם כניסה בחלון הרשמי");
+  expect(api.mock.calls[1][1]).toBe(`/v2/providers/${google}/connection/login`);
+});
+
 test("token strategy has instructions and no secret capture or automatic login", async () => {
   api.mockResolvedValue({ state: "disconnected", message: "חסר אסימון בסביבה" });
   render(<SubscriptionConnection {...props()} strategy="setup_token_env" />);

@@ -1287,9 +1287,17 @@ class SmartiLocalGateway:
         return await self._idempotent(request, "subscriptionConnection", perform)
 
     async def _subscription_quota(self, request):
-        from .subscription_providers import PROVIDERS
+        from .subscription_providers import ANTIGRAVITY, PROVIDERS, get_provider
+        from .subscription_providers.base import SubscriptionError
         if request.match_info["provider"] not in PROVIDERS:
             return self._error(request, 404, "unknown_subscription_provider")
+        if request.match_info["provider"] == ANTIGRAVITY:
+            provider = get_provider(self.core, ANTIGRAVITY)
+            if not provider.disconnected:
+                try:
+                    return self._ok(request, await asyncio.to_thread(provider.quota))
+                except SubscriptionError:
+                    pass
         return self._ok(request, {"available": False, "source": "unavailable",
             "message": "נתוני המכסה אינם זמינים דרך ממשק רשמי בחיבור זה."})
 

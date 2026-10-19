@@ -164,15 +164,123 @@ class SubscriptionTests(unittest.TestCase):
         self.turn([{"type": "result", "ok": True, "output": {"kind": "final", "tool_calls": None,
             "progress_report": None, "final_answer": "ok"}}], messages=messages, inspect=inspect)
 
-    def test_antigravity_catalog_is_not_readiness_or_tool_isolation_evidence(self):
+    def test_antigravity_connection_requires_supported_version_and_readonly_account_metadata(self):
         provider = AntigravityProvider(self.temp.name, "google_login")
+        quota = {"status": "SUCCESS", "num_turns": 0, "command": {"name": "usage", "data": {"groups": [
+            {"name": "Gemini", "buckets": [{"window": "5h", "remaining_fraction": .75, "reset_time": "2026-10-19T12:00:00Z"}]}]}}}
         with mock.patch.object(provider, "executable", return_value="agy"), \
-             mock.patch.object(provider, "run", side_effect=["1.4.2", "gemini-test-high\tTest model\n"]):
-            self.assertEqual(provider.connection_status()["state"], "policy_conflict")
+             mock.patch.object(provider, "run", side_effect=["1.4.2", json.dumps(quota), "gemini-test-high\tTest model\n"]):
+            status = provider.connection_status()
+            self.assertEqual(status["state"], "connected")
+            self.assertEqual(status["quota"]["groups"][0]["buckets"][0]["remaining_fraction"], .75)
             self.assertEqual(provider.read_models(), ["gemini-test-high"])
-        with self.assertRaises(SubscriptionError) as error:
-            provider.complete([], "gemini-test-high")
-        self.assertEqual(error.exception.reason, "policy_conflict")
+        with mock.patch.object(provider, "executable", return_value="agy"), mock.patch.object(provider, "run", return_value="1.2.0"):
+            self.assertEqual(provider.connection_status()["state"], "incompatible_version")
+
+    def agy_turn(self, events=None, *, inspect=None, purpose="agent", messages=None, stream=None):
+        provider = AntigravityProvider(self.temp.name, "google_login")
+        provider.models = [{"id": "gemini-test-low", "efforts": []}]
+        output = {"kind": "final", "progress_report": None, "tool_calls": None, "final_answer": "שלום"}
+        def run(command, **kwargs):
+            if command[-1] == "--version":
+                return "1.4.2"
+            agent_name = command[command.index("--agent") + 1]
+            if inspect:
+                inspect(command, kwargs)
+            rows = events if events is not None else [
+                {"event": "init", "init": {"agent": agent_name, "model": "gemini-test-low", "tools": ["run_command", "view_file", "finish"]}},
+                {"event": "step_update", "step_update": {"step_type": "tool", "tool_name": "finish"}},
+                {"event": "result", "result": {"status": "SUCCESS", "structured_output": output if purpose == "agent" else {"text": "כותרת"},
+                    "usage": {"input_tokens": 100, "cache_read_tokens": 80, "output_tokens": 20, "thinking_tokens": 12}}}]
+            for event in rows:
+                event = copy.deepcopy(event)
+                if event.get("event") == "init" and event.get("init", {}).get("agent") == "$agent":
+                    event["init"]["agent"] = agent_name
+                kwargs["event"](json.dumps(event, ensure_ascii=False))
+            return ""
+        with mock.patch.object(provider, "executable", return_value="agy"), mock.patch.object(provider, "run", side_effect=run):
+            return provider.complete(messages or [{"role": "user", "content": "hello"}], "gemini-test-low", purpose=purpose, stream=stream)
+
+    def test_antigravity_uses_private_minimal_agent_and_stdin_without_global_settings_mutation(self):
+        roots = []
+        def inspect(command, kwargs):
+            root = Path(kwargs["cwd"])
+            roots.append(root)
+            agent = next((root / ".agents" / "agents").glob("*.md")).read_text(encoding="utf-8")
+            for setting in ("tools: [finish]", "excludeDefaultComponents: true", "inheritCustomizations: false", "inheritMcp: false", "hooks: []"):
+                self.assertIn(setting, agent)
+            self.assertIn("Smarti Core exclusively owns", agent)
+            wire = json.loads(Path(command[command.index("--json-schema") + 1]).read_text(encoding="utf-8"))
+            self.assertEqual(wire["properties"]["tool_calls"]["type"], "array")
+            self.assertEqual(wire["properties"]["final_answer"]["type"], "string")
+            self.assertNotIn("--dangerously-skip-permissions", command)
+            self.assertNotIn("hello", command)
+            self.assertEqual(json.loads(kwargs["payload"])["event"], "user")
+        answer, usage = self.agy_turn(inspect=inspect)
+        self.agy_turn(inspect=inspect)
+        self.assertEqual(answer, "שלום")
+        self.assertNotEqual(roots[0], roots[1])
+        self.assertTrue(all(not path.exists() for path in roots))
+        self.assertEqual((usage["prompt"], usage["completion"], usage["total"]), (180, 20, 200))
+        self.assertEqual((usage["cached_prompt"], usage["reasoning"]), (80, 12))
+
+    def test_antigravity_rejects_wrong_agent_model_native_tool_and_duplicate_completion(self):
+        init = {"event": "init", "init": {"agent": "$agent", "model": "gemini-test-low"}}
+        result = {"event": "result", "result": {"status": "SUCCESS", "structured_output": {"kind": "final", "progress_report": None, "tool_calls": None, "final_answer": "ok"}}}
+        cases = [[result], [dict(init, init={"agent": "other", "model": "gemini-test-low"})],
+            [dict(init, init={"agent": "$agent", "model": "other"})],
+            [init, {"event": "step_update", "step_update": {"step_type": "tool", "tool_name": "view_file"}}],
+            [init, result, result]]
+        for events in cases:
+            with self.subTest(events=events), self.assertRaises(SubscriptionError) as error:
+                self.agy_turn(events)
+            self.assertEqual(error.exception.reason, "provider_contract_violation")
+
+    def test_antigravity_success_without_schema_is_not_a_valid_completion(self):
+        from smarti.codex_signin import CodexProtocolError
+        with self.assertRaises(CodexProtocolError):
+            self.agy_turn([{"event": "init", "init": {"agent": "$agent", "model": "gemini-test-low"}},
+                {"event": "result", "result": {"status": "SUCCESS", "response": "no finish tool"}}])
+        self.assertEqual(self.agy_turn(purpose="title")[0], "כותרת")
+
+    def test_antigravity_normalizes_only_empty_inactive_fields_from_cli_serializers(self):
+        from smarti.codex_signin import CodexProtocolError
+        init = {"event": "init", "init": {"agent": "$agent", "model": "gemini-test-low"}}
+        def result(output):
+            return {"event": "result", "result": {"status": "SUCCESS", "structured_output": output}}
+        final = {"kind": "final", "final_answer": "ok", "tool_calls": [], "progress_report": ""}
+        self.assertEqual(self.agy_turn([init, result(final)])[0], "ok")
+        call = {"name": "file_manager", "arguments_json": json.dumps({"action": "stat", "path": "C:/בדיקה.txt"})}
+        tool = {"kind": "tool_calls", "final_answer": "", "tool_calls": [call], "progress_report": None}
+        decoded = json.loads(self.agy_turn([init, result(tool)])[0])
+        self.assertEqual(decoded["tool_calls"][0]["arguments"]["path"], "C:/בדיקה.txt")
+        with self.assertRaises(CodexProtocolError):
+            self.agy_turn([init, result(dict(final, tool_calls=[call]))])
+
+    def test_antigravity_subscription_env_rejects_api_overrides_and_media(self):
+        provider = AntigravityProvider(self.temp.name, "google_login")
+        provider.models = [{"id": "gemini-test-low", "efforts": []}]
+        overrides = {"GEMINI_API_KEY": "unused-api-key", "GOOGLE_GENAI_USE_VERTEXAI": "true", "AGY_ADC_AUTH": "1", "GOOGLE_GEMINI_BASE_URL": "https://invalid.example"}
+        with mock.patch.dict(os.environ, overrides):
+            for key in overrides:
+                self.assertNotIn(key, provider.environment())
+                self.assertIn(key, os.environ)
+        with mock.patch.object(provider, "version", return_value="1.4.2"), self.assertRaises(SubscriptionError) as error:
+            provider.complete([{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]}], "gemini-test-low")
+        self.assertEqual(error.exception.reason, "unsupported_attachment")
+        self.assertEqual(safe_failure("503: No capacity available for model gpt-oss").reason, "provider_overloaded")
+
+    def test_antigravity_quota_rejects_inference_and_filters_invalid_or_private_fields(self):
+        provider = AntigravityProvider(self.temp.name, "google_login")
+        payload = {"status": "SUCCESS", "num_turns": 0, "command": {"name": "usage", "data": {"email": "not-returned", "groups": [
+            {"name": "Gemini", "buckets": [{"remaining_fraction": -1}, {"remaining_fraction": True}, {"remaining_fraction": .5, "private": "not-returned"}]}]}}}
+        with mock.patch.object(provider, "executable", return_value="agy"), mock.patch.object(provider, "run", return_value=json.dumps(payload)):
+            result = provider.quota()
+            self.assertEqual(len(result["groups"][0]["buckets"]), 1)
+            self.assertNotIn("not-returned", json.dumps(result))
+        payload["num_turns"] = 1
+        with mock.patch.object(provider, "executable", return_value="agy"), mock.patch.object(provider, "run", return_value=json.dumps(payload)), self.assertRaises(SubscriptionError):
+            provider.quota()
 
     def test_subscription_core_route_never_falls_back_to_api_or_retries_policy_errors(self):
         core = RequestCore(CLAUDE)

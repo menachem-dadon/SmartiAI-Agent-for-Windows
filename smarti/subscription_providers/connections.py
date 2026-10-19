@@ -91,9 +91,7 @@ class Connections:
                 return self.operation(name, identifier)
         if action != "login":
             raise ValueError("unknown_connection_action")
-        if name != CLAUDE:
-            return provider.connection_status()
-        if provider.strategy != "claude_login":
+        if name == CLAUDE and provider.strategy != "claude_login":
             return provider.state("wrong_auth_mode", "במסלול האסימון יש להגדיר את סביבת ההפעלה ולבדוק חיבור, או לבחור כניסה רגילה.")
         executable = provider.executable()
         with self.lock:
@@ -107,10 +105,12 @@ class Connections:
                 raise SubscriptionError("יש להשלים או לבטל את פעולת ההתחברות הקודמת.", "busy")
             identifier = uuid.uuid4().hex
             operation = {"id": identifier, "provider": name, "state": "running",
-                "message": "יש להשלים כניסה בחלון הרשמי של Claude Code.", "created": time.monotonic()}
+                "message": "יש להשלים כניסה בחלון הרשמי של Claude Code." if name == CLAUDE else
+                    "יש להשלים כניסה בחלון Antigravity הרשמי, ואז לצאת ממנו בעזרת Ctrl+D.", "created": time.monotonic()}
             self.operations[identifier] = operation
             provider.workspace.mkdir(parents=True, exist_ok=True)
-            operation["process"] = subprocess.Popen([executable, "auth", "login"], cwd=provider.workspace,
+            command = [executable, "auth", "login"] if name == CLAUDE else [executable]
+            operation["process"] = subprocess.Popen(command, cwd=provider.workspace,
                 env=provider.environment(), creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
             def finish():
                 process = operation["process"]
@@ -120,7 +120,7 @@ class Connections:
                         if operation["state"] != "running":
                             return
                         provider.disconnected = False
-                        result = provider.connection_status() if code == 0 else provider.state("disconnected", "ההתחברות לא הושלמה. אפשר לנסות שוב.")
+                        result = provider.connection_status() if code == 0 or name != CLAUDE else provider.state("disconnected", "ההתחברות לא הושלמה. אפשר לנסות שוב.")
                         provider.models = []
                         operation.update(state="completed", message=result["message"], connection=result)
                         if result["state"] == "connected":
