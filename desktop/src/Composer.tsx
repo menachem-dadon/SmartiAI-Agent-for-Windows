@@ -15,7 +15,7 @@ import type { ResolvedTheme } from "./designSystem";
 import { DesignSystemProvider, Icon, Menu, Switch } from "./design-system";
 import "./chat.css";
 import { ComposerModelPicker } from "./ComposerModelPicker";
-import { quotaResetLabel } from "./quotaPresentation";
+import { useProviderQuota } from "./ProviderQuota";
 import { autonomyLabels, autonomyProfiles } from "./autonomyProfiles";
 import { coreApi } from "./coreApi";
 import { composerInteractionRevision, useComposerFocus } from "./composerFocus";
@@ -71,18 +71,6 @@ async function pastedFile(file: File): Promise<PendingAttachment> {
       : undefined,
   };
 }
-type QuotaWindow = {
-  remaining_percent: number;
-  resets_at?: number;
-  window_minutes?: number;
-};
-type CodexQuota = {
-  available: boolean;
-  plan_type?: string;
-  five_hour?: QuotaWindow | null;
-  weekly?: QuotaWindow | null;
-  fetched_at?: number;
-};
 type VoiceState = {
   session_id: string;
   active: boolean;
@@ -147,10 +135,7 @@ export function Composer({
   const sending = useRef(false);
   const [submittingOwner, setSubmittingOwner] = useState<string | null>(null);
   const submitting = submittingOwner === (conversationId || "new");
-  const [quota, setQuota] = useState<CodexQuota | null>(null);
-  const [quotaLoading, setQuotaLoading] = useState(false);
-  const [quotaError, setQuotaError] = useState("");
-  const quotaFetchedAt = useRef(0);
+  const { summary: quotaSummary, refresh: refreshQuota } = useProviderQuota(provider, model);
   const area = useRef<HTMLTextAreaElement>(null);
   const requestFocus = useComposerFocus(area, conversationId, focusRequest,
     Boolean(disabled || listening || voiceStarting || submitting), focusAllowed);
@@ -174,29 +159,6 @@ export function Composer({
     }
     owner.current = conversationId;
   }, [conversationId]);
-  const refreshQuota = async (minimumAgeSeconds = 0) => {
-    if (
-      provider !== "openai_codex_signin" ||
-      quotaLoading ||
-      (quotaFetchedAt.current &&
-        Date.now() - quotaFetchedAt.current < minimumAgeSeconds * 1000)
-    )
-      return;
-    setQuotaLoading(true);
-    setQuotaError("");
-    try {
-      const data = await coreApi<CodexQuota>(
-        "GET",
-        "/v2/providers/openai_codex_signin/quota",
-      );
-      setQuota(data);
-      quotaFetchedAt.current = Date.now();
-    } catch (reason) {
-      setQuotaError(String(reason));
-    } finally {
-      setQuotaLoading(false);
-    }
-  };
   useLayoutEffect(() => {
     const node = area.current;
     if (!node) return;
@@ -216,19 +178,6 @@ export function Composer({
     observer?.observe(node);
     return () => observer?.disconnect();
   }, [text]);
-  useEffect(() => {
-    if (provider !== "openai_codex_signin") {
-      setQuota(null);
-      setQuotaError("");
-      return;
-    }
-    const first = window.setTimeout(() => void refreshQuota(15), 1600);
-    const timer = window.setInterval(() => void refreshQuota(15), 60_000);
-    return () => {
-      clearTimeout(first);
-      clearInterval(timer);
-    };
-  }, [provider]);
   const stageFiles = async (files: File[]) => {
     if (!files.length) { requestFocus(); return; }
     const stageOwner = conversationId;
@@ -379,32 +328,6 @@ export function Composer({
     return () => window.removeEventListener("smarti:voice-hotkey", activate);
   }, []);
   const canSend = Boolean(text.trim() || attachments.length);
-  const quotaStatus = quotaError ? "לא ניתן לטעון את המכסה כרגע"
-    : !quota ? "טוען נתוני מכסה…"
-    : !quota.available ? "נתוני המכסה אינם זמינים כרגע"
-    : `${quota.plan_type ? `תוכנית ${quota.plan_type} · ` : ""}${quotaLoading ? "מתעדכן…" : "מעודכן כעת"}`;
-  const quotaSummary = provider === "openai_codex_signin" ? (
-    <section className="codex-quota-summary" aria-label="מכסת Codex שנותרה" title={quotaStatus}>
-      {(["five_hour", "weekly"] as const).map(key => {
-        const windowData = quota?.[key];
-        const value = windowData?.remaining_percent;
-        const remaining = typeof value === "number" && Number.isFinite(value)
-          ? Math.max(0, Math.min(100, Math.round(value))) : null;
-        const label = key === "five_hour" ? "5 שעות" : "שבוע";
-        const reset = quotaResetLabel(windowData?.resets_at, key);
-        const detail = remaining === null ? quotaStatus : reset ? `איפוס: ${reset}` : "זמן האיפוס אינו זמין";
-        const tone = remaining === null ? "" : remaining < 20 ? "is-low" : remaining < 50 ? "is-medium" : "is-good";
-        return (
-          <div className={`quota-window ${tone}`} key={key} title={`${quotaStatus} · ${detail}`}
-            aria-label={`${label}: ${remaining === null ? "המכסה אינה זמינה" : `${remaining}% נותרו`}. ${detail}`}>
-            <p><b>{label}</b><em>{remaining === null ? "—" : `${remaining}%`}</em></p>
-            <i aria-hidden="true"><span style={{ width: `${remaining ?? 0}%` }} /></i>
-            <small>{remaining === null ? (quotaLoading ? "טוען…" : "לא זמין") : reset || "לא זמין"}</small>
-          </div>
-        );
-      })}
-    </section>
-  ) : undefined;
   return (
     <DesignSystemProvider theme={theme} className="composer-design"><div
       className={`composer ${running ? "is-running" : ""}`}

@@ -13,6 +13,7 @@ class Connections:
         self.core = core
         self.operations = {}
         self.lock = threading.RLock()
+        self.snapshots = {}
 
     def close(self):
         with self.lock:
@@ -26,7 +27,9 @@ class Connections:
                 if operation["provider"] == name and operation["state"] == "running"), None)
             if running:
                 return get_provider(self.core, name).state("login_in_progress", running["message"], operation_id=running["id"])
-        return get_provider(self.core, name).connection_status()
+            provider = get_provider(self.core, name)
+            snapshot = self.snapshots.get((name, provider.strategy))
+            return dict(snapshot) if snapshot else provider.state("unchecked", "טרם נבדק")
 
     def operation(self, name, identifier):
         with self.lock:
@@ -46,16 +49,24 @@ class Connections:
                 if process:
                     get_provider(self.core, name).terminate(process)
                 operation["message"] = "ההתחברות בוטלה."
+                provider = get_provider(self.core, name)
+                snapshot = self.snapshots.get((name, provider.strategy))
+                if snapshot:
+                    operation["connection"] = dict(snapshot)
             return self.operation(name, identifier)
 
-    def action(self, name, action):
+    def action(self, name, action, *, automatic=False):
         provider = get_provider(self.core, name)
+        if automatic and self.core.settings.get("subscription_provider_connections", {}).get(name) is False:
+            return self.status(name)
         if action == "disconnect":
             with self.lock:
                 for operation in list(self.operations.values()):
                     if operation["provider"] == name and operation["state"] == "running":
                         self.cancel(name, operation["id"])
             result = provider.disconnect()
+            with self.lock:
+                self.snapshots[(name, provider.strategy)] = result
             self.core.settings.setdefault("subscription_provider_connections", {})[name] = False
             self.core._save_settings()
             return result
@@ -76,10 +87,16 @@ class Connections:
                     try:
                         provider.disconnected = False
                         result = provider.connection_status()
+                        if result["state"] in {"connected", "configured"} and not provider.models:
+                            try:
+                                provider.catalog()
+                            except SubscriptionError:
+                                pass  # Connection and catalog availability are separate.
                         with self.lock:
                             if operation["state"] != "running":
                                 return
                             operation.update(state="completed", message=result["message"], connection=result)
+                            self.snapshots[(name, provider.strategy)] = result
                             if result["state"] in {"connected", "configured"}:
                                 self.core.settings.setdefault("subscription_provider_connections", {})[name] = True
                                 self.core._save_settings()
@@ -123,6 +140,7 @@ class Connections:
                         result = provider.connection_status() if code == 0 or name != CLAUDE else provider.state("disconnected", "ההתחברות לא הושלמה. אפשר לנסות שוב.")
                         provider.models = []
                         operation.update(state="completed", message=result["message"], connection=result)
+                        self.snapshots[(name, provider.strategy)] = result
                         if result["state"] == "connected":
                             self.core.settings.setdefault("subscription_provider_connections", {})[name] = True
                             self.core._save_settings()

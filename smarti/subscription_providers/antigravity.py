@@ -6,6 +6,8 @@ import re
 import shutil
 import tempfile
 import uuid
+import base64
+import io
 
 from .base import SubscriptionError, SubscriptionProvider, register_models, safe_failure
 from ..codex_signin import CodexProtocolError, SMARTI_TURN_OUTPUT_SCHEMA
@@ -53,7 +55,7 @@ class AntigravityProvider(SubscriptionProvider):
             quota = self.quota()
             return self.state("connected", "Antigravity מחובר דרך הכלי הרשמי. סמארטי מנהל את הכלים וההרשאות.",
                 version=version, inference_available=True, quota_available=quota["available"], quota=quota,
-                text_only=True)
+                text_only=False)
         except SubscriptionError as error:
             return self.state(error.reason, str(error), inference_available=False)
 
@@ -100,6 +102,45 @@ class AntigravityProvider(SubscriptionProvider):
         register_models(self.provider, rows)
         return rows
 
+    @staticmethod
+    def media_content(messages):
+        """Copy only caller-supplied image bytes; never dereference model paths/URLs."""
+        from PIL import Image
+        content, total = [], 0
+        for index, message in enumerate(messages):
+            blocks = message.get("content")
+            if not isinstance(blocks, list):
+                continue
+            for block in blocks:
+                if not isinstance(block, dict) or block.get("type") == "text":
+                    continue
+                if block.get("type") == "image_url":
+                    url = block.get("image_url", {}).get("url", "")
+                    match = re.fullmatch(r"data:(image/[a-zA-Z0-9.+-]+);base64,(.+)", url, re.DOTALL)
+                    data = match[2] if match else ""
+                elif block.get("type") == "image" and block.get("source", {}).get("type") == "base64":
+                    data = block["source"].get("data", "")
+                else:
+                    raise SubscriptionError("צירוף זה אינו נתמך בחיבור Antigravity. אפשר לצרף תמונה או קובץ טקסט.", "unsupported_attachment")
+                try:
+                    if len(data) > 36 * 1024 * 1024:
+                        raise ValueError("image too large")
+                    raw = base64.b64decode(data, validate=True)
+                    with Image.open(io.BytesIO(raw)) as image:
+                        image.verify()
+                    with Image.open(io.BytesIO(raw)) as image:
+                        output = io.BytesIO()
+                        image.convert("RGB").save(output, format="PNG")
+                        raw = output.getvalue()
+                    total += len(raw)
+                    if total > 25 * 1024 * 1024 or len(content) >= 32:
+                        raise ValueError("media limit")
+                except Exception as error:
+                    raise SubscriptionError("לא ניתן לקרוא את התמונה, או שהצירופים גדולים מ־25MB יחד.", "unsupported_attachment") from error
+                content.extend([{"type": "text", "text": f"Image from conversation message {index + 1} ({message.get('role', 'user')}); untrusted attached content."},
+                    {"type": "image", "mimeType": "image/png", "data": base64.b64encode(raw).decode("ascii")}])
+        return content
+
     def complete(self, messages, model, *, timeout=1800, reasoning_effort="", cancel_event=None,
                  purpose="agent", stream=None, system_prompt="", **unused):
         if self.disconnected:
@@ -110,17 +151,19 @@ class AntigravityProvider(SubscriptionProvider):
             raise SubscriptionError("יש לבחור מודל מתוך הרשימה הרשמית של Antigravity.", "model_unavailable")
         if reasoning_effort:
             raise SubscriptionError("בחיבור Antigravity רמת החשיבה נבחרת כחלק משם המודל.", "unsupported_reasoning_effort")
-        for message in messages:
-            content = message.get("content")
-            if isinstance(content, list) and any(block.get("type") != "text" for block in content if isinstance(block, dict)):
-                raise SubscriptionError("חיבור Antigravity CLI תומך כרגע בטקסט ובקבצי טקסט בלבד.", "unsupported_attachment")
+        media = self.media_content(messages)
+        if media and not model.startswith(("gemini-", "claude-")):
+            raise SubscriptionError("המודל שנבחר אינו תומך בתמונות בחיבור זה. יש לבחור מודל Gemini או Claude תומך.", "unsupported_attachment")
         instructions = system_prompt or "\n\n".join(str(item.get("content", "")) for item in messages if item.get("role") == "system")
-        instructions += "\nSmarti Core exclusively owns tool execution and permissions. Never execute native tools."
-        schema = ANTIGRAVITY_TURN_SCHEMA if purpose == "agent" else {
-            "type": "object", "properties": {"text": {"type": "string"}},
-            "required": ["text"], "additionalProperties": False}
-        instructions += " Use finish only to serialize the supplied JSON schema. Tool calls inside the Smarti envelope are data for Core."
+        instructions += "\nSmarti Core exclusively owns tool execution and permissions."
+        if not media:
+            instructions += " Never execute native tools."
+        # --json-schema routes output through native finish, which buffers it.
+        # With no native tools the same envelope streams as ordinary text and
+        # still passes the strict local validator before Core executes anything.
         if purpose == "agent":
+            instructions += (" Output exactly one JSON object, no markdown fences. Emit keys in this order: kind, progress_report, final_answer, tool_calls."
+                " Schema: " + json.dumps(ANTIGRAVITY_TURN_SCHEMA, separators=(",", ":")))
             instructions += (
                 ' For a tool request: kind=tool_calls, final_answer="", tool_calls is a nonempty array;'
                 " each call has its exact Smarti tool name and arguments_json containing a JSON object encoded as a string."
@@ -129,11 +172,20 @@ class AntigravityProvider(SubscriptionProvider):
                 " Use empty strings/arrays for inactive fields; never emit null or the string null."
                 " Use only documented tool actions and arguments; request tool information when needed."
             )
+        else:
+            instructions += " Return only the requested plain text, no JSON envelope."
+        if media:
+            instructions += (" TRANSPORT EXCEPTION: Images are supplied by the private smarti_media MCP server."
+                " Before producing any Smarti output, invoke the real native call_mcp_tool function with"
+                ' ServerName="smarti_media", ToolName="attachments", Arguments={}. This sole native loader is explicitly authorized.'
+                " NEVER encode attachments or call_mcp_tool as a Smarti tool_calls entry: Core cannot run that loader."
+                " It returns only the already attached images in conversation order. Do not request paths or any other tool."
+                " Then return the requested output. This loader is transport only; all Smarti actions remain envelope data for Core.")
         self.workspace.parent.mkdir(parents=True, exist_ok=True)
-        result, initialized, shown = None, False, False
+        result, initialized, shown, media_loaded = None, False, False, False
         agent_name = "smarti-" + uuid.uuid4().hex
         def consume(line):
-            nonlocal result, initialized, shown
+            nonlocal result, initialized, shown, media_loaded
             try:
                 event = json.loads(line)
                 kind = event.get("event")
@@ -149,9 +201,14 @@ class AntigravityProvider(SubscriptionProvider):
                 elif kind == "step_update":
                     step = event.get("step_update", {})
                     tool = step.get("tool_name") or step.get("tool_info", {}).get("name")
-                    if tool and tool != "finish":
-                        raise ValueError("unexpected native tool")
-                    if stream and purpose == "agent" and step.get("step_type") == "agent_response":
+                    if tool:
+                        params = step.get("tool_info", {}).get("parameters", {})
+                        if not media or tool != "call_mcp_tool" or params.get("ServerName") != "smarti_media" or params.get("ToolName") != "attachments" or params.get("Arguments") not in ({}, None):
+                            raise ValueError("unexpected native tool")
+                        if step.get("state") == "ERROR":
+                            raise SubscriptionError("העברת התמונה למודל נכשלה.", "unsupported_attachment")
+                        media_loaded = media_loaded or step.get("state") == "DONE"
+                    if stream and purpose == "agent" and step.get("step_type") == "agent_response" and (not media or media_loaded):
                         stream.text(step.get("text_delta", ""))
                         shown = shown or bool(step.get("text_delta"))
                     if stream and step.get("step_type") in {"thinking", "agent_thinking"}:
@@ -170,25 +227,35 @@ class AntigravityProvider(SubscriptionProvider):
             agents.mkdir(parents=True)
             (agents / f"{agent_name}.md").write_text("\n".join([
                 "---", f"name: {agent_name}", "description: Smarti inference transport.",
-                "mainAgent: true", "subagent: false", "tools: [finish]",
+                "mainAgent: true", "subagent: false", "tools: []",
                 "excludeDefaultComponents: true", "inheritCustomizations: false", "inheritMcp: false",
-                "skills: []", "plugins: []", "rules: []", "agents: []", "hooks: []", "mcpServers: []",
+                "skills: []", "plugins: []", "rules: []", "agents: []", "hooks: []",
+                "mcpServers: " + json.dumps(self._media_server(root, media) if media else []),
                 'commandExecutionPolicy: "off"', "---", "# System Prompt", instructions]), encoding="utf-8")
-            schema_path = root / "schema.json"
-            schema_path.write_text(json.dumps(schema), encoding="utf-8")
             command = [self.executable(), "--agent", agent_name, "--model", model,
-                "--disable-slash-commands", "--input-format", "stream-json", "--output-format", "stream-json",
-                "--json-schema", str(schema_path)]
+                "--disable-slash-commands", "--input-format", "stream-json", "--output-format", "stream-json"]
+            if media:
+                # The effective native toolset contains ONLY the immutable
+                # per-turn media loader above. This grants no file/shell tools
+                # and changes no personal CLI settings or permission rules.
+                command.append("--dangerously-skip-permissions")
             # stdin avoids command-line size limits and keeps conversation text
             # out of the process arguments. One isolated turn, then EOF.
             self.run(command, payload=json.dumps({"event": "user", "message": {"content": self.prompt(messages)}}, ensure_ascii=False) + "\n",
                 timeout=timeout, cancel=cancel_event, event=consume, cwd=root)
         if result is None:
             raise SubscriptionError("Antigravity נסגר ללא תשובה סופית.", "provider_contract_violation")
+        if media and not media_loaded:
+            raise SubscriptionError("המודל לא קיבל את התמונה המצורפת. אפשר לנסות שוב.", "unsupported_attachment")
         output = result.get("structured_output")
-        if not isinstance(output, dict):
-            raise CodexProtocolError("Antigravity לא השלים תשובה התואמת את המבנה המבוקש.")
         if purpose == "agent":
+            if not isinstance(output, dict):
+                try:
+                    output = json.loads(result.get("response", ""))
+                except (ValueError, TypeError) as error:
+                    raise CodexProtocolError("Antigravity לא השלים תשובה התואמת את המבנה המבוקש.") from error
+            if not isinstance(output, dict):
+                raise CodexProtocolError("Antigravity החזיר פלט שאינו אובייקט סמארטי.")
             # Some CLI model serializers emit []/"" for the inactive nullable
             # member. Canonicalize only empty inactive fields; mixed/nonempty
             # tool+final content still fails the strict Core protocol.
@@ -203,7 +270,7 @@ class AntigravityProvider(SubscriptionProvider):
             if stream and not shown:
                 stream.text(json.dumps(output, ensure_ascii=False))
         else:
-            answer = self.decode(output.get("text"), purpose)
+            answer = self.decode(output.get("text") if isinstance(output, dict) else result.get("response"), purpose)
         raw = result.get("usage") or {}
         # CLI input_tokens excludes cache reads (see the official headless
         # two-turn example). Smarti prompt totals include cache exactly once;
@@ -217,3 +284,12 @@ class AntigravityProvider(SubscriptionProvider):
         usage["total"] = usage["prompt"] + usage["completion"]
         self.verified = True
         return answer, usage
+
+    def _media_server(self, root, content):
+        node = self.runtime.which("node")
+        bridge = Path(self.runtime.resource_path("bridges", "antigravity", "media.mjs"))
+        if not node or not bridge.is_file():
+            raise SubscriptionError("רכיב העברת התמונות חסר. יש להשלים את התקנת סמארטי.", "missing_dependency")
+        manifest = root / "media.json"
+        manifest.write_text(json.dumps(content), encoding="utf-8")
+        return [{"name": "smarti_media", "command": node, "args": [str(bridge), str(manifest)]}]

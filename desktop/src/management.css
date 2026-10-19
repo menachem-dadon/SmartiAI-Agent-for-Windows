@@ -136,6 +136,10 @@
 .diagnostic-hero>strong { padding:12px; color:var(--sds-color-accent); font-size:28px; }
 .diagnostic-hero>div { flex:1 1 280px; min-width:0; }
 .diagnostic-hero progress { width:100%; accent-color:var(--sds-color-accent); }
+.provider-connection { display:flex; flex-direction:column; align-items:flex-start; gap:var(--sds-space-3); min-width:0; }
+.provider-connection-status { display:inline-flex; align-items:center; gap:var(--sds-space-2); color:var(--sds-color-text-muted); }
+.provider-connection-status i { width:8px; height:8px; border-radius:var(--sds-radius-pill); background:var(--sds-color-text-muted); flex:none; }
+.provider-connection-status.is-connected i { background:var(--sds-color-success); }
 .status-error { border-inline-start:3px solid var(--sds-color-danger)!important; }
 .status-warning { border-inline-start:3px solid var(--sds-color-warning)!important; }
 .status-pass { border-inline-start:3px solid var(--sds-color-success)!important; }

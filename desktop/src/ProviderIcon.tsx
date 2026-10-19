@@ -18,10 +18,13 @@ import qwen from "./provider-icons/qwen.svg";
 import together from "./provider-icons/together-ai.svg";
 import xai from "./provider-icons/xai.svg";
 import zhipu from "./provider-icons/zhipu-ai.svg";
+import antigravity from "./provider-icons/antigravity.svg";
+import claudeCode from "./provider-icons/claude-code.svg";
 
 // Supplied artwork stays unchanged. Monochrome silhouettes inherit theme contrast.
 const providerArtwork: Record<string, { src: string; monochrome?: boolean }> = {
   gemini: { src: gemini }, openai: { src: openai, monochrome: true },
+  google_antigravity_signin: { src: antigravity }, anthropic_claude_code_signin: { src: claudeCode },
   openai_codex_signin: { src: codex }, anthropic: { src: anthropic, monochrome: true },
   openrouter: { src: openrouter, monochrome: true }, groq: { src: groq, monochrome: true },
   nvidia: { src: nvidia }, cerebras: { src: cerebras, monochrome: true },

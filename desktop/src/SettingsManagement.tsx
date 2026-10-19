@@ -1,6 +1,7 @@
 import { Dialog, IconButton, Popover, PageHeader, SegmentedControl, SettingRow as SharedSettingRow, SettingsGroup, Switch, RangeField, LoadingState } from "./design-system";
 import { ManagementFeedback } from "./managementFeedback";
 import { ProviderPicker } from "./ProviderPicker";
+import { CodexConnection } from "./CodexConnection";
 import { SubscriptionConnection, subscriptionProviders } from "./SubscriptionConnection";
 import { reasoningDisplayName, reasoningModeOptions } from "./modelPresentation";
 import { ReasoningBudgetControl } from "./ReasoningBudgetControl";
@@ -723,25 +724,6 @@ export function ProviderWorkflow({
         : [...favorites, { provider, model }],
     );
   };
-  const codexAction = async (action: string) => {
-    setStatus("מבצע פעולת Codex…");
-    try {
-      const data = await coreApi<{ state: string; message: string }>(
-        "POST",
-        "/v2/management/settings/actions",
-        { action },
-        true,
-      );
-      setStatus(data.message);
-      await reload();
-      if (action !== "codex_status") await refreshModels();
-    } catch (reason) {
-      setStatus(String(reason));
-    }
-  };
-  useEffect(() => {
-    if (provider === "openai_codex_signin") void codexAction("codex_status");
-  }, [provider]);
   const configured = secretKey ? secrets[secretKey] : undefined;
   return (
     <div className="source-provider-workflow">
@@ -858,35 +840,10 @@ export function ProviderWorkflow({
           onStrategyChange={async value => { await save("claude_code_auth_strategy", value); }}
           onChanged={refreshModels} />
       </SourceSettingField>}
-      {provider === "openai_codex_signin" && (
-        <>
-          <SourceSettingField
-            label="חיבור ChatGPT / Codex"
-            help="התחברות רשמית עם חשבון ChatGPT או Codex. לא נשמרים סיסמה, API key או token בהגדרות של סמארטי."
-            dataPath="codex_signin"
-          >
-            <ManagementFeedback message={status || "אפשר להתחבר באמצעות חשבון ChatGPT / Codex."} />
-            <div className="inline-actions codex-actions">
-              <Button type="button" variant="primary"
-                className="primary"
-                onClick={() => void codexAction("codex_login")}
-              >
-                התחבר עם ChatGPT / Codex
-              </Button>
-              <Button type="button" icon="plug" onClick={() => void codexAction("codex_check")}>
-                בדוק חיבור
-              </Button>
-              <Button type="button" onClick={() => void codexAction("codex_logout")}>
-                התנתק
-              </Button>
-            </div>
-          </SourceSettingField>
-          <p className="secret-instructions">
-            חיבור זה משתמש ב-Codex sign-in הרשמי של OpenAI, כפוף למגבלות החשבון
-            והתוכנית שלך, ועלול להשתנות לפי מדיניות OpenAI.
-          </p>
-        </>
-      )}
+      {provider === "openai_codex_signin" && <SourceSettingField
+        label="חיבור ChatGPT / Codex" help="החשבון מחובר דרך הכלי הרשמי." dataPath="codex_signin">
+        <CodexConnection onChanged={refreshModels} />
+      </SourceSettingField>}
       <SourceSettingField
         label="מודל"
         help="בחירת המודל הפעיל לשיחה. בחירה נשמרת גם כמועדף כדי שאפשר יהיה להחליף אליו במהירות מהצ'אט."

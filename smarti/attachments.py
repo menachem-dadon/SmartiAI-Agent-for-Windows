@@ -344,8 +344,8 @@ def provider_attachment_support(mode, item):
     kind = item.get("kind")
     mode = normalize_provider_name(mode)
     if mode == "google_antigravity_signin":
-        return (True, "") if is_text_attachment(item) else (
-            False, "Antigravity CLI supports text attachments here; images, PDF, audio and video are not supported.")
+        return (True, "") if is_text_attachment(item) or mime_type in ANTHROPIC_IMAGE_MIME_TYPES else (
+            False, "Antigravity supports images and text attachments here; PDF, audio and video need conversion first.")
     if mode == "gemini":
         if mime_type in GEMINI_INLINE_MIME_TYPES or any(mime_type.startswith(prefix) for prefix in GEMINI_INLINE_PREFIXES):
             return True, ""

@@ -5,7 +5,7 @@ import { Composer } from "./Composer";
 import { coreApi } from "./coreApi";
 import { useState } from "react";
 
-vi.mock("./coreApi", () => ({ coreApi: vi.fn(async () => ({ available: false })) }));
+vi.mock("./coreApi", () => ({ coreApi: vi.fn(async () => ({ available: false })), encodePath: encodeURIComponent }));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const callbacks = {

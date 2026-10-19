@@ -33,6 +33,10 @@ These marks identify existing integrations in settings. Monochrome rendering
 inherits the active theme; artwork geometry is unchanged. The action/tool icon
 family stays Tabler and the original Smarti PNG family stays preserved.
 
+The two subscription-provider SVGs (Antigravity and Claude Code) were supplied
+unchanged in antigravity-claude-code-icons.zip on 2026-10-19, with the same Lobe
+Icons MIT attribution. They also appear in the conversation's provider picker.
+
 Segoe UI, Arial, Consolas and Courier New are CSS system fallbacks only. Smarti
 does not redistribute their font files through this design system.
 

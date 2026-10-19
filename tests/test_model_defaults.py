@@ -74,6 +74,8 @@ class ModelDefaultAndProvenanceTests(unittest.TestCase):
             "openai": "gpt-6.1-sol",
             "openai_codex_signin": "gpt-6.1-sol",
             "anthropic": "claude-sonnet-5-5",
+            "anthropic_claude_code_signin": "claude-sonnet-5-5",
+            "google_antigravity_signin": "gemini-3.8-flash-high",
         }
         for provider in MODEL_PROVIDER_ORDER:
             model = expected.get(provider, "")

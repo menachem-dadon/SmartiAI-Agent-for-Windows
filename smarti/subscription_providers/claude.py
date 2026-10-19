@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+from datetime import datetime
 
 from .base import SubscriptionError, SubscriptionProvider, register_models, safe_failure
 from ..codex_signin import SMARTI_TURN_OUTPUT_SCHEMA
@@ -13,6 +14,30 @@ class ClaudeProvider(SubscriptionProvider):
     provider = "anthropic_claude_code_signin"
     label = "Claude Code"
     install_url = "https://code.claude.com/docs/en/quickstart"
+
+    def quota(self):
+        if self.disconnected:
+            return {"available": False, "source": "unavailable"}
+        events = []
+        self.run(self.command(), payload=json.dumps({"method": "quota", "cwd": str(self.workspace),
+            "executable": self.executable()}) + "\n", timeout=25,
+            event=lambda line: events.append(json.loads(line)))
+        data = next((item for item in events if item.get("type") == "quota"), {})
+        result = {"available": False, "source": "unavailable"}
+        if not data.get("available") or not isinstance(data.get("limits"), dict):
+            return result
+        for source, target in (("five_hour", "five_hour"), ("seven_day", "weekly")):
+            window = data["limits"].get(source) or {}
+            used = window.get("utilization")
+            if isinstance(used, (int, float)) and not isinstance(used, bool) and 0 <= used <= 100:
+                reset = None
+                try:
+                    reset = datetime.fromisoformat(window.get("resets_at", "").replace("Z", "+00:00")).timestamp()
+                except (ValueError, TypeError, AttributeError):
+                    pass
+                result[target] = {"remaining_percent": 100 - used, "resets_at": reset}
+                result.update(available=True, source="reported", plan_type=str(data.get("plan") or ""))
+        return result
 
     def bridge(self):
         return Path(self.runtime.resource_path("bridges", "claude-code", "bridge.mjs"))
@@ -82,7 +107,8 @@ class ClaudeProvider(SubscriptionProvider):
                 continue
             efforts = [level for level in model.get("supportedEffortLevels", [])
                        if level in {"low", "medium", "high", "xhigh", "max"}] if model.get("supportsEffort") else []
-            rows.append({"id": model["value"], "label": model.get("displayName", model["value"]),
+            identifier = model.get("resolvedModel") if model["value"] != "default" else "default"
+            rows.append({"id": identifier or model["value"], "aliases": [model["value"]], "label": model.get("displayName", model["value"]),
                 "resolved_model": model.get("resolvedModel", ""), "efforts": efforts,
                 "availability": "unknown"})
         self.models = rows
@@ -95,7 +121,7 @@ class ClaudeProvider(SubscriptionProvider):
         if state["state"] not in {"connected", "configured"}:
             raise SubscriptionError(state["message"], state["state"])
         rows = self.models or self.catalog()
-        selected = next((row for row in rows if row["id"] == model or row.get("resolved_model") == model), None)
+        selected = next((row for row in rows if row["id"] == model or row.get("resolved_model") == model or model in row.get("aliases", [])), None)
         if not selected:
             raise SubscriptionError("יש לבחור מודל מתוך הרשימה הרשמית של Claude Code.", "model_unavailable")
         if reasoning_effort and reasoning_effort not in selected["efforts"]:

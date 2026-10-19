@@ -163,13 +163,15 @@ MODEL_PROVIDER_CONFIGS = {
     },
     "anthropic_claude_code_signin": {
         "label": "Claude Code", "kind": "subscription", "secret_key": None,
-        "default_model": "", "help_url": "https://code.claude.com/docs/en/quickstart",
+        "default_model": "claude-sonnet-5-5", "title_model": "claude-haiku-5-5",
+        "help_url": "https://code.claude.com/docs/en/quickstart",
         "key_instructions": "כניסה דרך Claude Code הרשמי דורשת מנוי מתאים. חשבון Claude חינמי אינו כולל שימוש זה.",
     },
     "google_antigravity_signin": {
         "label": "Google Antigravity", "kind": "subscription", "secret_key": None,
-        "default_model": "", "help_url": "https://antigravity.google/docs/cli-getting-started",
-        "key_instructions": "החיבור לשיחה ממתין לתמיכה רשמית בבידוד כלי הספק. אפשר לבדוק את מצב הרכיב ורשימת המודלים.",
+        "default_model": "gemini-3.8-flash-high", "title_model": "gemini-3.8-flash-low",
+        "help_url": "https://antigravity.google/docs/cli-getting-started",
+        "key_instructions": "נדרש כלי Antigravity רשמי המותקן ומחובר לחשבון Google מתאים.",
     },
     "anthropic": {
         "label": "Anthropic",

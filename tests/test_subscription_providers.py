@@ -1,5 +1,7 @@
 """Subscription adapters without personal credentials, model calls or paid requests."""
 import copy
+import base64
+import io
 import json
 import os
 from pathlib import Path
@@ -30,11 +32,12 @@ class SubscriptionTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_registry_keeps_separate_subscription_routes_without_api_secrets_or_defaults(self):
+    def test_registry_keeps_subscription_routes_without_api_secrets_and_requested_defaults(self):
         for name in (CLAUDE, ANTIGRAVITY):
             self.assertIn(name, MODEL_PROVIDER_ORDER)
             self.assertFalse(provider_requires_api_key(name))
-            self.assertEqual(DEFAULT_SETTINGS[f"selected_{name}_model"], "")
+            self.assertEqual(DEFAULT_SETTINGS[f"selected_{name}_model"],
+                "claude-sonnet-5-5" if name == CLAUDE else "gemini-3.8-flash-high")
 
     def test_environment_uses_only_explicit_token_strategy_and_keeps_parent_unchanged(self):
         inherited = {"CLAUDE_CODE_OAUTH_TOKEN": "test-subscription-secret", "ANTHROPIC_API_KEY": "test-api-key",
@@ -189,7 +192,6 @@ class SubscriptionTests(unittest.TestCase):
                 inspect(command, kwargs)
             rows = events if events is not None else [
                 {"event": "init", "init": {"agent": agent_name, "model": "gemini-test-low", "tools": ["run_command", "view_file", "finish"]}},
-                {"event": "step_update", "step_update": {"step_type": "tool", "tool_name": "finish"}},
                 {"event": "result", "result": {"status": "SUCCESS", "structured_output": output if purpose == "agent" else {"text": "כותרת"},
                     "usage": {"input_tokens": 100, "cache_read_tokens": 80, "output_tokens": 20, "thinking_tokens": 12}}}]
             for event in rows:
@@ -201,18 +203,77 @@ class SubscriptionTests(unittest.TestCase):
         with mock.patch.object(provider, "executable", return_value="agy"), mock.patch.object(provider, "run", side_effect=run):
             return provider.complete(messages or [{"role": "user", "content": "hello"}], "gemini-test-low", purpose=purpose, stream=stream)
 
+    def test_antigravity_stream_reaches_live_response_before_terminal_result(self):
+        wire = '{"kind":"final","progress_report":"","final_answer":"שלום עולם","tool_calls":[]}'
+        output = []
+        live = LiveResponse(emit=lambda batch: output.extend(batch.get("events", [])))
+        events = [{"event": "init", "init": {"agent": "$agent", "model": "gemini-test-low"}}]
+        events += [{"event": "step_update", "step_update": {"step_type": "agent_response", "state": "ACTIVE", "text_delta": part}}
+            for part in (wire[:67], wire[67:])]
+        def native_events():
+            yield from events
+            live.flush()
+            self.assertTrue(any(event.get("kind") == "text_delta" for event in output))
+            yield {"event": "result", "result": {"status": "SUCCESS", "response": wire}}
+        answer, _ = self.agy_turn(native_events(), stream=live)
+        self.assertEqual(answer, "שלום עולם")
+        self.assertTrue(any(event.get("kind") == "text_delta" and event.get("text") for event in output))
+        self.assertNotIn('"kind"', "".join(event.get("text", "") for event in output))
+
+    def test_antigravity_media_is_immutable_ordered_and_validated(self):
+        from PIL import Image
+        image = io.BytesIO()
+        Image.new("RGB", (3, 3), "red").save(image, format="PNG")
+        data = base64.b64encode(image.getvalue()).decode()
+        messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}}]},
+            {"role": "assistant", "content": "old answer"},
+            {"role": "user", "content": [{"type": "image", "source": {"type": "base64", "data": data}}]}]
+        content = AntigravityProvider.media_content(messages)
+        self.assertEqual([item["type"] for item in content], ["text", "image", "text", "image"])
+        self.assertIn("message 1", content[0]["text"])
+        self.assertIn("message 3", content[2]["text"])
+        for url in ("https://example.com/private.png", "file:///private.png", "data:image/png;base64,aW52YWxpZA=="):
+            with self.subTest(url=url), self.assertRaises(SubscriptionError):
+                AntigravityProvider.media_content([{"content": [{"type": "image_url", "image_url": {"url": url}}]}])
+
+    def test_claude_quota_uses_metadata_without_a_model_turn(self):
+        def run(command, **options):
+            request = json.loads(options["payload"])
+            self.assertEqual(request["method"], "quota")
+            self.assertNotIn("content", request)
+            options["event"](json.dumps({"type": "quota", "available": True, "plan": "pro", "limits": {
+                "five_hour": {"utilization": 25, "resets_at": "2026-10-20T12:00:00Z"},
+                "seven_day": {"utilization": 80}, "extra_usage": {"used_credits": 999}}}))
+        with mock.patch.object(self.provider, "command", return_value=[]), mock.patch.object(self.provider, "executable", return_value="claude"), mock.patch.object(self.provider, "run", side_effect=run):
+            result = self.provider.quota()
+        self.assertEqual(result["five_hour"]["remaining_percent"], 75)
+        self.assertEqual(result["weekly"]["remaining_percent"], 20)
+        self.assertNotIn("extra_usage", result)
+
+    def test_cached_connection_reads_do_not_run_a_probe_or_reconnect(self):
+        core = SimpleNamespace(settings={}, _save_settings=mock.Mock())
+        service = Connections(core)
+        with mock.patch("smarti.subscription_providers.connections.get_provider", return_value=self.provider):
+            with mock.patch.object(self.provider, "connection_status") as probe:
+                self.assertEqual(service.status(CLAUDE)["state"], "unchecked")
+                service.snapshots[(CLAUDE, self.provider.strategy)] = {"state": "connected", "message": "cached"}
+                self.assertEqual(service.status(CLAUDE)["state"], "connected")
+                probe.assert_not_called()
+            service.action(CLAUDE, "disconnect")
+            service.action(CLAUDE, "check", automatic=True)
+            self.assertTrue(self.provider.disconnected)
+
     def test_antigravity_uses_private_minimal_agent_and_stdin_without_global_settings_mutation(self):
         roots = []
         def inspect(command, kwargs):
             root = Path(kwargs["cwd"])
             roots.append(root)
             agent = next((root / ".agents" / "agents").glob("*.md")).read_text(encoding="utf-8")
-            for setting in ("tools: [finish]", "excludeDefaultComponents: true", "inheritCustomizations: false", "inheritMcp: false", "hooks: []"):
+            for setting in ("tools: []", "excludeDefaultComponents: true", "inheritCustomizations: false", "inheritMcp: false", "hooks: []"):
                 self.assertIn(setting, agent)
             self.assertIn("Smarti Core exclusively owns", agent)
-            wire = json.loads(Path(command[command.index("--json-schema") + 1]).read_text(encoding="utf-8"))
-            self.assertEqual(wire["properties"]["tool_calls"]["type"], "array")
-            self.assertEqual(wire["properties"]["final_answer"]["type"], "string")
+            self.assertNotIn("--json-schema", command)
+            self.assertIn('Emit keys in this order: kind', agent)
             self.assertNotIn("--dangerously-skip-permissions", command)
             self.assertNotIn("hello", command)
             self.assertEqual(json.loads(kwargs["payload"])["event"], "user")
@@ -354,9 +415,13 @@ class SubscriptionTests(unittest.TestCase):
         self.assertTrue(gateway.start())
         request = LocalGatewayTests._request
         provider = mock.Mock()
+        provider.strategy = "claude_login"
+        provider.disconnected = False
+        provider.quota.return_value = {"available": False}
         provider.connection_status.return_value = {"state": "disconnected", "message": "ready for login"}
         provider.catalog.return_value = [{"id": "sonnet", "availability": "unknown", "efforts": ["low"]}]
         provider.disconnect.return_value = {"state": "disconnected", "message": "disconnected from Smarti"}
+        gateway._subscription_connections.snapshots[(CLAUDE, provider.strategy)] = {"state": "disconnected", "message": "cached"}
         try:
             with mock.patch("smarti.subscription_providers.get_provider", return_value=provider), \
                  mock.patch("smarti.subscription_providers.connections.get_provider", return_value=provider):
@@ -371,6 +436,7 @@ class SubscriptionTests(unittest.TestCase):
             self.assertEqual(core.settings["api_mode"], "local")
             provider.disconnect.assert_called_once()
             provider.complete.assert_not_called()
+            provider.connection_status.assert_not_called()
         finally:
             gateway.stop()
             core.run_manager.shutdown(wait=True)

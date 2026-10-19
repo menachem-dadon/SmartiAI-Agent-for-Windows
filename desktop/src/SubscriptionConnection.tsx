@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button, ChoiceField } from "./design-system";
 import { ManagementFeedback } from "./managementFeedback";
 import { coreApi, encodePath } from "./coreApi";
+import { ProviderConnectionStatus } from "./ProviderConnectionStatus";
 
 export const subscriptionProviders = ["anthropic_claude_code_signin", "google_antigravity_signin"];
 type Connection = { state: string; message: string; id?: string; operation_id?: string; install_url?: string; connection?: Connection;
@@ -60,7 +61,7 @@ export function SubscriptionConnection({ provider, strategy, onStrategyChange, o
       const path = name === "cancel" ? `${base}/operations/${encodePath(operation)}/cancel` : `${base}/${name}`;
       const result = await coreApi<Connection>("POST", path, {}, true);
       if (revision !== generation.current) return;
-      setConnection(result);
+      setConnection(result.connection || result);
       setOperation(result.state === "running" ? result.id || "" : "");
       if (result.state !== "running") await onChanged();
     } catch (reason) {
@@ -68,21 +69,23 @@ export function SubscriptionConnection({ provider, strategy, onStrategyChange, o
     } finally { if (revision === generation.current) setBusy(false); }
   };
   const blocked = connection?.state === "policy_conflict";
-  return <div>
+  const connected = connection?.state === "connected" || connection?.state === "configured";
+  const needsHelp = connection && !["connected", "configured", "disconnected", "unchecked", "cancelled", "running", "login_in_progress"].includes(connection.state);
+  return <div className="provider-connection">
     {claude && <ChoiceField label="שיטת התחברות ל־Claude Code" value={strategy}
       options={[{ value: "claude_login", label: "כניסה רגילה" }, { value: "setup_token_env", label: "אסימון מסביבת ההפעלה" }]}
       disabled={busy || Boolean(operation)} onValueChange={value => {
         setBusy(true); setError("");
         void onStrategyChange(value).catch(reason => setError(`שיטת ההתחברות לא נשמרה: ${String(reason)}`)).finally(() => setBusy(false));
       }} />}
-    <ManagementFeedback message={error || connection?.message || "בודק את מצב רכיב החיבור…"} />
+    <ProviderConnectionStatus state={connection?.state} busy={busy || Boolean(operation)} />
+    <ManagementFeedback message={error || (needsHelp ? connection.message : "")} />
     <div className="inline-actions codex-actions">
-      {claude && strategy === "claude_login" && <Button variant="primary" disabled={busy || Boolean(operation)} onClick={() => void action("login")}>התחבר עם Claude Code</Button>}
-      {!claude && !blocked && <Button variant="primary" disabled={busy || Boolean(operation)} onClick={() => void action("login")}>התחבר עם Antigravity</Button>}
-      <Button icon="plug" disabled={busy || Boolean(operation)} onClick={() => void action("check")}>בדוק חיבור</Button>
-      {operation ? <Button disabled={busy} onClick={() => void action("cancel")}>בטל התחברות</Button>
-        : <Button disabled={busy} onClick={() => void action("disconnect")}>נתק מסמארטי</Button>}
-      {connection?.install_url && <Button disabled={busy} onClick={() => {
+      <Button icon={connected ? "refresh" : "plug"} variant={connected ? "secondary" : "primary"} disabled={busy || Boolean(operation)} onClick={() => void action("check")}>{connected ? "בדוק חיבור" : "חבר לסמארטי"}</Button>
+      {!connected && !blocked && connection?.state !== "missing_dependency" && (!claude || strategy === "claude_login") && <Button icon="external" disabled={busy || Boolean(operation)} onClick={() => void action("login")}>כניסה בכלי הרשמי</Button>}
+      {operation ? <Button icon="stop" disabled={busy} onClick={() => void action("cancel")}>בטל</Button>
+        : connected && <Button icon="close" disabled={busy} title="מנתק מסמארטי; החשבון בכלי הרשמי נשאר מחובר" onClick={() => void action("disconnect")}>נתק מסמארטי</Button>}
+      {connection?.install_url && connection.state === "missing_dependency" && <Button icon="download" disabled={busy} onClick={() => {
         void invoke("open_chat_link", { target: connection.install_url, local: false })
           .catch(reason => setError(`פתיחת אתר ההתקנה נכשלה: ${String(reason)}`));
       }}>התקנה והנחיות</Button>}
@@ -91,11 +94,5 @@ export function SubscriptionConnection({ provider, strategy, onStrategyChange, o
       במסוף של Claude Code הפעל <bdi>claude setup-token</bdi> והגדר <bdi>CLAUDE_CODE_OAUTH_TOKEN</bdi> בסביבת ההפעלה.
       לאחר שינוי האסימון הפעל מחדש את סמארטי. אין להדביק אותו כאן; הוא אינו נשמר בהגדרות.
     </p>}
-    {connection?.quota?.available && connection.quota.groups.map((group, index) => <p className="secret-instructions" key={index}>
-      <bdi>{group.name}</bdi>{": "}{group.buckets.map(bucket => `${bucket.window === "weekly" ? "שבועי" : bucket.window === "5h" ? "5 שעות" : bucket.window}: ${Math.round(bucket.remaining_fraction * 100)}% נותרו`).join(" · ")}
-    </p>)}
-    <p className="secret-instructions">{claude ? "נדרש מנוי Claude מתאים; חשבון חינמי אינו כולל חיבור זה. הכלי הרשמי מנהל את פרטי הכניסה." : blocked ? "גילוי המודלים זמין לצורך אבחון; הוא אינו מעיד שהחיבור לשיחה מוכן." : "החיבור הרשמי תומך בטקסט ובקבצי טקסט. רמת החשיבה נבחרת כחלק משם המודל. לאחר כניסה בחלון הרשמי יש לצאת ממנו בעזרת Ctrl+D."}
-      {" "}{!connection?.quota?.available && "מכסת המנוי אינה זמינה כאן. "}ניתוק מסמארטי אינו מוציא מהחשבון בכלי הרשמי.
-    </p>
   </div>;
 }

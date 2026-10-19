@@ -31,7 +31,8 @@ def model_efforts(provider, model):
 
 def register_models(provider, rows):
     with _catalog_lock:
-        _catalogs[provider] = {row["id"]: tuple(row.get("efforts", ())) for row in rows}
+        _catalogs[provider] = {name: tuple(row.get("efforts", ())) for row in rows
+            for name in [row["id"], row.get("resolved_model"), *row.get("aliases", [])] if name}
 
 
 def safe_failure(raw):
@@ -57,7 +58,7 @@ class SubscriptionProvider:
     install_url = ""
 
     def __init__(self, data_dir, strategy):
-        self.data_dir = Path(data_dir)
+        self.data_dir = Path(data_dir).resolve()
         self.strategy = strategy
         self.workspace = self.data_dir / "subscription_providers" / self.provider / "workspace"
         self.runtime = SmartiRuntime()

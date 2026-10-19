@@ -29,12 +29,17 @@ try {
   if (request.effort) options.effort = request.effort;
   if (request.schema) options.outputFormat = { type: 'json_schema', schema: request.schema };
   async function* prompt() {
-    if (request.method === 'metadata') await new Promise(() => {});
+    if (['metadata', 'quota'].includes(request.method)) await new Promise(() => {});
     else yield { type: 'user', session_id: '', parent_tool_use_id: null,
       message: { role: 'user', content: request.content } };
   }
   session = query({ prompt: prompt(), options });
-  if (request.method === 'metadata') {
+  if (request.method === 'quota') {
+    // Pinned SDK adapter: optional experimental metadata, never a model turn.
+    const usage = await session.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true });
+    emit({ type: 'quota', available: usage.rate_limits_available,
+      plan: usage.subscription_type, limits: usage.rate_limits });
+  } else if (request.method === 'metadata') {
     const models = await session.supportedModels();
     let account = {};
     try { account = await session.accountInfo(); } catch { /* Inference-only tokens may lack account metadata. */ }

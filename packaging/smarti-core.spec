@@ -13,6 +13,7 @@ datas = [
     (str(repo_root / "smarti" / "local_lmstudio_sdk.cjs"), "smarti"),
     (str(repo_root / "smarti" / "local_lmstudio_sdk.NOTICES.txt"), "smarti"),
     (str(repo_root / "bridges" / "claude-code"), "bridges/claude-code"),
+    (str(repo_root / "bridges" / "antigravity"), "bridges/antigravity"),
 ]
 for package in ("certifi", "keyring", "truststore"):
     try:

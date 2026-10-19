@@ -157,6 +157,28 @@ class SmartiLocalGateway:
             "label": "", "status": "idle", "completed_items": 0,
         }
         self._runtime_file = os.path.join(USER_DATA_DIR, "local-gateway.json")
+        from .subscription_providers.connections import Connections
+        self._subscription_connections = Connections(core)
+        self._codex_connection_snapshot = None
+        self._codex_connection_lock = threading.RLock()
+        self._codex_connection_revision = 0
+
+    def _refresh_connection(self, provider):
+        from .subscription_providers import PROVIDERS
+        if provider in PROVIDERS:
+            self._subscription_connections.action(provider, "check", automatic=True)
+        elif provider == "openai_codex_signin":
+            with self._codex_connection_lock:
+                self._codex_connection_revision += 1
+                revision = self._codex_connection_revision
+            def refresh():
+                from dataclasses import asdict
+                from .codex_signin import CodexSignInProvider
+                snapshot = asdict(CodexSignInProvider(USER_DATA_DIR).connection_status())
+                with self._codex_connection_lock:
+                    if revision == self._codex_connection_revision:
+                        self._codex_connection_snapshot = snapshot
+            threading.Thread(target=refresh, daemon=True).start()
 
     @staticmethod
     def _request_id(request):
@@ -726,6 +748,10 @@ class SmartiLocalGateway:
             backup_path = self.core.reset_settings_to_defaults()
             return self._ok(request, {"reset": True, "backup_path": str(backup_path or ""), **self._safe_settings()})
         if action in {"codex_status", "codex_check", "codex_login", "codex_logout"}:
+            if action == "codex_status":
+                return self._ok(request, self._codex_connection_snapshot or {"state": "unchecked", "message": "טרם נבדק"})
+            with self._codex_connection_lock:
+                self._codex_connection_revision += 1
             from dataclasses import asdict
             from .codex_signin import CodexSignInProvider
             provider = CodexSignInProvider(USER_DATA_DIR)
@@ -740,13 +766,14 @@ class SmartiLocalGateway:
                 status = await asyncio.to_thread(method, model=model)
             else:
                 status = await asyncio.to_thread(method)
+            self._codex_connection_snapshot = asdict(status)
             if status.state == "connected":
                 self.core.settings["api_mode"] = "openai_codex_signin"
                 self.core._save_settings()
                 setup_model = getattr(self.core, "setup_model", None)
                 if callable(setup_model):
                     setup_model()
-            return self._ok(request, asdict(status))
+            return self._ok(request, self._codex_connection_snapshot)
         if action == "email_test":
             from .desktop_services import test_email_settings
             ok, message = await asyncio.to_thread(test_email_settings, self.core.settings)
@@ -1187,6 +1214,8 @@ class SmartiLocalGateway:
                 setup_model = getattr(self.core, "setup_model", None)
                 if callable(setup_model):
                     setup_model()
+            if "api_mode" in values or "claude_code_auth_strategy" in values:
+                self._refresh_connection(normalize_provider_name(self.core.settings.get("api_mode")))
             if any(key.startswith(("mcp_", "enable_mcp", "enable_skills")) for key in values):
                 refresh = getattr(self.core, "refresh_extension_catalogs", None)
                 if callable(refresh):
@@ -1228,7 +1257,7 @@ class SmartiLocalGateway:
             try:
                 instance = get_provider(self.core, provider)
                 entries = instance.catalog()
-                connection = instance.connection_status()
+                connection = instance.connection_status() if validate else self._subscription_connections.status(provider)
                 return {"provider": provider, "ok": connection["state"] == "connected" if validate else True,
                     "message": connection["message"], "models": [entry["id"] for entry in entries],
                     "entries": entries, "connection": connection}
@@ -1291,8 +1320,8 @@ class SmartiLocalGateway:
         from .subscription_providers.base import SubscriptionError
         if request.match_info["provider"] not in PROVIDERS:
             return self._error(request, 404, "unknown_subscription_provider")
-        if request.match_info["provider"] == ANTIGRAVITY:
-            provider = get_provider(self.core, ANTIGRAVITY)
+        if request.match_info["provider"] in PROVIDERS:
+            provider = get_provider(self.core, request.match_info["provider"])
             if not provider.disconnected:
                 try:
                     return self._ok(request, await asyncio.to_thread(provider.quota))
@@ -1571,6 +1600,7 @@ class SmartiLocalGateway:
             self.stop()
             return False
         logging.info("Local gateway listening on 127.0.0.1:%s", self.port)
+        self._refresh_connection(normalize_provider_name(self.core.settings.get("api_mode")))
         return True
 
     def _write_runtime_info(self):

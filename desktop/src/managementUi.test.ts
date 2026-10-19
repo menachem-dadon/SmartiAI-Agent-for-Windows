@@ -198,7 +198,7 @@ describe("Point 16C source-derived settings behavior", () => {
       theme: "dark",
     }));
     await waitFor(() => expect(screen.getByRole("button", { name: "codex default" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: /התחבר עם.*ChatGPT \/ Codex/ }));
+    fireEvent.click(screen.getByRole("button", { name: "כניסה לחשבון" }));
     await waitFor(() => expect(modelRequests).toBe(2));
     await waitFor(() => expect(screen.getByRole("button", { name: "codex default" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "codex default" }));
