@@ -2,8 +2,21 @@ import type { ReasoningOption } from "./chatTypes";
 
 // Presentation only: model IDs, including local paths and third-party namespaces,
 // must reach Core unchanged.
+export function modelIdentity(provider: string, model: string) {
+  return provider === "google_antigravity_signin" ? model.replace(/-(?:low|medium|high|xhigh|max)$/, "") : model;
+}
+
+export function distinctProviderModels(provider: string, models: string[]) {
+  const seen = new Set<string>();
+  return models.filter(model => {
+    const key = modelIdentity(provider, model);
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
+
 export function modelDisplayName(provider: string, model: string) {
-  const name = provider.toLowerCase() === "local" ? model.slice(model.lastIndexOf("\\") + 1) : model;
+  const name = provider.toLowerCase() === "local" ? model.slice(model.lastIndexOf("\\") + 1) : modelIdentity(provider, model);
   return name.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
 }
 

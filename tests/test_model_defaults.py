@@ -85,7 +85,7 @@ class ModelDefaultAndProvenanceTests(unittest.TestCase):
                 DEFAULT_SETTINGS["selected_model_source"][provider],
                 MODEL_SELECTION_SOURCE_DEFAULT,
             )
-            self.assertEqual(model_reasoning_setting(DEFAULT_SETTINGS, provider, model), {"gemini": "medium", "openai": "medium", "openai_codex_signin": "medium", "anthropic": "high"}.get(provider, ""))
+            self.assertEqual(model_reasoning_setting(DEFAULT_SETTINGS, provider, model), {"gemini": "medium", "openai": "medium", "openai_codex_signin": "medium", "anthropic": "high", "google_antigravity_signin": "high" if model_reasoning_options(provider, model) else "", "anthropic_claude_code_signin": "medium" if model_reasoning_options(provider, model) else ""}.get(provider, ""))
 
     def test_only_known_automatic_selections_are_refreshed_on_load(self):
         loaded = copy.deepcopy(DEFAULT_SETTINGS)

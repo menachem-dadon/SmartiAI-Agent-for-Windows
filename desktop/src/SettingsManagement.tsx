@@ -3,7 +3,7 @@ import { ManagementFeedback } from "./managementFeedback";
 import { ProviderPicker } from "./ProviderPicker";
 import { CodexConnection } from "./CodexConnection";
 import { SubscriptionConnection, subscriptionProviders } from "./SubscriptionConnection";
-import { reasoningDisplayName, reasoningModeOptions } from "./modelPresentation";
+import { distinctProviderModels, modelDisplayName, modelIdentity, reasoningDisplayName, reasoningModeOptions } from "./modelPresentation";
 import { ReasoningBudgetControl } from "./ReasoningBudgetControl";
 import type { ReasoningOption } from "./chatTypes";
 import { useSecretAutosave } from "./useSecretAutosave";
@@ -493,19 +493,20 @@ function SettingRow({
   );
 }
 
-function SearchableModelPicker({ models, selected, loading, favorites, onSelect, onToggleFavorite }: {
-  models: string[]; selected: string; loading: boolean; favorites: Json[]; theme: ResolvedTheme;
+function SearchableModelPicker({ provider, models, selected, loading, favorites, onSelect, onToggleFavorite }: {
+  provider: string; models: string[]; selected: string; loading: boolean; favorites: Json[]; theme: ResolvedTheme;
   onSelect: (model: string) => Promise<void>; onToggleFavorite: (model: string) => Promise<void>;
 }) {
   const [query, setQuery] = useState(""), [error, setError] = useState("");
   const options = useRef<HTMLDivElement>(null);
-  const allModels = useMemo(() => [...new Set([selected, ...models])].filter(Boolean), [models, selected]);
+  const allModels = useMemo(() => distinctProviderModels(provider, [...new Set([selected, ...models])].filter(Boolean)), [provider, models, selected]);
+  const label = (model: string) => provider === "google_antigravity_signin" ? modelDisplayName(provider, model) : model;
   const filtered = useMemo(() => {
     const terms = query.toLocaleLowerCase("en").split(/[^a-z0-9]+/).filter(Boolean);
     return allModels.filter(model => { const normalized = model.toLocaleLowerCase("en").replace(/[^a-z0-9]+/g, " ");
       return terms.every(term => normalized.includes(term) || normalized.replace(/ /g, "").includes(term)); });
   }, [query, allModels]);
-  return <div className="source-model-picker"><Popover label={selected || (models.length ? "בחר מודל" : "לא נמצאו מודלים")}>
+  return <div className="source-model-picker"><Popover label={selected ? label(selected) : models.length ? "בחר מודל" : "לא נמצאו מודלים"}>
     {close => <div className="source-model-popup" onKeyDown={event => {
       const choices = [...(options.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') || [])];
       const index = choices.indexOf(document.activeElement as HTMLButtonElement);
@@ -518,12 +519,12 @@ function SearchableModelPicker({ models, selected, loading, favorites, onSelect,
       {loading && <LoadingState label="טוען מודלים…" />}
       <ManagementFeedback message={error} />
       <div ref={options} role="listbox" aria-label="מודלים">{filtered.slice(0,250).map(model => {
-        const favorite = favorites.some(item => item.model === model);
+        const favorite = favorites.some(item => modelIdentity(provider, String(item.model)) === modelIdentity(provider, model));
         return <div key={model} className={model === selected ? "selected" : ""}>
-          <IconButton icon={favorite ? "starFilled" : "star"} label={`${favorite ? "הסר" : "הוסף"} ${model} ${favorite ? "מהמועדפים" : "למועדפים"}`}
+          <IconButton icon={favorite ? "starFilled" : "star"} label={`${favorite ? "הסר" : "הוסף"} ${label(model)} ${favorite ? "מהמועדפים" : "למועדפים"}`}
             variant="ghost" aria-pressed={favorite}
             onClick={() => void onToggleFavorite(model).catch(reason => setError(`שמירת המועדף נכשלה: ${String(reason)}`))} />
-          <Button variant="ghost" role="option" aria-selected={model === selected} onClick={() => void onSelect(model).then(close).catch(reason => setError(`בחירת המודל נכשלה: ${String(reason)}`))}><bdi>{model}</bdi></Button>
+          <Button variant="ghost" role="option" aria-selected={model === selected} onClick={() => void onSelect(model).then(close).catch(reason => setError(`בחירת המודל נכשלה: ${String(reason)}`))}><bdi>{label(model)}</bdi></Button>
         </div>;
       })}{!filtered.length && <p className="sds-hint">לא נמצאו מודלים</p>}</div>
     </div>}
@@ -661,7 +662,7 @@ export function ProviderWorkflow({
     if (
       !model ||
       favorites.some(
-        (item) => item.provider === provider && item.model === model,
+        (item) => item.provider === provider && modelIdentity(provider, String(item.model)) === modelIdentity(provider, model),
       )
     )
       return;
@@ -713,13 +714,13 @@ export function ProviderWorkflow({
   };
   const toggleFavorite = async (model = selectedModel) => {
     const exists = favorites.some(
-      (item) => item.provider === provider && item.model === model,
+      (item) => item.provider === provider && modelIdentity(provider, String(item.model)) === modelIdentity(provider, model),
     );
     await save(
       "favorite_models",
       exists
         ? favorites.filter(
-            (item) => !(item.provider === provider && item.model === model),
+            (item) => !(item.provider === provider && modelIdentity(provider, String(item.model)) === modelIdentity(provider, model)),
           )
         : [...favorites, { provider, model }],
     );
@@ -850,6 +851,7 @@ export function ProviderWorkflow({
         dataPath="selected_provider_model"
       >
         <SearchableModelPicker
+          provider={provider}
           models={models}
           selected={selectedModel}
           loading={modelsLoading}

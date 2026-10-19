@@ -7,8 +7,8 @@ import { providerOptions } from "./managementCatalog";
 import { ProviderIcon } from "./ProviderIcon";
 import { useDismissiblePopup } from "./popupDismissal";
 import { useModelMenuPosition } from "./modelMenuPosition";
-import { modelDisplayName, reasoningDisplayName, reasoningModeOptions } from "./modelPresentation";
 import { ReasoningBudgetControl } from "./ReasoningBudgetControl";
+import { modelDisplayName, modelIdentity, reasoningDisplayName, reasoningModeOptions } from "./modelPresentation";
 
 type Favorite = { provider: string; model: string };
 type View = "effort" | "models";
@@ -93,8 +93,16 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
   const id = useId(), open = view !== null;
   if (view) lastView.current = view;
   const shownView = view || lastView.current;
-  const menuModels = provider && model && !favoriteModels.some(item => item.provider === provider && item.model === model)
+  const suppliedModels = provider && model && !favoriteModels.some(item => item.provider === provider && item.model === model)
     ? [{ provider, model }, ...favoriteModels] : favoriteModels;
+  const seenModels = new Set<string>();
+  const menuModels = suppliedModels.map(item => item.provider === provider && provider === "google_antigravity_signin"
+    && modelIdentity(provider, item.model) === modelIdentity(provider, model) ? { ...item, model } : item).filter(item => {
+    if (item.provider !== "google_antigravity_signin") return true;
+    const key = modelIdentity(item.provider, item.model);
+    if (seenModels.has(key)) return false;
+    seenModels.add(key); return true;
+  });
   const providers = Array.from(new Set(menuModels.map(item => item.provider)));
   const shownProvider = providers.includes(browsedProvider) ? browsedProvider : providers[0] || "";
   const rowCount = Math.min(7, Math.max(1, providers.length, ...providers.map(p => menuModels.filter(item => item.provider === p).length)));

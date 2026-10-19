@@ -20,6 +20,14 @@ for _field in ("progress_report", "final_answer"):
     ANTIGRAVITY_TURN_SCHEMA["properties"][_field]["type"] = "string"
 ANTIGRAVITY_TURN_SCHEMA["properties"]["tool_calls"]["type"] = "array"
 
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def split_model(model):
+    """Suffixes are presentation/control metadata; the raw ID stays persisted."""
+    base, separator, effort = str(model).rpartition("-")
+    return (base, effort) if separator and effort in EFFORTS else (str(model), "")
+
 
 class AntigravityProvider(SubscriptionProvider):
     provider = "google_antigravity_signin"
@@ -92,15 +100,38 @@ class AntigravityProvider(SubscriptionProvider):
             raise SubscriptionError("פלט אימות החשבון והמכסה אינו תואם. יש לבדוק את גרסת Antigravity ולהתחבר בכלי הרשמי.", "incompatible_version") from error
 
     def catalog(self):
-        output = self.run([self.executable(), "models"], timeout=30)
-        rows = []
-        for line in output.splitlines():
-            match = re.match(r"^([a-z0-9][a-z0-9._/-]+)\s+(.+)$", line.strip())
-            if match:
-                rows.append({"id": match[1], "label": match[2].strip(), "efforts": [], "availability": "unknown"})
-        self.models = rows
-        register_models(self.provider, rows)
-        return rows
+        with self._lock:
+            output = self.run([self.executable(), "models"], timeout=30)
+            rows = []
+            for line in output.splitlines():
+                match = re.match(r"^([a-z0-9][a-z0-9._/-]+)\s+(.+)$", line.strip())
+                if match:
+                    base, effort = split_model(match[1])
+                    rows.append({"id": match[1], "label": match[2].strip(), "base_model": base,
+                        "model_effort": effort, "availability": "unknown"})
+            for row in rows:
+                row["efforts"] = [level for level in EFFORTS if any(
+                    other["base_model"] == row["base_model"] and other["model_effort"] == level for other in rows)]
+            self.models = rows
+            register_models(self.provider, rows)
+            return rows
+
+    def ensure_catalog(self):
+        with self._lock:
+            return self.models or self.catalog()
+
+    def resolve_model(self, model, effort=""):
+        rows = self.ensure_catalog()
+        selected = next((row for row in rows if row["id"] == model), None)
+        if not selected:
+            raise SubscriptionError("יש לבחור מודל מתוך הרשימה הרשמית של Antigravity.", "model_unavailable")
+        if not effort:
+            return model
+        base, suffix = split_model(model)
+        match = next((row for row in rows if split_model(row["id"]) == (base, effort)), None)
+        if not suffix or not match:
+            raise SubscriptionError("רמת החשיבה שנבחרה אינה זמינה למודל בקטלוג Antigravity.", "unsupported_reasoning_effort")
+        return match["id"]
 
     @staticmethod
     def media_content(messages):
@@ -146,11 +177,8 @@ class AntigravityProvider(SubscriptionProvider):
         if self.disconnected:
             raise SubscriptionError("Antigravity מנותק מסמארטי. יש לבדוק חיבור בהגדרות.", "signin_required")
         self.version()
-        selected = next((row for row in (self.models or self.catalog()) if row["id"] == model), None)
-        if not selected:
-            raise SubscriptionError("יש לבחור מודל מתוך הרשימה הרשמית של Antigravity.", "model_unavailable")
-        if reasoning_effort:
-            raise SubscriptionError("בחיבור Antigravity רמת החשיבה נבחרת כחלק משם המודל.", "unsupported_reasoning_effort")
+        requested_model = model
+        model = self.resolve_model(model, reasoning_effort)
         media = self.media_content(messages)
         if media and not model.startswith(("gemini-", "claude-")):
             raise SubscriptionError("המודל שנבחר אינו תומך בתמונות בחיבור זה. יש לבחור מודל Gemini או Claude תומך.", "unsupported_attachment")
@@ -280,7 +308,7 @@ class AntigravityProvider(SubscriptionProvider):
             "cached_prompt": cached, "reasoning": int(raw.get("thinking_tokens", 0) or 0),
             "billing_mode": "subscription", "estimated_cost_usd": None,
             "usage_source": "reported" if raw else "unavailable", "provider": self.provider,
-            "requested_model": model, "effective_model": model, "purpose": purpose}
+            "requested_model": requested_model, "effective_model": model, "purpose": purpose}
         usage["total"] = usage["prompt"] + usage["completion"]
         self.verified = True
         return answer, usage

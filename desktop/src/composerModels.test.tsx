@@ -56,6 +56,23 @@ async function openModels() {
 }
 
 describe("composer model selection", () => {
+  test("Antigravity groups favorite variants and retains the active raw identity and reasoning control", async () => {
+    const selected = "gemini-3.8-flash-low", choose = vi.fn(), effort = vi.fn();
+    render(<Composer {...callbacks} attachments={[]} provider="google_antigravity_signin" model={selected}
+      reasoningEffort="high" reasoningOptions={["low", "medium", "high"].map(value => ({ value, label: value }))}
+      onReasoningEffort={effort} onFavoriteModel={choose} favoriteModels={[
+        { provider: "google_antigravity_signin", model: "gemini-3.8-flash-high" },
+        { provider: "google_antigravity_signin", model: selected },
+      ]} />);
+    await openEffort();
+    expect(screen.getByRole("slider").getAttribute("aria-valuetext")).toBe("High");
+    fireEvent.click(screen.getByRole("button", { name: "פתיחת המודלים המועדפים" }));
+    expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
+    const item = screen.getByRole("menuitemradio", { name: "gemini 3.8 flash" });
+    expect(item.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(item);
+    expect(choose).toHaveBeenCalledWith({ provider: "google_antigravity_signin", model: selected });
+  });
   test("shortens only local paths and sends the original favorite identity", async () => {
     const localModel = String.raw`C:\models\vendor\Qwen-35-Q4.gguf`;
     const thirdParty = "qwen/Qwen-35-Coder";

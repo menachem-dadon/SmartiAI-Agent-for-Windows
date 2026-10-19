@@ -1105,7 +1105,15 @@ def model_reasoning_contract(provider, model):
     if provider in {"anthropic_claude_code_signin", "google_antigravity_signin"}:
         from .subscription_providers.base import model_efforts
         levels = model_efforts(provider, str(model or "").strip())
-        return {"id": "subscription_metadata", "supported_levels": levels} if levels else {}
+        if not levels:
+            return {}
+        contract = {"id": "subscription_metadata", "supported_levels": levels}
+        if provider == "google_antigravity_signin":
+            from .subscription_providers.antigravity import split_model
+            effort = split_model(model)[1]
+            if effort in levels:
+                contract["recommended_level"] = effort
+        return contract
     if provider == "gemini":
         if re.match(r"^(?:text-embedding|embedding|imagen|veo|aqa)", name):
             return {}

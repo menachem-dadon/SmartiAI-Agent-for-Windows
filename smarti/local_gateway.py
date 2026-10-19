@@ -428,6 +428,7 @@ class SmartiLocalGateway:
     async def _v2_bootstrap(self, request):
         current_provider = normalize_provider_name(self.core.settings.get("api_mode") or getattr(self.core, "mode", "") or "gemini")
         current_model = str(self.core.settings.get(f"selected_{current_provider}_model") or "")
+        await self._antigravity_reasoning_catalog(current_provider)
         reasoning = await asyncio.to_thread(local_reasoning.describe, self.core, current_model) if current_provider == "local" and current_model else {
             "reasoning_effort": model_reasoning_setting(self.core.settings, current_provider, current_model),
             "reasoning_options": [{"value": value, "label": label} for value, label in model_reasoning_options(current_provider, current_model)],
@@ -1330,8 +1331,19 @@ class SmartiLocalGateway:
         return self._ok(request, {"available": False, "source": "unavailable",
             "message": "נתוני המכסה אינם זמינים דרך ממשק רשמי בחיבור זה."})
 
+    async def _antigravity_reasoning_catalog(self, provider):
+        if provider != "google_antigravity_signin":
+            return
+        from .subscription_providers import get_provider
+        from .subscription_providers.base import SubscriptionError
+        try:
+            await asyncio.to_thread(get_provider(self.core, provider).ensure_catalog)
+        except SubscriptionError:
+            pass  # Unknown metadata must remain an empty capability contract.
+
     async def _set_model_reasoning(self, request):
         provider = normalize_provider_name(request.match_info["provider"])
+        await self._antigravity_reasoning_catalog(provider)
 
         if request.method == "GET":
             model = str(request.query.get("model") or "").strip()

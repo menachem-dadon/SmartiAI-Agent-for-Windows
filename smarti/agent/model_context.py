@@ -2607,6 +2607,10 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
         current_model = str(current_model or "").strip()
         if request_mode == "gemini":
             current_model = current_model.removeprefix("models/")
+        if request_mode == "google_antigravity_signin":
+            # Cold/headless requests need real variant metadata before resolving
+            # a saved reasoning choice. This runs inside the request worker.
+            subscription_provider(self, request_mode).ensure_catalog()
         cache_controls_allowed = self._prompt_cache_controls_allowed(request_mode)
         request_system_prompt = str(
             request_options.get("system_prompt", getattr(self, "system_prompt", "")) or ""
