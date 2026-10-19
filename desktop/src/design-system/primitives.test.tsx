@@ -57,6 +57,24 @@ describe("UX-2 shared interaction contracts", () => {
     const range = screen.getByRole("slider"); expect(range.getAttribute("aria-valuetext")).toBe("ללא הגבלה");
     fireEvent.change(range, { target: { value: "60" } }); expect(change).toHaveBeenCalledWith(60);
   });
+  test("range preserves decimal steps, native commit events and accessible values", () => {
+    const change = vi.fn(), commit = vi.fn();
+    function Example() {
+      const [value, setValue] = useState(1.2);
+      return <RangeField label="שקט" min={0.3} max={5} step={0.1} value={value}
+        onValueChange={next => { change(next); setValue(next); }}
+        onPointerUp={event => commit(event.currentTarget.valueAsNumber)} formatValue={value => `${value} שניות`} />;
+    }
+    render(wrap(<Example />));
+    const range = screen.getByRole("slider", { name: "שקט" });
+    expect(range.getAttribute("dir")).toBe("rtl");
+    expect(range.getAttribute("step")).toBe("0.1");
+    expect(range.getAttribute("aria-valuetext")).toBe("1.2 שניות");
+    fireEvent.change(range, { target: { value: "2.4" } });
+    fireEvent.pointerUp(range);
+    expect(change).toHaveBeenCalledExactlyOnceWith(2.4);
+    expect(commit).toHaveBeenCalledExactlyOnceWith(2.4);
+  });
   test("menu skips disabled actions, toggles, handles arrows and returns focus on Escape", async () => {
     const select = vi.fn(); render(wrap(<Menu label="פעולות" items={[{ id: "one", label: "עריכה", onSelect: select }, { id: "two", label: "מושבת", disabled: true, onSelect: select }, { id: "three", label: "מחיקה", onSelect: select }]} />));
     const trigger = screen.getByRole("button", { name: "פעולות" }); trigger.focus(); await userEvent.keyboard("{ArrowDown}");

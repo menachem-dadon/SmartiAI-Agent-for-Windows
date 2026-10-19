@@ -98,7 +98,7 @@ async function main() {
       if(width===1280) record(`${label}: popup centered on trigger`, await page.locator('[role=dialog]').evaluate(n=>{
         const p=n.getBoundingClientRect(),a=document.querySelector('.model-picker-trigger').getBoundingClientRect();return Math.abs((p.left+p.right-a.left-a.right)/2)<1;
       }));
-      record(`${label}: reasoning stops`, await page.locator('.model-effort-stops i').count() === 5);
+      record(`${label}: reasoning stops`, await page.locator('.sds-slider-stops i').count() === 5);
       const slider = page.getByRole('slider', {name:'עוצמת חשיבה'});
       await slider.focus(); await slider.press('End');
       await page.waitForFunction(()=>window.__qaEvents.some(e=>e.effort==='max'));
@@ -146,8 +146,8 @@ async function main() {
     const dragSlider = page.getByRole('slider',{name:'עוצמת חשיבה'});
     await dragSlider.focus(); await dragSlider.press('Home'); await page.waitForTimeout(100);
     const callsBeforeDrag = await page.evaluate(()=>window.__qaEvents.length), track = await dragSlider.boundingBox();
-    await page.mouse.move(track.x+16,track.y+track.height/2); await page.mouse.down();
-    await page.mouse.move(track.x+track.width-16,track.y+track.height/2,{steps:8}); await page.mouse.up();
+    await page.mouse.move(track.x+track.width-16,track.y+track.height/2); await page.mouse.down();
+    await page.mouse.move(track.x+16,track.y+track.height/2,{steps:8}); await page.mouse.up();
     await page.waitForFunction(()=>window.__qaEvents.at(-1)?.effort==='max');
     record('native pointer drag saves final level once', await page.evaluate(()=>window.__qaEvents.length) === callsBeforeDrag+1);
     await page.evaluate(()=>{window.__qaEffortGate=new Promise(resolve=>{window.__qaReleaseEffort=resolve;});});
@@ -164,15 +164,15 @@ async function main() {
     await page.waitForTimeout(100);
     await page.emulateMedia({reducedMotion:'no-preference'});
     const geometry = await page.evaluate(async()=>{
-      const slider=document.querySelector('.model-effort-input');
+      const slider=document.querySelector('.sds-slider-input');
       const results=[],frames=[];
       for(const value of [0,1,2,3,4]) {
         const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(slider,String(value));
         slider.dispatchEvent(new Event('input',{bubbles:true}));
         for(let i=0;i<10;i++) {
           await new Promise(requestAnimationFrame);
-          const fill=document.querySelector('.model-effort-fill').getBoundingClientRect(),thumb=document.querySelector('.model-effort-thumb').getBoundingClientRect();
-          results.push(Math.abs(fill.right-(thumb.left+thumb.right)/2));
+          const fill=document.querySelector('.sds-slider-fill').getBoundingClientRect(),thumb=document.querySelector('.sds-slider-thumb').getBoundingClientRect();
+          results.push(Math.abs(fill.left-(thumb.left+thumb.right)/2));
           const p=document.querySelector('[role=dialog]').getBoundingClientRect();frames.push({x:p.x,y:p.y,width:p.width,height:p.height});
         }
       }
@@ -180,13 +180,13 @@ async function main() {
     });
     record('fill and handle stay aligned during animation',geometry.error<1);
     record('compact popup remains stable while changing effort',geometry.stable);
-    const thumb=await page.locator('.model-effort-thumb').boundingBox();
+    const thumb=await page.locator('.sds-slider-thumb').boundingBox();
     await page.mouse.move(thumb.x+thumb.width/2,thumb.y+thumb.height/2);await page.waitForTimeout(150);
-    const grown=await page.locator('.model-effort-thumb').boundingBox();
+    const grown=await page.locator('.sds-slider-thumb').boundingBox();
     record('handle hover grows smoothly',grown.width>thumb.width+1);
-    const firstStop=await page.locator('.model-effort-stops i').first().boundingBox();
+    const firstStop=await page.locator('.sds-slider-stops i').first().boundingBox();
     await page.mouse.move(firstStop.x+firstStop.width/2,firstStop.y+firstStop.height/2);await page.waitForTimeout(150);
-    record('station hover grows smoothly',(await page.locator('.model-effort-stops i').first().boundingBox()).width>firstStop.width+1);
+    record('station hover grows smoothly',(await page.locator('.sds-slider-stops i').first().boundingBox()).width>firstStop.width+1);
     await page.waitForTimeout(100);
     await page.getByRole('button',{name:'פתיחת המודלים המועדפים'}).click();
     const selected = page.getByRole('menuitemradio').filter({has:page.locator('.model-menu-check')}).first();
@@ -227,7 +227,7 @@ async function main() {
       if(scale>1) await page.addStyleTag({content:'.sds-root { --sds-font-control:21px!important; --sds-font-body:24px!important; --sds-font-caption:19.5px!important; }'});
       await page.getByRole('button',{name:'בחירת מודל',exact:true}).click();
       await page.waitForTimeout(220);
-      record(`${label}: seven budget stops`,await page.locator('.model-effort-stops i').count()===7);
+      record(`${label}: seven budget stops`,await page.locator('.sds-slider-stops i').count()===7);
       record(`${label}: bounds`,await inside());
       record(`${label}: footer visible without scroll`,await page.locator('.model-picker-surface--effort').evaluate(n=>n.scrollHeight<=n.clientHeight+1));
       const toggle=page.getByRole('switch',{name:'תקציב חשיבה קשיח',exact:true});

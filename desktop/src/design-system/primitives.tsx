@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { designTokenStyle, type DesignTheme } from "./tokens";
 import { Icon, IconTheme, IconFamilyContext, type IconFamily, type IconName } from "./icons";
 import "./system.css";
+import { Slider } from "./Slider";
 
 type Direction = "rtl" | "ltr";
 const DesignContext = createContext<{ theme: DesignTheme; dir: Direction; reduced: boolean; host: HTMLDivElement | null }>({ theme: "light", dir: "rtl", reduced: false, host: null });
@@ -132,8 +133,10 @@ export function Switch({ label, checked, onCheckedChange, disabled, size = "norm
 }
 export function RangeField({ label, value, min, max, step = 1, onValueChange, formatValue = String, disabled, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "value" | "min" | "max" | "step" | "onChange"> & { label: string; value: number; min: number; max: number; step?: number; onValueChange: (value: number) => void; formatValue?: (value: number) => string }) {
   const id = useId(); const { dir } = useContext(DesignContext);
-  const fill = max > min ? Math.max(0, Math.min(100, (value - min) / (max - min) * 100)) : 0;
-  return <div className="sds-range-field"><label htmlFor={id}>{label}</label><div><input {...props} id={id} type="range" className="sds-range" disabled={disabled} value={value} min={min} max={max} step={step} aria-valuetext={formatValue(value)} style={{ "--sds-range-fill": `${fill}%`, "--sds-range-direction": dir === "rtl" ? "to left" : "to right" } as CSSProperties} onChange={(event) => onValueChange(event.currentTarget.valueAsNumber)} /><output htmlFor={id}><bdi>{formatValue(value)}</bdi></output></div></div>;
+  const intervals = (max - min) / step;
+  const stops = intervals >= 1 && intervals <= 10 && Math.abs(intervals - Math.round(intervals)) < 1e-8
+    ? Array.from({ length: Math.round(intervals) + 1 }, (_, index) => min + index * step) : [];
+  return <div className="sds-range-field"><label htmlFor={id}>{label}</label><div><Slider {...props} id={id} dir={dir} className="sds-range" disabled={disabled} value={value} min={min} max={max} step={step} stops={stops} aria-valuetext={formatValue(value)} onValueChange={onValueChange} /><output htmlFor={id}><bdi>{formatValue(value)}</bdi></output></div></div>;
 }
 
 export type MenuItem = { id: string; label: string; description?: string; icon?: IconName; disabled?: boolean; tone?: "danger"; onSelect: () => void };

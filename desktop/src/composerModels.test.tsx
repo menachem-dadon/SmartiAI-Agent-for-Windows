@@ -98,7 +98,7 @@ describe("composer model selection", () => {
     const popup = await openEffort();
     const slider = screen.getByRole("slider", { name: "עוצמת חשיבה" });
     expect(slider.getAttribute("max")).toBe("2");
-    expect(popup.querySelectorAll(".model-effort-stops i")).toHaveLength(3);
+    expect(popup.querySelectorAll(".sds-slider-stops i")).toHaveLength(3);
     fireEvent.pointerDown(slider, { pointerId: 1 });
     fireEvent.change(slider, { target: { value: "1" } });
     expect(slider.getAttribute("aria-valuetext")).toBe("Medium");

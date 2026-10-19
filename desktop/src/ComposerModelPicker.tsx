@@ -1,6 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Button, DesignSystemProvider, HoverLabel, Icon, IconButton, Tooltip } from "./design-system";
+import { Button, DesignSystemProvider, HoverLabel, Icon, IconButton, Slider, Tooltip } from "./design-system";
 import type { ReasoningOption } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
 import { providerOptions } from "./managementCatalog";
@@ -25,8 +25,6 @@ const providerName = (value: string) => providerOptions.find(option => option.va
 function ReasoningSlider({ value, options, onChange, onPreviewChange }: {
   value: string; options: ReasoningOption[]; onChange: Props["onReasoningEffort"]; onPreviewChange: (value: string | null) => void;
 }) {
-  const slider = useRef<HTMLDivElement>(null);
-  const [hover, setHover] = useState({ thumb: false, stop: -1 });
   const dragging = useRef(false), preview = useRef<string | null>(null), dragStart = useRef(value);
   const index = options.findIndex(option => option.value === value);
   const commitDrag = () => {
@@ -35,35 +33,18 @@ function ReasoningSlider({ value, options, onChange, onPreviewChange }: {
     const next = preview.current;
     if (next !== null && next !== dragStart.current) void onChange(next);
   };
-  return <div className="model-effort-control" dir="ltr">
-    <div ref={slider} className="model-effort-slider" style={{ "--model-effort-position": options.length > 1 ? Math.max(0, index) / (options.length - 1) : 0 } as CSSProperties}
-      onPointerLeave={() => setHover({ thumb: false, stop: -1 })}
-      onPointerMove={event => {
-        if (event.pointerType === "touch" || !slider.current) return;
-        const rect = slider.current.getBoundingClientRect(), thumb = slider.current.querySelector<HTMLElement>(".model-effort-thumb")!.getBoundingClientRect();
-        const half = parseFloat(getComputedStyle(slider.current).getPropertyValue("--model-effort-thumb-size")) / 2;
-        const step = options.length > 1 ? (rect.width - 2 * half) / (options.length - 1) : 0;
-        const stop = step > 0 ? Math.max(0, Math.min(options.length - 1, Math.round((event.clientX - rect.left - half) / step))) : 0;
-        const next = { thumb: event.clientX >= thumb.left && event.clientX <= thumb.right && event.clientY >= thumb.top && event.clientY <= thumb.bottom,
-          stop: Math.abs(event.clientX - rect.left - half - stop * step) <= 10 && Math.abs(event.clientY - rect.top - rect.height / 2) <= 12 ? stop : -1 };
-        setHover(current => current.thumb === next.thumb && current.stop === next.stop ? current : next);
-      }}>
-      <span className="model-effort-track" aria-hidden="true"><span className="model-effort-fill" /></span>
-      <span className={`model-effort-thumb${hover.thumb ? " is-hovered" : ""}`} aria-hidden="true" />
-      <input className="model-effort-input" type="range" aria-label="עוצמת חשיבה" aria-valuetext={reasoningDisplayName(value, options)}
+  return <div className="model-effort-control" dir="rtl">
+      <Slider sliderClassName="model-effort-slider" aria-label="עוצמת חשיבה" aria-valuetext={reasoningDisplayName(value, options)}
         min={0} max={Math.max(0, options.length - 1)} step={1} value={Math.max(0, index)} disabled={options.length < 2 || index < 0}
-
+        stops={options.map((_, i) => i)}
         onPointerDown={event => { dragging.current = true; dragStart.current = value; preview.current = null; event.currentTarget.setPointerCapture?.(event.pointerId); }}
         onPointerUp={commitDrag} onPointerCancel={commitDrag} onLostPointerCapture={commitDrag}
-        onChange={event => {
-          const next = options[event.currentTarget.valueAsNumber]?.value;
+        onValueChange={index => {
+          const next = options[index]?.value;
           if (!next) return;
           preview.current = next; onPreviewChange(next);
           if (!dragging.current) void onChange(next);
         }} />
-      <span className="model-effort-stops" aria-hidden="true">{options.map((option, i) =>
-        <i key={option.value} style={{ "--model-effort-stop-position": options.length > 1 ? i / (options.length - 1) : 0 } as CSSProperties} className={`${i <= index ? "is-filled" : ""}${i === index ? " is-current" : ""}${i === hover.stop ? " is-hovered" : ""}`} />)}</span>
-    </div>
     <output className="sds-visually-hidden" aria-live="polite">{reasoningDisplayName(value, options)}</output>
   </div>;
 }
