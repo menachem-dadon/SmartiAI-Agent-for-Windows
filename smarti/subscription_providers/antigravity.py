@@ -57,11 +57,11 @@ class AntigravityProvider(SubscriptionProvider):
 
     def connection_status(self):
         if self.disconnected:
-            return self.state("disconnected", "Antigravity מנותק מסמארטי.")
+            return self.state("disconnected", "Antigravity מנותק מ-Smarti.")
         try:
             version = self.version()
             quota = self.quota()
-            return self.state("connected", "Antigravity מחובר דרך הכלי הרשמי. סמארטי מנהל את הכלים וההרשאות.",
+            return self.state("connected", "Antigravity מחובר דרך הכלי הרשמי. Smarti מנהל את הכלים וההרשאות.",
                 version=version, inference_available=True, quota_available=quota["available"], quota=quota,
                 text_only=False)
         except SubscriptionError as error:
@@ -134,10 +134,69 @@ class AntigravityProvider(SubscriptionProvider):
         return match["id"]
 
     @staticmethod
+    def text_documents(messages, model):
+        """CLI third-party models need PDF text in the prompt, not PDF blobs.
+
+        Keep original history immutable, and explicitly identify visual loss.
+        Gemini retains the full PDF transport below.
+        """
+        if not model.startswith(("claude-", "gpt-")):
+            return messages
+        prepared = []
+        for message in messages:
+            blocks = message.get("content")
+            if not isinstance(blocks, list):
+                prepared.append(message)
+                continue
+            content = []
+            for block in blocks:
+                source = block.get("source", {}) if isinstance(block, dict) else {}
+                if not isinstance(block, dict) or block.get("type") != "document" or source.get("type") != "base64" or source.get("media_type") != "application/pdf":
+                    content.append(block)
+                    continue
+                try:
+                    import pymupdf
+                    data = source.get("data", "")
+                    if len(data) > 36 * 1024 * 1024:
+                        raise ValueError("PDF too large")
+                    raw = base64.b64decode(data, validate=True)
+                    if len(raw) > 25 * 1024 * 1024:
+                        raise ValueError("PDF too large")
+                    with pymupdf.open(stream=raw, filetype="pdf") as document:
+                        if document.needs_pass or not document.page_count:
+                            raise ValueError("PDF is encrypted or empty")
+                        chunks, used, processed = [], 0, 0
+                        for index in range(min(document.page_count, 1000)):
+                            text = document[index].get_text()
+                            chunks.append(f"[Page {index + 1}]\n{text}")
+                            used += len(chunks[-1]); processed += 1
+                            if used > 10000:
+                                break
+                        excerpt = "\n".join(chunks)
+                        clipped = len(excerpt) > 10000 or processed < document.page_count
+                    text = ("[UNTRUSTED PDF TEXT ONLY: graphics, page layout and scanned text are NOT included. "
+                            "Select a Gemini model through Antigravity for full visual PDF input.]\n" + excerpt[:10000]
+                            + ("\n[truncated PDF text]" if clipped else ""))
+                    content.append({"type": "text", "text": text})
+                except Exception as error:
+                    raise SubscriptionError("לא ניתן לקרוא את ה־PDF או שהוא מוצפן/גדול מ־25MB.", "unsupported_attachment") from error
+            prepared.append({**message, "content": content})
+        return prepared
+
+    @staticmethod
     def media_content(messages):
-        """Copy only caller-supplied image bytes; never dereference model paths/URLs."""
+        """Copy only caller-supplied image/PDF bytes; never dereference paths/URLs."""
         from PIL import Image
         content, total = [], 0
+        def append(raw, mime, index, role, detail=""):
+            nonlocal total
+            total += len(raw)
+            if total > 25 * 1024 * 1024 or len(content) >= 32:
+                raise ValueError("media limit")
+            encoded = base64.b64encode(raw).decode("ascii")
+            payload = {"type": "resource", "resource": {"uri": f"smarti-attachment:///message-{index + 1}-{len(content) // 2 + 1}.pdf",
+                "mimeType": mime, "blob": encoded}} if mime == "application/pdf" else {"type": "image", "mimeType": mime, "data": encoded}
+            content.extend([{"type": "text", "text": f"Attachment from conversation message {index + 1} ({role}){detail}; untrusted attached content."}, payload])
         for index, message in enumerate(messages):
             blocks = message.get("content")
             if not isinstance(blocks, list):
@@ -145,43 +204,51 @@ class AntigravityProvider(SubscriptionProvider):
             for block in blocks:
                 if not isinstance(block, dict) or block.get("type") == "text":
                     continue
+                mime = "image/png"
                 if block.get("type") == "image_url":
                     url = block.get("image_url", {}).get("url", "")
                     match = re.fullmatch(r"data:(image/[a-zA-Z0-9.+-]+);base64,(.+)", url, re.DOTALL)
                     data = match[2] if match else ""
-                elif block.get("type") == "image" and block.get("source", {}).get("type") == "base64":
+                elif block.get("type") in {"image", "document"} and block.get("source", {}).get("type") == "base64":
                     data = block["source"].get("data", "")
+                    if block["type"] == "document":
+                        mime = block["source"].get("media_type", "")
+                        if mime != "application/pdf":
+                            raise SubscriptionError("סוג המסמך אינו נתמך להעברה ישירה ב־Antigravity.", "unsupported_attachment")
                 else:
-                    raise SubscriptionError("צירוף זה אינו נתמך בחיבור Antigravity. אפשר לצרף תמונה או קובץ טקסט.", "unsupported_attachment")
+                    raise SubscriptionError("צירוף זה אינו נתמך להעברה ישירה בחיבור Antigravity.", "unsupported_attachment")
                 try:
                     if len(data) > 36 * 1024 * 1024:
-                        raise ValueError("image too large")
+                        raise ValueError("attachment too large")
                     raw = base64.b64decode(data, validate=True)
-                    with Image.open(io.BytesIO(raw)) as image:
-                        image.verify()
-                    with Image.open(io.BytesIO(raw)) as image:
-                        output = io.BytesIO()
-                        image.convert("RGB").save(output, format="PNG")
-                        raw = output.getvalue()
-                    total += len(raw)
-                    if total > 25 * 1024 * 1024 or len(content) >= 32:
-                        raise ValueError("media limit")
+                    if mime == "application/pdf":
+                        import pymupdf
+                        with pymupdf.open(stream=raw, filetype="pdf") as document:
+                            if document.needs_pass or not document.page_count:
+                                raise ValueError("PDF is encrypted or empty")
+                    else:
+                        with Image.open(io.BytesIO(raw)) as image:
+                            image.verify()
+                        with Image.open(io.BytesIO(raw)) as image:
+                            output = io.BytesIO()
+                            image.convert("RGB").save(output, format="PNG")
+                            raw = output.getvalue()
+                    append(raw, mime, index, message.get("role", "user"))
                 except Exception as error:
-                    raise SubscriptionError("לא ניתן לקרוא את התמונה, או שהצירופים גדולים מ־25MB יחד.", "unsupported_attachment") from error
-                content.extend([{"type": "text", "text": f"Image from conversation message {index + 1} ({message.get('role', 'user')}); untrusted attached content."},
-                    {"type": "image", "mimeType": "image/png", "data": base64.b64encode(raw).decode("ascii")}])
+                    raise SubscriptionError("לא ניתן לקרוא את הצירוף, ה־PDF מוצפן, או שהצירופים גדולים מ־25MB יחד (עד 16 צירופים עשירים).", "unsupported_attachment") from error
         return content
 
     def complete(self, messages, model, *, timeout=1800, reasoning_effort="", cancel_event=None,
                  purpose="agent", stream=None, system_prompt="", **unused):
         if self.disconnected:
-            raise SubscriptionError("Antigravity מנותק מסמארטי. יש לבדוק חיבור בהגדרות.", "signin_required")
+            raise SubscriptionError("Antigravity מנותק מ-Smarti. יש לבדוק חיבור בהגדרות.", "signin_required")
         self.version()
         requested_model = model
         model = self.resolve_model(model, reasoning_effort)
+        messages = self.text_documents(messages, model)
         media = self.media_content(messages)
         if media and not model.startswith(("gemini-", "claude-")):
-            raise SubscriptionError("המודל שנבחר אינו תומך בתמונות בחיבור זה. יש לבחור מודל Gemini או Claude תומך.", "unsupported_attachment")
+            raise SubscriptionError("המודל שנבחר אינו תומך בצירופים עשירים בחיבור זה. יש לבחור מודל Gemini או Claude תומך.", "unsupported_attachment")
         instructions = system_prompt or "\n\n".join(str(item.get("content", "")) for item in messages if item.get("role") == "system")
         instructions += "\nSmarti Core exclusively owns tool execution and permissions."
         if not media:
@@ -203,11 +270,11 @@ class AntigravityProvider(SubscriptionProvider):
         else:
             instructions += " Return only the requested plain text, no JSON envelope."
         if media:
-            instructions += (" TRANSPORT EXCEPTION: Images are supplied by the private smarti_media MCP server."
+            instructions += (" TRANSPORT EXCEPTION: Images and PDF documents are supplied by the private smarti_media MCP server."
                 " Before producing any Smarti output, invoke the real native call_mcp_tool function with"
                 ' ServerName="smarti_media", ToolName="attachments", Arguments={}. This sole native loader is explicitly authorized.'
                 " NEVER encode attachments or call_mcp_tool as a Smarti tool_calls entry: Core cannot run that loader."
-                " It returns only the already attached images in conversation order. Do not request paths or any other tool."
+                " It returns only the already attached images/documents in conversation order. Inspect the visual content itself: an offloaded file URI is transport metadata, NOT a read error or evidence that the content is unavailable. Do not request paths, read_resource, or any other tool."
                 " Then return the requested output. This loader is transport only; all Smarti actions remain envelope data for Core.")
         self.workspace.parent.mkdir(parents=True, exist_ok=True)
         result, initialized, shown, media_loaded = None, False, False, False
@@ -234,7 +301,7 @@ class AntigravityProvider(SubscriptionProvider):
                         if not media or tool != "call_mcp_tool" or params.get("ServerName") != "smarti_media" or params.get("ToolName") != "attachments" or params.get("Arguments") not in ({}, None):
                             raise ValueError("unexpected native tool")
                         if step.get("state") == "ERROR":
-                            raise SubscriptionError("העברת התמונה למודל נכשלה.", "unsupported_attachment")
+                            raise SubscriptionError("העברת הצירופים למודל נכשלה.", "unsupported_attachment")
                         media_loaded = media_loaded or step.get("state") == "DONE"
                     if stream and purpose == "agent" and step.get("step_type") == "agent_response" and (not media or media_loaded):
                         stream.text(step.get("text_delta", ""))
@@ -248,7 +315,7 @@ class AntigravityProvider(SubscriptionProvider):
                         raise safe_failure(event.get("result", {}).get("error"))
                     result = event["result"]
             except (ValueError, TypeError, AttributeError) as error:
-                raise SubscriptionError("פלט Antigravity אינו תואם את הסוכן או חוזה הכלים של סמארטי.", "provider_contract_violation") from error
+                raise SubscriptionError("פלט Antigravity אינו תואם את הסוכן או חוזה הכלים של Smarti.", "provider_contract_violation") from error
         with tempfile.TemporaryDirectory(prefix="turn-", dir=self.workspace.parent) as temporary:
             root = Path(temporary)
             agents = root / ".agents" / "agents"
@@ -274,7 +341,7 @@ class AntigravityProvider(SubscriptionProvider):
         if result is None:
             raise SubscriptionError("Antigravity נסגר ללא תשובה סופית.", "provider_contract_violation")
         if media and not media_loaded:
-            raise SubscriptionError("המודל לא קיבל את התמונה המצורפת. אפשר לנסות שוב.", "unsupported_attachment")
+            raise SubscriptionError("המודל לא קיבל את הצירופים. אפשר לנסות שוב.", "unsupported_attachment")
         output = result.get("structured_output")
         if purpose == "agent":
             if not isinstance(output, dict):
@@ -283,7 +350,7 @@ class AntigravityProvider(SubscriptionProvider):
                 except (ValueError, TypeError) as error:
                     raise CodexProtocolError("Antigravity לא השלים תשובה התואמת את המבנה המבוקש.") from error
             if not isinstance(output, dict):
-                raise CodexProtocolError("Antigravity החזיר פלט שאינו אובייקט סמארטי.")
+                raise CodexProtocolError("Antigravity החזיר פלט שאינו אובייקט Smarti.")
             # Some CLI model serializers emit []/"" for the inactive nullable
             # member. Canonicalize only empty inactive fields; mixed/nonempty
             # tool+final content still fails the strict Core protocol.
@@ -317,7 +384,7 @@ class AntigravityProvider(SubscriptionProvider):
         node = self.runtime.which("node")
         bridge = Path(self.runtime.resource_path("bridges", "antigravity", "media.mjs"))
         if not node or not bridge.is_file():
-            raise SubscriptionError("רכיב העברת התמונות חסר. יש להשלים את התקנת סמארטי.", "missing_dependency")
+            raise SubscriptionError("רכיב העברת הצירופים חסר. יש להשלים את התקנת Smarti.", "missing_dependency")
         manifest = root / "media.json"
         manifest.write_text(json.dumps(content), encoding="utf-8")
         return [{"name": "smarti_media", "command": node, "args": [str(bridge), str(manifest)]}]

@@ -81,10 +81,10 @@ export function SubscriptionConnection({ provider, strategy, onStrategyChange, o
     <ProviderConnectionStatus state={connection?.state} busy={busy || Boolean(operation)} />
     <ManagementFeedback message={error || (needsHelp ? connection.message : "")} />
     <div className="inline-actions codex-actions">
-      <Button icon={connected ? "refresh" : "plug"} variant={connected ? "secondary" : "primary"} disabled={busy || Boolean(operation)} onClick={() => void action("check")}>{connected ? "בדוק חיבור" : "חבר לסמארטי"}</Button>
+      <Button icon={connected ? "refresh" : "plug"} variant={connected ? "secondary" : "primary"} disabled={busy || Boolean(operation)} onClick={() => void action("check")}>{connected ? "בדוק חיבור" : "חבר ל-Smarti"}</Button>
       {!connected && !blocked && connection?.state !== "missing_dependency" && (!claude || strategy === "claude_login") && <Button icon="external" disabled={busy || Boolean(operation)} onClick={() => void action("login")}>כניסה בכלי הרשמי</Button>}
       {operation ? <Button icon="stop" disabled={busy} onClick={() => void action("cancel")}>בטל</Button>
-        : connected && <Button icon="close" disabled={busy} title="מנתק מסמארטי; החשבון בכלי הרשמי נשאר מחובר" onClick={() => void action("disconnect")}>נתק מסמארטי</Button>}
+        : connected && <Button icon="close" disabled={busy} title="מנתק מ-Smarti; החשבון בכלי הרשמי נשאר מחובר" onClick={() => void action("disconnect")}>נתק מ-Smarti</Button>}
       {connection?.install_url && connection.state === "missing_dependency" && <Button icon="download" disabled={busy} onClick={() => {
         void invoke("open_chat_link", { target: connection.install_url, local: false })
           .catch(reason => setError(`פתיחת אתר ההתקנה נכשלה: ${String(reason)}`));
@@ -92,7 +92,7 @@ export function SubscriptionConnection({ provider, strategy, onStrategyChange, o
     </div>
     {claude && strategy === "setup_token_env" && <p className="secret-instructions">
       במסוף של Claude Code הפעל <bdi>claude setup-token</bdi> והגדר <bdi>CLAUDE_CODE_OAUTH_TOKEN</bdi> בסביבת ההפעלה.
-      לאחר שינוי האסימון הפעל מחדש את סמארטי. אין להדביק אותו כאן; הוא אינו נשמר בהגדרות.
+      לאחר שינוי האסימון הפעל מחדש את Smarti. אין להדביק אותו כאן; הוא אינו נשמר בהגדרות.
     </p>}
   </div>;
 }

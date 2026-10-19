@@ -142,6 +142,20 @@ class VisualCanvasPersistenceTests(unittest.TestCase):
         page = core._scrape_fetch_page("https://example.test/article", {}, 5)
         self.assertEqual(page["primary_image"], "https://cdn.example.test/hero.jpg")
 
+    def test_web_reader_keeps_json_endpoints_as_untrusted_bounded_page_content(self):
+        from types import SimpleNamespace
+        for mime in ("application/json; charset=utf-8", "application/problem+json", "text/plain"):
+            core = SmartiCore.__new__(SmartiCore)
+            core._run_cancelable_callable = lambda callback: callback()
+            core._request_get = lambda *args, **kwargs: SimpleNamespace(
+                headers={"content-type": mime}, text='{"title":"<b>literal</b>","value":42}',
+                url="https://example.test/api/recent", status_code=200, raise_for_status=lambda: None)
+            page = core._scrape_fetch_page("https://example.test/api/recent", {}, 5)
+            self.assertNotIn("error", page)
+            self.assertIn('"value":42', page["text"])
+            self.assertIn("<b>literal</b>", page["text"])
+            self.assertEqual(page["links"], [])
+
     def test_canvas_contract_does_not_require_a_schema_round_trip(self):
         core = SmartiCore.__new__(SmartiCore)
         requires_info, reason = core._tool_requires_info_before_use("canvas_manager", {}, set())

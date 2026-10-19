@@ -31,7 +31,7 @@ export function CodexConnection({ onChanged }: { onChanged: () => Promise<void> 
     <ProviderConnectionStatus state={state} busy={busy} />
     <ManagementFeedback message={error} />
     <div className="inline-actions codex-actions">
-      <Button icon={connected ? "refresh" : "plug"} variant={connected ? "secondary" : "primary"} disabled={busy} onClick={() => void action("codex_check")}>{connected ? "בדוק חיבור" : "חבר לסמארטי"}</Button>
+      <Button icon={connected ? "refresh" : "plug"} variant={connected ? "secondary" : "primary"} disabled={busy} onClick={() => void action("codex_check")}>{connected ? "בדוק חיבור" : "חבר ל-Smarti"}</Button>
       {!connected && <Button icon="external" disabled={busy} onClick={() => void action("codex_login")}>כניסה לחשבון</Button>}
       {connected && <Button icon="close" disabled={busy} title="מוציא מהחשבון גם בכלי Codex הרשמי" onClick={() => void action("codex_logout")}>יציאה מהחשבון</Button>}
     </div>

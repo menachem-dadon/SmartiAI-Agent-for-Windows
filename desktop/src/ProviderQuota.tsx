@@ -14,8 +14,17 @@ export function quotaWindows(provider: string, model: string, quota?: ProviderQu
   ];
   const family = model.startsWith("gemini") ? "gemini" : model.startsWith("claude") ? "claude" : model.startsWith("gpt") ? "gpt" : "";
   const groups = quota?.groups || [];
-  const matching = family ? groups.filter(group => group.name.toLowerCase().includes(family)) : [];
-  return (matching.length ? matching : groups).flatMap((group, index) => group.buckets.map((bucket, i) => ({
+  // A plan can report a dedicated model bucket as well as a family bucket
+  // (Pro's Gemini 4 Argon, for example). Prefer the most specific real group;
+  // plans without that group keep the provider's shared family quota.
+  const scored = groups.map(group => {
+    const name = group.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const specific = model === name || model.startsWith(`${name}-`);
+    return { group, score: specific ? name.length : family && name.includes(family) && !/\d/.test(name) ? 1 : 0 };
+  });
+  const best = Math.max(0, ...scored.map(row => row.score));
+  const matching = scored.filter(row => row.score === best && best > 0).map(row => row.group);
+  return (family ? matching : groups).flatMap((group, index) => group.buckets.map((bucket, i) => ({
     key: `${index}:${i}`, label: `${matching.length || groups.length === 1 ? "" : `${group.name} · `}${bucket.window === "5h" ? "5 שעות" : bucket.window === "weekly" || bucket.window === "7d" ? "שבוע" : bucket.name || bucket.window}`,
     period: bucket.window === "5h" ? "five_hour" as const : "weekly" as const,
     remaining_percent: bucket.remaining_fraction * 100,
@@ -46,9 +55,9 @@ export function useProviderQuota(provider: string, model: string) {
     const timer = window.setInterval(() => void refresh(), 60_000);
     return () => { clearTimeout(first); clearInterval(timer); };
   }, [provider, refresh]);
-  const status = error ? "לא ניתן לטעון את המכסה כרגע" : !data ? "טוען נתוני מכסה…"
-    : !data.available ? "נתוני המכסה אינם זמינים כרגע" : `${data.plan_type ? `תוכנית ${data.plan_type} · ` : ""}${loading ? "מתעדכן…" : "מעודכן כעת"}`;
   const windows = quotaWindows(provider, model, data);
+  const status = error ? "לא ניתן לטעון את המכסה כרגע" : !data ? "טוען נתוני מכסה…"
+    : !data.available || !windows.length ? "נתוני המכסה אינם זמינים כרגע" : `${data.plan_type ? `תוכנית ${data.plan_type} · ` : ""}${loading ? "מתעדכן…" : "מעודכן כעת"}`;
   const summary = providers.includes(provider) ? <section className="codex-quota-summary" aria-label={provider === "openai_codex_signin" ? "מכסת Codex שנותרה" : "מכסת המנוי שנותרה"} title={status}>
     {windows.length ? windows.map(item => {
       const value = data?.available ? item.remaining_percent : undefined;

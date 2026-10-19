@@ -730,9 +730,10 @@ fn cdp_call(webview: &Webview, method: String, params: String) -> Result<Value, 
             }
         })
         .map_err(|error| error.to_string())?;
-    let payload = receiver
-        .recv_timeout(CDP_TIMEOUT)
-        .map_err(|_| "WebView2 CDP action timed out".to_string())??;
+    let payload = receiver.recv_timeout(CDP_TIMEOUT).map_err(|error| match error {
+        mpsc::RecvTimeoutError::Timeout => "WebView2 CDP action timed out".to_string(),
+        mpsc::RecvTimeoutError::Disconnected => "WebView2 CDP response channel closed before completion; inspect the target before retrying an action".to_string(),
+    })??;
     serde_json::from_str(&payload)
         .map_err(|error| format!("invalid WebView2 CDP response: {error}"))
 }
@@ -1377,6 +1378,16 @@ mod tests {
                     let result = (|| -> Result<(usize, usize), String> {
                         let (port, stop) = start_smoke_site()?;
                         let outcome = (|| -> Result<(usize, usize), String> {
+                            // The first agent request must work without a tab
+                            // already warmed by UI metadata or direct CDP calls.
+                            let cold = structured_action(&handle, &broker, json!({
+                                "action":"start", "sessionId":"cold-session", "profile":"guest",
+                                "url":format!("http://127.0.0.1:{port}/agent"), "presentation":"visible"
+                            }))?;
+                            if cold["page"]["url"] == "about:blank" || cold["page"]["refs"].as_object().is_none() {
+                                return Err(format!("cold browser start did not observe the page: {cold}"));
+                            }
+                            structured_action(&handle, &broker, json!({"action":"close_tab", "tabId":cold["tabId"], "sessionId":"cold-session"}))?;
                             let state = create_webview(&handle, &broker, BrowserProfile::Guest,
                                 &format!("http://127.0.0.1:{port}/"), Some("preview-owner".into()))?;
                             let tab = state.tabs.into_iter().find(|tab| tab.active).ok_or("missing preview target")?;

@@ -16,7 +16,7 @@ test("mount reads a cached status with no automatic check or credential input", 
   render(<SubscriptionConnection {...props()} />);
   await screen.findByText("לא מחובר");
   expect(screen.queryByText("cancelled verbose details")).toBeNull();
-  expect(screen.getByRole("button", { name: "חבר לסמארטי" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "חבר ל-Smarti" })).toBeTruthy();
   expect(document.querySelector("input")).toBeNull();
   expect(api).toHaveBeenCalledTimes(1);
   expect(api.mock.calls[0][0]).toBe("GET");
@@ -39,7 +39,7 @@ test("a connected Antigravity has compact status, no quota or onboarding button"
   expect(screen.queryByText(/85%/)).toBeNull();
   expect(screen.queryByRole("button", { name: "כניסה בכלי הרשמי" })).toBeNull();
   expect(screen.getByRole("button", { name: "בדוק חיבור" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "נתק מסמארטי" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "נתק מ-Smarti" })).toBeTruthy();
 });
 
 test("the token route retains instructions without secret capture or login", async () => {
@@ -83,9 +83,9 @@ test("check failure releases the button for retry", async () => {
   api.mockRejectedValueOnce(new Error("isolated failure"));
   render(<SubscriptionConnection {...props()} />);
   await screen.findByText("לא מחובר");
-  fireEvent.click(screen.getByRole("button", { name: "חבר לסמארטי" }));
+  fireEvent.click(screen.getByRole("button", { name: "חבר ל-Smarti" }));
   await screen.findByText(/isolated failure/);
-  await waitFor(() => expect((screen.getByRole("button", { name: "חבר לסמארטי" }) as HTMLButtonElement).disabled).toBe(false));
+  await waitFor(() => expect((screen.getByRole("button", { name: "חבר ל-Smarti" }) as HTMLButtonElement).disabled).toBe(false));
 });
 
 test("lost operations stop polling and release controls", async () => {
@@ -98,7 +98,7 @@ test("lost operations stop polling and release controls", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "כניסה בכלי הרשמי" })));
   await act(async () => vi.advanceTimersByTimeAsync(1100));
   expect(screen.queryByRole("button", { name: "בטל" })).toBeNull();
-  expect((screen.getByRole("button", { name: "חבר לסמארטי" }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByRole("button", { name: "חבר ל-Smarti" }) as HTMLButtonElement).disabled).toBe(false);
   await act(async () => vi.advanceTimersByTimeAsync(10000));
   expect(api).toHaveBeenCalledTimes(3);
 });

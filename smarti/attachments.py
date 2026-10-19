@@ -20,7 +20,10 @@ GEMINI_INLINE_MIME_TYPES = {
 SAFE_TEXT_ATTACHMENT_EXTENSIONS = {
     ".txt", ".md", ".csv", ".json", ".jsonl", ".xml", ".html", ".css", ".js",
     ".ts", ".tsx", ".jsx", ".py", ".pyw", ".log", ".ini", ".yaml", ".yml", ".sql",
-    ".toml", ".rs", ".c", ".cpp", ".h", ".cs", ".java", ".svelte", ".vue", ".ps1", ".sh", ".svg"
+    ".toml", ".rs", ".c", ".cpp", ".h", ".cs", ".java", ".svelte", ".vue", ".ps1", ".sh", ".svg",
+    ".mjs", ".cjs", ".go", ".kt", ".kts", ".swift", ".dart", ".rb", ".php", ".lua", ".pl",
+    ".ipynb", ".tex", ".bib", ".rst", ".eml", ".ics", ".vcf", ".srt", ".vtt", ".rtf",
+    ".conf", ".cfg", ".properties", ".gradle", ".proto", ".graphql", ".gql", ".bat", ".cmd"
 }
 
 GOOGLE_WORKSPACE_EXPORT_EXTENSIONS = {
@@ -224,7 +227,7 @@ def read_attachment_bytes(item, max_bytes=None):
         return None, f"Cannot read file: {error}"
 
 
-def attachment_document_text(item, max_chars=10000):
+def attachment_document_text(item, max_chars=10000, *, include_archive_text=False):
     """Extract document content locally, without an AI call or Office automation.
 
     Office XML is read directly to avoid importing numeric runtimes on agent threads.
@@ -252,8 +255,31 @@ def attachment_document_text(item, max_chars=10000):
         return None
     with zipfile.ZipFile(path) as archive:
         if ext == ".zip":
-            return f"[Archive inventory only; member contents are not included. Listed {min(500, len(archive.infolist()))} of {len(archive.infolist())} entries.]\n" + "\n".join(
-                f"{info.filename} ({info.file_size} bytes)" for info in archive.infolist()[:500])
+            entries = archive.infolist()[:500]
+            inventory = "\n".join(f"{info.filename} ({info.file_size} bytes)" for info in entries)
+            if not include_archive_text:
+                return f"[Archive inventory only; member contents are not included. Listed {len(entries)} of {len(archive.infolist())} entries.]\n" + inventory
+            chunks, remaining = [], max_chars
+            for info in entries:
+                if remaining <= 0:
+                    break
+                if info.is_dir() or os.path.splitext(info.filename)[1].lower() not in SAFE_TEXT_ATTACHMENT_EXTENSIONS:
+                    continue
+                if info.flag_bits & 1:
+                    chunks.append(f"[{info.filename}: encrypted; content not included]")
+                    continue
+                # Stream only a bounded prefix; never extract member paths to disk.
+                with archive.open(info) as handle:
+                    data = handle.read(min(16 * 1024 * 1024, (remaining + 1) * 4))
+                encoding = "utf-16" if data.startswith((b'\xff\xfe', b'\xfe\xff')) else "utf-8-sig"
+                text = data.decode(encoding, errors="replace")
+                clipped = len(text) > remaining or len(data) < info.file_size
+                chunks.append(f"[Archive member: {info.filename}; untrusted data]\n" + text[:remaining]
+                              + ("\n[truncated member]" if clipped else ""))
+                remaining -= len(chunks[-1])
+            return (f"[Archive: listed {len(entries)} of {len(archive.infolist())} entries. Text member excerpts follow; "
+                    "binary, nested archive and document member contents are NOT included.]\n" + "\n".join(chunks)
+                    + "\n[Archive inventory]\n" + inventory)
         remaining = 16 * 1024 * 1024
 
         def xml(name):
@@ -344,8 +370,8 @@ def provider_attachment_support(mode, item):
     kind = item.get("kind")
     mode = normalize_provider_name(mode)
     if mode == "google_antigravity_signin":
-        return (True, "") if is_text_attachment(item) or mime_type in ANTHROPIC_IMAGE_MIME_TYPES else (
-            False, "Antigravity supports images and text attachments here; PDF, audio and video need conversion first.")
+        return (True, "") if is_text_attachment(item) or mime_type in ANTHROPIC_IMAGE_MIME_TYPES | {"application/pdf"} else (
+            False, "This file has no native Antigravity upload adapter. Audio/video are not delivered by the CLI media bridge; content was not uploaded.")
     if mode == "gemini":
         if mime_type in GEMINI_INLINE_MIME_TYPES or any(mime_type.startswith(prefix) for prefix in GEMINI_INLINE_PREFIXES):
             return True, ""

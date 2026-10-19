@@ -306,9 +306,12 @@ fn dom(app: &AppHandle, tab: &BrowserTab, payload: &Value, op: &str) -> Result<V
 fn ensure_live(app: &AppHandle, broker: &BrowserBroker, tab: &BrowserTab) -> Result<(), String> {
     let view = app.get_webview(&tab.webview_label).ok_or("TARGET_CLOSED")?;
     if !tab.active {
+        // Do not hold the broker mutex across a native UI dispatch: page-load
+        // and title callbacks acquire the same mutex on the UI thread.
+        let bounds = broker.inner.lock().map_err(|_| "browser broker mutex poisoned")?.bounds.clone();
         set_webview_bounds(
             &view,
-            &presentation_bounds(&broker.inner.lock().unwrap().bounds, false),
+            &presentation_bounds(&bounds, false),
         )?;
     }
     view.show().map_err(|e| e.to_string())?;

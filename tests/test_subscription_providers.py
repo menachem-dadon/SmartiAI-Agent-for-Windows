@@ -250,6 +250,30 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(result["weekly"]["remaining_percent"], 20)
         self.assertNotIn("extra_usage", result)
 
+    def test_antigravity_pdf_payload_validates_bytes_and_never_exposes_a_file_path(self):
+        import pymupdf
+        with pymupdf.open() as document:
+            document.new_page().insert_text((30, 50), "PDF_TEST")
+            data = document.tobytes()
+            encrypted = document.tobytes(encryption=pymupdf.PDF_ENCRYPT_AES_256, owner_pw="owner", user_pw="user")
+        def blocks(raw, mime="application/pdf"):
+            return [{"role": "user", "content": [{"type": "document", "source": {
+                "type": "base64", "media_type": mime, "data": base64.b64encode(raw).decode()}}]}]
+        content = AntigravityProvider.media_content(blocks(data))
+        resource = content[1]["resource"]
+        self.assertEqual(base64.b64decode(resource["blob"]), data)
+        self.assertTrue(resource["uri"].startswith("smarti-attachment:///"))
+        for raw, mime in ((b"not PDF", "application/pdf"), (encrypted, "application/pdf"), (data, "audio/wav")):
+            with self.subTest(mime=mime), self.assertRaises(SubscriptionError):
+                AntigravityProvider.media_content(blocks(raw, mime))
+        original = blocks(data)
+        for model in ("claude-sonnet-5-5-low", "gpt-oss-120b-medium"):
+            text = AntigravityProvider.text_documents(original, model)
+            self.assertIn("PDF_TEST", text[0]["content"][0]["text"])
+            self.assertIn("NOT included", text[0]["content"][0]["text"])
+            self.assertEqual(AntigravityProvider.media_content(text), [])
+            self.assertEqual(original[0]["content"][0]["type"], "document")
+
     def test_cached_connection_reads_do_not_run_a_probe_or_reconnect(self):
         core = SimpleNamespace(settings={}, _save_settings=mock.Mock())
         service = Connections(core)

@@ -48,7 +48,7 @@ def safe_failure(raw):
     if any(word in text for word in ("unknown model", "model not", "not supported")):
         return SubscriptionError("המודל שנבחר אינו זמין בחשבון או בגרסת רכיב החיבור. יש לבחור מודל זמין.", "model_unavailable")
     if "provider_contract_violation" in text:
-        return SubscriptionError("רכיב הספק הציע כלים שאינם בשליטת סמארטי. הבקשה נעצרה לשמירת הרשאות הכלים.", "provider_contract_violation")
+        return SubscriptionError("רכיב הספק הציע כלים שאינם בשליטת Smarti. הבקשה נעצרה לשמירת הרשאות הכלים.", "provider_contract_violation")
     return SubscriptionError("רכיב החיבור לא השלים את הבקשה. יש לבדוק חיבור, רשת וגרסת רכיב בהגדרות הספק.")
 
 
@@ -189,7 +189,7 @@ class SubscriptionProvider:
         self.disconnected, self.verified = True, False
         self.models = []
         register_models(self.provider, [])
-        return self.state("disconnected", "הספק נותק מסמארטי. הכניסה בכלי הרשמי נשמרה.")
+        return self.state("disconnected", "הספק נותק מ-Smarti. הכניסה בכלי הרשמי נשמרה.")
 
     def read_models(self):
         return [row["id"] for row in self.catalog()]
@@ -205,7 +205,7 @@ class SubscriptionProvider:
                 if len(payload.get("tool_calls") or []) > 8:
                     raise ValueError("too many tool calls")
             except (ValueError, TypeError, ValidationError) as error:
-                raise CodexProtocolError("תשובת הספק אינה תואמת את חוזה סמארטי.") from error
+                raise CodexProtocolError("תשובת הספק אינה תואמת את חוזה Smarti.") from error
             return CodexSignInProvider._decode_structured_turn(value)
         text = str(value or "").strip()
         if not text:

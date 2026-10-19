@@ -59,12 +59,12 @@ class ClaudeProvider(SubscriptionProvider):
     def command(self):
         node = self.runtime.private_node_executable() or shutil.which("node")
         if not node or not self.bridge().is_file() or not (self.bridge().parent / "node_modules" / "@anthropic-ai" / "claude-agent-sdk").is_dir():
-            raise SubscriptionError("ערכת החיבור הרשמית של Claude חסרה. יש להתקין את תלויות החיבור של סמארטי.", "missing_dependency")
+            raise SubscriptionError("ערכת החיבור הרשמית של Claude חסרה. יש להתקין את תלויות החיבור של Smarti.", "missing_dependency")
         return [node, str(self.bridge())]
 
     def connection_status(self):
         if self.disconnected:
-            return self.state("disconnected", "Claude Code מנותק מסמארטי.")
+            return self.state("disconnected", "Claude Code מנותק מ-Smarti.")
         try:
             self.command()
             if self.strategy == "setup_token_env" and not self.environment().get("CLAUDE_CODE_OAUTH_TOKEN"):

@@ -233,6 +233,14 @@ class WebContentMixin:
         res = self._run_cancelable_callable(lambda: self._request_get(url, headers=headers, timeout=timeout, allow_redirects=True))
         res.raise_for_status()
         content_type = str(res.headers.get("content-type", "") or "").lower()
+        mime = content_type.split(";", 1)[0].strip()
+        if mime == "application/json" or mime.endswith("+json") or mime == "text/plain":
+            # API endpoints are useful readable sources too. Keep their original
+            # text, including JSON punctuation, inside the normal bounded and
+            # untrusted web-result path rather than parsing it as HTML.
+            final_url = self._canonical_scrape_url(getattr(res, "url", "") or url) or self._canonical_scrape_url(url)
+            return {"url": final_url, "title": "", "description": "", "primary_image": "",
+                    "text": res.text or "", "links": [], "status_code": getattr(res, "status_code", None)}
         if content_type and not any(part in content_type for part in ("text/html", "application/xhtml", "application/xml", "text/xml")):
             return {"error": f"Unsupported content type: {content_type.split(';')[0]}", "url": url}
         if not getattr(res, "encoding", None):

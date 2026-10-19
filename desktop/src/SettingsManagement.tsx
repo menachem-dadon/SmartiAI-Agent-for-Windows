@@ -834,7 +834,7 @@ export function ProviderWorkflow({
       )}
       {subscriptionProviders.includes(provider) && <SourceSettingField
         label={provider === "anthropic_claude_code_signin" ? "חיבור Claude Code" : "חיבור Google Antigravity"}
-        help="החיבור משתמש בכלי הרשמי של הספק; פרטי הכניסה אינם נשמרים בסמארטי."
+        help="החיבור משתמש בכלי הרשמי של הספק; פרטי הכניסה אינם נשמרים ב-Smarti."
         dataPath="subscription_connection">
         <SubscriptionConnection key={provider} provider={provider}
           strategy={String(values.claude_code_auth_strategy || "claude_login")}

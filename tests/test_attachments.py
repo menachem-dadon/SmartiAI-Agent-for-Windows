@@ -56,7 +56,8 @@ class AttachmentTests(unittest.TestCase):
     def test_direct_and_tool_mixed_files_reach_provider_content(self):
         for mode, key in [("gemini", "inlineData"), ("anthropic", "source"),
                           ("openai", "image_url"), ("openrouter", "image_url"),
-                          ("local", "image_url"), ("openai_codex_signin", "image_url")]:
+                          ("local", "image_url"), ("openai_codex_signin", "image_url"),
+                          ("google_antigravity_signin", "source")]:
             with self.subTest(mode=mode):
                 self.core.mode = mode
                 direct = self.core._build_user_message_with_attachments("Describe", [self.image, self.text])
@@ -175,6 +176,42 @@ class AttachmentTests(unittest.TestCase):
         self.assertIn("Cannot extract", value)
         self.assertIn("entities are not supported", value)
         self.assertIn("name,value", value)
+
+    def test_antigravity_pdf_and_converted_books_preserve_visual_content(self):
+        import pymupdf
+        self.core.mode = "google_antigravity_signin"
+        with pymupdf.open() as document:
+            page = document.new_page()
+            page.insert_text((40, 80), "PDF_CANARY")
+            pdf = self.file("report.pdf", document.tobytes())
+        book = self.file("book.fb2", b'<?xml version="1.0"?><FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0"><body><section><p>BOOK_CANARY</p></section></body></FictionBook>')
+        for item, marker in ((pdf, "PDF_CANARY"), (book, "BOOK_CANARY")):
+            blocks, warnings = self.core._provider_attachment_blocks(item)
+            self.assertEqual(warnings, [])
+            source = blocks[-1]["source"]
+            self.assertEqual(source["media_type"], "application/pdf")
+            with pymupdf.open(stream=base64.b64decode(source["data"]), filetype="pdf") as result:
+                self.assertIn(marker, "".join(page.get_text() for page in result))
+        messages = []
+        self.core._append_tool_results_feedback(messages, "read", [{"action": "file_manager", "feedback": self.core._attachment_tool_payload(pdf["path"])}])
+        self.assertTrue(any(block.get("type") == "document" for block in messages[-1]["content"]))
+
+    def test_antigravity_archive_members_are_bounded_and_never_extracted(self):
+        self.core.mode = "google_antigravity_signin"
+        archive = self.archive("project.zip", {"../../escape.txt": "ZIP_TEXT_CANARY", "module.mjs": "export const MODULE_CANARY=42;", "large.py": "x" * 30000, "binary.bin": b"\x00\xff", "nested.zip": b"nested"})
+        value = json.dumps(self.core._build_user_message_with_attachments("read", [archive]), ensure_ascii=False)
+        self.assertIn("ZIP_TEXT_CANARY", value)
+        self.assertIn("MODULE_CANARY", value)
+        self.assertIn("truncated", value)
+        self.assertIn("NOT included", value)
+        self.assertFalse((self.root.parent / "escape.txt").exists())
+        for name in ("sound.wav", "clip.mp4", "unknown.bin"):
+            value = json.dumps(self.core._build_user_message_with_attachments("read", [self.file(name, b"not media")]))
+            self.assertIn("NOT included", value)
+        for name in ("code.go", "code.kt", "code.cjs", "event.ics", "mail.eml", "captions.vtt"):
+            value = json.dumps(self.core._build_user_message_with_attachments("read", [self.file(name, b"TEXT_CANARY")]))
+            self.assertIn("TEXT_CANARY", value)
+            self.assertNotIn("NOT included", value)
 
     def test_ocr_is_removed_and_stale_calls_cannot_execute_it(self):
         self.assertNotIn("extract_image_text", BUILTIN_TOOL_SCHEMAS)
