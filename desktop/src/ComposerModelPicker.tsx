@@ -190,6 +190,7 @@ export function ComposerModelPicker({ theme, provider, model, favoriteModels, re
       <div key={shownView} className={`model-picker-surface${shownView === "effort" ? " model-picker-surface--effort" : ""}`} onAnimationEnd={event => { if (event.target === event.currentTarget && !open) setPresent(false); }}>
         {shownView === "effort" ? <div className="model-effort-content">
           <div className="model-effort-header">
+            {!!provider && <span className="model-effort-provider" role="img" aria-label={`ספק פעיל: ${providerName(provider)}`}><ProviderIcon value={provider} /></span>}
             <Button variant="ghost" className="model-effort-model" aria-label="פתיחת המודלים המועדפים" onClick={() => setView("models")}>
               {!!reasoningOptions.length && <bdi className="model-effort-value">{reasoningDisplayName(previewEffort ?? reasoningEffort, reasoningOptions)}</bdi>}
               <span className="model-effort-model-name"><HoverLabel text={name} /><Icon name="chevron" size={14} /></span>
