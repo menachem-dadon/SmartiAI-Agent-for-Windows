@@ -776,7 +776,7 @@ export default function App() {
     workspaceWindowReady && !managementSection && page?.session_id === activeId,
     messages.length, messages, newUserRun, activeRunId, foreground);
   useEffect(() => {
-    if (!newUserRun || !messages.some(message => message.role === "user" && message.metadata?.run_id === newUserRun)) return;
+    if (!newUserRun || !messages.some(message => message.role === "user" && (message.metadata?.live_message_id || message.metadata?.run_id) === newUserRun)) return;
     const timer = window.setTimeout(() => setNewUserRun(""), 240);
     return () => window.clearTimeout(timer);
   }, [newUserRun, messages]);
@@ -936,6 +936,7 @@ export default function App() {
   const live = useLiveConversation({ conversation: activeId, provider, model, attachments,
     onConversation: id => setActiveId(id),
     onMessage: message => setMessages(current => mergeMessages(current, [message])),
+    onNewUserMessage: setNewUserRun,
     onRefresh: () => { void refreshLists(); if (activeIdRef.current) void loadMessages(activeIdRef.current); },
     onError: setError,
   });
@@ -1616,7 +1617,7 @@ export default function App() {
                     <RichMessage
                       key={String(message.metadata?.live_message_id || message.message_id || (message.role === "assistant" && runId ? `run-${runId}` : `${message.role}:${message.created_at || index}:${message.content}`))}
                       message={message}
-                      isNew={message.role === "user" && runId === newUserRun}
+                      isNew={message.role === "user" && (message.metadata?.live_message_id || runId) === newUserRun}
                       events={
                         message.role === "assistant" && runId
                           ? messageEvents.get(runId) || EMPTY_MESSAGE_EVENTS

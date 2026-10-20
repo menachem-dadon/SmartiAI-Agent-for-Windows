@@ -29,6 +29,7 @@
 .source-settings-head>.sds-setting-row { border:0; padding:0; justify-content:flex-end; align-items:flex-start; flex-wrap:nowrap; }
 .source-settings-head>.sds-setting-row>div:first-child { min-width:0; flex:0 1 auto; }
 .source-settings-scroll,.source-provider-workflow,.management-fields { min-width:0; display:grid; gap:16px; }
+.live-settings { min-width:0; display:grid; gap:var(--sds-space-4); }
 .source-settings-field { min-width:0; }
 .source-settings-field .sds-setting-row { align-items:flex-start; }
 .source-settings-field .sds-setting-control { flex:1 1 280px; }

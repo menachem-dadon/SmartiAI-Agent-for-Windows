@@ -122,6 +122,7 @@ class LiveVoiceManager:
 
     def config(self):
         provider = str(self.core.settings.get("live_provider") or "")
+        enabled = bool(self.core.settings.get("live_enabled", bool(provider)))
         items = []
         for name, spec in PROVIDERS.items():
             own = self.core._ensure_secret_loaded(f"live_{name}_api_key")
@@ -129,8 +130,8 @@ class LiveVoiceManager:
             items.append({"id": name, **spec, "configured": bool(key), "inherited": bool(key and not own),
                           "masked": mask_secret_value(key) if key else "",
                           "voice": self.core.settings.get(f"live_{name}_voice") or spec["voices"][0]})
-        return {"provider": provider, "items": items,
-                "available": any(item["id"] == provider and item["configured"] for item in items)}
+        return {"provider": provider, "enabled": enabled, "language": self.core.settings.get("live_language", "he"), "items": items,
+                "available": enabled and any(item["id"] == provider and item["configured"] for item in items)}
 
     async def start(self, payload):
         conversation = str(payload.get("conversation_id") or "")
@@ -175,6 +176,14 @@ class LiveSession:
         self.id, self.conversation, self.provider = uuid.uuid4().hex, conversation, provider
         self.executor = {key: str(payload.get(key) or "") for key in ("provider_mode", "model_name")}
         self.attachments = list(attachments)
+        self.language = str(self.core.settings.get("live_language") or "he")
+        language = {"he": "Hebrew (he-IL)", "en": "English (en-US)"}.get(self.language)
+        self.instructions = LIVE_INSTRUCTIONS
+        if language:
+            self.instructions += (f"\nThe default language of the user's microphone audio is {language}. "
+                f"Recognize and transcribe the user's speech verbatim in its original language and script; "
+                f"do not translate or romanize the input transcript. Speak {language} by default. "
+                "Respect explicit requests to change language and preserve technical names as spoken.")
         self.phase, self.closed, self.error = "starting", False, ""
         self.events, self.sequence = deque(maxlen=1400), 0
         self.changed = asyncio.Event()
@@ -330,7 +339,7 @@ class LiveSession:
                     text += f"\nAttachment {item.get('name')}:\n{value}"
         # Conservative byte/token budget. A native model may compress its own
         # history, but Core's full canonical source is never discarded.
-        if len((text + LIVE_INSTRUCTIONS).encode("utf-8")) > 110000:
+        if len((text + self.instructions).encode("utf-8")) > 110000:
             raise ValueError("ההקשר המלא גדול מקיבולת הלייב שניתן להבטיח. יש לפתוח שיחה חדשה; דבר לא נחתך בשקט")
         return text
 
@@ -340,6 +349,21 @@ class LiveSession:
             raise RuntimeError("מנוע הלייב אינו מחובר")
         async with self.send_lock:
             await self.ws.send_json(data)
+
+    def connection_setup(self):
+        if self.provider == "openai":
+            # GPT Live uses conversation instructions, not Realtime's separate
+            # transcription configuration. Do not send Realtime-only fields.
+            return {"type": "session.start", "session": {
+                "model": PROVIDERS[self.provider]["model"], "instructions": self.instructions,
+                "audio": {"format": {"type": "audio/pcm", "rate": 24000}, "output": {"voice": self.voice()}},
+                "delegation": {"type": "client"}, "store": False}}
+        return {"setup": {"model": "models/" + PROVIDERS[self.provider]["model"],
+            "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": self.voice()}}}},
+            "systemInstruction": {"parts": [{"text": self.instructions}]},
+            "tools": [{"functionDeclarations": [CONTROL_DECLARATION]}],
+            "inputAudioTranscription": {"languageCodes": [{"he": "he-IL", "en": "en-US"}[self.language]]} if self.language in ("he", "en") else {},
+            "outputAudioTranscription": {}, "sessionResumption": {}, "contextWindowCompression": {"slidingWindow": {}}}}
 
     async def connect(self):
         try:
@@ -352,19 +376,11 @@ class LiveSession:
                 connector=aiohttp.TCPConnector(ssl=tls), trust_env=True)
             if self.provider == "openai":
                 self.ws = await self.http.ws_connect("wss://api.openai.com/v1/live/sessions", headers={"Authorization": f"Bearer {key}"}, max_msg_size=8*1024*1024)
-                await self.send({"type": "session.start", "session": {
-                    "model": PROVIDERS[self.provider]["model"], "instructions": LIVE_INSTRUCTIONS,
-                    "audio": {"format": {"type": "audio/pcm", "rate": 24000}, "output": {"voice": self.voice()}},
-                    "delegation": {"type": "client"}, "store": False}})
+                await self.send(self.connection_setup())
             else:
                 self.ws = await self.http.ws_connect("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
                     headers={"x-goog-api-key": key}, max_msg_size=8*1024*1024)
-                self.gemini_setup = {"setup": {"model": "models/" + PROVIDERS[self.provider]["model"],
-                    "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": self.voice()}}}},
-                    "systemInstruction": {"parts": [{"text": LIVE_INSTRUCTIONS}]},
-                    "tools": [{"functionDeclarations": [CONTROL_DECLARATION]}],
-                    "inputAudioTranscription": {}, "outputAudioTranscription": {},
-                    "sessionResumption": {}, "contextWindowCompression": {"slidingWindow": {}}}}
+                self.gemini_setup = self.connection_setup()
                 await self.send(self.gemini_setup)
             first_packet = await asyncio.wait_for(self.ws.receive(), 25)
             if first_packet.type not in (aiohttp.WSMsgType.TEXT, aiohttp.WSMsgType.BINARY):

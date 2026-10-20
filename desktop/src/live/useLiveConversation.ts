@@ -4,10 +4,11 @@ import { subscribeSettingsChanges } from "../settingsChanges";
 import { setLiveSpeechSuspended } from "../speechPlayback";
 import type { ChatMessage, PendingAttachment } from "../chatTypes";
 import { LiveAudio } from "./liveAudio";
+import { LiveActivity } from "./liveActivity";
 import type { OrbState } from "./SmartyLiveOrb";
 
 export type LiveProvider = { id: string; label: string; model: string; voices: string[]; voice: string; configured: boolean; inherited: boolean; masked: string };
-export type LiveConfig = { provider: string; available: boolean; items: LiveProvider[] };
+export type LiveConfig = { provider: string; enabled: boolean; language: string; available: boolean; items: LiveProvider[] };
 export type LiveTask = { id: string; run_id: string; status: string; pause_requested?: boolean };
 type Session = { id: string; conversation_id: string; phase: string; error: string; tasks: LiveTask[] };
 type Event = { sequence: number; type: string; phase?: string; message?: ChatMessage | string; audio?: string; rate?: number; task?: LiveTask; admission_id?: string; error?: string };
@@ -18,6 +19,7 @@ export type LiveController = ReturnType<typeof useLiveConversation>;
 export function useLiveConversation(options: {
   conversation: string; provider: string; model: string; attachments: PendingAttachment[];
   onConversation: (id: string) => void; onMessage: (message: ChatMessage) => void;
+  onNewUserMessage: (id: string) => void;
   onRefresh: () => void; onError: (message: string) => void;
 }) {
   const current = useRef(options); current.current = options;
@@ -26,7 +28,7 @@ export function useLiveConversation(options: {
   const [micMuted, setMicMuted] = useState(false), [outputMuted, setOutputMuted] = useState(false);
   const [orbState, setOrbState] = useState<OrbState>("idle");
   const [tasks, setTasks] = useState<LiveTask[]>([]);
-  const level = useRef(0), levels = useRef({ user: 0, smarty: 0 });
+  const level = useRef(0);
   const session = useRef<Session | null>(null), generation = useRef(0), audio = useRef<LiveAudio | null>(null);
   const sequence = useRef(0), writes = useRef(Promise.resolve()), queued = useRef(0), starting = useRef(false);
   const mounted = useRef(true);
@@ -79,13 +81,13 @@ export function useLiveConversation(options: {
     starting.current = true; const revision = ++generation.current;
     const requested = { ...current.current, attachments: [...current.current.attachments] };
     startupOwner.current = requested.conversation;
-    setPhase("starting"); setMicMuted(false); setOutputMuted(false); levels.current = { user: 0, smarty: 0 };
-    const engine = new LiveAudio(value => { void sendInput({ audio: value }).catch(error => { if (generation.current === revision) fail(error); }); }, (value, speaker) => {
+    setPhase("starting"); setMicMuted(false); setOutputMuted(false); taskBusy.current = false;
+    const activity = new LiveActivity(), seenUsers = new Set<string>();
+    const engine = new LiveAudio(value => { void sendInput({ audio: value }).catch(error => { if (generation.current === revision) fail(error); }); }, (user, smarty) => {
       if (generation.current !== revision) return;
-      levels.current[speaker] = value;
-      const speaking = levels.current.smarty > .003;
-      level.current = speaking ? levels.current.smarty : levels.current.user;
-      setOrbState(speaking ? "smartySpeaking" : levels.current.user > .025 ? "userSpeaking" : taskBusy.current ? "thinking" : "listening");
+      const sample = activity.sample(user, smarty, performance.now(), taskBusy.current);
+      level.current = sample.level;
+      setOrbState(previous => previous === sample.state ? previous : sample.state);
     });
     audio.current = engine;
     try {
@@ -109,7 +111,13 @@ export function useLiveConversation(options: {
         setPhase(page.phase);
         taskBusy.current = page.tasks.some(task => !task.pause_requested && ["queued", "running", "waiting_for_approval", "waiting_for_input"].includes(task.status));
         for (const event of page.events) {
-          if (event.type === "message" && event.message && typeof event.message !== "string") current.current.onMessage(event.message);
+          if (event.type === "message" && event.message && typeof event.message !== "string") {
+            const message = event.message, id = String(message.metadata?.live_message_id || message.message_id || "");
+            current.current.onMessage(message);
+            if (message.role === "user" && id && !seenUsers.has(id)) {
+              seenUsers.add(id); current.current.onNewUserMessage(id);
+            }
+          }
           if (event.type === "notice" && typeof event.message === "string") current.current.onError(event.message);
           if (event.type === "audio" && event.audio) engine.play(event.audio, event.rate);
           if (event.type === "interrupt") engine.interrupt();

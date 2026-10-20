@@ -231,6 +231,10 @@ class SettingsManager:
     def migrate_or_merge(self, loaded):
         loaded = self.decrypt_loaded_secrets(copy.deepcopy(loaded or {}))
         prior_loaded = copy.deepcopy(loaded)
+        # Existing Live users keep their selected provider and availability.
+        # New profiles stay disabled until the dedicated switch is enabled.
+        live_enabled_changed = "live_enabled" not in loaded
+        loaded.setdefault("live_enabled", bool(loaded.get("live_provider")))
         if int(loaded.get("settings_schema_version", 0) or 0) != SETTINGS_SCHEMA_VERSION:
             backup_path = self.backup_existing()
             migrated = copy.deepcopy(self.defaults)
@@ -274,6 +278,7 @@ class SettingsManager:
                 or model_provenance_changed
                 or context_limits_changed
                 or reasoning_defaults_changed
+                or live_enabled_changed
             ),
         )
 

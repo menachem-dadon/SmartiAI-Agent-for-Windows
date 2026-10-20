@@ -599,6 +599,7 @@ class MessagingMixin:
                     publish_pause_state(True)
                     self._emit_agent_process_event("report", text="המשימה מושהית לבקשת המשתמש")
                 def resume_boundary():
+                    nonlocal task_started, task_clock_started
                     if paused_at:
                         wall, clock = paused_at[0]
                         task_started += time.time() - wall

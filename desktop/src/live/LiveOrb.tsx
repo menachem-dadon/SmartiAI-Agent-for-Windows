@@ -19,6 +19,6 @@ export function LiveOrb({ state, level }: { state: OrbState; level: { current: n
   }, [state, level]);
   return <div className={`live-orb-area${fallback ? " is-fallback" : ""}`} data-state={state}>
     <canvas ref={canvas} className="live-orb" aria-hidden="true" />
-    <span className="live-orb-label" role="status">{labels[state]}</span>
+    <span className="sds-visually-hidden" role="status">{labels[state]}</span>
   </div>;
 }

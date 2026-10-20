@@ -399,6 +399,12 @@ export function Composer({
       />
       <div className="composer-actions" dir="ltr">
         <span className="action-button-host">
+          {(live?.available || live?.active) && <button className="composer-primary live-toggle" type="button"
+            aria-label={live.active ? "סגירת לייב" : "פתיחת לייב"} aria-busy={live.active && !live.ready || undefined}
+            disabled={Boolean(!live.active && (disabled || listening || voiceStarting || submitting || sendPending || staging > 0))}
+            onClick={() => { if (live.active) void live.stop(); else void live.start(); }}>
+            {live.active ? <Icon name={live.ready ? "close" : "loader"} size={22} /> : <svg className="sds-icon" data-icon="voice" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 10v4m4-7v10m4-14v18m4-14v10m4-7v4" /></svg>}
+          </button>}
           <button
             className={`composer-primary ${live?.available && !canSend && !running ? "is-plain-mic" : ""} ${canSend ? "can-send" : ""} ${listening ? "is-listening" : ""}`}
             hidden={live?.active && !canSend}
@@ -426,12 +432,6 @@ export function Composer({
           >
             <Icon name={(running && !live?.active) || listening ? "stop" : canSend ? "send" : "mic"} size={24} />
           </button>
-          {(live?.available || live?.active) && <button className="composer-primary live-toggle" type="button"
-            aria-label={live.active ? "סגירת לייב" : "פתיחת לייב"} aria-busy={live.active && !live.ready || undefined}
-            disabled={Boolean(!live.active && (disabled || listening || voiceStarting || submitting || sendPending || staging > 0))}
-            onClick={() => { if (live.active) void live.stop(); else void live.start(); }}>
-            <Icon name={live.active && !live.ready ? "loader" : live.active ? "close" : "activity"} size={22} />
-          </button>}
           {live?.ready && <>
             <button className={`composer-tool live-mute ${live.outputMuted ? "is-muted" : ""}`} type="button" aria-label={live.outputMuted ? "ביטול השתקת סמארטי" : "השתקת סמארטי"} aria-pressed={live.outputMuted} onClick={live.toggleOutput}><Icon name="speaker" /></button>
             <button className={`composer-tool live-mute ${live.micMuted ? "is-muted" : ""}`} type="button" aria-label={live.micMuted ? "ביטול השתקת המיקרופון" : "השתקת המיקרופון"} aria-pressed={live.micMuted} onClick={() => void live.toggleMic()}><Icon name="mic" /></button>

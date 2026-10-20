@@ -76,6 +76,38 @@ class RunControlTests(unittest.TestCase):
         self.assertEqual(received[0]["attachments"], [{"path": "original.png"}])
         self.assertEqual(control.boundary(cancelled.is_set, lambda: None, lambda: None), [])
 
+    def test_real_agent_resumes_after_entering_a_pause_boundary(self):
+        from tests.test_stability_repairs import StabilityRepairTests
+        fixture = StabilityRepairTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        conversation, _, run = fixture._managed_resume_fixture()
+        core, control = fixture.core, RunControl()
+        core._execution_context.run_control = control
+        entered, resumed = threading.Event(), threading.Event()
+        boundary = control.boundary
+        def observed_boundary(cancelled, on_pause, on_resume):
+            def pause():
+                on_pause(); entered.set()
+            def resume():
+                on_resume(); resumed.set()
+            return boundary(cancelled, pause, resume)
+        control.boundary = observed_boundary
+        def infer(model, messages):
+            control.change("pause")
+            return "Completed after the actual pause.", {}
+        core._handle_api_request_with_retry = infer
+        def resume_after_pause():
+            if entered.wait(3): control.change("resume")
+        resumer = threading.Thread(target=resume_after_pause)
+        resumer.start()
+        result = core.send_message("continue", session_id=conversation, run_id=run, persist_turn=False)
+        resumer.join(4)
+        self.assertTrue(entered.is_set())
+        self.assertTrue(resumed.is_set())
+        self.assertEqual(result, "Completed after the actual pause.")
+        core.execute_tool.assert_not_called()
+
     def test_cancellation_releases_pause_without_resume(self):
         control, cancelled, paused = RunControl(), threading.Event(), threading.Event()
         resume = Mock()
@@ -129,6 +161,45 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.manager.config()["items"][1]["inherited"])
         del self.settings["live_gemini_api_key"]
         self.assertEqual(original, self.settings)
+
+    def test_disabled_live_preserves_provider_and_shared_secret(self):
+        self.settings["live_enabled"] = False
+        config = self.manager.config()
+        self.assertFalse(config["available"])
+        self.assertEqual(config["provider"], "gemini")
+        self.assertTrue(config["items"][1]["inherited"])
+        self.settings["live_enabled"] = True
+        self.assertTrue(self.manager.config()["available"])
+
+    async def test_language_is_snapshotted_and_uses_provider_native_contract(self):
+        setup = self.session.connection_setup()["setup"]
+        self.assertEqual(setup["inputAudioTranscription"], {"languageCodes": ["he-IL"]})
+        self.assertNotIn("languageCode", setup["generationConfig"]["speechConfig"])
+        self.assertIn("Hebrew", setup["systemInstruction"]["parts"][0]["text"])
+        self.settings["live_language"] = "en"
+        self.assertEqual(self.session.connection_setup()["setup"]["inputAudioTranscription"], {"languageCodes": ["he-IL"]})
+        other = LiveSession(self.manager, self.conversation, "openai", {}, [])
+        try:
+            config = other.connection_setup()["session"]
+            self.assertIn("English", config["instructions"])
+            self.assertNotIn("input", config["audio"])
+        finally:
+            await other.close()
+        self.settings["live_language"] = "auto"
+        other = LiveSession(self.manager, self.conversation, "gemini", {}, [])
+        try:
+            self.assertEqual(other.connection_setup()["setup"]["inputAudioTranscription"], {})
+            self.assertNotIn("default language of the user's microphone", other.instructions)
+        finally:
+            await other.close()
+
+    def test_enabled_migration_keeps_existing_live_but_new_profiles_disabled(self):
+        from smarti.config import DEFAULT_SETTINGS
+        from smarti.managers import SettingsManager
+        manager = SettingsManager(str(Path(self.directory.name) / "settings.json"), DEFAULT_SETTINGS)
+        for old, expected in (({"live_provider": "gemini"}, True), ({}, False), ({"live_provider": "gemini", "live_enabled": False}, False)):
+            merged, _ = manager.migrate_or_merge({"settings_schema_version": DEFAULT_SETTINGS["settings_schema_version"], **old})
+            self.assertEqual(merged["live_enabled"], expected)
 
     async def test_audio_sequence_replay_and_mute_never_duplicate_audio(self):
         packet = {"sequence": 0, "audio": base64.b64encode(b"\0\0" * 256).decode()}

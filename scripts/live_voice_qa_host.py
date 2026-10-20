@@ -59,7 +59,7 @@ LiveSession.connect = connect
 service = SmartiCoreService(token=os.environ["UX3_TEST_TOKEN"])
 handshake = service.start()
 core = service.core
-core.settings.update(api_mode="local", selected_local_model="live-qa-model", live_provider="gemini",
+core.settings.update(api_mode="local", selected_local_model="live-qa-model", live_provider="gemini", live_enabled=True,
                      live_gemini_api_key="isolated-fake-key", conversation_title_generation_mode="local",
                      prevent_sleep_during_active_task=False, read_aloud_all=True, updates_auto_check=False)
 core.settings["ui_preferences"]["theme_mode"] = "light"

@@ -287,7 +287,7 @@ export const RichMessage = memo(function RichMessage({
   paused?: boolean;
   onRunControl?: (runId: string, action: "pause" | "resume" | "cancel") => void;
 }) {
-  const messageId = `${message.role}:${message.metadata?.run_id || message.message_id || `${message.created_at || ""}:${contentIdentity(message.content)}`}`;
+  const messageId = `${message.role}:${message.metadata?.live_message_id || message.metadata?.run_id || message.message_id || `${message.created_at || ""}:${contentIdentity(message.content)}`}`;
   const preferencesKey = `smarti.chat.disclosures:${messageId}`;
   const storedPreferences = () => { try { return JSON.parse(sessionStorage.getItem(preferencesKey) || "{}"); } catch { return {}; } };
   const [preferences, setPreferences] = useState<Record<string, boolean>>(storedPreferences);

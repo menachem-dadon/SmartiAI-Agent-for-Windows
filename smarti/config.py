@@ -1945,6 +1945,8 @@ DEFAULT_SETTINGS = {
     "gemini_api_key": "",
     "openai_api_key": "",
     "live_provider": "",
+    "live_enabled": False,
+    "live_language": "he",
     "live_openai_voice": "marin",
     "live_gemini_voice": "Kore",
     "live_openai_api_key": "",

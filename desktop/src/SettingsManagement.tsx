@@ -1687,9 +1687,6 @@ export function SettingsView({
         ) : (
           <>
             {section === "settings_ai" && !query && (
-              <LiveSettings />
-            )}
-            {section === "settings_ai" && !query && (
               <ProviderWorkflow
                 values={data.values}
                 secrets={data.secrets}
@@ -1807,6 +1804,7 @@ export function SettingsView({
                 </div>
               </SettingsGroup>
             ))}
+            {section === "settings_ai" && !query && <LiveSettings />}
             {section === "settings_advanced" && advanced && (
               <AdvancedDeveloperLogPanel theme={theme} />
             )}
