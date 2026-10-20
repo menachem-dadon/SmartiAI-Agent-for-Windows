@@ -4,6 +4,7 @@ from .attachments import normalize_attachments
 from .user_language import conversation_language
 
 from collections import deque
+from .run_control import RunControl
 
 
 TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "interrupted"})
@@ -19,6 +20,7 @@ class RunHandle:
         self.response = ""
         self.error = ""
         self.status = "queued"
+        self.control = RunControl()
 
     def wait(self, timeout=None):
         self.done_event.wait(timeout)
@@ -172,6 +174,8 @@ class ConversationRunManager:
         }
         if is_background_task:
             user_metadata.update({"is_background_task": True, "triggered_by_background": True})
+        if run_metadata.get("live_task_id"):
+            user_metadata.update({"live_backend": True, "live_task_id": run_metadata["live_task_id"]})
         self.core.chat_store.append_message("user", user_text, user_metadata, session_id=target)
         handle = RunHandle(run_id, target, cancel_event or threading.Event())
         work = {
@@ -380,6 +384,7 @@ class ConversationRunManager:
                 callbacks=self._callback_bundle(work),
                 runtime_snapshot=work.get("runtime_snapshot"),
             ):
+                self.core._execution_context.run_control = handle.control
                 self.core._execution_context.policy_snapshot = copy.deepcopy(
                     work["metadata"].get("policy_snapshot") or {}
                 )
@@ -410,6 +415,9 @@ class ConversationRunManager:
                     should_title=bool(work["metadata"].get("should_generate_title")),
                 )
                 self.core.chat_store.update_context(context, session_id)
+                if work["metadata"].get("live_task_id"):
+                    self.core.chat_store.mark_live_backend(run_id, work["metadata"]["live_task_id"])
+                    self._record_live_fallback(work, response)
             handle.response = str(response or "")
             if handle.cancel_event.is_set():
                 handle.status = "cancelled"
@@ -428,7 +436,7 @@ class ConversationRunManager:
                 {"status": handle.status, "response": handle.response},
                 persist=False,
             )
-            if handle.status == "completed" and work["metadata"].get("channel") == "desktop":
+            if handle.status == "completed" and work["metadata"].get("channel") == "desktop" and not getattr(self.core, "_live_voice_owner", None):
                 settings = self.core.settings
                 if settings.get("read_aloud_all", False) or (
                     settings.get("read_aloud_voice_only", True) and work["metadata"].get("is_voice", False)
@@ -461,6 +469,9 @@ class ConversationRunManager:
                         {"run_id": run_id, "run_status": handle.status, "is_error": handle.status == "failed"},
                         session_id=session_id,
                     )
+                if work["metadata"].get("live_task_id"):
+                    self.core.chat_store.mark_live_backend(run_id, work["metadata"]["live_task_id"])
+                    self._record_live_fallback(work, response)
                 handle.response = str(response or "")
                 self.core.chat_store.transition_run(
                     run_id,
@@ -494,6 +505,28 @@ class ConversationRunManager:
     def handle(self, run_id):
         with self._lock:
             return self._handles.get(str(run_id or ""))
+
+    def _record_live_fallback(self, work, response):
+        """Persist a visible result even after the voice event loop has shut down."""
+        if getattr(self.core, "_live_voice_conversation", None) == work["session_id"]:
+            return
+        task_id = work["metadata"]["live_task_id"]
+        backend = next((message for message in reversed(self.core.chat_store.messages(work["session_id"]))
+                        if message.get("role") == "assistant" and message.get("metadata", {}).get("run_id") == work["handle"].run_id), {})
+        meta = {key: value for key, value in backend.get("metadata", {}).items() if key in {"canvases", "memory_updated", "memory_change_count", "memory_change_actions", "is_error"}}
+        display = getattr(self.core, "_display_assistant_text_for_history", str)
+        self.core.chat_store.upsert_live_message(work["session_id"], f"final-{task_id}", "assistant", display(response),
+            {**meta, "live_task_id": task_id, "live_final": True, "live_session_id": work["metadata"].get("live_session_id", "")})
+
+    def control_run(self, run_id, action, text="", attachments=None):
+        handle = self.handle(run_id)
+        if not handle or handle.done_event.is_set() or handle.cancel_event.is_set():
+            raise ValueError("המשימה כבר הסתיימה או אינה זמינה לשליטה")
+        revision = handle.control.change(action, text, attachments)
+        self.core.chat_store.transition_run(run_id, (self.core.chat_store.run(run_id) or {}).get("status", "running"),
+                                            metadata_patch={"control_revision": revision, "pause_requested": handle.control.paused})
+        self._emit("run_control", run_id, handle.session_id, {"action": action, "revision": revision, "text": text})
+        return {"run_id": run_id, "revision": revision, "pause_requested": handle.control.paused}
 
     def active_run_id(self, session_id):
         with self._lock:

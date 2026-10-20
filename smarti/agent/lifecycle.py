@@ -329,6 +329,7 @@ class LifecycleMixin:
             "target_session_id": getattr(execution_context, "target_session_id", None),
             "cancel_event": getattr(execution_context, "cancel_event", None),
             "model_name": getattr(execution_context, "model_name", None),
+            "run_control": getattr(execution_context, "run_control", None),
         }
         execution_context.run_values = self._build_run_values(
             session_id,

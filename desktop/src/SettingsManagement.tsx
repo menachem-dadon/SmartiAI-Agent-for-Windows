@@ -7,6 +7,7 @@ import { distinctProviderModels, modelDisplayName, modelIdentity, reasoningDispl
 import { ReasoningBudgetControl } from "./ReasoningBudgetControl";
 import type { ReasoningOption } from "./chatTypes";
 import { useSecretAutosave } from "./useSecretAutosave";
+import { LiveSettings } from "./live/LiveSettings";
 import { readClipboardText } from "./clipboardText";
 import { Button, Textarea, Field, Icon, ChoiceField, SelectField, SearchField } from "./design-system";
 import {
@@ -1685,6 +1686,9 @@ export function SettingsView({
           <PolicyMatrix values={data.values} save={save} />
         ) : (
           <>
+            {section === "settings_ai" && !query && (
+              <LiveSettings />
+            )}
             {section === "settings_ai" && !query && (
               <ProviderWorkflow
                 values={data.values}

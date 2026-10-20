@@ -19,8 +19,10 @@ import { useProviderQuota } from "./ProviderQuota";
 import { autonomyLabels, autonomyProfiles } from "./autonomyProfiles";
 import { coreApi } from "./coreApi";
 import { composerInteractionRevision, useComposerFocus } from "./composerFocus";
+import type { LiveController } from "./live/useLiveConversation";
 
 interface ComposerProps {
+  live?: LiveController;
   draft?: string;
   onDraftChange?: (text: string) => void;
   conversationId?: string;
@@ -95,6 +97,7 @@ function DraftImage({ item }: { item: PendingAttachment }) {
   return source ? <img src={source} alt={item.name} /> : <i aria-label={`תמונה: ${item.name}`}>IMG</i>;
 }
 export function Composer({
+  live,
   draft,
   onDraftChange,
   conversationId,
@@ -211,7 +214,7 @@ export function Composer({
     void stageFiles(files);
   };
   const send = async () => {
-    if ((!text.trim() && !attachments.length) || disabled || running || sendPending || listening || startingVoice.current || sending.current || stagingCount.current) return;
+    if ((!text.trim() && !attachments.length) || disabled || (running && !live?.active) || (live?.active && !live.ready) || sendPending || listening || startingVoice.current || sending.current || stagingCount.current) return;
     sending.current = true;
     setSubmittingOwner(conversationId || "new");
     setError("");
@@ -397,10 +400,11 @@ export function Composer({
       <div className="composer-actions" dir="ltr">
         <span className="action-button-host">
           <button
-            className={`composer-primary ${canSend ? "can-send" : ""} ${listening ? "is-listening" : ""}`}
+            className={`composer-primary ${live?.available && !canSend && !running ? "is-plain-mic" : ""} ${canSend ? "can-send" : ""} ${listening ? "is-listening" : ""}`}
+            hidden={live?.active && !canSend}
             type="button"
             aria-label={
-              running
+              running && !live?.active
                 ? "עצירה"
                 : listening
                   ? "הפסקת הכתבה"
@@ -411,7 +415,7 @@ export function Composer({
             aria-busy={voiceStarting || submitting || undefined}
             disabled={!running && (disabled || voiceStarting || submitting || sendPending || staging > 0)}
             onClick={
-              running
+              running && !live?.active
                 ? () => { onCancel(); requestFocus(); }
                 : listening
                   ? () => void stopListening()
@@ -420,8 +424,18 @@ export function Composer({
                   : () => void listen()
             }
           >
-            <Icon name={running || listening ? "stop" : canSend ? "send" : "mic"} size={24} />
+            <Icon name={(running && !live?.active) || listening ? "stop" : canSend ? "send" : "mic"} size={24} />
           </button>
+          {(live?.available || live?.active) && <button className="composer-primary live-toggle" type="button"
+            aria-label={live.active ? "סגירת לייב" : "פתיחת לייב"} aria-busy={live.active && !live.ready || undefined}
+            disabled={Boolean(!live.active && (disabled || listening || voiceStarting || submitting || sendPending || staging > 0))}
+            onClick={() => { if (live.active) void live.stop(); else void live.start(); }}>
+            <Icon name={live.active && !live.ready ? "loader" : live.active ? "close" : "activity"} size={22} />
+          </button>}
+          {live?.ready && <>
+            <button className={`composer-tool live-mute ${live.outputMuted ? "is-muted" : ""}`} type="button" aria-label={live.outputMuted ? "ביטול השתקת סמארטי" : "השתקת סמארטי"} aria-pressed={live.outputMuted} onClick={live.toggleOutput}><Icon name="speaker" /></button>
+            <button className={`composer-tool live-mute ${live.micMuted ? "is-muted" : ""}`} type="button" aria-label={live.micMuted ? "ביטול השתקת המיקרופון" : "השתקת המיקרופון"} aria-pressed={live.micMuted} onClick={() => void live.toggleMic()}><Icon name="mic" /></button>
+          </>}
         </span>
         <div className="composer-controls">
           <div className="composer-selectors">

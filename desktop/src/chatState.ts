@@ -39,7 +39,7 @@ export function mergeMessages(older: ChatMessage[], current: ChatMessage[]) {
   const messages = new Map<string, ChatMessage>();
   for (const message of [...older, ...current]) {
     const run = message.role === "assistant" && message.metadata?.run_id;
-    const identity = run ? `run:${run}` : message.created_at
+    const identity = message.metadata?.live_message_id ? `live:${message.metadata.live_message_id}` : run ? `run:${run}` : message.created_at
       ? `${message.role}:${message.created_at}:${message.content}` : `${message.role}:${message.content}`;
     messages.set(identity, message);
   }

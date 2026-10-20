@@ -578,6 +578,52 @@ class MessagingMixin:
                     and (not self._is_background_context() or getattr(self, "background_task_step_callback", None))
                 )
 
+            def apply_run_control():
+                nonlocal task_started, task_clock_started, attachments
+                control = getattr(self._execution_context, "run_control", None)
+                if control is None:
+                    return False
+                paused_at = []
+                def publish_pause_state(paused):
+                    manager = getattr(self, "run_manager", None)
+                    if run_id and manager:
+                        run = self.chat_store.run(run_id) or {}
+                        if run.get("status") in {"running", "waiting_for_approval", "waiting_for_input"}:
+                            self.chat_store.transition_run(run_id, run["status"], metadata_patch={"paused": paused})
+                            manager._emit("run_pause_state", run_id, target_session_id, {"paused": paused})
+                def pause_boundary():
+                    paused_at.append((time.time(), time.monotonic()))
+                    run_cancel_event.suspend()
+                    self._execution_context.task_deadline = None
+                    checkpoint("paused")
+                    publish_pause_state(True)
+                    self._emit_agent_process_event("report", text="המשימה מושהית לבקשת המשתמש")
+                def resume_boundary():
+                    if paused_at:
+                        wall, clock = paused_at[0]
+                        task_started += time.time() - wall
+                        paused_seconds = time.monotonic() - clock
+                        task_clock_started += paused_seconds
+                        run_cancel_event.resume()
+                        self._execution_context.task_deadline = run_cancel_event.deadline
+                    publish_pause_state(False)
+                    self._emit_agent_process_event("report", text="ממשיך את המשימה מהנקודה שבה הושהתה")
+                updates = control.boundary(self._is_cancel_requested, pause_boundary, resume_boundary)
+                self._raise_if_cancelled()
+                for update in updates:
+                    text = f"User correction, revision {update['revision']}. Preserve confirmed tool results; do not repeat completed actions.\n{update['text']}"
+                    new_files = update.get("attachments", [])
+                    if new_files:
+                        attachments = merge_conversation_attachments(attachments, new_files)
+                        self.conversation_attachments = merge_conversation_attachments(self.conversation_attachments, new_files)
+                        current_messages.append(self._build_user_message_with_attachments(text, new_files))
+                    else:
+                        self._append_user_feedback_message(current_messages, text)
+                    task_state["control_revision"] = update["revision"]
+                if updates:
+                    checkpoint("instruction_updated")
+                return bool(updates)
+
             def emit_process_report(report, source="model", force=False):
                 nonlocal process_report_count, last_process_report
                 if not process_reports_enabled():
@@ -622,6 +668,7 @@ class MessagingMixin:
             checkpoint("resume_ready" if resume_checkpoint else "ready")
 
             while MAX_ITERATIONS is None or iteration < MAX_ITERATIONS:
+                apply_run_control()
                 if run_cancel_event.is_set():
                     self._raise_if_cancelled()
                     break
@@ -652,6 +699,10 @@ class MessagingMixin:
                         self.agent_runtime.trace("model_request", f"iteration={iteration}, model={current_model}")
                     checkpoint("model_request")
                     ai_response_text, usage_dict = self._handle_api_request_with_retry(current_model, current_messages)
+                    # A correction received during inference invalidates that answer
+                    # before it can dispatch tools. Already completed tools stay in context.
+                    if apply_run_control():
+                        continue
                     codex_protocol_repair_streak = 0
                     context_overflow_compaction_attempts = 0
                     self._log_usage(current_model, usage_dict)
@@ -845,6 +896,8 @@ class MessagingMixin:
                         streamed_id = live_calls[call_index]["call_id"] if call_index < len(live_calls) and live_calls[call_index].get("name") == call.get("action") else ""
                         call["_agent_process_event_id"] = str(call.get("_agent_process_event_id") or streamed_id or uuid.uuid4().hex)
 
+                    if apply_run_control():
+                        continue
                     emit_tool_process_report(pre_text, selected_calls, source="model")
                     self._emit_agent_process_event(
                         "tool_start",

@@ -43,6 +43,7 @@ from .desktop_services import (
     usage_snapshot,
 )
 from .voice_service import VoiceSessionController
+from .live_voice import LiveVoiceManager
 from .update_discovery import discover_update
 
 
@@ -149,6 +150,7 @@ class SmartiLocalGateway:
         self._workspace = WorkspaceScope(core)
         self._terminal_sessions = TerminalRegistry(self._workspace)
         self._voice = VoiceSessionController(lambda: self.core.settings)
+        self._live_voice = LiveVoiceManager(core, self._attachments)
         self._idempotency_lock = threading.RLock()
         self._diagnostic_lock = threading.RLock()
         self._active_diagnostic = None
@@ -660,6 +662,43 @@ class SmartiLocalGateway:
 
     async def _voice_status(self, request):
         return self._ok(request, self._voice.snapshot())
+
+    async def _live_config(self, request):
+        return self._ok(request, self._live_voice.config())
+
+    async def _control_run(self, request):
+        payload = await self._body(request, "controlRun")
+        try:
+            return self._ok(request, self.core.run_manager.control_run(request.match_info["run_id"], payload["action"], payload.get("instruction", "")))
+        except ValueError as error:
+            return self._error(request, 409, "run_not_controllable", str(error))
+
+    async def _live_start(self, request):
+        payload = await self._body(request, "startLive")
+        try:
+            return self._ok(request, await self._live_voice.start(payload), 202)
+        except ValueError as error:
+            return self._error(request, 409, "live_unavailable", str(error))
+
+    async def _live_session(self, request):
+        session = self._live_voice.sessions.get(request.match_info["live_id"])
+        if session is None:
+            return self._error(request, 404, "live_not_found", "שיחת הלייב אינה פעילה; המשימות שמורות בצ׳אט")
+        try:
+            action = request.match_info["action"]
+            if action == "events" and request.method == "GET":
+                return self._ok(request, await session.poll(self._query_int(request, "after", 0, 0, 2147483647)))
+            if action == "stop" and request.method == "POST":
+                await session.close()
+                return self._ok(request, session.snapshot())
+            if action == "input" and request.method == "POST":
+                return self._ok(request, await session.input(await self._body(request, "liveInput")))
+            if action == "control" and request.method == "POST":
+                payload = await self._body(request, "liveControl")
+                return self._ok(request, session.control(payload["action"], payload.get("instruction", ""), payload.get("task_id", "")))
+            return self._error(request, 405, "invalid_live_action")
+        except (ValueError, RuntimeError) as error:
+            return self._error(request, 409, "live_error", str(error))
 
     async def _approvals(self, request):
         return self._ok(request, {"items": self.core.chat_store.pending_approvals(request.query.get("session_id") or None)})
@@ -1473,6 +1512,13 @@ class SmartiLocalGateway:
             return await self._auth_middleware(request, handler)
 
         app = web.Application(middlewares=[auth_middleware], client_max_size=self.MAX_BODY_BYTES)
+        async def close_live(_app):
+            await self._live_voice.stop()
+        app.on_cleanup.append(close_live)
+        app.router.add_get("/v2/live/config", self._live_config)
+        app.router.add_post("/v2/live/sessions", self._live_start)
+        app.router.add_get("/v2/live/sessions/{live_id}/{action:events}", self._live_session)
+        app.router.add_post("/v2/live/sessions/{live_id}/{action:input|stop|control}", self._live_session)
         app.router.add_get("/v1/health", self._v1_health)
         app.router.add_get("/v1/{resource:sessions|workspaces|runs|approvals}", self._v1_get)
         app.router.add_get("/v1/runs/{run_id}/events", self._v1_run_events)
@@ -1498,6 +1544,7 @@ class SmartiLocalGateway:
         app.router.add_get("/v2/runs", self._runs)
         app.router.add_get("/v2/runs/{run_id}", self._run_item)
         app.router.add_post("/v2/runs/{run_id}/cancel", self._cancel_run)
+        app.router.add_post("/v2/runs/{run_id}/control", self._control_run)
         app.router.add_get("/v2/runs/{run_id}/events", self._run_events)
         app.router.add_post("/v2/runs/{run_id}/api-key", self._provide_run_api_key)
         app.router.add_get("/v2/events/replay", self._events_replay)

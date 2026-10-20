@@ -79,6 +79,24 @@
 .composer-primary,.composer-tool { width:40px; height:40px; display:grid; place-items:center; border:0; padding:8px; border-radius:50%; cursor:pointer; }
 .composer-primary { background:var(--sds-color-action); color:var(--sds-color-on-action); }
 .composer-primary:hover { background:var(--sds-color-action-hover); }
+.composer-actions:has(.live-toggle) { grid-template-columns:auto minmax(0,1fr) 40px; }
+.composer-actions:has(.live-toggle) .action-button-host { display:flex; align-items:center; gap:4px; }
+.composer-primary[hidden] { display:none; }
+.composer-primary.is-plain-mic { background:transparent; color:var(--sds-color-text); }
+.composer-primary.is-plain-mic:hover { background:var(--sds-color-surface-muted); }
+.live-toggle[aria-busy="true"] .sds-icon { animation:live-spin 1s linear infinite; }
+.live-mute { position:relative; }
+.live-mute.is-muted::after { content:""; position:absolute; width:24px; height:2px; background:currentColor; transform:rotate(-45deg); }
+.live-orb-area { height:148px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; background:var(--sds-color-surface); }
+.live-orb { width:112px; height:112px; display:block; }
+.live-orb-label { font-size:var(--sds-font-caption); color:var(--sds-color-text-muted); }
+.live-orb-area.is-fallback .live-orb { border-radius:50%; background:radial-gradient(circle at 30% 30%,var(--sds-color-surface-muted),var(--sds-color-action)); }
+.live-task-controls { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.source-secret-input { display:flex; align-items:center; gap:4px; min-width:0; }
+.source-secret-input>label { flex:1; min-width:0; }
+@keyframes live-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .live-toggle[aria-busy="true"] .sds-icon { animation:none; } }
+@container (max-width:480px) { .composer-actions:has(.live-toggle) { grid-template-columns:1fr 40px; } .composer-actions:has(.live-toggle) .composer-controls { grid-row:2; grid-column:1 / -1; } }
 .composer-tool { background:transparent; color:var(--sds-color-text); }
 .composer-tool:hover { background:var(--sds-color-surface-muted); }
 .composer-controls { min-width:0; display:flex; align-items:center; flex-wrap:wrap; }

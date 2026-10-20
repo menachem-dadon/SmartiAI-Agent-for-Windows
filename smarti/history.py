@@ -669,6 +669,34 @@ class ChatSessionStore:
             session = self._session(db, target)
             return session.get("messages", []) if session else []
 
+    def upsert_live_message(self, session_id, identity, role, content, metadata=None):
+        """Persist transcript revisions under one identity, without duplicating turns."""
+        with self._lock, self._connect() as db:
+            target = self._ensure_session(db, session_id, set_active=False)
+            row = db.execute("SELECT * FROM messages WHERE session_id=? AND json_extract(metadata_json, '$.live_message_id')=?",
+                             (target, str(identity))).fetchone()
+            meta = _json_loads(row["metadata_json"], {}) if row else {}
+            meta.update(metadata or {})
+            meta["live_message_id"] = str(identity)
+            now = _now_iso()
+            if row:
+                ordinal = row["ordinal"]
+                db.execute("UPDATE messages SET content=?, metadata_json=? WHERE id=?",
+                           (str(content), _json_dumps(meta), row["id"]))
+            else:
+                ordinal = db.execute("SELECT COALESCE(MAX(ordinal), -1)+1 FROM messages WHERE session_id=?", (target,)).fetchone()[0]
+                db.execute("INSERT INTO messages(session_id,ordinal,role,content,created_at,metadata_json) VALUES(?,?,?,?,?,?)",
+                           (target, ordinal, role, str(content), now, _json_dumps(meta)))
+            db.execute("UPDATE sessions SET updated_at=? WHERE id=?", (now, target))
+            return self._row_message(db.execute("SELECT * FROM messages WHERE session_id=? AND ordinal=?", (target, ordinal)).fetchone())
+
+    def mark_live_backend(self, run_id, task_id):
+        with self._lock, self._connect() as db:
+            for row in db.execute("SELECT id,metadata_json FROM messages WHERE json_extract(metadata_json,'$.run_id')=?", (str(run_id),)).fetchall():
+                meta = _json_loads(row["metadata_json"], {})
+                meta.update(live_backend=True, live_task_id=str(task_id))
+                db.execute("UPDATE messages SET metadata_json=? WHERE id=?", (_json_dumps(meta), row["id"]))
+
     def append_message(self, role, content, metadata=None, session_id=None, created_at=None):
         """Append one durable message without requiring a complete user/assistant turn."""
         normalized_role = str(role or "assistant").strip().lower()

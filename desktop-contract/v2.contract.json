@@ -14,6 +14,109 @@
     "secrets": "masked metadata only; plaintext is accepted only by explicit set/validate commands"
   },
   "requests": {
+    "controlRun": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "pause",
+            "resume",
+            "update"
+          ]
+        },
+        "instruction": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "startLive": {
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "type": "string"
+        },
+        "provider_mode": {
+          "type": "string"
+        },
+        "model_name": {
+          "type": "string"
+        },
+        "attachment_handles": {
+          "type": "array",
+          "maxItems": 80,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "liveInput": {
+      "type": "object",
+      "properties": {
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "audio": {
+          "type": "string",
+          "maxLength": 64000
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1000000
+        },
+        "mic_muted": {
+          "type": "boolean"
+        },
+        "attachment_handles": {
+          "type": "array",
+          "maxItems": 80,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "required": [
+        "sequence"
+      ],
+      "additionalProperties": false
+    },
+    "liveControl": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "pause",
+            "resume",
+            "update",
+            "cancel",
+            "status"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "instruction": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
     "createWorkspace": {
       "type": "object",
       "properties": {
@@ -775,6 +878,55 @@
     }
   },
   "operations": [
+    {
+      "method": "POST",
+      "path": "/v2/runs/{run_id}/control",
+      "operation_id": "controlRun",
+      "summary_he": "השהיה, המשך ותיקון משימה קיימת",
+      "request_schema": "controlRun"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/live/config",
+      "operation_id": "liveConfig",
+      "summary_he": "ספקי לייב ומצב מפתחות ממוסך",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/live/sessions",
+      "operation_id": "startLive",
+      "summary_he": "פתיחת שיחת לייב",
+      "request_schema": "startLive"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/live/sessions/{live_id}/events",
+      "operation_id": "liveEvents",
+      "summary_he": "אירועי שמע ותמלול זמניים",
+      "request_schema": null
+    },
+    {
+      "method": "POST",
+      "path": "/v2/live/sessions/{live_id}/input",
+      "operation_id": "liveInput",
+      "summary_he": "שמע והודעה למודל לייב",
+      "request_schema": "liveInput"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/live/sessions/{live_id}/control",
+      "operation_id": "liveControl",
+      "summary_he": "שליטה במשימת לייב ללא מתן אישורים",
+      "request_schema": "liveControl"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/live/sessions/{live_id}/stop",
+      "operation_id": "stopLive",
+      "summary_he": "סגירת קול תוך המשך משימות",
+      "request_schema": null
+    },
     {
       "method": "GET",
       "path": "/v2/health",

@@ -8,9 +8,36 @@ class TaskCancellation:
     def __init__(self, user_event, seconds):
         self.user_event = user_event
         self.expired = threading.Event()
+        self._deadline_lock = threading.RLock()
+        self._timer_revision = 0
+        self._paused_remaining = None
         self.deadline = time.monotonic() + seconds if seconds else None
-        self.timer = threading.Timer(seconds, self.expired.set) if seconds else None
+        self.timer = threading.Timer(seconds, self._expire, args=(0,)) if seconds else None
         if self.timer:
+            self.timer.daemon = True
+            self.timer.start()
+
+    def _expire(self, revision):
+        with self._deadline_lock:
+            if revision == self._timer_revision and self.deadline is not None:
+                self.expired.set()
+
+    def suspend(self):
+        with self._deadline_lock:
+            if self.deadline is not None:
+                self._paused_remaining = max(0, self.deadline - time.monotonic())
+                self.deadline = None
+                self._timer_revision += 1
+                if self.timer:
+                    self.timer.cancel()
+
+    def resume(self):
+        with self._deadline_lock:
+            if self._paused_remaining is None:
+                return
+            remaining, self._paused_remaining = self._paused_remaining, None
+            self.deadline = time.monotonic() + remaining
+            self.timer = threading.Timer(remaining, self._expire, args=(self._timer_revision,))
             self.timer.daemon = True
             self.timer.start()
 
@@ -29,8 +56,10 @@ class TaskCancellation:
         return True
 
     def close(self):
-        if self.timer:
-            self.timer.cancel()
+        with self._deadline_lock:
+            self._timer_revision += 1
+            if self.timer:
+                self.timer.cancel()
 
 
 class BoundedCapture:

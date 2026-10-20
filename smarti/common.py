@@ -877,6 +877,7 @@ MODEL_PROVIDER_SECRET_KEYS = {
 }
 
 SENSITIVE_SETTING_KEYS = MODEL_PROVIDER_SECRET_KEYS | {
+    "live_openai_api_key", "live_gemini_api_key",
     "tavily_api_key", "email_password", "email_address",
     "google_drive_client_id", "google_drive_client_secret",
     "google_drive_refresh_token", "google_drive_access_token",

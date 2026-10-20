@@ -42,6 +42,9 @@ import {
   type ThemePreference,
 } from "./designSystem";
 import { RichMessage } from "./RichMessage";
+import { useLiveConversation } from "./live/useLiveConversation";
+import { liveTimeline } from "./live/liveTimeline";
+import { LiveOrb } from "./live/LiveOrb";
 import { Alert, Button, DesignSystemProvider, Dialog, Field, Icon, IconButton, Menu } from "./design-system";
 import { ChatSidebar, conversationActions } from "./ChatSidebar";
 import { SearchDialog } from "./SearchDialog";
@@ -897,7 +900,7 @@ export default function App() {
   const activeConversation = conversations.find((item) => item.id === activeId);
   const activeRun = runs.find(
     (item) =>
-      item.session_id === activeId && ACTIVE_RUN_STATES.has(item.status),
+      item.session_id === activeId && !item.metadata?.live_permission && ACTIVE_RUN_STATES.has(item.status),
   );
   const activeEvents = events.filter((item) => item.session_id === activeId);
   const activeApprovals = approvalQueue.items.filter(
@@ -930,6 +933,18 @@ export default function App() {
   const displayRun = activeRun || terminalReply;
   const activeAssistantRecorded = Boolean(displayRun && messages.some(message =>
     message.role === "assistant" && message.metadata?.run_id === displayRun.id));
+  const live = useLiveConversation({ conversation: activeId, provider, model, attachments,
+    onConversation: id => setActiveId(id),
+    onMessage: message => setMessages(current => mergeMessages(current, [message])),
+    onRefresh: () => { void refreshLists(); if (activeIdRef.current) void loadMessages(activeIdRef.current); },
+    onError: setError,
+  });
+  const timeline = liveTimeline([...messages, ...(displayRun && !activeAssistantRecorded && !displayRun.metadata?.live_task_id
+    ? [{ role: "assistant" as const, content: streamAnswer(streams[displayRun.id] || displayRun.metadata?.stream) || displayRun.response_text || "", metadata: { run_id: displayRun.id, user_language: displayRun.metadata?.user_language, is_error: displayRun.status === "failed" } }] : [])], runs.filter(run => run.session_id === activeId));
+  const controlLiveRun = useCallback((id: string, action: "pause" | "resume" | "cancel") => {
+    void coreApi("POST", `/v2/runs/${encodePath(id)}/${action === "cancel" ? "cancel" : "control"}`, action === "cancel" ? {} : { action }, true)
+      .then(() => refreshLists()).catch(reason => setError(String(reason)));
+  }, [refreshLists]);
 
   const createConversation = async () => {
     if (!restoringModel && provider && model) drafts.setSelection({ provider, model, effort: reasoningEffort, endpoint: reasoningOptions.find(option => option.value === reasoningEffort)?.endpoint });
@@ -1034,6 +1049,11 @@ export default function App() {
     const submittedAttachments = [...submittedDraft.attachments];
     const unavailable = submittedAttachments.find(item => item.error);
     if (unavailable) throw new Error(`${unavailable.name}: ${unavailable.error}`);
+    if (live.active) {
+      await live.send(text, submittedAttachments);
+      drafts.accept(sourceId, sourceId, submittedDraft, text, activeIdRef.current === sourceId);
+      return;
+    }
     if (!await renderedSelectionSave) throw new Error("בחירת המודל לא נשמרה. יש לבחור מודל לפני השליחה.");
     await reasoningOperations.current;
     const submitted = await runSubmission.submit({
@@ -1586,16 +1606,15 @@ export default function App() {
               </div>
             ) : (
               <div className="message-list">
-                {[...messages, ...(displayRun && !activeAssistantRecorded ? [{ role: "assistant" as const, content: streamAnswer(streams[displayRun.id] || displayRun.metadata?.stream) || displayRun.response_text || "", metadata: { run_id: displayRun.id, user_language: displayRun.metadata?.user_language, is_error: displayRun.status === "failed" } }] : [])].map((message, index) => {
+                {timeline.map((message, index) => {
                   const runId = String(message.metadata?.run_id || "");
                   const messageActive = Boolean(
                     message.role === "assistant" &&
-                    activeRun &&
-                    runId === activeRun.id,
+                    runs.some(run => run.id === runId && ACTIVE_RUN_STATES.has(run.status)),
                   );
                   return (
                     <RichMessage
-                      key={message.role === "assistant" && runId ? `run-${runId}` : `${message.role}:${message.created_at || index}:${message.content}`}
+                      key={String(message.metadata?.live_message_id || message.message_id || (message.role === "assistant" && runId ? `run-${runId}` : `${message.role}:${message.created_at || index}:${message.content}`))}
                       message={message}
                       isNew={message.role === "user" && runId === newUserRun}
                       events={
@@ -1603,13 +1622,16 @@ export default function App() {
                           ? messageEvents.get(runId) || EMPTY_MESSAGE_EVENTS
                           : EMPTY_MESSAGE_EVENTS
                       }
-                      active={messageActive}
+                      active={messageActive || Boolean(message.metadata?.live_partial)}
                       runStatus={runs.find(run => run.id === runId)?.status}
                       providerMode={runs.find(run => run.id === runId)?.metadata?.provider_mode}
                       stream={message.role === "assistant" ? streams[runId] || runs.find(run => run.id === runId)?.metadata?.stream : undefined}
                       viewportHeight={scroll.height}
                       theme={resolved}
                       onOpenCanvas={openMessageCanvas}
+                      pauseRequested={Boolean(runs.find(run => run.id === runId)?.metadata?.pause_requested)}
+                      paused={Boolean(runs.find(run => run.id === runId)?.metadata?.paused)}
+                      onRunControl={controlLiveRun}
                     />
                   );
                 })}
@@ -1645,9 +1667,11 @@ export default function App() {
               <footer className="sds-actions"><button ref={dialogCancel} type="button" className="sds-button" disabled={dialogBusy} onClick={() => setConversationDialog(null)}>ביטול</button><Button loading={dialogBusy} type="submit" variant={conversationDialog?.kind === "delete" ? "danger" : "primary"}>אישור</Button></footer>
             </form>
           </Dialog>
-          <div className="chat-composer-panel">
+          <div className={`chat-composer-panel${live.ready ? " has-live-orb" : ""}`}>
           {scroll.hasNewContent && <button type="button" className={`chat-new-content ${activeRun ? "is-generating" : ""}`} aria-label="גלילה לסוף התשובה" onClick={scroll.follow}><span className="chat-down-arrow"><Icon name="arrow" /></span>{activeRun && <span className="chat-stream-dots" aria-hidden="true"><i/><i/><i/></span>}</button>}
+          {live.ready && <LiveOrb state={live.orbState} level={live.level} />}
           <Composer
+            live={live}
             theme={resolved}
             focusRequest={composerFocusRequest}
             focusAllowed={!managementSection && !searchOpen && !conversationDialog && !activeApiKeyRequest && !activeApprovals.length && !(workspace.workbenchOpen && (workbenchExpanded || narrowWorkspace)) && !(narrowWorkspace && workspace.conversationDrawerOpen)}

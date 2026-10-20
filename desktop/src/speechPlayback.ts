@@ -17,6 +17,12 @@ let polling = false;
 let refreshAttempted = false;
 let refreshPromise: Promise<SpeechState> | undefined;
 const listeners = new Set<() => void>();
+let liveSpeechSuspended = false;
+export function setLiveSpeechSuspended(value: boolean) {
+  if (liveSpeechSuspended === value) return;
+  liveSpeechSuspended = value;
+  for (const listener of listeners) listener();
+}
 const snapshot = () => state;
 function publish(next: SpeechState) {
   // Idle status polling must not re-render every historical Markdown message.
@@ -94,6 +100,7 @@ function subscribe(listener: () => void) {
 // A single poll serves every message and the settings preview. Ownership also
 // connects automatic answer speech to its existing message's stop button.
 export function useSpeechPlayback(ownerId: string) {
+  const suspended = useSyncExternalStore(subscribe, () => liveSpeechSuspended, () => false);
   const current = useSyncExternalStore(subscribe, snapshot, () => idle);
   const [pending, setPending] = useState(false);
   const [localError, setLocalError] = useState("");
@@ -101,6 +108,7 @@ export function useSpeechPlayback(ownerId: string) {
   const speaking = current.owner_id === ownerId && current.is_playing;
   const error = localError || (current.owner_id === ownerId ? current.error : "");
   const toggle = async (text: string) => {
+    if (liveSpeechSuspended) return;
     if (inFlight.current) return;
     inFlight.current = true;
     setPending(true); setLocalError("");
@@ -120,5 +128,5 @@ export function useSpeechPlayback(ownerId: string) {
       inFlight.current = false; setPending(false);
     }
   };
-  return { speaking, pending, error, toggle };
+  return { speaking, pending, error, toggle, suspended };
 }

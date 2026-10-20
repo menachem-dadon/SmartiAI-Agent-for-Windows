@@ -16,6 +16,8 @@ class SpeechMixin:
             self.tts_status_callback(playing)
 
     def start_speaking(self, text, owner_id=""):
+        if getattr(self, "_live_voice_owner", None):
+            raise RuntimeError("ההקראה מושעית זמנית בזמן שיחת לייב")
         return self._tts_session.start(self._speech_text(text), owner_id=owner_id)
 
     def _speech_text(self, text):
@@ -64,6 +66,8 @@ class SpeechMixin:
         return clean.strip(" \t\r\n.-")
 
     def speak_text(self, text):
+        if getattr(self, "_live_voice_owner", None):
+            return
         # Legacy QThread callers retain synchronous completion.
         try:
             clean = self._speech_text(text)

@@ -3,6 +3,28 @@ export const SMARTI_DESKTOP_CONTRACT_VERSION = "2.0.0" as const;
 export interface ApiEnvelope<T> { request_id: string; data: T }
 export interface ApiError { request_id: string; error: string; detail?: string; fields?: string[] }
 export interface DesktopEvent { event_id: number; sequence: number; event_type: string; request_id: string; session_id: string; run_id: string; payload: Record<string, unknown>; created_at: string }
+export interface ControlRunRequest {
+  action: "pause" | "resume" | "update";
+  instruction?: string;
+}
+export interface StartLiveRequest {
+  conversation_id?: string;
+  provider_mode?: string;
+  model_name?: string;
+  attachment_handles?: Array<string>;
+}
+export interface LiveInputRequest {
+  sequence: number;
+  audio?: string;
+  text?: string;
+  mic_muted?: boolean;
+  attachment_handles?: Array<string>;
+}
+export interface LiveControlRequest {
+  action: "pause" | "resume" | "update" | "cancel" | "status";
+  task_id?: string;
+  instruction?: string;
+}
 export interface CreateWorkspaceRequest {
   title?: string;
   root_path?: string;

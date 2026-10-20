@@ -5,7 +5,7 @@ const {randomUUID}=require('node:crypto');
 const assert=require('node:assert/strict');
 async function browserQA(options={}) {
  const token=randomUUID();
- const host=spawn('python',['scripts/ux3_core_host.py'],{windowsHide:true,env:{...process.env,UX3_TEST_TOKEN:token,UX6_STRESS_QA:'1',UX4_WORKBENCH_QA:'1',PYTHONUTF8:'1',...options.env}});
+ const host=spawn('python',[options.host || 'scripts/ux3_core_host.py'],{windowsHide:true,env:{...process.env,UX3_TEST_TOKEN:token,UX6_STRESS_QA:'1',UX4_WORKBENCH_QA:'1',PYTHONUTF8:'1',...options.env}});
  let stderr='';host.stderr.on('data',b=>stderr+=b);
  let handshake;
  try{handshake=await new Promise((resolve,reject)=>{
@@ -18,13 +18,14 @@ async function browserQA(options={}) {
  };
  const legal=(await api('GET','/v2/management/legal')).body.data;
  assert.equal((await api('POST','/v2/management/legal',{accepted:true,version:legal.version})).status,200);
- const browser=await chromium.launch({channel:'msedge',headless:true});
+ const browser=await chromium.launch({channel:'msedge',headless:true,args:options.browserArgs || []});
  const context=await browser.newContext({viewport:{width:1380,height:900}}),page=await context.newPage();
  const listeners=new Map(); const calls=[];let native={tabs:[],activeTabId:null,available:true};
  await page.exposeFunction('__qaInvoke',async(cmd,args={})=>{
   calls.push(cmd);
   if(cmd==='core_api'){const r=args.request;return api(r.method,r.path,r.body);}
   if(cmd==='core_status')return{state:'ready',generation:1,pid:handshake.pid,port:handshake.port,stderrTail:[]};
+  if(cmd==='desktop_launch_id')return 'isolated-browser-launch';
   if(cmd==='core_health')return handshake.health;
   if(cmd==='browser_status'||cmd==='browser_metadata')return native;
   if(cmd==='browser_open'){const tab={tabId:randomUUID(),workspaceId:args.workspaceId,url:args.url,title:'QA browser',profile:args.profile,active:true,loading:false,pinned:false};native={...native,tabs:[...native.tabs,tab],activeTabId:tab.tabId};return native;}

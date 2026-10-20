@@ -27,6 +27,24 @@ LIMIT = {"type": "integer", "minimum": 1, "maximum": 500}
 
 
 REQUEST_SCHEMAS = {
+    "controlRun": _object({
+        "action": {"type": "string", "enum": ["pause", "resume", "update"]},
+        "instruction": STRING,
+    }, ("action",)),
+    "startLive": _object({
+        "conversation_id": STRING, "provider_mode": STRING, "model_name": STRING,
+        "attachment_handles": {"type": "array", "maxItems": 80, "items": IDENTIFIER},
+    }),
+    "liveInput": _object({
+        "sequence": {"type": "integer", "minimum": 0},
+        "audio": {"type": "string", "maxLength": 64000},
+        "text": {"type": "string", "maxLength": 1000000}, "mic_muted": {"type": "boolean"},
+        "attachment_handles": {"type": "array", "maxItems": 80, "items": IDENTIFIER},
+    }, ("sequence",)),
+    "liveControl": _object({
+        "action": {"type": "string", "enum": ["pause", "resume", "update", "cancel", "status"]},
+        "task_id": STRING, "instruction": STRING,
+    }, ("action",)),
     "createWorkspace": _object({
         "title": {"type": "string", "maxLength": 200},
         "root_path": {"type": "string", "maxLength": 32767},
@@ -168,6 +186,13 @@ REQUEST_SCHEMAS = {
 
 
 OPERATIONS = [
+    ("POST", "/v2/runs/{run_id}/control", "controlRun", "השהיה, המשך ותיקון משימה קיימת", "controlRun"),
+    ("GET", "/v2/live/config", "liveConfig", "ספקי לייב ומצב מפתחות ממוסך", None),
+    ("POST", "/v2/live/sessions", "startLive", "פתיחת שיחת לייב", "startLive"),
+    ("GET", "/v2/live/sessions/{live_id}/events", "liveEvents", "אירועי שמע ותמלול זמניים", None),
+    ("POST", "/v2/live/sessions/{live_id}/input", "liveInput", "שמע והודעה למודל לייב", "liveInput"),
+    ("POST", "/v2/live/sessions/{live_id}/control", "liveControl", "שליטה במשימת לייב ללא מתן אישורים", "liveControl"),
+    ("POST", "/v2/live/sessions/{live_id}/stop", "stopLive", "סגירת קול תוך המשך משימות", None),
     ("GET", "/v2/health", "health", "בדיקת חיות מינימלית", None),
     ("GET", "/v2/version", "version", "גרסת חוזה וגרסת מוצר", None),
     ("GET", "/v2/capabilities", "capabilities", "יכולות זמינות ב-Core", None),

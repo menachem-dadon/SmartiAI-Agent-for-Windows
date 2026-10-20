@@ -269,6 +269,9 @@ export const RichMessage = memo(function RichMessage({
   isNew = false,
   viewportHeight = 0,
   stream,
+  pauseRequested = false,
+  paused = false,
+  onRunControl,
 }: {
   message: ChatMessage;
   events?: RunEvent[];
@@ -280,6 +283,9 @@ export const RichMessage = memo(function RichMessage({
   isNew?: boolean;
   viewportHeight?: number;
   stream?: StreamState;
+  pauseRequested?: boolean;
+  paused?: boolean;
+  onRunControl?: (runId: string, action: "pause" | "resume" | "cancel") => void;
 }) {
   const messageId = `${message.role}:${message.metadata?.run_id || message.message_id || `${message.created_at || ""}:${contentIdentity(message.content)}`}`;
   const preferencesKey = `smarti.chat.disclosures:${messageId}`;
@@ -359,7 +365,7 @@ export const RichMessage = memo(function RichMessage({
   const activeRows = rows.filter(row => row.kind === "tools" && row.running);
   const ownerRow = activeRows.find(row => row.kind === "tools" && preferences[row.key]) || activeRows[0];
   const ownerTool = ownerRow?.kind === "tools" && preferences[ownerRow.key] ? ownerRow.tools.find(tool => ["running", "preparing", "waiting"].includes(tool.status))?.key : undefined;
-  const canThink = active && message.role === "assistant" && !message.content &&
+  const canThink = active && !pauseRequested && message.role === "assistant" && !message.content &&
     stream?.stage !== "retry" &&
     (providerMode !== "local" || stream?.stage === "prefill" || stream?.stage === "thinking") &&
     (!runStatus || runStatus === "queued" || runStatus === "running") &&
@@ -536,7 +542,7 @@ export const RichMessage = memo(function RichMessage({
               icon={speaking ? "stop" : "speaker"} variant="ghost"
               label={speaking ? "עצור הקראה" : "הקרא בקול"}
               onClick={() => void speech.toggle(message.content)}
-              disabled={speech.pending}
+              disabled={speech.pending || speech.suspended}
             />
           )}
           {memoryUpdated && (
@@ -556,7 +562,7 @@ export const RichMessage = memo(function RichMessage({
           <summary onClick={event => { event.preventDefault(); processManual.current = true; preserveDisclosure(event.currentTarget, () => { setProcessOpen(!processOpen); remember("process", !processOpen); }); }}>
             <Icon name="chevron" size={16} className="process-chevron" />
             <AgentStatusText active={active && !processOpen}>
-              {active ? processText("סמארטי עובד", "Smarti is working") : processText("סמארטי עבד", "Smarti worked")}{" "}
+              {active ? paused ? processText("המשימה מושהית", "Task paused") : pauseRequested ? processText("ממתין לנקודת השהיה", "Waiting for a pause boundary") : processText("סמארטי עובד", "Smarti is working") : processText("סמארטי עבד", "Smarti worked")}{" "}
               {formatAgentDuration(elapsed)}
             </AgentStatusText>
             <Icon name="activity" size={20} />
@@ -625,6 +631,10 @@ export const RichMessage = memo(function RichMessage({
       {message.role === "assistant" && <span className="sds-visually-hidden" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>}
       {retryLabel && <WaitingIndicator immediate shimmer={!rows.length || processOpen && !ownerRow} label={retryLabel}/>}
       {canThink && <WaitingIndicator key={agentEvents.filter(event => event.type === "report").slice(-1)[0]?.liveEventId || "initial"} immediate={stream?.stage === "prefill" || stream?.stage === "thinking"} shimmer={!rows.length || processOpen && !ownerRow} label={stream?.stage === "prefill" ? `${processText("מעבד הנחיה", "Processing prompt")}${stream.percent == null ? "…" : `: ${stream.percent}%`}` : processText("חושב...", "Thinking...")}/>}
+      {message.metadata?.live_process && active && onRunControl ? <div className="live-task-controls">
+        <button type="button" className="sds-button" onClick={() => onRunControl(String(message.metadata?.run_id), pauseRequested ? "resume" : "pause")}><Icon name={pauseRequested ? "play" : "pause"} />{pauseRequested ? "המשך משימה" : "השהה משימה"}</button>
+        <button type="button" className="sds-button" onClick={() => onRunControl(String(message.metadata?.run_id), "cancel")}><Icon name="stop" />בטל משימה</button>
+      </div> : null}
       {attachmentStrip}
       {message.role === "user" ? !!message.content && <UserBubble isNew={isNew}>
         {content}
