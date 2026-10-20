@@ -1,5 +1,6 @@
 """Official Antigravity CLI with a private, minimal custom agent per request."""
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -11,6 +12,7 @@ import io
 
 from .base import SubscriptionError, SubscriptionProvider, register_models, safe_failure
 from ..codex_signin import CodexProtocolError, SMARTI_TURN_OUTPUT_SCHEMA
+from ..common import SmartiCancelled
 
 # The CLI translates this schema for different model families. Non-nullable
 # inactive fields avoid stringified "null" in Claude/GPT finish calls. Core's
@@ -21,6 +23,14 @@ for _field in ("progress_report", "final_answer"):
 ANTIGRAVITY_TURN_SCHEMA["properties"]["tool_calls"]["type"] = "array"
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+class _TurnComplete(Exception):
+    """A validated Smarti packet ends this process before the CLI agent retries."""
+
+    def __init__(self, output, usage):
+        self.output = output
+        self.usage = usage
 
 
 def split_model(model):
@@ -238,6 +248,33 @@ class AntigravityProvider(SubscriptionProvider):
                     raise SubscriptionError("לא ניתן לקרוא את הצירוף, ה־PDF מוצפן, או שהצירופים גדולים מ־25MB יחד (עד 16 צירופים עשירים).", "unsupported_attachment") from error
         return content
 
+    def _decode_turn(self, output):
+        if not isinstance(output, dict):
+            try:
+                output = json.loads(output)
+            except (ValueError, TypeError) as error:
+                raise CodexProtocolError("Antigravity לא השלים תשובה התואמת את המבנה המבוקש.") from error
+        if not isinstance(output, dict):
+            raise CodexProtocolError("Antigravity החזיר פלט שאינו אובייקט Smarti.")
+        # Canonicalize only empty inactive fields from CLI model serializers.
+        # Mixed/nonempty tool+final content still fails the strict Core schema.
+        output = dict(output)
+        if output.get("kind") == "final" and output.get("tool_calls") == []:
+            output["tool_calls"] = None
+        elif output.get("kind") == "tool_calls" and output.get("final_answer") == "":
+            output["final_answer"] = None
+        if output.get("progress_report") == "":
+            output["progress_report"] = None
+        answer = self.decode(output, "agent")
+        report = str(output.get("progress_report") or "").strip()
+        if output.get("kind") == "tool_calls" and report:
+            # Preserve the already validated report's type through Core's text
+            # adapter. Words such as "example" in prose must not hide real calls.
+            body = answer[len(report) + 1:]
+            report = re.sub(r'</?smarti_report>', '', report, flags=re.IGNORECASE)
+            answer = f"<smarti_report>{report}</smarti_report>\n{body}"
+        return output, answer
+
     def complete(self, messages, model, *, timeout=1800, reasoning_effort="", cancel_event=None,
                  purpose="agent", stream=None, system_prompt="", **unused):
         if self.disconnected:
@@ -254,8 +291,11 @@ class AntigravityProvider(SubscriptionProvider):
         if not media:
             instructions += " Never execute native tools."
         # --json-schema routes output through native finish, which buffers it.
-        # With no native tools the same envelope streams as ordinary text and
-        # still passes the strict local validator before Core executes anything.
+        # A completed response STEP is our transport boundary. Waiting for the
+        # native agent's terminal result lets its private function-call repair
+        # loop regenerate an already valid Smarti request before Core can run it.
+        # Validate the whole step, then stop only this owned process. Partial
+        # deltas remain presentation only; they never authorize tool execution.
         if purpose == "agent":
             instructions += (" Output exactly one JSON object, no markdown fences. Emit keys in this order: kind, progress_report, final_answer, tool_calls."
                 " Schema: " + json.dumps(ANTIGRAVITY_TURN_SCHEMA, separators=(",", ":")))
@@ -266,6 +306,7 @@ class AntigravityProvider(SubscriptionProvider):
                 ' For a final answer: kind=final, final_answer is nonempty text, tool_calls=[] and progress_report="".'
                 " Use empty strings/arrays for inactive fields; never emit null or the string null."
                 " Use only documented tool actions and arguments; request tool information when needed."
+                " End this response immediately after the single JSON object. Smarti will execute the requested tools and provide their results in the next request."
             )
         else:
             instructions += " Return only the requested plain text, no JSON envelope."
@@ -278,9 +319,11 @@ class AntigravityProvider(SubscriptionProvider):
                 " Then return the requested output. This loader is transport only; all Smarti actions remain envelope data for Core.")
         self.workspace.parent.mkdir(parents=True, exist_ok=True)
         result, initialized, shown, media_loaded = None, False, False, False
+        response_step, response_parts, step_usage = None, [], {}
+        completion_source = "terminal_result"
         agent_name = "smarti-" + uuid.uuid4().hex
         def consume(line):
-            nonlocal result, initialized, shown, media_loaded
+            nonlocal result, initialized, shown, media_loaded, response_step
             try:
                 event = json.loads(line)
                 kind = event.get("event")
@@ -295,24 +338,49 @@ class AntigravityProvider(SubscriptionProvider):
                     raise ValueError("missing init")
                 elif kind == "step_update":
                     step = event.get("step_update", {})
+                    index = step.get("step_index", 0)
+                    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                        raise ValueError("invalid step index")
+                    if step.get("state") == "DONE" and isinstance(step.get("usage"), dict):
+                        step_usage[index] = step["usage"]
                     tool = step.get("tool_name") or step.get("tool_info", {}).get("name")
                     if tool:
                         params = step.get("tool_info", {}).get("parameters", {})
                         if not media or tool != "call_mcp_tool" or params.get("ServerName") != "smarti_media" or params.get("ToolName") != "attachments" or params.get("Arguments") not in ({}, None):
                             raise ValueError("unexpected native tool")
-                        if step.get("state") == "ERROR":
+                        if step.get("state") == "ERROR" or step.get("tool_info", {}).get("error"):
                             raise SubscriptionError("העברת הצירופים למודל נכשלה.", "unsupported_attachment")
                         media_loaded = media_loaded or step.get("state") == "DONE"
-                    if stream and purpose == "agent" and step.get("step_type") == "agent_response" and (not media or media_loaded):
-                        stream.text(step.get("text_delta", ""))
-                        shown = shown or bool(step.get("text_delta"))
+                    if purpose == "agent" and step.get("step_type") == "agent_response" and (not media or media_loaded):
+                        if response_step is not None and index != response_step:
+                            raise CodexProtocolError("Antigravity התחיל תשובה נוספת לפני השלמת בקשת הכלים של Smarti.")
+                        response_step = index
+                        fragment = step.get("text_delta", "")
+                        if not isinstance(fragment, str):
+                            raise ValueError("invalid text delta")
+                        response_parts.append(fragment)
+                        if stream:
+                            stream.text(fragment)
+                            shown = shown or bool(fragment)
+                        if step.get("state") == "DONE":
+                            output, _ = self._decode_turn("".join(response_parts))
+                            if cancel_event is not None and cancel_event.is_set():
+                                raise SmartiCancelled("CANCELLED_BY_USER")
+                            usage = {key: sum(int(value.get(key, 0) or 0) for value in step_usage.values())
+                                for key in ("input_tokens", "output_tokens", "thinking_tokens", "cache_read_tokens")} if step_usage else {}
+                            logging.info("ANTIGRAVITY HANDOFF | model=%s | step=%s | kind=%s | tool_calls=%s | usage_source=%s",
+                                model, index, output["kind"], len(output.get("tool_calls") or []), "reported" if usage else "unavailable")
+                            raise _TurnComplete(output, usage)
                     if stream and step.get("step_type") in {"thinking", "agent_thinking"}:
                         stream.status("thinking")
                 elif kind == "result":
                     if result is not None:
                         raise ValueError("duplicate result")
                     if event.get("result", {}).get("status") != "SUCCESS":
-                        raise safe_failure(event.get("result", {}).get("error"))
+                        failure = safe_failure(event.get("result", {}).get("error"))
+                        if failure.reason == "provider_protocol_error":
+                            raise CodexProtocolError(str(failure))
+                        raise failure
                     result = event["result"]
             except (ValueError, TypeError, AttributeError) as error:
                 raise SubscriptionError("פלט Antigravity אינו תואם את הסוכן או חוזה הכלים של Smarti.", "provider_contract_violation") from error
@@ -336,32 +404,22 @@ class AntigravityProvider(SubscriptionProvider):
                 command.append("--dangerously-skip-permissions")
             # stdin avoids command-line size limits and keeps conversation text
             # out of the process arguments. One isolated turn, then EOF.
-            self.run(command, payload=json.dumps({"event": "user", "message": {"content": self.prompt(messages)}}, ensure_ascii=False) + "\n",
-                timeout=timeout, cancel=cancel_event, event=consume, cwd=root)
+            try:
+                self.run(command, payload=json.dumps({"event": "user", "message": {"content": self.prompt(messages)}}, ensure_ascii=False) + "\n",
+                    timeout=timeout, cancel=cancel_event, event=consume, cwd=root)
+            except _TurnComplete as complete:
+                # run() always terminates/reaps its own process tree in finally.
+                # This is an explicitly validated step, not CLI SUCCESS or a
+                # fallback from a failed/truncated/unauthorized native tool.
+                result = {"structured_output": complete.output, "usage": complete.usage}
+                completion_source = "validated_step"
         if result is None:
             raise SubscriptionError("Antigravity נסגר ללא תשובה סופית.", "provider_contract_violation")
         if media and not media_loaded:
             raise SubscriptionError("המודל לא קיבל את הצירופים. אפשר לנסות שוב.", "unsupported_attachment")
         output = result.get("structured_output")
         if purpose == "agent":
-            if not isinstance(output, dict):
-                try:
-                    output = json.loads(result.get("response", ""))
-                except (ValueError, TypeError) as error:
-                    raise CodexProtocolError("Antigravity לא השלים תשובה התואמת את המבנה המבוקש.") from error
-            if not isinstance(output, dict):
-                raise CodexProtocolError("Antigravity החזיר פלט שאינו אובייקט Smarti.")
-            # Some CLI model serializers emit []/"" for the inactive nullable
-            # member. Canonicalize only empty inactive fields; mixed/nonempty
-            # tool+final content still fails the strict Core protocol.
-            output = dict(output)
-            if output.get("kind") == "final" and output.get("tool_calls") == []:
-                output["tool_calls"] = None
-            elif output.get("kind") == "tool_calls" and output.get("final_answer") == "":
-                output["final_answer"] = None
-            if output.get("progress_report") == "":
-                output["progress_report"] = None
-            answer = self.decode(output, purpose)
+            output, answer = self._decode_turn(output if isinstance(output, dict) else result.get("response", ""))
             if stream and not shown:
                 stream.text(json.dumps(output, ensure_ascii=False))
         else:
@@ -375,7 +433,9 @@ class AntigravityProvider(SubscriptionProvider):
             "cached_prompt": cached, "reasoning": int(raw.get("thinking_tokens", 0) or 0),
             "billing_mode": "subscription", "estimated_cost_usd": None,
             "usage_source": "reported" if raw else "unavailable", "provider": self.provider,
-            "requested_model": requested_model, "effective_model": model, "purpose": purpose}
+            "requested_model": requested_model, "effective_model": model, "purpose": purpose,
+            "completion_source": completion_source,
+            "usage_scope": "completed_steps" if completion_source == "validated_step" else "terminal_result"}
         usage["total"] = usage["prompt"] + usage["completion"]
         self.verified = True
         return answer, usage

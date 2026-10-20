@@ -3658,13 +3658,19 @@ class AgentRuntime:
         # boundary even when a text-only provider omits the following newline.
         # Never scan the report itself or accept arbitrary inline JSON examples.
         report = re.match(r'\s*<smarti_report>.*?</smarti_report>', text, re.DOTALL | re.IGNORECASE)
+        def has_example_prefix(start):
+            # A URL in a real progress report (e.g. https://example.com) is
+            # not a JSON example. Explicit report framing is not code context.
+            prefix = text[report.end():start] if report else text[:start]
+            prefix = re.sub(r'https?://\S+|\b(?:[\w-]+\.)+[a-z]{2,}(?::\d+)?(?:/\S*)?', '', prefix, flags=re.IGNORECASE)
+            return bool(re.search(r'(?:\bexample\b|דוגמ[אה])', prefix, re.IGNORECASE))
         fenced = list(re.finditer(r'```[^\n]*\n.*?```', text, re.DOTALL))
         blocks = list(re.finditer(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL | re.IGNORECASE))
         calls = []
         for m in blocks:
             if report and m.start() < report.end():
                 continue
-            if re.search(r'(?:\bexample\b|דוגמ[אה])', text[:m.start()], re.IGNORECASE):
+            if has_example_prefix(m.start()):
                 continue
             raw = m.group(1)
             try:
@@ -3696,7 +3702,7 @@ class AgentRuntime:
             if report and idx < report.end():
                 continue
             after_report = bool(report and not text[report.end():idx].strip())
-            if (not after_report and text[text.rfind("\n", 0, idx) + 1:idx].strip()) or re.search(r'(?:\bexample\b|דוגמ[אה])', text[:idx], re.IGNORECASE):
+            if (not after_report and text[text.rfind("\n", 0, idx) + 1:idx].strip()) or has_example_prefix(idx):
                 continue
             try:
                 obj, end = decoder.raw_decode(text[idx:])

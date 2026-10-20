@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import queue
@@ -49,6 +50,10 @@ def safe_failure(raw):
         return SubscriptionError("המודל שנבחר אינו זמין בחשבון או בגרסת רכיב החיבור. יש לבחור מודל זמין.", "model_unavailable")
     if "provider_contract_violation" in text:
         return SubscriptionError("רכיב הספק הציע כלים שאינם בשליטת Smarti. הבקשה נעצרה לשמירת הרשאות הכלים.", "provider_contract_violation")
+    if any(word in text for word in ("malformed function call", "function call is empty", "invalid json", "structured output")):
+        return SubscriptionError("הספק החזיר קריאת כלי בפורמט שגוי. Smarti לא ביצע את הקריאה.", "provider_protocol_error")
+    if any(word in text for word in ("max_tokens", "max output tokens", "output token limit")):
+        return SubscriptionError("תשובת הספק נקטעה במגבלת הפלט. יש לפצל את הבקשה או לקצר את התוצר.", "provider_output_limit")
     return SubscriptionError("רכיב החיבור לא השלים את הבקשה. יש לבדוק חיבור, רשת וגרסת רכיב בהגדרות הספק.")
 
 
@@ -84,14 +89,22 @@ class SubscriptionProvider:
         if process.poll() is not None:
             return
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW, timeout=10)
+            try:
+                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW, timeout=10)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                # Keep the original cancellation, provider timeout or handoff.
+                logging.warning("SUBSCRIPTION CLEANUP | pid=%s | helper_failure=%s | fallback=direct_kill",
+                    process.pid, type(error).__name__)
+                if process.poll() is None:
+                    process.kill()
         else:
             process.terminate()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=5)
 
     def run(self, command, *, payload=None, cancel=None, timeout=30, event=None, cwd=None, ok_codes=(0,)):
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -172,13 +185,15 @@ class SubscriptionProvider:
             return "".join(output)
         finally:
             closing.set()
-            self.terminate(process)
-            writer.join(timeout=1)
-            for reader in readers:
-                reader.join(timeout=1)
-            for pipe in (process.stdin, process.stdout, process.stderr):
-                if pipe and not pipe.closed:
-                    pipe.close()
+            try:
+                self.terminate(process)
+            finally:
+                writer.join(timeout=1)
+                for reader in readers:
+                    reader.join(timeout=1)
+                for pipe in (process.stdin, process.stdout, process.stderr):
+                    if pipe and not pipe.closed:
+                        pipe.close()
 
     def state(self, state, message, **extra):
         return {"state": state, "message": message, "provider": self.provider,

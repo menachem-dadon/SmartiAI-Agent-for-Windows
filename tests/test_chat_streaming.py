@@ -105,6 +105,23 @@ class ChatStreamingTests(unittest.TestCase):
         self.assertTrue(malformed['is_tool_call_intent'])
         self.assertTrue(malformed['tool_calls'])
 
+    def test_url_in_report_does_not_hide_real_tool_call_or_finish_with_only_progress(self):
+        runtime = AgentRuntime(Mock())
+        call = json.dumps({"tool_calls":[{"name":"web_manager","arguments":{"action":"read","url":"https://example.com"}}]})
+        prefixes = ['טוען את הדף https://example.com כדי לקרוא את כותרתו...\n',
+            'קורא את תוכן הדף מ-example.com.\n',
+            '<smarti_report>Reading an example page at https://example.com</smarti_report>',
+            '<smarti_report>יוצר הדמיית דוגמה</smarti_report>']
+        for prefix in prefixes:
+            for packet in (call, '```json\n'+call+'\n```'):
+                with self.subTest(prefix=prefix,packet=packet):
+                    parsed = runtime.extract_tool_calls(prefix+packet)
+                    self.assertTrue(parsed['is_tool_call_intent'])
+                    self.assertEqual(len(parsed['tool_calls']),1)
+                    self.assertEqual(json.loads(parsed['json_str'])['params']['name'],'web_manager')
+        for example in ('For example:\n'+call, 'דוגמה:\n```json\n'+call+'\n```'):
+            self.assertFalse(runtime.extract_tool_calls(example)['is_tool_call_intent'])
+
     def test_new_request_removes_unexecuted_preparation_from_durable_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             store = ChatSessionStore(str(Path(directory) / "history.sqlite"))

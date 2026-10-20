@@ -11,7 +11,8 @@ class MessagingMixin:
         except Exception:
             max_repairs = 2
         logging.warning(
-            "Codex protocol response rejected; repair attempt %s/%s: %s",
+            "Provider protocol response rejected | provider=%s | repair attempt %s/%s: %s",
+            self.mode,
             attempt,
             max_repairs,
             error,
@@ -676,10 +677,10 @@ class MessagingMixin:
                             continue
                         final_response = (
                             f"ERROR_USER: {transport_label} החזיר שוב פלט כלי בתבנית שגויה גם לאחר בקשות תיקון. "
-                            "סמארטי שמר נקודת המשך כדי שלא לאבד את המשימה."
+                            "Smarti שמר נקודת המשך כדי שלא לאבד את המשימה."
                         )
                         final_response = ui_text(self, final_response,
-                            "ERROR_USER: Codex kept returning malformed tool output after correction requests. Smarti saved a checkpoint to preserve the task.")
+                            f"ERROR_USER: {transport_label} kept returning malformed tool output after correction requests. Smarti saved a checkpoint to preserve the task.")
                         checkpoint_should_keep = True
                     elif "CANCELLED_BY_USER" in str(e):
                         final_response = ui_text(self, "הפעולה נעצרה לבקשת המשתמש.", "The operation stopped at the user's request.")

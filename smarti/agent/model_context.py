@@ -3199,13 +3199,19 @@ Scan <available_skills>. If one clearly applies to the user's task, load exactly
                     )
             except SmartiCancelled:
                 raise
-            except SubscriptionError:
+            except SubscriptionError as error:
                 # These messages are already safe and distinguish auth, quota,
                 # policy and protocol. Never retry with another billing route.
+                logging.error("SUBSCRIPTION FAILURE | request_id=%s | provider=%s | model=%s | purpose=%s | reason=%s | message=%s",
+                    request_log_id, request_mode, current_model, request_purpose, error.reason,
+                    redact_sensitive_text(str(error), self.settings))
                 raise
-            except CodexProtocolError:
+            except CodexProtocolError as error:
                 # The agent loop returns this structured validation failure to
                 # Codex as corrective feedback. It is not an API/network error.
+                logging.warning("PROVIDER PROTOCOL FAILURE | request_id=%s | provider=%s | model=%s | purpose=%s | message=%s",
+                    request_log_id, request_mode, current_model, request_purpose,
+                    redact_sensitive_text(str(error), self.settings))
                 raise
             except Exception as e:
                 if self._is_budget_exception(e):

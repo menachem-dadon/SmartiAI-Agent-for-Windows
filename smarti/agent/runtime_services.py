@@ -269,6 +269,7 @@ class RuntimeServicesMixin:
 
     def _normalize_step_text(self, text):
         raw = (text or "").replace("##", "").strip()
+        raw = re.sub(r'^\s*<smarti_report>\s*|\s*</smarti_report>\s*$', '', raw, flags=re.IGNORECASE)
         if not raw:
             return ""
         raw = re.sub(r'```.*?```', '', raw, flags=re.DOTALL).strip()

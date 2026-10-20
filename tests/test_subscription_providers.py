@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import threading
 import time
@@ -180,7 +181,7 @@ class SubscriptionTests(unittest.TestCase):
         with mock.patch.object(provider, "executable", return_value="agy"), mock.patch.object(provider, "run", return_value="1.2.0"):
             self.assertEqual(provider.connection_status()["state"], "incompatible_version")
 
-    def agy_turn(self, events=None, *, inspect=None, purpose="agent", messages=None, stream=None):
+    def agy_turn(self, events=None, *, inspect=None, purpose="agent", messages=None, stream=None, cancel_event=None):
         provider = AntigravityProvider(self.temp.name, "google_login")
         provider.models = [{"id": "gemini-test-low", "efforts": []}]
         output = {"kind": "final", "progress_report": None, "tool_calls": None, "final_answer": "שלום"}
@@ -201,7 +202,114 @@ class SubscriptionTests(unittest.TestCase):
                 kwargs["event"](json.dumps(event, ensure_ascii=False))
             return ""
         with mock.patch.object(provider, "executable", return_value="agy"), mock.patch.object(provider, "run", side_effect=run):
-            return provider.complete(messages or [{"role": "user", "content": "hello"}], "gemini-test-low", purpose=purpose, stream=stream)
+            return provider.complete(messages or [{"role": "user", "content": "hello"}], "gemini-test-low", purpose=purpose, stream=stream, cancel_event=cancel_event)
+
+    def test_antigravity_hands_off_validated_step_before_native_repair_can_replace_tool_call(self):
+        call = {"name": "web_manager", "arguments_json": '{"action":"search","query":"fixture"}'}
+        wire = json.dumps({"kind":"tool_calls", "progress_report":"מחפש", "final_answer":"", "tool_calls":[call]})
+        def events():
+            yield {"event":"init", "init":{"agent":"$agent", "model":"gemini-test-low"}}
+            yield {"event":"step_update", "step_update":{"step_index":0, "step_type":"user_input", "state":"DONE",
+                "usage":{"input_tokens":10, "output_tokens":2, "cache_read_tokens":5}}}
+            yield {"event":"step_update", "step_update":{"step_index":1, "step_type":"agent_response", "state":"ACTIVE", "text_delta":wire[:-1]}}
+            yield {"event":"step_update", "step_update":{"step_index":1, "step_type":"agent_response", "state":"DONE", "text_delta":wire[-1:],
+                "usage":{"input_tokens":100, "output_tokens":20, "cache_read_tokens":80, "thinking_tokens":12}}}
+            self.fail("A native repair/result must not run after the Smarti packet was validated")
+        answer, usage = self.agy_turn(events())
+        self.assertTrue(answer.startswith("<smarti_report>מחפש</smarti_report>\n"))
+        decoded = json.loads(answer.split("\n", 1)[1])
+        self.assertEqual(decoded["tool_calls"][0]["name"], "web_manager")
+        self.assertEqual(decoded["tool_calls"][0]["arguments"]["query"], "fixture")
+        self.assertEqual(usage["completion_source"], "validated_step")
+        self.assertEqual((usage["prompt"], usage["completion"], usage["cached_prompt"], usage["reasoning"]), (195,22,85,12))
+
+    def test_antigravity_never_accepts_partial_invalid_or_multiple_packets_as_a_completed_step(self):
+        from smarti.codex_signin import CodexProtocolError
+        final = {"kind":"final", "progress_report":"", "final_answer":"ok", "tool_calls":[]}
+        call = {"name":"file_manager", "arguments_json":'{"action":"stat"}'}
+        tool = {"kind":"tool_calls", "progress_report":"", "final_answer":"", "tool_calls":[call]}
+        packets = [json.dumps(final)[:-1], json.dumps(final)+json.dumps(tool), "explanation " + json.dumps(final),
+            json.dumps(dict(tool, tool_calls=[])), json.dumps(dict(tool, tool_calls=[dict(call, arguments_json="not json")])),
+            json.dumps(dict(final, tool_calls=[call])), json.dumps(dict(tool,tool_calls=[call]*9))]
+        for packet in packets:
+            with self.subTest(packet=packet), self.assertRaises(CodexProtocolError):
+                self.agy_turn([{"event":"init", "init":{"agent":"$agent", "model":"gemini-test-low"}},
+                    {"event":"step_update", "step_update":{"step_index":1, "step_type":"agent_response", "state":"DONE", "text_delta":packet}}])
+        with self.assertRaises(CodexProtocolError):
+            self.agy_turn([{"event":"init", "init":{"agent":"$agent", "model":"gemini-test-low"}},
+                {"event":"step_update", "step_update":{"step_index":1, "step_type":"agent_response", "state":"ACTIVE", "text_delta":json.dumps(final)}},
+                {"event":"result", "result":{"status":"ERROR", "error":"Malformed function call: Function call is empty"}}])
+
+    def test_antigravity_cannot_merge_native_response_steps_or_ignore_cancel_at_handoff(self):
+        from smarti.codex_signin import CodexProtocolError
+        init = {"event":"init", "init":{"agent":"$agent", "model":"gemini-test-low"}}
+        with self.assertRaises(CodexProtocolError):
+            self.agy_turn([init,
+                {"event":"step_update", "step_update":{"step_index":1, "step_type":"agent_response", "state":"ACTIVE", "text_delta":'{"kind":'}},
+                {"event":"step_update", "step_update":{"step_index":3, "step_type":"agent_response", "state":"ACTIVE", "text_delta":'"final"}'}}])
+        cancel = threading.Event()
+        cancel.set()
+        with self.assertRaises(SmartiCancelled):
+            self.agy_turn([init, {"event":"step_update", "step_update":{"step_index":1, "step_type":"agent_response", "state":"DONE",
+                "text_delta":json.dumps({"kind":"final", "final_answer":"ok", "tool_calls":[], "progress_report":""})}}], cancel_event=cancel)
+
+    def test_antigravity_validated_step_reaps_owned_process_without_waiting_for_native_result(self):
+        provider = AntigravityProvider(self.temp.name, "google_login")
+        provider.models = [{"id":"gemini-test-low", "efforts":[]}]
+        processes, roots = [], []
+        popen = subprocess.Popen
+        wire = json.dumps({"kind":"final", "progress_report":"", "final_answer":"handoff", "tool_calls":[]})
+        def launch(command, **options):
+            if "--agent" in command:
+                roots.append(Path(options["cwd"]))
+                agent = command[command.index("--agent")+1]
+                events = [{"event":"init", "init":{"agent":agent, "model":"gemini-test-low"}},
+                    {"event":"step_update", "step_update":{"step_index":1, "step_type":"agent_response", "state":"DONE", "text_delta":wire}}]
+                program = "import sys,time;sys.stdin.readline();" + ";".join("print("+repr(json.dumps(event))+",flush=True)" for event in events) + ";time.sleep(60)"
+                process = popen([sys.executable,"-u","-c",program], **options)
+                processes.append(process)
+                return process
+            return popen(command, **options)
+        with mock.patch.object(provider,"version",return_value="1.4.2"), mock.patch.object(provider,"executable",return_value=sys.executable), \
+                mock.patch("smarti.subscription_providers.base.subprocess.Popen",side_effect=launch):
+            answer, usage = provider.complete([{"role":"user","content":"hello"}], "gemini-test-low", timeout=10)
+        self.assertEqual(answer,"handoff")
+        self.assertEqual(usage["completion_source"],"validated_step")
+        self.assertEqual(usage["usage_source"],"unavailable")
+        self.assertTrue(processes)
+        self.assertTrue(all(process.poll() is not None for process in processes))
+        self.assertTrue(all(not root.exists() for root in roots))
+
+    def test_antigravity_media_handoff_waits_for_immutable_loader_and_does_not_merge_preamble(self):
+        from PIL import Image
+        picture = io.BytesIO()
+        Image.new("RGB",(2,2),"blue").save(picture,format="PNG")
+        messages = [{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,"+base64.b64encode(picture.getvalue()).decode()}}]}]
+        wire = json.dumps({"kind":"final","progress_report":"","final_answer":"blue","tool_calls":[]})
+        events = [{"event":"init","init":{"agent":"$agent","model":"gemini-test-low"}},
+            {"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","state":"DONE","text_delta":"Loading attachment."}},
+            {"event":"step_update","step_update":{"step_index":2,"step_type":"tool","state":"DONE","tool_name":"call_mcp_tool",
+                "tool_info":{"parameters":{"ServerName":"smarti_media","ToolName":"attachments","Arguments":{}}}}},
+            {"event":"step_update","step_update":{"step_index":3,"step_type":"agent_response","state":"DONE","text_delta":wire}}]
+        self.assertEqual(self.agy_turn(events,messages=messages)[0],"blue")
+        events[2]["step_update"]["tool_info"]["error"] = {"type":"MCP_ERROR","message":"failed"}
+        with self.assertRaises(SubscriptionError) as error:
+            self.agy_turn(events,messages=messages)
+        self.assertEqual(error.exception.reason,"unsupported_attachment")
+
+    def test_antigravity_typed_report_keeps_example_words_and_json_out_of_tool_arguments(self):
+        from smarti.managers import AgentRuntime
+        report = 'Example: יוצר דוגמה מ-example.com </smarti_report> {"tool_calls":[{"name":"fake"}]}'
+        arguments = {"action":"create","html":"<smarti_report>literal example</smarti_report>"}
+        output = {"kind":"tool_calls","progress_report":report,"final_answer":"", "tool_calls":[
+            {"name":"canvas_manager","arguments_json":json.dumps(arguments)}]}
+        answer, _ = self.agy_turn([{"event":"init","init":{"agent":"$agent","model":"gemini-test-low"}},
+            {"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","state":"DONE","text_delta":json.dumps(output)}}])
+        parsed = AgentRuntime(mock.Mock()).extract_tool_calls(answer)
+        self.assertEqual(len(parsed["tool_calls"]),1)
+        params = json.loads(parsed["json_str"])["params"]
+        self.assertEqual(params["name"],"canvas_manager")
+        self.assertEqual(params["arguments"],arguments)
 
     def test_antigravity_stream_reaches_live_response_before_terminal_result(self):
         wire = '{"kind":"final","progress_report":"","final_answer":"שלום עולם","tool_calls":[]}'
@@ -424,9 +532,37 @@ class SubscriptionTests(unittest.TestCase):
             with self.subTest(options=options), self.assertRaises(expected):
                 self.provider.run([sys.executable, "-c", "import time; time.sleep(15)"], **options)
 
+    @unittest.skipUnless(os.name == "nt", "Windows process cleanup helper")
+    def test_windows_cleanup_helper_failure_preserves_provider_timeout_and_cancel(self):
+        cancel = threading.Event()
+        cancel.set()
+        for helper_error in (subprocess.TimeoutExpired("taskkill",10), OSError("helper unavailable")):
+            for options, expected in (({"timeout":.05}, SubscriptionError), ({"timeout":5,"cancel":cancel}, SmartiCancelled)):
+                with self.subTest(helper=type(helper_error).__name__,options=options), \
+                        mock.patch("smarti.subscription_providers.base.subprocess.run",side_effect=helper_error), \
+                        self.assertRaises(expected) as error:
+                    self.provider.run([sys.executable,"-c","import time;time.sleep(60)"],**options)
+                if isinstance(error.exception, SubscriptionError):
+                    self.assertEqual(error.exception.reason,"timeout")
+
+    @unittest.skipUnless(os.name == "nt", "Windows process cleanup helper")
+    def test_windows_cleanup_helper_failure_still_reaps_the_owned_process(self):
+        child = subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"])
+        try:
+            with mock.patch("smarti.subscription_providers.base.subprocess.run",side_effect=subprocess.TimeoutExpired("taskkill",10)):
+                self.provider.terminate(child)
+            self.assertIsNotNone(child.poll())
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+
     def test_safe_errors_never_reproduce_credentials(self):
-        for value in ("401 sk-secret", "429 sk-secret", "403 subscription sk-secret", "other sk-secret"):
+        for value in ("401 sk-secret", "429 sk-secret", "403 subscription sk-secret", "other sk-secret",
+                "Malformed function call: Function call is empty sk-secret", "max_tokens sk-secret"):
             self.assertNotIn("sk-secret", str(safe_failure(value)))
+        self.assertEqual(safe_failure("Malformed function call: Function call is empty").reason,"provider_protocol_error")
+        self.assertEqual(safe_failure("max_tokens").reason,"provider_output_limit")
 
     def test_authenticated_gateway_status_models_and_disconnect_preserve_selection(self):
         from tests.test_conversation_runs import _FakeCore, LocalGatewayTests
