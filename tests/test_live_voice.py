@@ -15,6 +15,7 @@ from smarti.live_voice import LiveSession, LiveVoiceManager, context_chunks, pac
 from smarti.local_gateway import ScopedAttachmentRegistry
 from smarti.run_control import RunControl
 from smarti.agent.speech import SpeechMixin
+from smarti.agent.model_context import ModelContextMixin
 from smarti.task_limits import TaskCancellation
 
 
@@ -128,7 +129,9 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.settings = {"live_provider": "gemini", "gemini_api_key": "test-secret-shared", "live_gemini_voice": "Kore"}
         self.runs = SimpleNamespace(subscribe=Mock(return_value="subscription"), unsubscribe=Mock(), control_run=Mock(), cancel=Mock(), submit=Mock())
         self.core = SimpleNamespace(settings=self.settings, chat_store=self.store, run_manager=self.runs,
-                                    _ensure_secret_loaded=lambda key: self.settings.get(key, ""), stop_speaking=Mock())
+                                    _ensure_secret_loaded=lambda key: self.settings.get(key, ""), stop_speaking=Mock(),
+                                    _local_fast_conversation_title=ModelContextMixin._local_fast_conversation_title,
+                                    _schedule_conversation_title=Mock(return_value=True), _emit_notification=Mock())
         self.manager = LiveVoiceManager(self.core, ScopedAttachmentRegistry())
         self.session = LiveSession(self.manager, self.conversation, "gemini", {"provider_mode": "local", "model_name": "test"}, [])
         self.session.phase = "ready"
@@ -368,6 +371,96 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(row["role"], row["content"]) for row in rows], [("user", "שלום"), ("assistant", "היי")])
         self.assertTrue(all(not row["metadata"]["live_partial"] for row in rows))
         self.assertTrue(any(event["type"] == "audio" for event in self.session.events))
+
+    def use_title_scheduler(self):
+        pending = []
+        self.core._title_executor = SimpleNamespace(submit=pending.append)
+        self.core._pending_title_lock = threading.RLock()
+        self.core._pending_title_sessions = set()
+        self.core.generate_conversation_title = Mock(return_value="תכנון טיול לירושלים")
+        self.core._schedule_conversation_title = ModelContextMixin._schedule_conversation_title.__get__(self.core)
+        return pending
+
+    async def test_live_first_final_transcript_uses_shared_ai_title_scheduler(self):
+        pending = self.use_title_scheduler()
+        other = self.store.create_session()["id"]
+        self.session.attachments = [{"name": "מסלול.pdf", "path": "route.pdf"}]
+        # A later picker change must not change the Live session's title provider.
+        self.settings.update(api_mode="gemini", selected_gemini_model="different")
+        await self.session.receive({"serverContent": {"interimInputTranscription": {"text": "תכנן"}}})
+        self.assertEqual(self.store.session_metadata(self.conversation)["title"], "שיחה חדשה")
+        self.assertFalse(pending)
+        await self.session.receive({"serverContent": {"inputTranscription": {"text": "תכנן טיול לירושלים"}, "turnComplete": True}})
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(self.store.session_metadata(self.conversation)["title"], "תכנן טיול לירושלים")
+        self.assertFalse(self.store.session_metadata(self.conversation)["title_generated"])
+        self.assertEqual(self.store.messages(self.conversation)[0]["content"], "תכנן טיול לירושלים")
+        self.core.generate_conversation_title.assert_not_called()
+        pending.pop()()
+        self.core.generate_conversation_title.assert_called_once_with(
+            "תכנן טיול לירושלים", "", attachment_names=["מסלול.pdf"], provider_mode="local", current_model="test")
+        self.assertEqual(self.store.session_metadata(self.conversation)["title"], "תכנון טיול לירושלים")
+        self.assertTrue(self.store.session_metadata(self.conversation)["title_generated"])
+        self.assertEqual(self.store.session_metadata(other)["title"], "שיחה חדשה")
+        self.core._emit_notification.assert_called_with("chat_title_updated", {"session_id": self.conversation, "title": "תכנון טיול לירושלים"})
+        self.session.transcript("user", "ועכשיו חיפה")
+        self.session.finish_transcript("user")
+        self.assertFalse(pending)
+
+    async def test_live_local_title_needs_no_assistant_or_model_request(self):
+        self.use_title_scheduler()
+        self.settings["conversation_title_generation_mode"] = "local"
+        await self.session.apply_text("מצא מסמכים על ירושלים", [])
+        self.assertEqual(self.store.session_metadata(self.conversation)["title"], "מצא מסמכים על ירושלים")
+        self.assertTrue(self.store.session_metadata(self.conversation)["title_generated"])
+        self.core.generate_conversation_title.assert_not_called()
+
+    async def test_live_title_preserves_existing_manual_or_generated_name(self):
+        for manual in (True, False):
+            with self.subTest(manual=manual):
+                title = "שם ידני קיים" if manual else "שם אוטומטי קיים"
+                if manual:
+                    self.store.rename_session(self.conversation, title)
+                else:
+                    self.store.apply_initial_title(self.conversation, title)
+                self.session.transcript("user", "בקשה חדשה")
+                self.session.finish_transcript("user")
+                self.assertEqual(self.store.session_metadata(self.conversation)["title"], title)
+                self.core._schedule_conversation_title.assert_not_called()
+                self.conversation = self.store.create_session(set_active=False)["id"]
+                self.session.conversation = self.conversation
+
+    async def test_live_ai_title_cannot_overwrite_rename_while_pending(self):
+        pending = self.use_title_scheduler()
+        self.session.transcript("user", "תכנן טיול לירושלים")
+        self.session.finish_transcript("user")
+        self.store.rename_session(self.conversation, "שם ידני")
+        pending.pop()()
+        self.assertEqual(self.store.session_metadata(self.conversation)["title"], "שם ידני")
+        self.assertFalse(self.core._pending_title_sessions)
+
+    async def test_live_title_failure_preserves_transcript_and_provisional_name(self):
+        pending = self.use_title_scheduler()
+        self.core.generate_conversation_title.return_value = ""
+        self.session.transcript("user", "תכנן טיול לירושלים")
+        self.session.finish_transcript("user")
+        pending.pop()()
+        self.assertEqual(self.store.session_metadata(self.conversation)["title"], "תכנן טיול לירושלים")
+        self.assertEqual(self.store.messages(self.conversation)[0]["content"], "תכנן טיול לירושלים")
+        self.assertFalse(self.core._pending_title_sessions)
+
+    async def test_gpt_title_is_scheduled_once_despite_delayed_adjacent_fragments(self):
+        self.session.provider = "openai"
+        self.session.transcript("user", "תכנן טיול", start=100, end=200)
+        self.core._schedule_conversation_title.assert_not_called()
+        self.session.finish_transcript("user", retain=True)
+        self.session.transcript("user", " לירושלים", start=300, end=400)
+        self.session.finish_transcript("user", retain=True)
+        self.session.transcript("user", "עוד בקשה", start=4000, end=4100)
+        self.session.finish_transcript("user")
+        self.core._schedule_conversation_title.assert_called_once_with(
+            self.conversation, "תכנן טיול", "", attachment_names=[], provider_mode="local", current_model="test")
+        self.assertEqual(self.store.messages(self.conversation)[0]["content"], "תכנן טיול לירושלים")
 
     async def test_gpt_interleaved_transcripts_keep_independent_stable_ids(self):
         self.session.provider = "openai"
