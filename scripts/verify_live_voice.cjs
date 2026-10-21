@@ -10,7 +10,7 @@ const fs = require('node:fs/promises');
     throw Error('Unadapted live QA IPC: '+command);
   } });
   canary = q.handshake.canary;
-  const { page } = q, output = '.codex-local/live-round3';
+  const { page } = q, output = '.codex-local/live-round4';
   await fs.mkdir(output, { recursive: true });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource')) errors.push(message.text()); });
@@ -56,6 +56,12 @@ const fs = require('node:fs/promises');
     const spoken=page.getByText('הדיבור הזה מופיע בקצב הניגון.',{exact:true});
     await spoken.waitFor({timeout:6000});
     assert.equal(await spoken.locator('xpath=ancestor::article[contains(@class,"sds-message")]').getByRole('button',{name:'העתק',exact:true}).count(),1,'standalone spoken replies retain copy');
+    const liveSpacing=await spoken.locator('xpath=ancestor::article[contains(@class,"chat-message-row")]').evaluate(row=>{
+      const message=row.querySelector('.chat-message'), previous=row.closest('.message-design').previousElementSibling;
+      return {topMargin:parseFloat(getComputedStyle(message).marginTop),gap:row.getBoundingClientRect().top-previous.getBoundingClientRect().bottom,expectedGap:parseFloat(getComputedStyle(row.closest('.message-list')).rowGap)};
+    });
+    assert.equal(liveSpacing.topMargin,0,'screen-reader status must not add visible spacing');
+    assert(Math.abs(liveSpacing.gap-liveSpacing.expectedGap)<1,JSON.stringify(liveSpacing));
     await page.getByRole('textbox', { name: 'הודעה', exact: true }).fill('קרא את קובץ הבדיקה');
     await page.getByRole('textbox', { name: 'הודעה', exact: true }).press('Enter');
     await page.getByText('אני מפעיל את המשימה.', { exact: true }).waitFor();
@@ -90,9 +96,13 @@ const fs = require('node:fs/promises');
     while (Date.now() < until && !await page.getByText('המשימה הסתיימה. קראתי את קובץ הבדיקה והכנתי את התוצאה.', { exact: true }).count()) {
       const allow = page.getByRole('button', { name: 'אשר', exact: true });
       if (await allow.count() && await allow.first().isEnabled()) await allow.first().click();
+      const run=(await q.api('GET','/v2/runs?limit=100')).body.data.items.find(item=>item.id===worker.id);
+      if(run?.status==='completed') break;
       await page.waitForTimeout(150);
     }
-    await page.getByText('המשימה הסתיימה. קראתי את קובץ הבדיקה והכנתי את התוצאה.', { exact: true }).waitFor({ timeout: 3000 });
+    await page.waitForFunction(()=>document.querySelector('.agent-process')?.open===false);
+    assert.equal(await page.locator('.agent-process .is-shimmering').count(),0,'completion stops process shimmer before speech completes');
+    await page.getByText('המשימה הסתיימה. קראתי את קובץ הבדיקה והכנתי את התוצאה.', { exact: true }).waitFor({ timeout: 6000 });
     assert.equal(await page.locator('.agent-process').count(), 1);
     await page.locator('.message-content code').filter({ hasText: 'SMARTI_LIVE_CANARY_42' }).waitFor();
     assert.equal(await page.locator('.message-content code').filter({ hasText: 'SMARTI_LIVE_CANARY_42' }).count(), 1);
@@ -193,7 +203,7 @@ const fs = require('node:fs/promises');
     assert.equal(taskRuns.filter(run=>run.status==='completed').length,2);
     assert.equal(taskRuns.find(run=>run.id===activeBeforeClose.id).status,'cancelled');
     assert.equal(errors.length, 0, errors.join('\n'));
-    await fs.writeFile(`${output}/browser-report.json`, JSON.stringify({ scope: 'Isolated actual product UI/Core/agent/tools, deterministic provider and fake audio; no live vendor or personal microphone claim', results, settingsVisualCases:6, startupRetry:true,captionsFollowPlayback:true,captureSettings, actualPauseCheckpoint:paused, newUserAnchor:anchor, finalGap, messages: saved.length, processBlocks: process.length, errors }, null, 2));
+    await fs.writeFile(`${output}/browser-report.json`, JSON.stringify({ scope: 'Isolated actual product UI/Core/agent/tools, deterministic provider and fake audio; no live vendor or personal microphone claim', results, settingsVisualCases:6, startupRetry:true,captionsFollowPlayback:true,processCompletesBeforeSpeech:true,liveSpacing,captureSettings, actualPauseCheckpoint:paused, newUserAnchor:anchor, finalGap, messages: saved.length, processBlocks: process.length, errors }, null, 2));
     console.log('Live UI/Core: two completed tasks, cancellation after voice close, 30-second audio burst, combined final, mute and twelve visual cases passed');
   } catch (error) {
     await page.screenshot({ path: `${output}/failure.png` }).catch(() => {});

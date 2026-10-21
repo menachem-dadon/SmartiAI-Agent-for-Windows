@@ -95,6 +95,7 @@
 .live-orb-area.is-fallback .live-orb { border-radius:50%; background:radial-gradient(circle at 30% 30%,var(--sds-color-surface-muted),var(--sds-color-action)); }
 .live-answer-prefix { display:grid; gap:var(--sds-space-4); }
 .live-answer .agent-process { margin-bottom:var(--sds-space-4); }
+.is-live-message .sds-message-content>.sds-visually-hidden+.chat-message { margin-top:0; }
 @keyframes live-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .live-toggle[aria-busy="true"] .sds-icon { animation:none; } }
 @container (max-width:480px) { .composer-actions:has(.live-toggle) { grid-template-columns:1fr 40px; } .composer-actions:has(.live-toggle) .composer-controls { grid-row:2; grid-column:1 / -1; } }

@@ -20,3 +20,10 @@ test("mute displays text immediately, interruptions freeze at the heard words an
   expect(captions.present(next).content).toBe(message.content);
   expect(message.content).toContain("print(42)");
 });
+test("sub-sample clock differences cannot keep final content and actions pending",()=>{
+  const captions=new LiveCaptions();
+  const final={...message,metadata:{...message.metadata,live_audio_end_ms:3000.041666666667}};
+  captions.update(final);captions.tick(3000.041666666666);
+  expect(captions.present(final).content).toBe(message.content);
+  expect(captions.present(final).metadata?.live_partial).toBe(false);
+});

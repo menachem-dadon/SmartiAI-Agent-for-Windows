@@ -22,7 +22,9 @@ export class LiveCaptions {
       const start = Number(meta.live_audio_start_ms || 0), end = Number(meta.live_audio_end_ms || 0);
       const spoken = Number(meta.live_spoken_length ?? message.content.length);
       let length = message.content.length;
-      if (!muted && this.played < end) {
+      // Separate PCM/JS clocks can differ by a fraction of one sample. Never
+      // leave a completed reply pending forever over a sub-frame difference.
+      if (!muted && this.played + 20 < end) {
         let previousText = 0, previousTime = start;
         length = 0;
         const cues = Array.isArray(meta.live_audio_cues) ? meta.live_audio_cues as { text_end: number; audio_end_ms: number }[] : [];

@@ -16,7 +16,7 @@ export function liveTimeline(messages: ChatMessage[], runs: RunRecord[]): ChatMe
     // Once final, a later task must not drag an earlier process below its answer.
     const position = final < 0 ? visible.length : final;
     const backend = messages.find(message => message.metadata?.live_process && message.metadata?.live_task_id === taskId) || messages.find(message => message.role === "assistant" && message.metadata?.run_id === run.id);
-    const process = { live_answer_id: `live-answer:${taskId}`, run_id: run.id, agent_process: backend?.metadata?.agent_process,
+    const process = { live_answer_id: `live-answer:${taskId}`, run_id: run.id, live_run_status: run.status, agent_process: backend?.metadata?.agent_process,
       live_session_id: backend?.metadata?.live_session_id || run.metadata?.live_session_id };
     if (final >= 0) {
       visible[final] = { ...visible[final], metadata: { ...visible[final].metadata, ...process, live_answer_process: true } };

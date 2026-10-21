@@ -44,7 +44,7 @@ class VoiceSocket:
             asyncio.create_task(answer())
         for response in data.get("toolResponse", {}).get("functionResponses", []):
             if "result" in response.get("response", {}) and response.get("willContinue") is False:
-                await session.receive({"serverContent": {"outputTranscription": {"text": "המשימה הסתיימה. קראתי את קובץ הבדיקה והכנתי את התוצאה."}, "turnComplete": True}})
+                await session.receive({"serverContent": {"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":base64.b64encode(b"\0\0"*72001).decode()}}]}, "outputTranscription": {"text": "המשימה הסתיימה. קראתי את קובץ הבדיקה והכנתי את התוצאה."}, "turnComplete": True}})
 
 
 async def connect(self):

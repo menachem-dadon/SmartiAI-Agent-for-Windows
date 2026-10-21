@@ -233,6 +233,125 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.tasks[task["id"]]["run_id"], task["run_id"])
         self.runs.submit.assert_called_once()
 
+    async def test_abrupt_disconnect_resumes_same_task_without_replaying_execution(self):
+        task = self.make_task()
+        previous = self.session.ws
+        previous.receive = AsyncMock(return_value=WSMessage(WSMsgType.CLOSE, 1011, "Internal error"))
+        replacement = type(previous)()
+        reads = 0
+        async def read():
+            nonlocal reads
+            reads += 1
+            if reads == 1: return WSMessage(WSMsgType.BINARY, b'{"setupComplete":{}}', None)
+            self.session.closed_ack.set()
+            return WSMessage(WSMsgType.TEXT, '{"serverContent":{"outputTranscription":{"text":"Still here"},"turnComplete":true}}', None)
+        replacement.receive = read
+        self.session.http = SimpleNamespace(ws_connect=AsyncMock(return_value=replacement), close=AsyncMock())
+        self.session.gemini_setup = self.session.connection_setup()
+        self.session.resume_handle = "safe-resume"
+        await self.session.read_transport()
+        self.assertEqual(self.session.phase, "ready")
+        self.assertEqual(self.session.tasks[task["id"]]["run_id"], task["run_id"])
+        replay = self.session.control("start", "repeat", call_id="after-reconnect")
+        self.assertEqual(replay["id"], task["id"])
+        self.assertTrue(replay["resumed_existing"])
+        self.assertEqual(self.runs.submit.call_count, 1)
+        self.assertEqual(self.store.messages(self.conversation)[-1]["content"], "Still here")
+        self.session.tasks[task["id"]]["status"] = "completed"
+        self.assertEqual(self.session.control("start", "repeat finished work", call_id="late-replay")["id"], task["id"])
+        self.runs.submit.assert_called_once()
+        self.session.user_input_revision += 1
+        new_task = self.session.control("start", "new user request", call_id="new-request")
+        self.assertNotEqual(new_task["id"], task["id"])
+        self.assertEqual(self.runs.submit.call_count, 2)
+
+    async def test_policy_close_is_reported_with_code_and_does_not_reconnect(self):
+        self.session.ws.receive = AsyncMock(return_value=WSMessage(WSMsgType.CLOSE, 1008, "Policy violation"))
+        self.session.resume_handle = "not-for-policy-retry"
+        self.session.http = SimpleNamespace(ws_connect=AsyncMock(), close=AsyncMock())
+        with self.assertRaisesRegex(RuntimeError, "1008"):
+            await self.session.read_transport()
+        self.session.http.ws_connect.assert_not_called()
+
+    async def test_resume_preface_is_dispatched_after_writer_unlock_and_releases_old_speech(self):
+        task = self.make_task()
+        self.session.transcript("assistant", "Working on it")
+        self.session.voice_idle.clear()
+        previous = self.session.ws
+        disconnect, status_seen = asyncio.Event(), threading.Event()
+        async def old_read():
+            await disconnect.wait()
+            return WSMessage(WSMsgType.CLOSED, None, None)
+        async def old_close():
+            previous.closed = True
+            disconnect.set()
+            while not status_seen.is_set(): await asyncio.sleep(.005)
+        previous.receive, previous.close = old_read, old_close
+        replacement = type(previous)()
+        replacement.receive = AsyncMock(side_effect=[
+            WSMessage(WSMsgType.TEXT, json.dumps({"toolCall": {"functionCalls": [
+                {"id": "resumed-status", "name": "smarty_task", "args": {"action": "status", "task_id": task["id"]}}
+            ]}}), None),
+            WSMessage(WSMsgType.TEXT, '{"setupComplete":{}}', None),
+        ])
+        self.session.http = SimpleNamespace(ws_connect=AsyncMock(return_value=replacement), close=AsyncMock())
+        self.session.gemini_setup = self.session.connection_setup()
+        self.session.resume_handle = "preface-handle"
+        def snapshot():
+            status_seen.set()
+            return "full context after resumption"
+        self.session.context = snapshot
+        send = replacement.send_json
+        async def reply(data):
+            await send(data)
+            if "toolResponse" in data: self.session.closed_ack.set()
+        replacement.send_json = reply
+        reader = asyncio.create_task(self.session.read_transport())
+        await asyncio.sleep(0)  # Reader is waiting on the original socket.
+        async with self.session.send_lock:
+            await asyncio.wait_for(self.session.resume_gemini(), 1)
+        self.assertTrue(self.session.voice_idle.is_set())
+        self.assertFalse(self.store.messages(self.conversation)[-1]["metadata"]["live_partial"])
+        await asyncio.wait_for(reader, 1)
+        self.assertTrue(status_seen.is_set())
+        response = replacement.sent[-1]["toolResponse"]["functionResponses"][0]
+        self.assertEqual(response["id"], "resumed-status")
+        self.assertEqual(response["response"]["run_id"], task["run_id"])
+        self.runs.submit.assert_called_once()
+
+    async def test_resume_rejection_is_redacted_and_does_not_loop(self):
+        previous = self.session.ws
+        replacement = type(previous)()
+        self.session.connection_key = "secret-only-in-connection"
+        replacement.receive = AsyncMock(return_value=WSMessage(WSMsgType.TEXT,
+            '{"error":{"code":403,"message":"Rejected secret-only-in-connection"}}', None))
+        self.session.http = SimpleNamespace(ws_connect=AsyncMock(return_value=replacement), close=AsyncMock())
+        self.session.gemini_setup = self.session.connection_setup()
+        self.session.resume_handle = "rejected-handle"
+        with self.assertRaisesRegex(ValueError, r"Rejected \[redacted\]"):
+            await self.session.resume_gemini()
+        self.assertIs(self.session.ws, previous)
+        self.assertTrue(replacement.closed)
+        self.assertTrue(self.session.transport_ready.is_set())
+        self.session.http.ws_connect.assert_awaited_once()
+
+    async def test_status_context_does_not_block_audio_input_on_the_gateway_loop(self):
+        task = self.make_task()
+        started, release = threading.Event(), threading.Event()
+        def snapshot():
+            started.set(); release.wait(1)
+            return "complete canonical snapshot"
+        self.session.context = snapshot
+        command = asyncio.create_task(self.session.receive({"toolCall":{"functionCalls":[{"id":"status-check","name":"smarty_task","args":{"action":"status","task_id":task["id"]}}]}}))
+        while not started.is_set(): await asyncio.sleep(.005)
+        try:
+            await asyncio.wait_for(self.session.input({"sequence":0,"audio":base64.b64encode(b'\0\0'*256).decode()}),.2)
+        finally:
+            release.set()
+            await command
+        response=self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]["response"]
+        self.assertEqual(response["full_canonical_context"], "complete canonical snapshot")
+
     async def test_gpt_native_append_contract_keeps_delegation_identity(self):
         self.session.provider = "openai"
         await self.session.inject("confirmed result", delegation_id="delegate-one")

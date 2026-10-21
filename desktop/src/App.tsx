@@ -1663,9 +1663,9 @@ export default function App() {
               <footer className="sds-actions"><button ref={dialogCancel} type="button" className="sds-button" disabled={dialogBusy} onClick={() => setConversationDialog(null)}>ביטול</button><Button loading={dialogBusy} type="submit" variant={conversationDialog?.kind === "delete" ? "danger" : "primary"}>אישור</Button></footer>
             </form>
           </Dialog>
-          <div className={`chat-composer-panel${live.ready ? " has-live-orb" : ""}`}>
+          <div className={`chat-composer-panel${live.ready || live.phase === "reconnecting" ? " has-live-orb" : ""}`}>
           {scroll.hasNewContent && <button type="button" className={`chat-new-content ${activeRun ? "is-generating" : ""}`} aria-label="גלילה לסוף התשובה" onClick={scroll.follow}><span className="chat-down-arrow"><Icon name="arrow" /></span>{activeRun && <span className="chat-stream-dots" aria-hidden="true"><i/><i/><i/></span>}</button>}
-          {live.ready && <LiveOrb state={live.orbState} level={live.level} />}
+          {(live.ready || live.phase === "reconnecting") && <LiveOrb state={live.orbState} level={live.level} />}
           <Composer
             live={live}
             theme={resolved}

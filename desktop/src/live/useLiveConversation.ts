@@ -64,7 +64,7 @@ export function useLiveConversation(options: {
   const sendInput = (input: Input) => {
     const owned = session.current, revision = generation.current, order = sequence.current++;
     if (!owned) return Promise.reject(new Error("הלייב אינו פעיל"));
-    if (++queued.current > 30) { queued.current--; return Promise.reject(new Error("שליחת השמע מתעכבת; יש לחדש את הלייב")); }
+    if (++queued.current > 180) { queued.current--; return Promise.reject(new Error("שליחת השמע מתעכבת; יש לחדש את הלייב")); }
     const write = writes.current.then(async () => {
       if (revision !== generation.current) return;
       return await coreApi<Receipt>("POST", `/v2/live/sessions/${owned.id}/input`, { ...input, sequence: order });

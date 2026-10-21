@@ -45,3 +45,12 @@ test("standalone Live conversation replies keep their copy action",async()=>{
   fireEvent.click(screen.getByRole("button",{name:"העתק"}));
   await waitFor(()=>expect(writeText).toHaveBeenCalledWith("הנה סיפור"));
 });
+test("a completed task collapses and stops shimmering while its spoken final is still playing",()=>{
+  const message={role:"assistant" as const,content:"התשובה מתנגנת",metadata:{live_session_id:"live",live_answer_id:"completion-during-speech",live_partial:true,agent_process:{elapsed_seconds:4,events:[{type:"report",text:"מבצע את המשימה"}]}}};
+  const view=render(<RichMessage message={message} active runStatus="running"/>);
+  expect(view.container.querySelector<HTMLDetailsElement>(".agent-process")?.open).toBe(true);
+  view.rerender(<RichMessage message={message} active runStatus="completed"/>);
+  expect(view.container.querySelector<HTMLDetailsElement>(".agent-process")?.open).toBe(false);
+  expect(view.container.querySelector(".agent-process .is-shimmering")).toBeNull();
+  expect(screen.getByText(/סמארטי עבד/)).toBeTruthy();
+});
