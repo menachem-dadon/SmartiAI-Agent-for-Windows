@@ -39,3 +39,9 @@ test("the final Live copy excludes the introduction and retains code, table and 
   await waitFor(()=>expect(writeText).toHaveBeenCalledWith(final));
   expect(screen.queryByRole("button",{name:"השהה משימה"})).toBeNull();
 });
+test("standalone Live conversation replies keep their copy action",async()=>{
+  const writeText=vi.fn(async()=>{});Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText}});
+  render(<RichMessage message={{role:"assistant",content:"הנה סיפור",metadata:{live_session_id:"live",live_final:false,live_partial:false}}}/>);
+  fireEvent.click(screen.getByRole("button",{name:"העתק"}));
+  await waitFor(()=>expect(writeText).toHaveBeenCalledWith("הנה סיפור"));
+});

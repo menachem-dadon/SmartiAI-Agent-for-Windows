@@ -173,14 +173,16 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_language_is_snapshotted_and_uses_provider_native_contract(self):
         setup = self.session.connection_setup()["setup"]
-        self.assertEqual(setup["inputAudioTranscription"], {"languageCodes": ["he-IL"]})
+        self.assertEqual(setup["inputAudioTranscription"], {"languageCodes": ["he-IL"], "wordTimestamp": True})
         self.assertNotIn("languageCode", setup["generationConfig"]["speechConfig"])
         vad = setup["realtimeInputConfig"]["automaticActivityDetection"]
         self.assertEqual(vad["endOfSpeechSensitivity"], "END_SENSITIVITY_LOW")
         self.assertEqual(vad["silenceDurationMs"],1200)
+        self.assertEqual(vad["startOfSpeechSensitivity"], "START_SENSITIVITY_LOW")
+        self.assertEqual(vad["prefixPaddingMs"], 300)
         self.assertIn("Hebrew", setup["systemInstruction"]["parts"][0]["text"])
         self.settings["live_language"] = "en"
-        self.assertEqual(self.session.connection_setup()["setup"]["inputAudioTranscription"], {"languageCodes": ["he-IL"]})
+        self.assertEqual(self.session.connection_setup()["setup"]["inputAudioTranscription"], {"languageCodes": ["he-IL"], "wordTimestamp": True})
         other = LiveSession(self.manager, self.conversation, "openai", {}, [])
         try:
             config = other.connection_setup()["session"]
@@ -191,7 +193,7 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.settings["live_language"] = "auto"
         other = LiveSession(self.manager, self.conversation, "gemini", {}, [])
         try:
-            self.assertEqual(other.connection_setup()["setup"]["inputAudioTranscription"], {})
+            self.assertEqual(other.connection_setup()["setup"]["inputAudioTranscription"], {"wordTimestamp": True})
             self.assertNotIn("default language of the user's microphone", other.instructions)
         finally:
             await other.close()
@@ -260,6 +262,32 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.messages(self.conversation)[0]["message_id"], identity)
         self.session.transcript("user", "Another turn", start=4000, end=4100)
         self.assertEqual(len(self.store.messages(self.conversation)), 3)
+
+    async def test_interim_input_updates_one_bubble_and_final_does_not_repeat_it(self):
+        for text in ("אני רו", "אני רוצה"):
+            await self.session.receive({"serverContent": {"interimInputTranscription": {"text": text, "startOffset": ".2s", "endOffset": "1s"}}})
+        before = self.store.messages(self.conversation)
+        self.assertEqual(len(before), 1)
+        self.assertEqual(before[0]["content"], "אני רוצה")
+        await self.session.receive({"serverContent": {"inputTranscription": {"text": "אני רוצה סיפור", "startOffset": ".2s", "endOffset": "2.1s"}}})
+        self.session.finish_transcript("user")
+        after = self.store.messages(self.conversation)
+        self.assertEqual(after[0]["message_id"], before[0]["message_id"])
+        self.assertEqual(after[0]["content"], "אני רוצה סיפור")
+        self.assertEqual(after[0]["metadata"]["start_ms"], 200)
+        self.assertEqual(after[0]["metadata"]["end_ms"], 2100)
+
+    async def test_captions_carry_audio_clock_cues_independent_of_packet_arrival(self):
+        pcm = base64.b64encode(b"\0\0" * 24000).decode()
+        await self.session.receive({"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": pcm}}]}, "outputTranscription": {"text": "שלום "}}})
+        await self.session.receive({"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": pcm}}]}, "outputTranscription": {"text": "לך"}, "turnComplete": True}})
+        first = self.store.messages(self.conversation)[0]["metadata"]
+        self.assertEqual(first["live_audio_start_ms"], 0)
+        self.assertEqual(first["live_audio_end_ms"], 2000)
+        self.assertEqual(first["live_audio_cues"], [{"text_end": 5, "audio_end_ms": 1000}, {"text_end": 7, "audio_end_ms": 2000}])
+        self.assertEqual(first["live_spoken_length"], 7)
+        self.session.transcript("assistant", "תשובה נוספת")
+        self.assertEqual(self.store.messages(self.conversation)[1]["metadata"]["live_audio_start_ms"], 2000)
 
     async def test_tool_replay_executes_once_and_approval_is_not_a_live_tool(self):
         self.session.transcript("user", "read the file"); self.session.finish_transcript("user")

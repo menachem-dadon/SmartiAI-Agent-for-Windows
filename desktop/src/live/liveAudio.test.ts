@@ -4,8 +4,10 @@ import { LiveAudio } from "./liveAudio";
 afterEach(() => vi.unstubAllGlobals());
 test("meters reflect actual playback, keep sampling muted input, and release all resources", async () => {
   let frame: FrameRequestCallback = () => {}, userLevel = .02, outputLevel = 0;
+  let capture: { onaudioprocess?: (event: any) => void } = {};
   const disconnect = vi.fn(), stop = vi.fn(), close = vi.fn(async () => {});
-  const track = { enabled: true, stop };
+  const applyConstraints=vi.fn(async()=>{}), getUserMedia=vi.fn(async()=>({getTracks:()=>[track],getAudioTracks:()=>[track]}));
+  const track = { enabled: true, stop, getCapabilities:()=>({echoCancellation:[true,"all"]}), applyConstraints };
   const node = () => ({ connect: vi.fn(), disconnect, gain: { value: 1 } });
   let meters = 0;
   vi.stubGlobal("AudioContext", class {
@@ -19,20 +21,25 @@ test("meters reflect actual playback, keep sampling muted input, and release all
       return { ...node(), fftSize: 1024, getFloatTimeDomainData: (samples: Float32Array) => samples.fill(output ? outputLevel : userLevel) };
     }
     createMediaStreamSource = node;
-    createScriptProcessor = node;
+    createScriptProcessor = () => { capture={...node(),onaudioprocess:undefined};return capture; };
     createBuffer = (_channels: number, length: number, rate: number) => ({ duration: length / rate, getChannelData: () => new Float32Array(length) });
     createBufferSource = () => ({ ...node(), start: vi.fn(), stop: vi.fn() });
   });
-  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) } });
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frame = callback; return 1; });
   const cancel = vi.fn(); vi.stubGlobal("cancelAnimationFrame", cancel);
-  const levels = vi.fn(), audio = new LiveAudio(vi.fn(), levels);
+  const levels = vi.fn(), send=vi.fn(), audio = new LiveAudio(send, levels);
   await audio.prepare(); audio.begin(); frame(0);
+  expect(getUserMedia).toHaveBeenCalledWith({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:false}});
+  expect(applyConstraints).toHaveBeenCalledWith({echoCancellation:{exact:"all"}});
   expect(levels.mock.lastCall?.[0]).toBeCloseTo(.02);
   audio.play(btoa("\0\0".repeat(2400)));
   frame(16); expect(levels.mock.lastCall?.[1]).toBe(0); // queued, not yet heard
   outputLevel = .08;
   frame(32); expect(levels.mock.lastCall?.[1]).toBeCloseTo(.08);
+  capture.onaudioprocess?.({inputBuffer:{sampleRate:24000,getChannelData:()=>new Float32Array(2048).fill(.0003)}});
+  expect([...atob(send.mock.lastCall![0])].every(value=>value.charCodeAt(0)===0)).toBe(true);
+  frame(40);expect(levels.mock.lastCall?.[0]).toBe(0);
   audio.muteMic(true); frame(48);
   expect(track.enabled).toBe(false); expect(levels.mock.lastCall?.[0]).toBe(0);
   audio.muteOutput(true); frame(64); expect(levels.mock.lastCall?.[1]).toBe(0);
@@ -61,9 +68,11 @@ test("bursty replies longer than eight seconds drain in order through a short sc
     expect(audio.play(encoded)).toBe(true);
   }
   expect(sources.length).toBeLessThan(5);
+  expect(audio.receivedMs).toBeCloseTo(20000);expect(audio.playedMs).toBe(0);
   let ended=0;
   while(ended<sources.length){const source=sources[ended++];clock+=source.buffer!.duration;source.onended!();}
   expect(values.length).toBe(100);
+  expect(audio.playedMs).toBeCloseTo(20000);
   expect(values.map(value=>Math.round(value*32768))).toEqual(Array.from({length:20},(_,i)=>Array(5).fill((i+1)*100)).flat());
   // A pathological backlog is recovered locally and never throws or closes audio.
   const huge=btoa("\0\0".repeat(24000*121));

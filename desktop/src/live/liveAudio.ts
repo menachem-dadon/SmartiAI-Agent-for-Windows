@@ -1,3 +1,4 @@
+import { LiveCaptureFilter } from "./liveCapture";
 /** PCM transport, bounded queues, echo cancellation and deterministic disposal. */
 export class LiveAudio {
   private context: AudioContext | null = null;
@@ -16,7 +17,20 @@ export class LiveAudio {
   private muted = false;
   private disposed = false;
   private outputMuted = false;
-  constructor(private onAudio: (audio: string) => void, private onLevels: (user: number, smarty: number) => void) {}
+  private captureFilter = new LiveCaptureFilter();
+  private acceptedInputLevel: number | null = null;
+  private received = 0;
+  private played = 0;
+  private scheduled = new Map<AudioBufferSourceNode, { start: number; duration: number; position: number }>();
+  get receivedMs() { return this.received * 1000; }
+  get playedMs() {
+    let position = this.played;
+    for (const item of this.scheduled.values()) if ((this.context?.currentTime || 0) >= item.start)
+      position = Math.max(position, item.position + Math.min(item.duration, (this.context?.currentTime || 0) - item.start));
+    return position * 1000;
+  }
+  constructor(private onAudio: (audio: string) => void, private onLevels: (user: number, smarty: number) => void,
+    private onPlayback: (playedMs: number) => void = () => {}) {}
   async prepare() {
     // Called synchronously from the user's click, before the first network await.
     this.context = new AudioContext({ sampleRate: 24000 });
@@ -25,9 +39,15 @@ export class LiveAudio {
     this.output.connect(this.outputMeter); this.outputMeter.connect(this.context.destination);
     this.context.addEventListener("statechange", this.pump);
     await this.context.resume();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
     if (this.disposed) { stream.getTracks().forEach(track => track.stop()); return; }
     this.stream = stream;
+    const track = stream.getAudioTracks()[0];
+    const modes = track?.getCapabilities?.().echoCancellation as unknown[] | undefined;
+    if (modes?.includes("all")) {
+      try { await track.applyConstraints({ echoCancellation: { exact: "all" } as unknown as ConstrainBoolean }); }
+      catch { /* Keep the already enabled, supported boolean AEC. */ }
+    }
   }
   begin() {
     if (this.disposed || !this.context || !this.stream) return;
@@ -39,7 +59,9 @@ export class LiveAudio {
     this.silent = this.context.createGain(); this.silent.gain.value = 0;
     this.capture.onaudioprocess = event => {
       if (this.muted || this.disposed) return;
-      const input = event.inputBuffer.getChannelData(0), ratio = event.inputBuffer.sampleRate / 24000;
+      const raw = event.inputBuffer.getChannelData(0), ratio = event.inputBuffer.sampleRate / 24000;
+      const input = this.captureFilter.filter(raw, event.inputBuffer.sampleRate, this.context?.currentTime || 0);
+      this.acceptedInputLevel = Math.sqrt(input.reduce((sum, value) => sum + value * value, 0) / input.length);
       const pcm = new Int16Array(Math.floor(input.length / ratio));
       for (let index = 0; index < pcm.length; index++) {
         const sample = Math.max(-1, Math.min(1, input[Math.floor(index * ratio)]));
@@ -59,18 +81,21 @@ export class LiveAudio {
       if (this.disposed) return;
       // Read actual playback, not one average per received audio chunk. Queued
       // audio must not animate the orb before it reaches the speakers.
-      this.onLevels(this.muted ? 0 : rms(this.userMeter), this.outputMuted || !this.playing.size ? 0 : rms(this.outputMeter));
+      this.onLevels(this.muted ? 0 : this.acceptedInputLevel ?? rms(this.userMeter), this.outputMuted || !this.playing.size ? 0 : rms(this.outputMeter));
+      this.onPlayback(this.playedMs);
       this.meterFrame = requestAnimationFrame(measure);
     };
     this.meterFrame = requestAnimationFrame(measure);
   }
   play(encoded: string, rate = 24000) {
     const context = this.context;
-    if (!context || this.disposed || this.outputMuted) return true;
+    if (!context || this.disposed) return true;
     const binary = atob(encoded), bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
     if (bytes.length % 2) throw new Error("מקטע שמע לא תקין מהספק");
     if (!Number.isFinite(rate) || rate < 8000 || rate > 48000) throw new Error("קצב שמע לא תקין מהספק");
     const pcm = new Int16Array(bytes.buffer);
+    this.received += pcm.length / rate;
+    if (this.outputMuted) { this.played = this.received; this.onPlayback(this.playedMs); return true; }
     // Native audio can arrive much faster than playback. Keep PCM bounded in
     // memory and schedule only a short horizon, without closing the Live session.
     if (this.queuedSeconds + pcm.length / rate + Math.max(0, this.nextTime - context.currentTime) > 120) {
@@ -92,7 +117,10 @@ export class LiveAudio {
       const source = context.createBufferSource(); source.buffer = buffer; source.connect(this.output!);
       const start = Math.max(context.currentTime + .015, this.nextTime);
       this.nextTime = start + buffer.duration; this.playing.add(source);
-      source.onended = () => { source.disconnect(); this.playing.delete(source); this.pump(); };
+      const position = this.received - this.queuedSeconds - buffer.duration;
+      this.scheduled.set(source, { start, duration: buffer.duration, position });
+      this.captureFilter.record(samples, head.rate, start);
+      source.onended = () => { this.played = Math.max(this.played, position + buffer.duration); source.disconnect(); this.playing.delete(source); this.scheduled.delete(source); this.pump(); this.onPlayback(this.playedMs); };
       source.start(start);
     }
   };
@@ -100,7 +128,7 @@ export class LiveAudio {
     this.muted = muted; this.stream?.getAudioTracks().forEach(track => { track.enabled = !muted; });
   }
   muteOutput(muted: boolean) { this.outputMuted = muted; if (this.output) this.output.gain.value = muted ? 0 : 1; if (muted) this.interrupt(); }
-  interrupt() { this.pending = []; this.queuedSeconds = 0; for (const source of this.playing) { try { source.stop(); } catch { /* already ended */ } } this.playing.clear(); this.nextTime = 0; }
+  interrupt() { this.pending = []; this.queuedSeconds = 0; this.captureFilter.truncate(this.context?.currentTime || 0); for (const source of this.playing) { source.onended = null; source.disconnect(); try { source.stop(); } catch { /* already ended */ } } this.playing.clear(); this.scheduled.clear(); this.played = this.received; this.nextTime = 0; }
   dispose() {
     if (this.disposed) return;
     this.disposed = true; this.interrupt();

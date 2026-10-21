@@ -5,6 +5,7 @@ import { setLiveSpeechSuspended } from "../speechPlayback";
 import type { ChatMessage, PendingAttachment } from "../chatTypes";
 import { LiveAudio } from "./liveAudio";
 import { LiveActivity } from "./liveActivity";
+import { LiveCaptions } from "./liveCaptions";
 import type { OrbState } from "./SmartyLiveOrb";
 
 export type LiveProvider = { id: string; label: string; model: string; voices: string[]; voice: string; configured: boolean; inherited: boolean; masked: string };
@@ -17,6 +18,7 @@ type Input = { audio?: string; text?: string; attachment_handles?: string[]; mic
 export type LiveController = ReturnType<typeof useLiveConversation>;
 
 export function useLiveConversation(options: {
+  coreReady: boolean; coreGeneration: number;
   conversation: string; provider: string; model: string; attachments: PendingAttachment[];
   onConversation: (id: string) => void; onMessage: (message: ChatMessage) => void;
   onNewUserMessage: (id: string) => void;
@@ -29,6 +31,8 @@ export function useLiveConversation(options: {
   const [orbState, setOrbState] = useState<OrbState>("idle");
   const [tasks, setTasks] = useState<LiveTask[]>([]);
   const level = useRef(0);
+  const captions = useRef(new LiveCaptions());
+  const [, redrawCaptions] = useState(0);
   const session = useRef<Session | null>(null), generation = useRef(0), audio = useRef<LiveAudio | null>(null);
   const sequence = useRef(0), writes = useRef(Promise.resolve()), queued = useRef(0), starting = useRef(false);
   const mounted = useRef(true);
@@ -36,8 +40,23 @@ export function useLiveConversation(options: {
   const admissions = useRef(new Map<string, { resolve: () => void; reject: (error: Error) => void }>());
   const admitted = useRef(new Map<string, string>());
   useEffect(() => { setLiveSpeechSuspended(phase !== "closed"); return () => setLiveSpeechSuspended(false); }, [phase]);
-  const refresh = () => { void coreApi<LiveConfig>("GET", "/v2/live/config").then(value => { if (mounted.current) setConfig(value); }).catch(() => undefined); };
-  useEffect(() => { mounted.current = true; refresh(); const unsubscribe = subscribeSettingsChanges(refresh); return () => { mounted.current = false; unsubscribe(); void stop(); }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; void stop(); }; }, []);
+  useEffect(() => {
+    if (!options.coreReady) { setConfig(null); return; }
+    let alive = true, revision = 0, attempts = 0, timer = 0;
+    const refresh = async () => {
+      const request = ++revision; window.clearTimeout(timer);
+      try {
+        const value = await coreApi<LiveConfig>("GET", "/v2/live/config");
+        if (alive && request === revision) { attempts = 0; setConfig(value); }
+      } catch {
+        if (alive && request === revision) timer = window.setTimeout(refresh, Math.min(10000, 500 * 2 ** Math.min(attempts++, 5)));
+      }
+    };
+    void refresh();
+    const unsubscribe = subscribeSettingsChanges(() => { attempts = 0; void refresh(); });
+    return () => { alive = false; revision++; window.clearTimeout(timer); unsubscribe(); };
+  }, [options.coreReady, options.coreGeneration]);
   useEffect(() => {
     if ((session.current && options.conversation !== session.current.conversation_id) ||
         (starting.current && !session.current && options.conversation !== startupOwner.current)) void stop();
@@ -59,6 +78,7 @@ export function useLiveConversation(options: {
     for (const pending of admissions.current.values()) pending.reject(new Error("הלייב נסגר לפני שההודעה עם הקבצים אושרה"));
     admissions.current.clear(); admitted.current.clear();
     audio.current?.dispose(); audio.current = null; level.current = 0;
+    captions.current = new LiveCaptions();
     if (mounted.current) { setPhase("closed"); setOrbState("idle"); setTasks([]); }
     if (owned) {
       try { await coreApi("POST", `/v2/live/sessions/${owned.id}/stop`, {}); }
@@ -82,13 +102,14 @@ export function useLiveConversation(options: {
     const requested = { ...current.current, attachments: [...current.current.attachments] };
     startupOwner.current = requested.conversation;
     setPhase("starting"); setMicMuted(false); setOutputMuted(false); taskBusy.current = false;
+    captions.current = new LiveCaptions();
     const activity = new LiveActivity(), seenUsers = new Set<string>();
     const engine = new LiveAudio(value => { void sendInput({ audio: value }).catch(error => { if (generation.current === revision) fail(error); }); }, (user, smarty) => {
       if (generation.current !== revision) return;
       const sample = activity.sample(user, smarty, performance.now(), taskBusy.current);
       level.current = sample.level;
       setOrbState(previous => previous === sample.state ? previous : sample.state);
-    });
+    }, playedMs => { if (generation.current === revision && captions.current.tick(playedMs)) redrawCaptions(value => value + 1); });
     audio.current = engine;
     try {
       await engine.prepare();
@@ -112,7 +133,9 @@ export function useLiveConversation(options: {
         taskBusy.current = page.tasks.some(task => !task.pause_requested && ["queued", "running", "waiting_for_approval", "waiting_for_input"].includes(task.status));
         for (const event of page.events) {
           if (event.type === "message" && event.message && typeof event.message !== "string") {
-            const message = event.message, id = String(message.metadata?.live_message_id || message.message_id || "");
+            const message: ChatMessage = { ...event.message, metadata: { ...event.message.metadata, live_reveal: true } };
+            const id = String(message.metadata?.live_message_id || message.message_id || "");
+            captions.current.update(message); captions.current.tick(engine.playedMs);
             current.current.onMessage(message);
             if (message.role === "user" && id && !seenUsers.has(id)) {
               seenUsers.add(id); current.current.onNewUserMessage(id);
@@ -120,7 +143,7 @@ export function useLiveConversation(options: {
           }
           if (event.type === "notice" && typeof event.message === "string") current.current.onError(event.message);
           if (event.type === "audio" && event.audio && !engine.play(event.audio, event.rate)) current.current.onError("נוקה תור שמע שהתארך באופן חריג. השיחה והמשימה ממשיכות; התמלול המלא זמין בצ׳אט.");
-          if (event.type === "interrupt") engine.interrupt();
+          if (event.type === "interrupt") { captions.current.interrupt(engine.playedMs); engine.interrupt(); redrawCaptions(value => value + 1); }
           if (event.type === "input_accepted" && event.admission_id) {
             const pending = admissions.current.get(event.admission_id);
             if (pending) { admissions.current.delete(event.admission_id); if (event.error) pending.reject(new Error(event.error)); else pending.resolve(); }
@@ -139,7 +162,7 @@ export function useLiveConversation(options: {
     audio.current?.muteMic(next); setMicMuted(next);
     try { await sendInput({ mic_muted: next }); } catch (error) { if (generation.current === revision) fail(error); }
   };
-  const toggleOutput = () => { const next = !outputMuted; setOutputMuted(next); audio.current?.muteOutput(next); };
+  const toggleOutput = () => { const next = !outputMuted; setOutputMuted(next); audio.current?.muteOutput(next); captions.current.tick(audio.current?.playedMs || 0, next); redrawCaptions(value => value + 1); };
   const send = async (text: string, attachments: PendingAttachment[]) => {
     const owned = session.current;
     if (!owned || phase !== "ready") throw new Error("יש להמתין להכנת מנוע הלייב");
@@ -156,5 +179,6 @@ export function useLiveConversation(options: {
     catch (error) { current.current.onError(String(error)); }
   };
   return { available: Boolean(config?.available), active: phase !== "closed", ready: phase === "ready", phase,
-    micMuted, outputMuted, orbState, level, tasks, start, stop, toggleMic, toggleOutput, send, control };
+    micMuted, outputMuted, orbState, level, tasks, start, stop, toggleMic, toggleOutput, send, control,
+    present: (message: ChatMessage) => captions.current.present(message) };
 }

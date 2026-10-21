@@ -271,6 +271,7 @@ export const RichMessage = memo(function RichMessage({
   stream,
   pauseRequested = false,
   paused = false,
+  hideActions = false,
 }: {
   message: ChatMessage;
   events?: RunEvent[];
@@ -284,6 +285,7 @@ export const RichMessage = memo(function RichMessage({
   stream?: StreamState;
   pauseRequested?: boolean;
   paused?: boolean;
+  hideActions?: boolean;
 }) {
   const messageId = `${message.role}:${message.metadata?.live_answer_id || message.metadata?.live_message_id || message.metadata?.run_id || message.message_id || `${message.created_at || ""}:${contentIdentity(message.content)}`}`;
   const preferencesKey = `smarti.chat.disclosures:${messageId}`;
@@ -306,8 +308,8 @@ export const RichMessage = memo(function RichMessage({
   const [linkError, setLinkError] = useState("");
   const contentRef = useRef<HTMLDivElement>(null);
   const markdown = prepareMessageMarkdown(message.content);
-  const revealed = useRef<{ text: string; ranges: RevealRange[] }>({ text: markdown, ranges: [] });
-  if (active && markdown !== revealed.current.text) {
+  const revealed = useRef<{ text: string; ranges: RevealRange[] }>({ text: message.metadata?.live_partial || message.metadata?.live_reveal ? "" : markdown, ranges: [] });
+  if ((active || message.metadata?.live_reveal) && markdown !== revealed.current.text) {
     const previous = revealed.current.text;
     revealed.current = { text: markdown, ranges: markdown.startsWith(previous)
       ? [...revealed.current.ranges, revealRange(previous.length, markdown.length, revealed.current.ranges.slice(-1)[0])].slice(-48)
@@ -421,8 +423,7 @@ export const RichMessage = memo(function RichMessage({
         )
       : [];
   const actionsAvailable =
-    !active && Boolean(message.content.trim()) &&
-    !(message.role === "assistant" && message.metadata?.live_session_id && !message.metadata.live_final) &&
+    !hideActions && !active && Boolean(message.content.trim()) &&
     (message.role !== "assistant" || (!isError && (!(runStatus || message.metadata?.run_status) || (runStatus || message.metadata?.run_status) === "completed")));
   const openLink = useCallback(async (href: string) => {
     setLinkError("");
@@ -473,7 +474,7 @@ export const RichMessage = memo(function RichMessage({
             <div ref={contentRef} className="message-content-body">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
-                rehypePlugins={active ? [[streamReveal, { ranges: revealed.current.ranges }]] : []}
+                rehypePlugins={active || revealed.current.ranges.length ? [[streamReveal, { ranges: revealed.current.ranges }]] : []}
                 urlTransform={safeChatHref}
                 components={markdownComponents}
               >
@@ -553,7 +554,7 @@ export const RichMessage = memo(function RichMessage({
         </div>
       )}>
       {Array.isArray(message.metadata?.live_prefix) && message.metadata.live_prefix.length > 0 && <div className="live-answer-prefix">
-        {(message.metadata.live_prefix as ChatMessage[]).map(prefix => <RichMessage key={String(prefix.metadata?.live_message_id || prefix.message_id)} message={prefix} active={Boolean(prefix.metadata?.live_partial)} theme={theme} onOpenCanvas={onOpenCanvas} />)}
+        {(message.metadata.live_prefix as ChatMessage[]).map(prefix => <RichMessage key={String(prefix.metadata?.live_message_id || prefix.message_id)} message={prefix} hideActions active={Boolean(prefix.metadata?.live_partial)} theme={theme} onOpenCanvas={onOpenCanvas} />)}
       </div>}
       {!!rows.length && (
         <details

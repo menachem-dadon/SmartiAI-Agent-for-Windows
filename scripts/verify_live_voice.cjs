@@ -10,15 +10,23 @@ const fs = require('node:fs/promises');
     throw Error('Unadapted live QA IPC: '+command);
   } });
   canary = q.handshake.canary;
-  const { page } = q, output = '.codex-local/live-round2';
+  const { page } = q, output = '.codex-local/live-round3';
   await fs.mkdir(output, { recursive: true });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !message.text().startsWith('Failed to load resource')) errors.push(message.text()); });
   const results = [];
   try {
     await page.addInitScript(() => { const capture = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices); window.__liveQaTracks = []; navigator.mediaDevices.getUserMedia = async options => { const stream = await capture(options); window.__liveQaTracks.push(...stream.getTracks()); return stream; }; });
+    await page.addInitScript(()=>{
+      const invoke=window.__TAURI_INTERNALS__.invoke;window.__liveConfigFailures=0;
+      window.__TAURI_INTERNALS__.invoke=(command,args)=>{
+        if(command==='core_api' && args?.request?.path==='/v2/live/config' && !window.__liveConfigFailures++) return Promise.reject(new Error('Core still starting'));
+        return invoke(command,args);
+      };
+    });
     await page.goto('http://127.0.0.1:1456');
     await page.getByRole('button', { name: 'פתיחת לייב', exact: true }).waitFor();
+    assert((await page.evaluate(()=>window.__liveConfigFailures))>=2,'Live configuration retries without toggling settings');
     const centered = async () => page.locator('.live-toggle').evaluate(button => {
       const b = button.getBoundingClientRect(), i = button.querySelector('.sds-icon').getBoundingClientRect();
       return Math.abs((b.left + b.right - i.left - i.right) / 2) < .6 && Math.abs((b.top + b.bottom - i.top - i.bottom) / 2) < .6;
@@ -39,6 +47,15 @@ const fs = require('node:fs/promises');
     assert(await page.locator('.live-orb-area [role="status"]').evaluate(node => node.getBoundingClientRect().width <= 1 && getComputedStyle(node).clipPath === 'inset(50%)'), 'orb caption visually hidden');
     assert.equal((await q.api('POST', '/v2/audio/tts', { text: 'legacy TTS must be suspended', owner_id: 'qa' })).status, 503);
     assert.equal(await page.getByRole('button', { name: 'הכתבה קולית', exact: true }).isVisible(), false);
+    const captureSettings=await page.evaluate(()=>{const {echoCancellation,noiseSuppression,autoGainControl}=window.__liveQaTracks[0].getSettings();return {echoCancellation,noiseSuppression,autoGainControl};});
+    assert.equal(captureSettings.autoGainControl,false);
+    await page.getByRole('textbox',{name:'הודעה',exact:true}).fill('בדיקת תזמון');
+    await page.getByRole('button',{name:'שליחה',exact:true}).click();
+    await page.waitForTimeout(400);
+    assert.equal(await page.getByText('הדיבור הזה מופיע בקצב הניגון.',{exact:true}).count(),0,'captions must not race ahead of three seconds of audio');
+    const spoken=page.getByText('הדיבור הזה מופיע בקצב הניגון.',{exact:true});
+    await spoken.waitFor({timeout:6000});
+    assert.equal(await spoken.locator('xpath=ancestor::article[contains(@class,"sds-message")]').getByRole('button',{name:'העתק',exact:true}).count(),1,'standalone spoken replies retain copy');
     await page.getByRole('textbox', { name: 'הודעה', exact: true }).fill('קרא את קובץ הבדיקה');
     await page.getByRole('textbox', { name: 'הודעה', exact: true }).press('Enter');
     await page.getByText('אני מפעיל את המשימה.', { exact: true }).waitFor();
@@ -176,7 +193,7 @@ const fs = require('node:fs/promises');
     assert.equal(taskRuns.filter(run=>run.status==='completed').length,2);
     assert.equal(taskRuns.find(run=>run.id===activeBeforeClose.id).status,'cancelled');
     assert.equal(errors.length, 0, errors.join('\n'));
-    await fs.writeFile(`${output}/browser-report.json`, JSON.stringify({ scope: 'Isolated actual product UI/Core/agent/tools, deterministic provider and fake audio; no live vendor or personal microphone claim', results, settingsVisualCases:6, actualPauseCheckpoint:paused, newUserAnchor:anchor, finalGap, messages: saved.length, processBlocks: process.length, errors }, null, 2));
+    await fs.writeFile(`${output}/browser-report.json`, JSON.stringify({ scope: 'Isolated actual product UI/Core/agent/tools, deterministic provider and fake audio; no live vendor or personal microphone claim', results, settingsVisualCases:6, startupRetry:true,captionsFollowPlayback:true,captureSettings, actualPauseCheckpoint:paused, newUserAnchor:anchor, finalGap, messages: saved.length, processBlocks: process.length, errors }, null, 2));
     console.log('Live UI/Core: two completed tasks, cancellation after voice close, 30-second audio burst, combined final, mute and twelve visual cases passed');
   } catch (error) {
     await page.screenshot({ path: `${output}/failure.png` }).catch(() => {});

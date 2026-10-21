@@ -933,14 +933,14 @@ export default function App() {
   const displayRun = activeRun || terminalReply;
   const activeAssistantRecorded = Boolean(displayRun && messages.some(message =>
     message.role === "assistant" && message.metadata?.run_id === displayRun.id));
-  const live = useLiveConversation({ conversation: activeId, provider, model, attachments,
+  const live = useLiveConversation({ coreReady: healthOkay && bootstrapReady, coreGeneration: core.generation, conversation: activeId, provider, model, attachments,
     onConversation: id => setActiveId(id),
     onMessage: message => setMessages(current => mergeMessages(current, [message])),
     onNewUserMessage: setNewUserRun,
     onRefresh: () => { void refreshLists(); if (activeIdRef.current) void loadMessages(activeIdRef.current); },
     onError: setError,
   });
-  const timeline = liveTimeline([...messages, ...(displayRun && !activeAssistantRecorded && !displayRun.metadata?.live_task_id
+  const timeline = liveTimeline([...messages.map(live.present), ...(displayRun && !activeAssistantRecorded && !displayRun.metadata?.live_task_id
     ? [{ role: "assistant" as const, content: streamAnswer(streams[displayRun.id] || displayRun.metadata?.stream) || displayRun.response_text || "", metadata: { run_id: displayRun.id, user_language: displayRun.metadata?.user_language, is_error: displayRun.status === "failed" } }] : [])], runs.filter(run => run.session_id === activeId));
 
   const createConversation = async () => {

@@ -29,6 +29,9 @@ class VoiceSocket:
         if text.startswith("New user message"):
             request = text.split("\n", 2)[1]
             async def answer():
+                if "בדיקת תזמון" in request:
+                    await session.receive({"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":base64.b64encode(b"\0\0" * 72000).decode()}}]},"outputTranscription":{"text":"הדיבור הזה מופיע בקצב הניגון."},"turnComplete":True}})
+                    return
                 if "בדיקת שמע ארוך" in request:
                     for _ in range(3):
                         await session.receive({"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":base64.b64encode(b"\0\0" * 240000).decode()}}]}}})

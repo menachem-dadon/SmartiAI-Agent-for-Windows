@@ -211,6 +211,7 @@ class LiveSession:
         self.recent_transcripts, self.transcript_timers = {}, {}
         self.active_task, self.final_task = "", ""
         self.user_input_revision = 0
+        self.output_audio_ms = self.output_turn_start_ms = 0
         self.mic_muted = False
         self.subscription = self.core.run_manager.subscribe(self.on_run_event)
         self.forward = asyncio.Queue(maxsize=128)
@@ -370,10 +371,10 @@ class LiveSession:
             "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": self.voice()}}}},
             "systemInstruction": {"parts": [{"text": self.instructions}]},
             "tools": [{"functionDeclarations": [CONTROL_DECLARATION]}],
-            "inputAudioTranscription": {"languageCodes": [{"he": "he-IL", "en": "en-US"}[self.language]]} if self.language in ("he", "en") else {},
-            "outputAudioTranscription": {}, "sessionResumption": {}, "contextWindowCompression": {"slidingWindow": {}},
-            "realtimeInputConfig": {"automaticActivityDetection": {"startOfSpeechSensitivity": "START_SENSITIVITY_HIGH",
-                "endOfSpeechSensitivity": "END_SENSITIVITY_LOW", "prefixPaddingMs": 200, "silenceDurationMs": 1200}}}}
+            "inputAudioTranscription": {"wordTimestamp": True, **({"languageCodes": [{"he": "he-IL", "en": "en-US"}[self.language]]} if self.language in ("he", "en") else {})},
+            "outputAudioTranscription": {"wordTimestamp": True}, "sessionResumption": {}, "contextWindowCompression": {"slidingWindow": {}},
+            "realtimeInputConfig": {"automaticActivityDetection": {"startOfSpeechSensitivity": "START_SENSITIVITY_LOW",
+                "endOfSpeechSensitivity": "END_SENSITIVITY_LOW", "prefixPaddingMs": 300, "silenceDurationMs": 1200}}}}
 
     async def connect(self):
         try:
@@ -465,7 +466,7 @@ class LiveSession:
                 raise ValueError(error or "לא ניתן לקרוא את התמונה")
             await self.send({"clientContent": {"turns": [{"role": "user", "parts": [{"inlineData": {"mimeType": mime or "image/png", "data": base64.b64encode(raw).decode()}}]}], "turnComplete": False}})
 
-    def transcript(self, role, delta, *, start=None, end=None):
+    def transcript(self, role, delta, *, start=None, end=None, interim=False):
         if not delta:
             return
         if role == "user": self.user_input_revision += 1
@@ -481,9 +482,16 @@ class LiveSession:
             self.finish_transcript(role)
             current = None
         if not current:
-            current = {"id": uuid.uuid4().hex, "text": "", "role": role, "task": self.final_task if role == "assistant" else ""}
+            current = {"id": uuid.uuid4().hex, "text": "", "role": role, "task": self.final_task if role == "assistant" else "",
+                       "audio_start_ms": self.output_turn_start_ms, "cues": []}
             self.transcripts[role] = current
-        current["text"] += str(delta)
+        if interim:
+            current["interim"] = str(delta)
+        else:
+            current.pop("interim", None)
+            current["text"] += str(delta)
+            if role == "assistant":
+                current["cues"].append({"text_end": len(strip_memory_envelopes(current["text"])), "audio_end_ms": self.output_audio_ms})
         self.transcript_clock[role] = end if end is not None else start
         if start is not None:
             current.setdefault("start_ms", start)
@@ -500,10 +508,12 @@ class LiveSession:
     def save_transcript(self, item, partial):
         task = self.tasks.get(item["task"], {})
         blocks = task.get("visual_blocks", "") if item["role"] == "assistant" and item["task"] else ""
-        visible = strip_memory_envelopes(item["text"]) if item["role"] == "assistant" else item["text"]
+        text = item["text"] + item.get("interim", "")
+        visible = strip_memory_envelopes(text) if item["role"] == "assistant" else text
         row = self.core.chat_store.upsert_live_message(self.conversation, item["id"], item["role"], visible + ("\n\n" + blocks if blocks and not partial else ""),
             {**(task.get("visual_metadata", {}) if item["task"] else {}), "live_session_id": self.id, "live_partial": partial, "live_task_id": item["task"], "live_final": bool(item["task"]),
              "start_ms": item.get("start_ms"), "end_ms": item.get("end_ms"),
+             **({"live_audio_start_ms": item["audio_start_ms"], "live_audio_end_ms": self.output_audio_ms, "live_audio_cues": item["cues"], "live_spoken_length": len(visible)} if item["role"] == "assistant" else {}),
              "attachments": self.attachments if item["role"] == "user" else []})
         self.emit("message", message=row)
 
@@ -521,7 +531,19 @@ class LiveSession:
                 self.final_task = ""
                 self.final_delivered.set()
             if role == "assistant":
+                self.output_turn_start_ms = self.output_audio_ms
                 self.voice_idle.set()
+
+    def output_audio(self, encoded):
+        self.output_audio_ms += len(base64.b64decode(encoded)) / 48
+        self.emit("audio", audio=encoded, rate=24000)
+
+    @staticmethod
+    def duration_ms(value):
+        try:
+            return float(str(value).removesuffix("s")) * 1000 if value is not None else None
+        except (TypeError, ValueError):
+            return None
 
     async def receive(self, data):
         if self.provider == "openai":
@@ -533,7 +555,7 @@ class LiveSession:
                 self.transcript(role, data.get("delta", ""), start=data.get("start_ms"), end=data.get("end_ms"))
             elif kind == "session.output_audio.delta":
                 self.voice_idle.clear()
-                self.emit("audio", audio=data.get("delta", ""), rate=24000)
+                self.output_audio(data.get("delta", ""))
             elif kind == "session.delegation.created":
                 call_id = str(data.get("delegation", {}).get("id") or "")
                 if call_id and call_id not in self.calls:
@@ -554,13 +576,18 @@ class LiveSession:
             if content.get("interrupted"):
                 self.emit("interrupt")
                 self.finish_transcript("assistant")
-            for role, field in (("user", "inputTranscription"), ("assistant", "outputTranscription")):
-                self.transcript(role, content.get(field, {}).get("text", ""))
             for part in content.get("modelTurn", {}).get("parts", []):
                 audio = part.get("inlineData", {})
                 if audio.get("data") and str(audio.get("mimeType", "")).startswith("audio/"):
                     self.voice_idle.clear()
-                    self.emit("audio", audio=audio["data"], rate=24000)
+                    self.output_audio(audio["data"])
+            for role, field in (("user", "interimInputTranscription"), ("user", "inputTranscription"), ("assistant", "outputTranscription")):
+                item = content.get(field, {})
+                self.transcript(role, item.get("text", ""), start=self.duration_ms(item.get("startOffset")),
+                    end=self.duration_ms(item.get("endOffset")), interim=field == "interimInputTranscription")
+            if data.get("voiceActivity"):
+                activity = data["voiceActivity"]
+                logging.info("Live activity: session=%s type=%s input_offset=%s output_ms=%s", self.id, activity.get("type"), activity.get("audioOffset"), round(self.output_audio_ms))
             if content.get("turnComplete"):
                 self.finish_transcript("user")
                 self.finish_transcript("assistant")
