@@ -53,7 +53,11 @@ export function useChatScroll(viewport: RefObject<HTMLDivElement | null>, sessio
   };
   useLayoutEffect(() => {
     const node = viewport.current;
-    if (!node || !ready || !sessionId) return;
+    if (!node || !ready || !sessionId) {
+      setHasNewContent(false);
+      if (!sessionId) previous.current = "";
+      return;
+    }
     const messages = () => Array.from(node.querySelectorAll<HTMLElement>("[data-message-id]"));
     let layoutWidth = node.clientWidth, layoutHeight = node.clientHeight;
     const contentBottom = () => {
@@ -155,7 +159,7 @@ export function useChatScroll(viewport: RefObject<HTMLDivElement | null>, sessio
     const last = node?.querySelector<HTMLElement>(".message-list")?.lastElementChild;
     if (node && last) animate(node.scrollTop + last.getBoundingClientRect().bottom - node.getBoundingClientRect().top - height);
   };
-  return { hasNewContent, follow, height };
+  return { hasNewContent: ready && Boolean(sessionId) && hasNewContent, follow, height };
 }
 
 // Keep the supplied anchor at its screen coordinate, even at the old scrollbar

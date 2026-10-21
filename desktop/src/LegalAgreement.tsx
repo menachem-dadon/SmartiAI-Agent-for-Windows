@@ -3,7 +3,6 @@ import "./management.css";
 import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ResolvedTheme } from "./designSystem";
-import { WindowTitleBar } from "./WindowTitleBar";
 
 export type LegalStatus = { accepted: boolean; version: string; effective_date: string; title: string };
 
@@ -81,7 +80,7 @@ export function LegalAgreement({ status, theme, onAccepted }: { status: LegalSta
     catch { setError("לא ניתן לשמור את ההסכמה. אפשר לנסות שוב."); submitting.current = false; setBusy(false); }
   };
   return <DesignSystemProvider theme={theme} className="legal-design"><main className="legal-gate" dir="rtl">
-    <WindowTitleBar />
+    <div className="window-titlebar-space" aria-hidden="true" />
     <Dialog open title="מדיניות פרטיות ותנאי שימוש" description="לפני שמתחילים, יש לקרוא את המסמך ולאשר את התנאים." initialFocus={document} onClose={quit}>
       <p className="legal-version"><bdi>SmartiAI</bdi> · גרסת מסמך <bdi>{status.version}</bdi> · <bdi>{status.effective_date}</bdi></p>
       <pre className="legal-document" ref={document} tabIndex={0} aria-label="מסמך מדיניות פרטיות ותנאי שימוש">{status.title}{`\nתאריך תחילה: ${status.effective_date}\nגרסת מסמך: ${status.version}\n\n`}{LEGAL_AGREEMENT_TEXT.replace(/^.*?\n/, "")}</pre>

@@ -6,8 +6,14 @@ session was maximized. Only this normal/maximized choice is persisted in
 `window-placement.json`; manual sizes and positions are session-only. Legacy
 coordinates and dimensions are ignored. Minimizing does not replace the last
 choice, and restoring a maximized launch returns to the centered default size.
-The lightweight HTML/boot entry paints one static centered icon against the shared theme
-background before importing React. React keeps that surface until the Core
+The HTML/boot entry paints one static centered icon against the shared theme
+background, with the RTL caption controls at the physical left edge. A small
+React root owned by boot mounts the existing `WindowTitleBar` before Rust shows
+the window. Its shared stylesheet is loaded in the initial entry, and the same
+controls remain available through lazy app loading and interface recovery.
+The app and consent surfaces reserve the existing 32px caption row without
+mounting another titlebar. Voice overlay windows do not mount these controls.
+React keeps the startup icon surface until the Core
 health check, legal state and required first-screen bootstrap have succeeded.
 The handoff changes content without replacing or resizing the native window.
 

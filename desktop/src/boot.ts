@@ -1,8 +1,13 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
+import { WindowTitleBar } from "./WindowTitleBar";
 import { prepareStartupIcon, setStartupVisible, startupTheme, updateStartupTheme } from "./startup";
 import { loadInterfaceModule, reloadInterface } from "./interfaceModule";
 import "./startup.css";
 import "./design-system/system.css";
+import "./windowTitleBar.css";
 
 async function boot() {
   const overlay = new URLSearchParams(location.search).get("voice-overlay") === "1";
@@ -10,6 +15,10 @@ async function boot() {
   updateStartupTheme(theme);
   if (overlay) setStartupVisible(false);
   else {
+    // Keep one working caption bar through startup, lazy loading and recovery.
+    // It is ready before Rust presents the window and outlives the app root.
+    const chrome = createRoot(document.getElementById("smarti-window-chrome")!);
+    flushSync(() => chrome.render(createElement(WindowTitleBar)));
     const icon = document.getElementById("smarti-startup-icon") as HTMLImageElement;
     await prepareStartupIcon(icon, theme);
     await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));

@@ -258,8 +258,8 @@ export function SettingsGroup({ title, description, children, variant = "card", 
 export function SettingRow({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return <div className="sds-setting-row"><div><strong>{title}</strong>{description && <p className="sds-hint">{description}</p>}</div><div className="sds-setting-control">{children}</div></div>;
 }
-export function Alert({ title, children, tone = "info", action }: { title: string; children?: ReactNode; tone?: "info" | "success" | "warning" | "danger"; action?: ReactNode }) {
-  return <div className={`sds-alert sds-alert--${tone}`} role={tone === "danger" ? "alert" : "status"}><Icon name={tone === "danger" || tone === "warning" ? "alert" : tone === "success" ? "check" : "info"} /><div><strong>{title}</strong>{children && <div>{children}</div>}{action}</div></div>;
+export function Alert({ title, children, tone = "info", action, onDismiss }: { title: string; children?: ReactNode; tone?: "info" | "success" | "warning" | "danger"; action?: ReactNode; onDismiss?: () => void }) {
+  return <div className={`sds-alert sds-alert--${tone}${onDismiss ? " sds-alert--dismissible" : ""}`} role={tone === "danger" ? "alert" : "status"}><Icon name={tone === "danger" || tone === "warning" ? "alert" : tone === "success" ? "check" : "info"} /><div className="sds-alert-body"><strong>{title}</strong>{children && <div>{children}</div>}{action}</div>{onDismiss && <IconButton icon="close" label="סגירת ההודעה" variant="ghost" tooltip={false} className="sds-alert-dismiss" onClick={onDismiss} />}</div>;
 }
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "accent" | "success" | "warning" | "danger" }) { return <span className={`sds-badge sds-badge--${tone}`}>{children}</span>; }
 export function EmptyState({ title, description, icon = "folder", action }: { title: string; description: string; icon?: IconName; action?: ReactNode }) { return <div className="sds-empty"><Icon name={icon} size={24} /><h3>{title}</h3><p className="sds-hint">{description}</p>{action}</div>; }

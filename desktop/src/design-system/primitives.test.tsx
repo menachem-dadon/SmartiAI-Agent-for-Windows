@@ -3,7 +3,7 @@ import { useState } from "react";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Button, ConfirmDialog, DesignSystemProvider, Dialog, Field, IconButton, Menu, MessageFrame, RangeField, Switch, Tabs, Textarea, Tooltip, UserBubble } from "./primitives";
+import { Alert, Button, ConfirmDialog, DesignSystemProvider, Dialog, Field, IconButton, Menu, MessageFrame, RangeField, Switch, Tabs, Textarea, Tooltip, UserBubble } from "./primitives";
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 beforeAll(() => {
   // jsdom lacks native dialog behavior; real modality is tested in Edge.
@@ -12,6 +12,21 @@ beforeAll(() => {
 });
 const wrap = (children: React.ReactNode) => <DesignSystemProvider theme="light">{children}</DesignSystemProvider>;
 describe("UX-2 shared interaction contracts", () => {
+  test("dismissible alerts retain the complete error and close by keyboard without taking focus on arrival", async () => {
+    const dismiss = vi.fn();
+    const user = userEvent.setup();
+    const view = render(wrap(<><Button>פעולה</Button><Alert title="הפעולה לא הושלמה" tone="danger" onDismiss={dismiss}>פרטי שגיאה מלאים</Alert></>));
+    screen.getByRole("button", { name: "פעולה" }).focus();
+    expect(screen.getByRole("alert").textContent).toContain("פרטי שגיאה מלאים");
+    expect(document.activeElement?.textContent).toBe("פעולה");
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "סגירת ההודעה" }));
+    await user.keyboard("{Enter}");
+    expect(dismiss).toHaveBeenCalledOnce();
+    view.rerender(wrap(<Alert title="מידע" action={<Button>נסה שוב</Button>}>הודעה רגילה</Alert>));
+    expect(screen.queryByRole("button", { name: "סגירת ההודעה" })).toBeNull();
+    expect(screen.getByRole("button", { name: "נסה שוב" })).not.toBeNull();
+  });
   test("dialogs can omit the close button while retaining their accessible name and native cancellation", () => {
     const close = vi.fn();
     render(wrap(<Dialog open title="חיפוש" showCloseButton={false} onClose={close}><Field label="שאילתה" /></Dialog>));

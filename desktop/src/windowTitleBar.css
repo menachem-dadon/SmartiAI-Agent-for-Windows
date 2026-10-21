@@ -1,0 +1,12 @@
+/* Loaded by boot, before the first native paint. Shared by every app state. */
+:root { --titlebar-height:32px; }
+.window-titlebar-space { height:var(--titlebar-height); flex:none; }
+.window-titlebar { --caption-hover:color-mix(in srgb,var(--sds-color-text) 6%,transparent); --caption-pressed:color-mix(in srgb,var(--sds-color-text) 9%,transparent); position:fixed; top:0; left:0; right:0; z-index:1100; height:var(--titlebar-height); display:flex; align-items:stretch; background:var(--sds-color-background); user-select:none; }
+.window-drag-region { min-width:0; flex:1; }
+.window-titlebar button { appearance:none; width:46px; height:var(--titlebar-height); flex:0 0 46px; display:flex; align-items:center; justify-content:center; margin:0; padding:0; border:0; border-radius:0; color:var(--sds-color-text); background:transparent; cursor:default; }
+.window-caption-icon { display:block; font:normal 10px/1 "Segoe Fluent Icons", "Segoe MDL2 Assets"; letter-spacing:0; pointer-events:none; }
+.window-titlebar button:hover { background:var(--caption-hover); }
+.window-titlebar button:active { background:var(--caption-pressed); }
+.window-titlebar button:focus-visible { outline:var(--sds-size-focus) solid var(--sds-color-focus); outline-offset:-3px; }
+.window-titlebar .window-close:hover { color:#fff; background:#c42b1c; }
+.window-titlebar .window-close:active { color:#fff; background:#a82418; }

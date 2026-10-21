@@ -146,6 +146,9 @@
 .sds-alert--warning { color:var(--sds-color-warning); }
 .sds-alert--success { color:var(--sds-color-success); }
 .sds-alert .sds-button { margin-top:var(--sds-space-3); }
+.sds-alert--dismissible { align-items:flex-start; gap:var(--sds-space-2); padding:var(--sds-space-3); }
+.sds-alert--dismissible>.sds-alert-body { flex:1; min-width:0; }
+.sds-alert--dismissible>.sds-alert-dismiss { margin-top:calc(-1 * var(--sds-space-1)); margin-inline-end:calc(-1 * var(--sds-space-1)); }
 .sds-badge { display:inline-flex; gap:var(--sds-space-1); align-items:center; padding:var(--sds-space-1) var(--sds-space-2); border-radius:var(--sds-radius-pill); background:var(--sds-color-surface-muted); color:var(--sds-color-text-muted); font-size:var(--sds-font-caption); }
 .sds-badge--accent { color:var(--sds-color-accent); background:var(--sds-color-accent-soft); }
 .sds-badge--success { color:var(--sds-color-success); }

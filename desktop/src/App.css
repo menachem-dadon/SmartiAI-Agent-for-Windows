@@ -66,16 +66,6 @@ code,pre,kbd { font-family: "Cascadia Code", Consolas, monospace; }
 .approval-card { align-items: stretch; flex-direction: column; } }
 :root { --drawer-width: 286px; --rail-width: 58px; --workbench-width: min(54vw, 760px); --focus: #35d9ff; }
 .legacy-icon { display: block; object-fit: contain; pointer-events: none; }
-.window-titlebar { --caption-hover: rgba(0,0,0,.06); --caption-pressed: rgba(0,0,0,.09); z-index: 100; height: var(--titlebar-height); display: flex; align-items: stretch; background: var(--sds-color-background,var(--bg)); user-select: none; }
-.theme-dark .window-titlebar { --caption-hover: rgba(255,255,255,.06); --caption-pressed: rgba(255,255,255,.09); }
-.window-drag-region { min-width: 0; flex: 1; }
-.window-titlebar button { appearance: none; width: 46px; height: var(--titlebar-height); flex: 0 0 46px; display: flex; align-items: center; justify-content: center; margin: 0; padding: 0; border: 0; border-radius: 0; color: var(--sds-color-text,var(--text)); background: transparent; cursor: default; }
-.window-caption-icon { display: block; font: normal 10px/1 "Segoe Fluent Icons", "Segoe MDL2 Assets"; letter-spacing: 0; pointer-events: none; }
-.window-titlebar button:hover { background: var(--caption-hover); }
-.window-titlebar button:active { background: var(--caption-pressed); }
-.window-titlebar button:focus-visible { outline-offset: -3px; }
-.window-titlebar .window-close:hover { color: #fff; background: #c42b1c; }
-.window-titlebar .window-close:active { color: #fff; background: #a82418; }
 
 .model-picker { position: relative; }
 .model-picker summary { max-width: 178px; height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 10px; overflow: hidden; border-radius: 17px; color: var(--muted); list-style: none; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; cursor: pointer; }

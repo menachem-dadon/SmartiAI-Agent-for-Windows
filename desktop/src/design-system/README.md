@@ -13,6 +13,12 @@ Preserve the
 workbench lifecycles D50–54. The shared chevron baseline is in §24.
 Import product foundations from `src/design-system`; never from `src/ux1` or `src/ux2`.
 
+UX-D109 / ledger §116 adds optional `Alert.onDismiss`: a shared ghost X button
+beside the content, physically left in RTL, without automatic focus or timeout.
+Existing alerts retain their actions and layout unless dismissal is requested.
+The global chat error uses this option in a bounded floating surface; long
+details scroll while the close action remains available.
+
 ## Preserve the accepted visual language (UX-D58)
 
 The user accepted the language after UX-5 while reserving further layout and UI

@@ -35,7 +35,7 @@ export function WindowTitleBar() {
     };
   }, [appWindow]);
   return (
-    <header className="window-titlebar" dir="ltr">
+    <header className="window-titlebar" dir="rtl">
       {/* Tauri handles dragging and double-click maximize on this region.
           A React double-click handler would toggle a second time. */}
       <div className="window-drag-region" data-tauri-drag-region />

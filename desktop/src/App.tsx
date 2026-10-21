@@ -72,7 +72,6 @@ import { useConversationAttention } from "./conversationAttention";
 import { settingsRevision, subscribeSettingsChanges } from "./settingsChanges";
 import { ConversationApprovals, useApprovalQueue } from "./conversationApprovals";
 import { useReplyNavigation, type ReplyNavigation } from "./replyNavigation";
-import { WindowTitleBar } from "./WindowTitleBar";
 import { StartupFailure, useStartupWatchdog } from "./InterfaceRecovery";
 import { interfaceReady } from "./interfaceModule";
 import { setStartupVisible, updateStartupTheme } from "./startup";
@@ -1509,7 +1508,7 @@ export default function App() {
       dir="rtl"
       data-theme={resolved}
     >
-      <WindowTitleBar />
+      <div className="window-titlebar-space" aria-hidden="true" />
       <section
         className={`workspace ${workspace.workbenchOpen && workbenchExpanded ? "is-workbench-expanded" : ""} ${workspace.workbenchOpen ? "has-workbench" : ""} ${narrowWorkspace ? "is-overlay-layout" : ""} ${workspaceResizing ? "is-resizing" : ""}`}
         inert={Boolean(managementSection)}
@@ -1577,7 +1576,7 @@ export default function App() {
           </div>
           {error && (
             <div className="chat-error">
-              <Alert tone="danger" title="הפעולה לא הושלמה" action={<Button variant="ghost" onClick={() => setError("")}>סגירה</Button>}>
+              <Alert tone="danger" title="הפעולה לא הושלמה" onDismiss={() => setError("")}>
                 {error}
               </Alert>
             </div>

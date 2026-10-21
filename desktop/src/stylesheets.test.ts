@@ -4,13 +4,13 @@ import { expect, test } from "vitest";
 
 const stylesheet = (file: string) => readFileSync(new URL(file, import.meta.url), "utf8");
 
-test.each(["./App.css", "./management.css", "./chat.css", "./workbench.css", "./design-system/system.css"])(
+test.each(["./App.css", "./windowTitleBar.css", "./startup.css", "./management.css", "./chat.css", "./workbench.css", "./design-system/system.css"])(
   "%s has complete CSS blocks before browser error recovery",
   (file) => expect(() => parse(stylesheet(file), { from: file })).not.toThrow(),
 );
 
 test("window captions and management navigation are available outside narrow media queries", () => {
-  const root = parse(stylesheet("./App.css"));
+  const root = parse(stylesheet("./windowTitleBar.css"));
   for (const selector of [
     ".window-titlebar",
     ".window-titlebar button",
