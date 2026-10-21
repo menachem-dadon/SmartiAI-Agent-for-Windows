@@ -19,6 +19,7 @@ class LiveTaskCoordinator:
         self.core, self.store = core, core.chat_store
         self.conversation, self.session_id, self.emit = conversation, session_id, emit
         self.tasks = {}
+        self.executions = {}
         self.active = ""
         self.commands = {}
         for run in reversed(self.store.list_runs(session_id=conversation, limit=1000)):
@@ -28,9 +29,10 @@ class LiveTaskCoordinator:
             self.tasks[task_id] = {"id": task_id, "run_id": run["id"], "status": run["status"],
                 "segments": meta.get("live_segments", []), "call_id": "", "user_input_revision": -1,
                 "pause_requested": meta.get("pause_requested", False)}
+            self.executions[run["id"]] = self.tasks[task_id]
             self.active = task_id
             if meta.get("live_session_id") == session_id and meta.get("live_command_key"):
-                self.commands[meta["live_command_key"]] = task_id
+                self.commands[meta["live_command_key"]] = run["id"]
 
     @staticmethod
     def view(task):
@@ -38,6 +40,7 @@ class LiveTaskCoordinator:
 
     def answer(self, task):
         run = self.store.run(task["run_id"]) or {}
+        if run: task["status"] = run["status"]
         return {**self.view(task), "result": run.get("response_text") or run.get("error_text") or "",
                 "reason": "This is existing execution evidence, not a new execution request."}
 
@@ -46,15 +49,26 @@ class LiveTaskCoordinator:
         if action not in ACTIONS: raise ValueError("פעולת משימה לא מוכרת")
         command_key = hashlib.sha256(f"{self.session_id}:{user_revision}:{action}:{task_id}:{instruction}".encode()).hexdigest()
         if call_id and command_key in self.commands:
-            prior = self.tasks.get(self.commands[command_key])
+            prior = self.executions.get(self.commands[command_key])
             if prior: return {**self.view(prior), "unchanged": True, "acknowledge_start": False}
         task_id = task_id or self.active
         task = self.tasks.get(task_id)
+        if task:
+            run = self.store.run(task["run_id"]) or {}
+            if run: task["status"] = run["status"]
         if action == "start" and call_id and recovered_revision >= user_revision and task:
             return {**self.view(task), "resumed_existing": True, "acknowledge_start": False}
         if action in {"status", "answer"}:
             if not task: return {"status": "idle", "full_canonical_context": context}
             return {**self.answer(task), "full_canonical_context": context}
+        if action == "continue" and task and task["status"] not in TERMINAL:
+            # A continuation is a new execution only after the previous one
+            # ended. Native model mistakes must not queue a copy of live work.
+            return {**self.answer(task), "already_running": True, "execution_started": False,
+                    "full_canonical_context": context,
+                    "reason": "This execution is still active. No new run or instruction change was applied. "
+                              "Answer the user from the current progress. Use update only if the user actually changed execution instructions; "
+                              "never continue/restart merely to report progress or carry out the remaining steps of the original request."}
         if action == "continue" or (action == "update" and task and task["status"] in TERMINAL):
             if not task: raise ValueError("אין משימה כזו להמשך")
             action = "start"  # New execution, linked to the same logical task.
@@ -72,6 +86,7 @@ class LiveTaskCoordinator:
             task = {"id": task_id, "run_id": handle.run_id, "status": "queued", "segments": [segment],
                     "call_id": call_id, "user_input_revision": user_revision}
             self.tasks[task_id] = task
+            self.executions[task["run_id"]] = task
             self.active = task_id
             self.persist_segments(task)
         else:
@@ -96,7 +111,7 @@ class LiveTaskCoordinator:
                     self.persist_segments(task)
             if action in {"pause", "resume"}: task["pause_requested"] = action == "pause"
         self.emit("task", task=self.view(task))
-        if action not in {"status", "answer"}: self.commands[command_key] = task_id
+        if action not in {"status", "answer"}: self.commands[command_key] = task["run_id"]
         return {**self.view(task), **({"acknowledge_start": True, "execution_started": True} if action == "start" else {})}
 
     def save_task(self, task):

@@ -40,13 +40,15 @@ class VoiceSocket:
                         await session.receive({"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":base64.b64encode(b"\0\0" * 240000).decode()}}]}}})
                     await session.receive({"serverContent":{"outputTranscription":{"text":"בדיקת שמע ארוך הושלמה."},"turnComplete":True}})
                     return
-                action = "start" if not session.active_task or "חדשה" in request else "update" if "עדכון" in request else "status"
+                # Deliberately reproduce a native model's wrong action for a
+                # progress question; Core must refuse a second active execution.
+                action = "start" if not session.active_task or "חדשה" in request else "continue" if "מה נשמע בינתיים" in request else "update" if "עדכון" in request else "status"
                 await session.receive({"serverContent": {"outputTranscription": {"text": "אני מפעיל את המשימה." if action == "start" else "אני איתך, הסוכן ממשיך לעבוד."}, "turnComplete": True}})
                 if action != "status":
                     await session.receive({"toolCall": {"functionCalls": [{"id": uuid.uuid4().hex, "name": "smarty_task", "args": {"action": action, "instruction": request}}]}})
             asyncio.create_task(answer())
         for response in data.get("toolResponse", {}).get("functionResponses", []):
-            if "result" in response.get("response", {}) and not response["response"].get("delivery") and response.get("willContinue") is False:
+            if "result" in response.get("response", {}) and "id" not in response["response"] and not response["response"].get("delivery") and response.get("willContinue") is False:
                 task = session.delivery_task
                 async def claim():
                     await session.receive({"toolCall": {"functionCalls": [{"id": uuid.uuid4().hex, "name": "smarty_task",

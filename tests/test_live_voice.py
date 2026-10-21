@@ -878,3 +878,84 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         await self.session.close()
         self.assertEqual(self.session.coordinator.result(task)["message_id"], row["message_id"])
         self.assertEqual(self.session.coordinator.result(task)["content"], "Complete")
+
+    async def test_progress_misrouted_as_continue_keeps_one_execution_and_delivers_its_spoken_result(self):
+        task = self.make_task("Create the complete file, including all remaining steps")
+        execution = self.session.tasks[task["id"]]
+        execution["call_id"] = "original-execution"
+        self.store.transition_run(task["run_id"], "running")
+        self.session.transcript("user", "מתקדם")
+        packet = {"toolCall": {"functionCalls": [{"id": "misrouted-progress", "name": "smarty_task",
+            "args": {"action": "continue", "task_id": task["id"], "instruction": "Finish creating the same file"}}]}}
+        await self.session.receive(packet)
+        response = self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]
+        self.assertTrue(response["response"]["already_running"])
+        self.assertFalse(response["willContinue"])
+        self.assertEqual(response["scheduling"], "WHEN_IDLE")
+        self.runs.submit.assert_called_once()
+        self.runs.control_run.assert_not_called()
+        self.assertEqual(self.session.tasks[task["id"]]["run_id"], task["run_id"])
+        self.assertEqual(len(execution["segments"]), 1)
+        await self.session.receive(packet)
+        self.runs.submit.assert_called_once()
+        self.session.finalizer = asyncio.create_task(self.session.deliver_finals())
+        self.session.queue_run_event({"event_type": "run_finished", "run_id": task["run_id"],
+            "payload": {"status": "completed", "response": "The file was created"}})
+        for _ in range(100):
+            if self.session.delivery_task: break
+            await asyncio.sleep(.01)
+        for _ in range(100):
+            if any(frame.get("toolResponse", {}).get("functionResponses", [{}])[0].get("id") == "original-execution" for frame in self.session.ws.sent): break
+            await asyncio.sleep(.01)
+        self.session.control("deliver", task_id=task["id"], run_id=task["run_id"])
+        await self.session.receive({"serverContent": {"modelTurn": {"parts": [{"inlineData": {
+            "mimeType": "audio/pcm;rate=24000", "data": base64.b64encode(b"\0\0" * 24000).decode()}}]},
+            "outputTranscription": {"text": "The file was created"}, "turnComplete": True}})
+        self.assertEqual(self.session.coordinator.result(task)["metadata"]["live_delivery"], "generated")
+        self.assertTrue(any(event["type"] == "audio" for event in self.session.events))
+        self.assertEqual(len([row for row in self.store.messages(self.conversation) if row["metadata"].get("live_process")]), 1)
+        self.assertEqual(len(self.store.list_runs(session_id=self.conversation)), 1)
+
+    def test_continuation_cannot_queue_behind_any_active_durable_execution(self):
+        for state in ("queued", "running", "waiting_for_approval", "waiting_for_input", "cancelling"):
+            with self.subTest(state=state):
+                task = self.make_task()
+                self.store.transition_run(task["run_id"], state)
+                self.session.tasks[task["id"]]["status"] = "completed"  # A stale callback must not authorize work.
+                before = self.runs.submit.call_count
+                result = self.session.control("continue", "Carry on", task_id=task["id"])
+                self.assertTrue(result["already_running"])
+                self.assertEqual(result["status"], state)
+                self.assertEqual(self.runs.submit.call_count, before)
+
+    async def test_pending_final_keeps_its_transport_and_speech_after_a_valid_continuation_starts(self):
+        first = self.make_task()
+        first_execution = self.session.tasks[first["id"]]
+        first_execution["call_id"] = "first-call"
+        self.store.transition_run(first["run_id"], "completed", response_text="First result")
+        # A valid continuation may start before the asynchronous finish callback.
+        second = self.session.control("continue", "Additional work", task_id=first["id"], call_id="second-call")
+        self.assertNotEqual(first["run_id"], second["run_id"])
+        self.assertIs(self.session.task_for_run(first["run_id"]), first_execution)
+        self.assertEqual(self.session.task_for_run(first["run_id"])["call_id"], "first-call")
+        self.session.finalizer = asyncio.create_task(self.session.deliver_finals())
+        self.session.queue_run_event({"event_type": "run_finished", "run_id": first["run_id"],
+            "payload": {"status": "completed", "response": "First result"}})
+        for _ in range(100):
+            if self.session.ws.sent: break
+            await asyncio.sleep(.01)
+        self.assertEqual(self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]["id"], "first-call")
+        self.session.control("deliver", task_id=first["id"], run_id=first["run_id"])
+        await self.session.receive({"serverContent": {"outputTranscription": {"text": "First result"}, "turnComplete": True}})
+        self.assertEqual(self.session.coordinator.result(first)["metadata"]["live_delivery"], "generated")
+        self.assertEqual(self.session.tasks[first["id"]]["run_id"], second["run_id"])
+        self.assertEqual(self.session.tasks[first["id"]]["status"], "queued")
+        self.assertEqual(len(self.store.list_runs(session_id=self.conversation)), 2)
+
+    async def test_gemini_result_without_native_call_uses_gemini_delivery_claim(self):
+        await self.session.send_task_result({"call_id": ""}, "Verified terminal evidence")
+        request = self.session.ws.sent[-1]["clientContent"]
+        self.assertTrue(request["turnComplete"])
+        prompt = request["turns"][0]["parts"][0]["text"]
+        self.assertIn("smarty_task action=deliver", prompt)
+        self.assertNotIn("client delegation", prompt)
