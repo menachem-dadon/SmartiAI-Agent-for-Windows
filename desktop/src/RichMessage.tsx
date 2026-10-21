@@ -271,7 +271,6 @@ export const RichMessage = memo(function RichMessage({
   stream,
   pauseRequested = false,
   paused = false,
-  onRunControl,
 }: {
   message: ChatMessage;
   events?: RunEvent[];
@@ -285,9 +284,8 @@ export const RichMessage = memo(function RichMessage({
   stream?: StreamState;
   pauseRequested?: boolean;
   paused?: boolean;
-  onRunControl?: (runId: string, action: "pause" | "resume" | "cancel") => void;
 }) {
-  const messageId = `${message.role}:${message.metadata?.live_message_id || message.metadata?.run_id || message.message_id || `${message.created_at || ""}:${contentIdentity(message.content)}`}`;
+  const messageId = `${message.role}:${message.metadata?.live_answer_id || message.metadata?.live_message_id || message.metadata?.run_id || message.message_id || `${message.created_at || ""}:${contentIdentity(message.content)}`}`;
   const preferencesKey = `smarti.chat.disclosures:${messageId}`;
   const storedPreferences = () => { try { return JSON.parse(sessionStorage.getItem(preferencesKey) || "{}"); } catch { return {}; } };
   const [preferences, setPreferences] = useState<Record<string, boolean>>(storedPreferences);
@@ -424,6 +422,7 @@ export const RichMessage = memo(function RichMessage({
       : [];
   const actionsAvailable =
     !active && Boolean(message.content.trim()) &&
+    !(message.role === "assistant" && message.metadata?.live_session_id && !message.metadata.live_final) &&
     (message.role !== "assistant" || (!isError && (!(runStatus || message.metadata?.run_status) || (runStatus || message.metadata?.run_status) === "completed")));
   const openLink = useCallback(async (href: string) => {
     setLinkError("");
@@ -493,7 +492,7 @@ export const RichMessage = memo(function RichMessage({
       </div>);
   return (
     <DesignSystemProvider theme={theme} className="message-design"><article
-      className={`chat-message-row chat-message-row--${message.role} ${backgroundTask ? "is-background-task" : ""}`}
+      className={`chat-message-row chat-message-row--${message.role} ${message.metadata?.live_answer_id ? "live-answer" : ""} ${backgroundTask ? "is-background-task" : ""}`}
       data-run-id={String(message.metadata?.run_id || "") || undefined}
       data-message-id={messageId}
       data-message-ordinal={message.message_id?.split(":").slice(-1)[0]}
@@ -553,6 +552,9 @@ export const RichMessage = memo(function RichMessage({
           )}
         </div>
       )}>
+      {Array.isArray(message.metadata?.live_prefix) && message.metadata.live_prefix.length > 0 && <div className="live-answer-prefix">
+        {(message.metadata.live_prefix as ChatMessage[]).map(prefix => <RichMessage key={String(prefix.metadata?.live_message_id || prefix.message_id)} message={prefix} active={Boolean(prefix.metadata?.live_partial)} theme={theme} onOpenCanvas={onOpenCanvas} />)}
+      </div>}
       {!!rows.length && (
         <details
           className="agent-process"
@@ -631,10 +633,6 @@ export const RichMessage = memo(function RichMessage({
       {message.role === "assistant" && <span className="sds-visually-hidden" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>}
       {retryLabel && <WaitingIndicator immediate shimmer={!rows.length || processOpen && !ownerRow} label={retryLabel}/>}
       {canThink && <WaitingIndicator key={agentEvents.filter(event => event.type === "report").slice(-1)[0]?.liveEventId || "initial"} immediate={stream?.stage === "prefill" || stream?.stage === "thinking"} shimmer={!rows.length || processOpen && !ownerRow} label={stream?.stage === "prefill" ? `${processText("מעבד הנחיה", "Processing prompt")}${stream.percent == null ? "…" : `: ${stream.percent}%`}` : processText("חושב...", "Thinking...")}/>}
-      {message.metadata?.live_process && active && onRunControl ? <div className="live-task-controls">
-        <button type="button" className="sds-button" onClick={() => onRunControl(String(message.metadata?.run_id), pauseRequested ? "resume" : "pause")}><Icon name={pauseRequested ? "play" : "pause"} />{pauseRequested ? "המשך משימה" : "השהה משימה"}</button>
-        <button type="button" className="sds-button" onClick={() => onRunControl(String(message.metadata?.run_id), "cancel")}><Icon name="stop" />בטל משימה</button>
-      </div> : null}
       {attachmentStrip}
       {message.role === "user" ? !!message.content && <UserBubble isNew={isNew}>
         {content}

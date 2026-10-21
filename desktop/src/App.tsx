@@ -942,10 +942,6 @@ export default function App() {
   });
   const timeline = liveTimeline([...messages, ...(displayRun && !activeAssistantRecorded && !displayRun.metadata?.live_task_id
     ? [{ role: "assistant" as const, content: streamAnswer(streams[displayRun.id] || displayRun.metadata?.stream) || displayRun.response_text || "", metadata: { run_id: displayRun.id, user_language: displayRun.metadata?.user_language, is_error: displayRun.status === "failed" } }] : [])], runs.filter(run => run.session_id === activeId));
-  const controlLiveRun = useCallback((id: string, action: "pause" | "resume" | "cancel") => {
-    void coreApi("POST", `/v2/runs/${encodePath(id)}/${action === "cancel" ? "cancel" : "control"}`, action === "cancel" ? {} : { action }, true)
-      .then(() => refreshLists()).catch(reason => setError(String(reason)));
-  }, [refreshLists]);
 
   const createConversation = async () => {
     if (!restoringModel && provider && model) drafts.setSelection({ provider, model, effort: reasoningEffort, endpoint: reasoningOptions.find(option => option.value === reasoningEffort)?.endpoint });
@@ -1615,7 +1611,7 @@ export default function App() {
                   );
                   return (
                     <RichMessage
-                      key={String(message.metadata?.live_message_id || message.message_id || (message.role === "assistant" && runId ? `run-${runId}` : `${message.role}:${message.created_at || index}:${message.content}`))}
+                      key={String(message.metadata?.live_answer_id || message.metadata?.live_message_id || message.message_id || (message.role === "assistant" && runId ? `run-${runId}` : `${message.role}:${message.created_at || index}:${message.content}`))}
                       message={message}
                       isNew={message.role === "user" && (message.metadata?.live_message_id || runId) === newUserRun}
                       events={
@@ -1632,7 +1628,6 @@ export default function App() {
                       onOpenCanvas={openMessageCanvas}
                       pauseRequested={Boolean(runs.find(run => run.id === runId)?.metadata?.pause_requested)}
                       paused={Boolean(runs.find(run => run.id === runId)?.metadata?.paused)}
-                      onRunControl={controlLiveRun}
                     />
                   );
                 })}

@@ -331,6 +331,9 @@ export function Composer({
     return () => window.removeEventListener("smarti:voice-hotkey", activate);
   }, []);
   const canSend = Boolean(text.trim() || attachments.length);
+  const separateLiveAction = Boolean(live?.available || live?.active);
+  const liveAction = running && !live?.active ? "stop" : live?.active && !live.ready ? "loading"
+    : canSend ? "send" : live?.active ? "close" : "start";
   return (
     <DesignSystemProvider theme={theme} className="composer-design"><div
       className={`composer ${running ? "is-running" : ""}`}
@@ -400,37 +403,42 @@ export function Composer({
       <div className="composer-actions" dir="ltr">
         <span className="action-button-host">
           {(live?.available || live?.active) && <button className="composer-primary live-toggle" type="button"
-            aria-label={live.active ? "סגירת לייב" : "פתיחת לייב"} aria-busy={live.active && !live.ready || undefined}
-            disabled={Boolean(!live.active && (disabled || listening || voiceStarting || submitting || sendPending || staging > 0))}
-            onClick={() => { if (live.active) void live.stop(); else void live.start(); }}>
-            {live.active ? <Icon name={live.ready ? "close" : "loader"} size={22} /> : <svg className="sds-icon" data-icon="voice" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 10v4m4-7v10m4-14v18m4-14v10m4-7v4" /></svg>}
+            aria-label={liveAction === "send" ? "שליחה" : liveAction === "stop" ? "עצירה" : live.active ? "סגירת לייב" : "פתיחת לייב"}
+            aria-busy={liveAction === "loading" || liveAction === "send" && submitting || undefined}
+            disabled={Boolean(["send", "start"].includes(liveAction) && (disabled || listening || voiceStarting || submitting || sendPending || staging > 0))}
+            onClick={() => {
+              if (liveAction === "stop") { onCancel(); requestFocus(); }
+              else if (liveAction === "send") void send();
+              else if (live.active) void live.stop(); else void live.start();
+            }}>
+            {liveAction !== "start" ? <Icon name={liveAction === "loading" || submitting ? "loader" : liveAction === "send" ? "send" : liveAction === "stop" ? "stop" : "close"} size={22} /> : <svg className="sds-icon" data-icon="voice" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 10v4m4-7v10m4-14v18m4-14v10m4-7v4" /></svg>}
           </button>}
           <button
-            className={`composer-primary ${live?.available && !canSend && !running ? "is-plain-mic" : ""} ${canSend ? "can-send" : ""} ${listening ? "is-listening" : ""}`}
-            hidden={live?.active && !canSend}
+            className={`composer-primary ${separateLiveAction ? "is-plain-mic" : ""} ${canSend && !separateLiveAction ? "can-send" : ""} ${listening ? "is-listening" : ""}`}
+            hidden={live?.active}
             type="button"
             aria-label={
-              running && !live?.active
+              running && !separateLiveAction
                 ? "עצירה"
                 : listening
                   ? "הפסקת הכתבה"
-                  : canSend
+                  : canSend && !separateLiveAction
                     ? "שליחה"
                     : "הכתבה קולית"
             }
             aria-busy={voiceStarting || submitting || undefined}
-            disabled={!running && (disabled || voiceStarting || submitting || sendPending || staging > 0)}
+            disabled={separateLiveAction ? running || disabled || voiceStarting || submitting || sendPending || staging > 0 : !running && (disabled || voiceStarting || submitting || sendPending || staging > 0)}
             onClick={
-              running && !live?.active
+              running && !separateLiveAction
                 ? () => { onCancel(); requestFocus(); }
                 : listening
                   ? () => void stopListening()
-                  : canSend
+                  : canSend && !separateLiveAction
                   ? () => void send()
                   : () => void listen()
             }
           >
-            <Icon name={(running && !live?.active) || listening ? "stop" : canSend ? "send" : "mic"} size={24} />
+            <Icon name={(running && !separateLiveAction) || listening ? "stop" : canSend && !separateLiveAction ? "send" : "mic"} size={24} />
           </button>
           {live?.ready && <>
             <button className={`composer-tool live-mute ${live.outputMuted ? "is-muted" : ""}`} type="button" aria-label={live.outputMuted ? "ביטול השתקת סמארטי" : "השתקת סמארטי"} aria-pressed={live.outputMuted} onClick={live.toggleOutput}><Icon name="speaker" /></button>

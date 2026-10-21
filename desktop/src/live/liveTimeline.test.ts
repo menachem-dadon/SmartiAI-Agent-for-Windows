@@ -11,18 +11,38 @@ test("one task process moves after intermediate dialogue and before its final", 
   expect(liveTimeline(rows, [run("one")]).map(row => row.content)).toEqual(["Starting", "question", "answer", ""]);
   const final = message("Finished", { live_task_id: "one", live_final: true });
   const timeline = liveTimeline([...rows, final, message("later")], [run("one")]);
-  expect(timeline.map(row => row.content)).toEqual(["Starting", "question", "answer", "", "Finished", "later"]);
-  expect(timeline[3].message_id).toBe("live-process:one");
+  expect(timeline.map(row => row.content)).toEqual(["Starting", "question", "answer", "Finished", "later"]);
+  expect(timeline[3].metadata?.live_answer_process).toBe(true);
 });
 test("separate tasks retain separate process blocks and executor prose is hidden", () => {
   const rows = [message("backend", { run_id: "run-one", live_backend: true }), message("first", { live_task_id: "one", live_final: true }), message("second", { live_task_id: "two", live_final: true })];
   const timeline = liveTimeline(rows, [run("one"), run("two")]);
-  expect(timeline.map(row => row.content)).toEqual(["", "first", "", "second"]);
-  expect(new Set(timeline.filter(row => row.metadata?.live_process).map(row => row.message_id)).size).toBe(2);
+  expect(timeline.map(row => row.content)).toEqual(["first", "second"]);
+  expect(new Set(timeline.map(row => row.metadata?.live_answer_id)).size).toBe(2);
 });
 test("persisted process survives an older run falling outside the run-list window", () => {
   const rows = [message("", { live_process: true, live_task_id: "old", run_id: "old-run", agent_process: ["tool"] }), message("final", { live_task_id: "old", live_final: true })];
-  expect(liveTimeline(rows, []).map(row => row.content)).toEqual(["", "final"]);
+  expect(liveTimeline(rows, []).map(row => row.content)).toEqual(["final"]);
+  expect(liveTimeline(rows, [])[0].metadata?.agent_process).toEqual(["tool"]);
+});
+test("adjacent Live introduction, process and final form one answer without copying its introduction", () => {
+  const intro = message("Starting now", { live_session_id: "live" });
+  const process = message("", { live_session_id: "live", live_process: true, live_task_id: "one", run_id: "run-one", agent_process: { events: [] } });
+  const final = message("Final\n```py\nprint(1)\n```", { live_session_id: "live", live_final: true, live_task_id: "one" });
+  const rows = liveTimeline([intro, process, final], []);
+  expect(rows).toHaveLength(1);
+  expect(rows[0].metadata?.live_prefix).toEqual([intro]);
+  expect(rows[0].content).toBe(final.content);
+  expect(rows[0].metadata?.live_answer_id).toBe(liveTimeline([intro, process], [run("one")])[0].metadata?.live_answer_id);
+});
+test("an intervening user message keeps chronology and moves only the active task process forward", () => {
+  const intro = message("Starting", { live_session_id: "live" });
+  const user: ChatMessage = { role: "user", content: "question" };
+  const reply = message("Working", { live_session_id: "live" });
+  const process = message("", { live_session_id: "live", live_process: true, live_task_id: "one", run_id: "run-one" });
+  const rows = liveTimeline([intro, user, reply, process], []);
+  expect(rows.slice(0,2)).toEqual([intro,user]);
+  expect(rows[2].metadata?.live_prefix).toEqual([reply]);
 });
 test("transcription updates replace a stable message instead of duplicating bubbles", () => {
   const before = message("I", { live_message_id: "utterance", live_partial: true });

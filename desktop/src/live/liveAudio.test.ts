@@ -10,6 +10,7 @@ test("meters reflect actual playback, keep sampling muted input, and release all
   let meters = 0;
   vi.stubGlobal("AudioContext", class {
     currentTime = 1; destination = {};
+    addEventListener = vi.fn(); removeEventListener = vi.fn();
     resume = async () => {};
     close = close;
     createGain = node;
@@ -37,4 +38,36 @@ test("meters reflect actual playback, keep sampling muted input, and release all
   audio.muteOutput(true); frame(64); expect(levels.mock.lastCall?.[1]).toBe(0);
   userLevel = 0; audio.dispose(); audio.dispose();
   expect(stop).toHaveBeenCalledOnce(); expect(close).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalled(); expect(disconnect).toHaveBeenCalled();
+});
+test("bursty replies longer than eight seconds drain in order through a short scheduling horizon", async () => {
+  let clock=1;
+  const sources: {buffer?:{duration:number};onended?:()=>void;start:ReturnType<typeof vi.fn>;stop:ReturnType<typeof vi.fn>;connect:ReturnType<typeof vi.fn>;disconnect:ReturnType<typeof vi.fn>}[]=[];
+  const node=()=>({connect:vi.fn(),disconnect:vi.fn(),gain:{value:1}});
+  const values: number[]=[];
+  vi.stubGlobal("AudioContext",class {
+    get currentTime(){return clock;} destination={};resume=async()=>{};close=async()=>{};
+    addEventListener=vi.fn();removeEventListener=vi.fn();createGain=node;
+    createAnalyser=()=>({...node(),fftSize:1024,getFloatTimeDomainData:()=>{}});
+    createBuffer(_channels:number,length:number,rate:number){const data=new Float32Array(length);return {duration:length/rate,getChannelData:()=>data};}
+    createBufferSource(){const source={...node(),buffer:undefined as any,onended:undefined as (()=>void)|undefined,start:vi.fn(),stop:vi.fn()};
+      source.start.mockImplementation(()=>values.push(source.buffer.getChannelData(0)[0]));sources.push(source);return source;}
+  });
+  vi.stubGlobal("navigator",{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[],getAudioTracks:()=>[]})}});
+  vi.stubGlobal("cancelAnimationFrame",vi.fn());
+  const audio=new LiveAudio(vi.fn(),vi.fn());await audio.prepare();
+  for(let i=1;i<=20;i++) {
+    const pcm=new Int16Array(24000).fill(i*100);
+    const encoded=btoa(String.fromCharCode(...new Uint8Array(pcm.buffer)));
+    expect(audio.play(encoded)).toBe(true);
+  }
+  expect(sources.length).toBeLessThan(5);
+  let ended=0;
+  while(ended<sources.length){const source=sources[ended++];clock+=source.buffer!.duration;source.onended!();}
+  expect(values.length).toBe(100);
+  expect(values.map(value=>Math.round(value*32768))).toEqual(Array.from({length:20},(_,i)=>Array(5).fill((i+1)*100)).flat());
+  // A pathological backlog is recovered locally and never throws or closes audio.
+  const huge=btoa("\0\0".repeat(24000*121));
+  expect(audio.play(huge)).toBe(false);
+  expect(audio.play(btoa("\0\0".repeat(2400)))).toBe(true);
+  audio.dispose();
 });

@@ -119,7 +119,7 @@ export function useLiveConversation(options: {
             }
           }
           if (event.type === "notice" && typeof event.message === "string") current.current.onError(event.message);
-          if (event.type === "audio" && event.audio) engine.play(event.audio, event.rate);
+          if (event.type === "audio" && event.audio && !engine.play(event.audio, event.rate)) current.current.onError("נוקה תור שמע שהתארך באופן חריג. השיחה והמשימה ממשיכות; התמלול המלא זמין בצ׳אט.");
           if (event.type === "interrupt") engine.interrupt();
           if (event.type === "input_accepted" && event.admission_id) {
             const pending = admissions.current.get(event.admission_id);

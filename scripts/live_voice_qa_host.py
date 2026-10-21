@@ -3,6 +3,7 @@
 Never imported by the product. No microphone, personal profile or paid provider.
 """
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -28,6 +29,11 @@ class VoiceSocket:
         if text.startswith("New user message"):
             request = text.split("\n", 2)[1]
             async def answer():
+                if "בדיקת שמע ארוך" in request:
+                    for _ in range(3):
+                        await session.receive({"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":base64.b64encode(b"\0\0" * 240000).decode()}}]}}})
+                    await session.receive({"serverContent":{"outputTranscription":{"text":"בדיקת שמע ארוך הושלמה."},"turnComplete":True}})
+                    return
                 action = "start" if not session.active_task or "חדשה" in request else "update" if "עדכון" in request else "status"
                 await session.receive({"serverContent": {"outputTranscription": {"text": "אני מפעיל את המשימה." if action == "start" else "אני איתך, הסוכן ממשיך לעבוד."}, "turnComplete": True}})
                 if action != "status":

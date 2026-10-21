@@ -10,6 +10,8 @@ export class LiveAudio {
   private outputMeter: AnalyserNode | null = null;
   private meterFrame = 0;
   private playing = new Set<AudioBufferSourceNode>();
+  private pending: { pcm: Int16Array; offset: number; rate: number }[] = [];
+  private queuedSeconds = 0;
   private nextTime = 0;
   private muted = false;
   private disposed = false;
@@ -21,6 +23,7 @@ export class LiveAudio {
     this.output = this.context.createGain();
     this.outputMeter = this.context.createAnalyser(); this.outputMeter.fftSize = 1024;
     this.output.connect(this.outputMeter); this.outputMeter.connect(this.context.destination);
+    this.context.addEventListener("statechange", this.pump);
     await this.context.resume();
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     if (this.disposed) { stream.getTracks().forEach(track => track.stop()); return; }
@@ -63,29 +66,46 @@ export class LiveAudio {
   }
   play(encoded: string, rate = 24000) {
     const context = this.context;
-    if (!context || this.disposed || this.outputMuted) return;
+    if (!context || this.disposed || this.outputMuted) return true;
     const binary = atob(encoded), bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
     if (bytes.length % 2) throw new Error("מקטע שמע לא תקין מהספק");
-    const pcm = new Int16Array(bytes.buffer), buffer = context.createBuffer(1, pcm.length, rate);
-    const samples = buffer.getChannelData(0);
-    for (let i = 0; i < pcm.length; i++) samples[i] = pcm[i] / 32768;
-    if (this.nextTime - context.currentTime > 8) throw new Error("השהיית השמע גדלה מדי; יש לחדש את הלייב");
-    const source = context.createBufferSource(); source.buffer = buffer; source.connect(this.output!);
-    const start = Math.max(context.currentTime + .015, this.nextTime);
-    this.nextTime = start + buffer.duration;
-    this.playing.add(source);
-    source.onended = () => { source.disconnect(); this.playing.delete(source); };
-    source.start(start);
+    if (!Number.isFinite(rate) || rate < 8000 || rate > 48000) throw new Error("קצב שמע לא תקין מהספק");
+    const pcm = new Int16Array(bytes.buffer);
+    // Native audio can arrive much faster than playback. Keep PCM bounded in
+    // memory and schedule only a short horizon, without closing the Live session.
+    if (this.queuedSeconds + pcm.length / rate + Math.max(0, this.nextTime - context.currentTime) > 120) {
+      this.interrupt(); return false;
+    }
+    this.pending.push({ pcm, offset: 0, rate }); this.queuedSeconds += pcm.length / rate;
+    this.pump(); return true;
   }
+  private pump = () => {
+    const context = this.context;
+    if (!context || this.disposed || this.outputMuted) return;
+    while (this.pending.length && this.nextTime < context.currentTime + .4) {
+      const head = this.pending[0], length = Math.min(head.pcm.length - head.offset, Math.round(head.rate * .2));
+      if (!length) { this.pending.shift(); continue; }
+      const buffer = context.createBuffer(1, length, head.rate), samples = buffer.getChannelData(0);
+      for (let i = 0; i < length; i++) samples[i] = head.pcm[head.offset + i] / 32768;
+      head.offset += length; this.queuedSeconds = Math.max(0, this.queuedSeconds - buffer.duration);
+      if (head.offset === head.pcm.length) this.pending.shift();
+      const source = context.createBufferSource(); source.buffer = buffer; source.connect(this.output!);
+      const start = Math.max(context.currentTime + .015, this.nextTime);
+      this.nextTime = start + buffer.duration; this.playing.add(source);
+      source.onended = () => { source.disconnect(); this.playing.delete(source); this.pump(); };
+      source.start(start);
+    }
+  };
   muteMic(muted: boolean) {
     this.muted = muted; this.stream?.getAudioTracks().forEach(track => { track.enabled = !muted; });
   }
   muteOutput(muted: boolean) { this.outputMuted = muted; if (this.output) this.output.gain.value = muted ? 0 : 1; if (muted) this.interrupt(); }
-  interrupt() { for (const source of this.playing) { try { source.stop(); } catch { /* already ended */ } } this.playing.clear(); this.nextTime = 0; }
+  interrupt() { this.pending = []; this.queuedSeconds = 0; for (const source of this.playing) { try { source.stop(); } catch { /* already ended */ } } this.playing.clear(); this.nextTime = 0; }
   dispose() {
     if (this.disposed) return;
     this.disposed = true; this.interrupt();
     cancelAnimationFrame(this.meterFrame);
+    this.context?.removeEventListener("statechange", this.pump);
     if (this.capture) this.capture.onaudioprocess = null;
     this.capture?.disconnect(); this.source?.disconnect(); this.silent?.disconnect(); this.output?.disconnect(); this.userMeter?.disconnect(); this.outputMeter?.disconnect();
     this.stream?.getTracks().forEach(track => track.stop()); this.stream = null;

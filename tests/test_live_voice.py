@@ -175,6 +175,9 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         setup = self.session.connection_setup()["setup"]
         self.assertEqual(setup["inputAudioTranscription"], {"languageCodes": ["he-IL"]})
         self.assertNotIn("languageCode", setup["generationConfig"]["speechConfig"])
+        vad = setup["realtimeInputConfig"]["automaticActivityDetection"]
+        self.assertEqual(vad["endOfSpeechSensitivity"], "END_SENSITIVITY_LOW")
+        self.assertEqual(vad["silenceDurationMs"],1200)
         self.assertIn("Hebrew", setup["systemInstruction"]["parts"][0]["text"])
         self.settings["live_language"] = "en"
         self.assertEqual(self.session.connection_setup()["setup"]["inputAudioTranscription"], {"languageCodes": ["he-IL"]})
@@ -259,14 +262,31 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.store.messages(self.conversation)), 3)
 
     async def test_tool_replay_executes_once_and_approval_is_not_a_live_tool(self):
+        self.session.transcript("user", "read the file"); self.session.finish_transcript("user")
+        self.session.transcript("assistant", "Starting now"); self.session.finish_transcript("assistant")
         def submit(*args, **kwargs):
             return SimpleNamespace(run_id=self.store.create_run(self.conversation, user_text=args[1], metadata=kwargs["metadata"]))
         self.runs.submit.side_effect = submit
         packet = {"toolCall": {"functionCalls": [{"id": "one", "name": "smarty_task", "args": {"action": "start", "instruction": "read"}}]}}
         await self.session.receive(packet); await self.session.receive(packet)
         self.runs.submit.assert_called_once()
+        initial = self.session.ws.sent[0]["toolResponse"]["functionResponses"][0]
+        self.assertEqual(initial["scheduling"], "SILENT")
+        self.assertTrue(initial["willContinue"])
         await self.session.receive({"toolCall": {"functionCalls": [{"id": "two", "name": "approve_tool", "args": {"approved": True}}]}})
         self.assertIn("error", self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]["response"])
+
+    async def test_start_acknowledges_once_when_no_spoken_introduction_exists(self):
+        def submit(*args, **kwargs):
+            return SimpleNamespace(run_id=self.store.create_run(self.conversation,user_text=args[1],metadata=kwargs["metadata"]))
+        self.runs.submit.side_effect=submit
+        packet={"toolCall":{"functionCalls":[{"id":"start-without-intro","name":"smarty_task","args":{"action":"start","instruction":"read"}}]}}
+        await self.session.receive(packet)
+        first=self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]
+        self.assertTrue(first["response"]["acknowledge_start"])
+        self.assertEqual(first["scheduling"],"WHEN_IDLE")
+        await self.session.receive(packet)
+        self.assertEqual(self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]["scheduling"],"SILENT")
 
     async def test_close_preserves_executor_restores_tts_and_persists_final(self):
         task = self.make_task()
@@ -360,12 +380,16 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.session.forwarder = asyncio.create_task(self.session.forward_events())
         self.session.finalizer = asyncio.create_task(self.session.deliver_finals())
         self.session.queue_run_event({"event_type": "run_step", "run_id": task["run_id"], "payload": {"value": "tool finished"}})
-        await asyncio.sleep(.02)
+        for _ in range(200):
+            if self.session.ws.sent: break
+            await asyncio.sleep(.01)
         response = self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]
         self.assertEqual(response["scheduling"], "SILENT")
         self.assertTrue(response["willContinue"])
         self.session.queue_run_event({"event_type": "run_finished", "run_id": task["run_id"], "payload": {"status": "completed", "response": "Done\n```py\nprint(42)\n```"}})
-        await asyncio.sleep(.05)
+        for _ in range(200):
+            if any(not item.get("willContinue", True) for sent in self.session.ws.sent for item in sent.get("toolResponse", {}).get("functionResponses", [])): break
+            await asyncio.sleep(.01)
         response = self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]
         self.assertEqual(response["scheduling"], "WHEN_IDLE")
         self.assertFalse(response["willContinue"])
@@ -373,6 +397,36 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         final = self.store.messages(self.conversation)[-1]
         self.assertEqual(final["metadata"]["live_task_id"], task["id"])
         self.assertIn("print(42)", final["content"])
+
+    async def test_progress_bursts_keep_all_facts_in_one_silent_update(self):
+        task = self.make_task()
+        self.session.tasks[task["id"]]["call_id"] = "native-call"
+        self.session.forwarder = asyncio.create_task(self.session.forward_events())
+        for i in range(25):
+            self.session.queue_run_event({"event_type":"run_step", "run_id":task["run_id"], "payload":{"value":f"confirmed-{i}"}})
+        for _ in range(200):
+            if self.session.ws.sent: break
+            await asyncio.sleep(.01)
+        self.assertEqual(len(self.session.ws.sent), 1)
+        result = self.session.ws.sent[0]["toolResponse"]["functionResponses"][0]
+        self.assertEqual(result["scheduling"], "SILENT")
+        facts = json.loads(result["response"]["progress"])
+        self.assertEqual(len(facts["context"]["progress_events"]),25)
+        self.assertTrue(facts["context"]["full_canonical_context"])
+
+    async def test_native_update_requires_new_user_input_but_accepts_a_spoken_correction(self):
+        task = self.make_task()
+        async def update(call):
+            await self.session.receive({"toolCall":{"functionCalls":[{"id":call,"name":"smarty_task","args":{"action":"update","task_id":task["id"],"instruction":"Use destination B"}}]}})
+        await update("redundant")
+        self.runs.control_run.assert_not_called()
+        ack = self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]
+        self.assertTrue(ack["response"]["unchanged"])
+        self.assertEqual(ack["scheduling"],"SILENT")
+        self.session.transcript("user","Actually use B")
+        await update("correction")
+        self.runs.control_run.assert_called_once()
+        self.assertIn("Use destination B",self.runs.control_run.call_args.args[2])
 
     def test_legacy_tts_is_suspended_without_saving_settings(self):
         core = SimpleNamespace(_live_voice_owner="live", _tts_session=Mock())
