@@ -221,6 +221,7 @@
 .message-table-frame :is(td,th) { padding:8px 12px; border:1px solid var(--sds-color-border); max-width:480px; }
 .message-table-frame th { background:var(--sds-color-surface-muted); }
 .message-actions { display:flex; gap:4px; align-items:center; }
+.message-actions-placeholder { width:var(--sds-size-target); height:var(--sds-size-target); }
 .memory-updated { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--sds-color-text-muted); }
 .message-link-error { color:var(--sds-color-danger); white-space:pre-wrap; }
 .sent-attachments { display:flex; gap:8px; flex-wrap:nowrap; max-width:90%; overflow-x:auto; overflow-y:hidden; margin:0 0 8px auto; direction:rtl; scrollbar-width:thin; }

@@ -430,6 +430,9 @@ export const RichMessage = memo(function RichMessage({
   const actionsAvailable =
     !hideActions && !message.metadata?.live_result_pending && !active && Boolean(message.content.trim()) &&
     (message.role !== "assistant" || (!isError && (!(runStatus || message.metadata?.run_status) || (runStatus || message.metadata?.run_status) === "completed")));
+  // Live can finalize the user's transcript after the assistant has replied.
+  // Reserve its action row immediately so completion cannot move that reply.
+  const reserveUserActions = !hideActions && message.role === "user" && Boolean(message.content.trim());
   const openLink = useCallback(async (href: string) => {
     setLinkError("");
     try {
@@ -538,7 +541,7 @@ export const RichMessage = memo(function RichMessage({
               </article>
             ))}
           </div>
-        )} actions={actionsAvailable && (
+        )} actions={actionsAvailable ? (
         <div className="message-actions">
           <MessageCopyButton text={message.content} onError={reason => setLinkError(`ההעתקה נכשלה: ${String(reason)}`)} />
           {message.role === "assistant" && (
@@ -557,7 +560,7 @@ export const RichMessage = memo(function RichMessage({
             </span>
           )}
         </div>
-      )}>
+      ) : reserveUserActions ? <div className="message-actions-placeholder" aria-hidden="true" /> : undefined}>
       {Array.isArray(message.metadata?.live_prefix) && message.metadata.live_prefix.length > 0 && <div className="live-answer-prefix">
         {(message.metadata.live_prefix as ChatMessage[]).map(prefix => <RichMessage key={String(prefix.metadata?.live_message_id || prefix.message_id)} message={prefix} hideActions active={Boolean(prefix.metadata?.live_partial)} theme={theme} onOpenCanvas={onOpenCanvas} />)}
       </div>}

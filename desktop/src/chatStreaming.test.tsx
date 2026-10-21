@@ -7,7 +7,7 @@ import type { RunEvent } from "./chatTypes";
 import { RichMessage } from "./RichMessage";
 
 const event = (id: number, values: Record<string, unknown>[]): RunEvent => ({ event_id: id, sequence: id, run_id: "r", session_id: "s", event_type: "run_stream", created_at: "", payload: { value: { events: values.map(value => ({ request_id: "request", ...value })) } } });
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 describe("live chat contracts", () => {
   test("a queued revision has its own quiet block, and a completed empty segment stays collapsed", () => {
     const message = { role: "assistant" as const, content: "", metadata: { live_schema: 2, live_process: true, live_segment_id: "revision", live_segment_after: null, live_run_status: "queued" } };
@@ -137,6 +137,43 @@ describe("live chat contracts", () => {
     const html = renderToStaticMarkup(<RichMessage message={{ role: "assistant", content: "final", metadata: { run_id: "r", run_status: "completed" } }}/>);
     expect(html).toContain('aria-label="הקרא בקול"');
     expect(html).toContain('aria-label="העתק"');
+  });
+
+  test("Live reserves user actions through streaming and late transcript completion", () => {
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    const user = { role: "user" as const, content: "תמלול", metadata: { live_session_id: "voice", live_message_id: "utterance", live_partial: true } };
+    const answer = { role: "assistant" as const, content: "תשובה", metadata: { live_session_id: "voice", live_message_id: "reply", live_partial: true } };
+    const dialogue = (content: string, userPartial: boolean, answerPartial: boolean) => <>
+      <RichMessage message={{ ...user, content, metadata: { ...user.metadata, live_partial: userPartial } }} active={userPartial}/>
+      <RichMessage message={{ ...answer, metadata: { ...answer.metadata, live_partial: answerPartial } }} active={answerPartial}/>
+    </>;
+    const view = render(dialogue(user.content, true, true));
+    const userFooter = view.container.querySelector(".chat-message-row--user .sds-message-actions");
+    expect(userFooter).not.toBeNull();
+    expect(userFooter?.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(view.queryByRole("button", { name: "העתק" })).toBeNull();
+    expect(view.container.querySelector(".chat-message-row--assistant .sds-message-actions")).toBeNull();
+
+    view.rerender(dialogue("תמלול מלא ומאומת", true, false));
+    expect(view.container.querySelector(".chat-message-row--user .sds-message-actions")).toBe(userFooter);
+    expect(userFooter?.querySelector("button")).toBeNull();
+
+    view.rerender(dialogue("תמלול מלא ומאומת", false, false));
+    expect(view.container.querySelector(".chat-message-row--user .sds-message-actions")).toBe(userFooter);
+    expect(userFooter?.querySelector('button[aria-label="העתק"]')).not.toBeNull();
+    expect(userFooter?.querySelector(".message-actions-placeholder")).toBeNull();
+
+    view.rerender(dialogue("תמלול מלא ומאומת נוסף", true, false));
+    expect(view.container.querySelector(".chat-message-row--user .sds-message-actions")).toBe(userFooter);
+    expect(userFooter?.querySelector("button")).toBeNull();
+  });
+
+  test("empty transcripts and explicitly hidden actions do not reserve a footer", () => {
+    for (const content of ["", "  ", "טקסט"]) {
+      const html = renderToStaticMarkup(<RichMessage message={{ role: "user", content, metadata: { live_partial: true } }} active hideActions={Boolean(content.trim())}/>);
+      expect(html).not.toContain("sds-message-actions");
+      expect(html).not.toContain("message-actions-placeholder");
+    }
   });
 
   test("preparation has one existing status line and arguments only in tool details", () => {
