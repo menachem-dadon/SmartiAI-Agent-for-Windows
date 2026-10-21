@@ -519,6 +519,9 @@ class LiveSession:
         if not current:
             current = {"id": uuid.uuid4().hex, "text": "", "role": role, "task": self.final_task if role == "assistant" else "",
                        "audio_start_ms": self.output_turn_start_ms, "cues": []}
+            if role == "user":
+                # Capture eligibility before even an interim transcript is stored.
+                current["should_title"] = self.core.chat_store.should_generate_title_for_next_turn(self.conversation)
             self.transcripts[role] = current
         if interim:
             current["interim"] = str(delta)
@@ -552,6 +555,26 @@ class LiveSession:
              "attachments": self.attachments if item["role"] == "user" else []})
         self.emit("message", message=row)
 
+    def schedule_title(self, item):
+        if not item.get("should_title") or not item["text"].strip():
+            return
+        # GPT can reopen the same transcript for a delayed adjacent fragment.
+        item["should_title"] = False
+        try:
+            names = [file["name"] for file in self.attachments if file.get("name")]
+            mode = str(self.core.settings.get("conversation_title_generation_mode", "ai") or "ai").strip().lower()
+            if mode != "local":
+                candidate = self.core._local_fast_conversation_title(item["text"], names)
+                applied = self.core.chat_store.apply_provisional_title(self.conversation, candidate)
+                if applied:
+                    self.core._emit_notification("chat_title_updated", {"session_id": self.conversation, "title": applied})
+            self.core._schedule_conversation_title(
+                self.conversation, item["text"], "", attachment_names=names,
+                provider_mode=self.executor["provider_mode"], current_model=self.executor["model_name"],
+            )
+        except Exception:
+            logging.exception("Could not start Live conversation title generation.")
+
     def finish_transcript(self, role, retain=False):
         timer = self.transcript_timers.pop(role, None)
         if timer:
@@ -562,6 +585,8 @@ class LiveSession:
             if retain:
                 self.recent_transcripts[role] = item
             self.save_transcript(item, partial=False)
+            if role == "user":
+                self.schedule_title(item)
             if role == "assistant" and item["task"] == self.final_task:
                 self.final_task = ""
                 self.final_delivered.set()
