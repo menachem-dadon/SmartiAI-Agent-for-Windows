@@ -28,6 +28,9 @@ class VoiceSocket:
         text = "".join(part.get("text", "") for turn in content.get("turns", []) for part in turn.get("parts", []))
         if text.startswith("New user message"):
             request = text.split("\n", 2)[1]
+            if "בדיקת כשל" in request:
+                self.stall = True
+                session.delivery_timeout = .4
             async def answer():
                 if "בדיקת תזמון" in request:
                     await session.receive({"serverContent":{"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":base64.b64encode(b"\0\0" * 72000).decode()}}]},"outputTranscription":{"text":"הדיבור הזה מופיע בקצב הניגון."},"turnComplete":True}})
@@ -43,7 +46,17 @@ class VoiceSocket:
                     await session.receive({"toolCall": {"functionCalls": [{"id": uuid.uuid4().hex, "name": "smarty_task", "args": {"action": action, "instruction": request}}]}})
             asyncio.create_task(answer())
         for response in data.get("toolResponse", {}).get("functionResponses", []):
-            if "result" in response.get("response", {}) and response.get("willContinue") is False:
+            if "result" in response.get("response", {}) and not response["response"].get("delivery") and response.get("willContinue") is False:
+                task = session.delivery_task
+                async def claim():
+                    await session.receive({"toolCall": {"functionCalls": [{"id": uuid.uuid4().hex, "name": "smarty_task",
+                        "args": {"action": "deliver", "task_id": task["id"], "run_id": task["run_id"]}}]}})
+                asyncio.create_task(claim())
+            if response.get("response", {}).get("delivery") == "accepted":
+                if getattr(self, "stall", False):
+                    self.stall = False
+                    await session.receive({"serverContent": {"outputTranscription": {"text": "תשובה שנקטעה"}}})
+                    return  # No turnComplete: exercise the real bounded fallback.
                 await session.receive({"serverContent": {"modelTurn":{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=24000","data":base64.b64encode(b"\0\0"*72001).decode()}}]}, "outputTranscription": {"text": "המשימה הסתיימה. קראתי את קובץ הבדיקה והכנתי את התוצאה."}, "turnComplete": True}})
 
 

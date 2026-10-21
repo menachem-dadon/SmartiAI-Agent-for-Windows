@@ -10,7 +10,7 @@ export class LiveCaptions {
   update(message: ChatMessage) {
     if (message.role !== "assistant" || !this.key(message) || message.metadata?.live_process) return;
     const previous = this.rows.get(this.key(message));
-    this.rows.set(this.key(message), { canonical: message, visible: previous?.visible || message, frozen: previous?.frozen });
+    this.rows.set(this.key(message), { canonical: message, visible: previous?.visible || message, frozen: message.metadata?.live_delivery === "fallback" ? false : previous?.frozen });
     this.tick(this.played, this.muted);
   }
   tick(playedMs: number, muted = this.muted) {
@@ -21,10 +21,12 @@ export class LiveCaptions {
       const message = row.canonical, meta = message.metadata || {};
       const start = Number(meta.live_audio_start_ms || 0), end = Number(meta.live_audio_end_ms || 0);
       const spoken = Number(meta.live_spoken_length ?? message.content.length);
+      const spokenText = typeof meta.live_spoken_text === "string" ? meta.live_spoken_text : message.content;
+      const playing = !muted && this.played + 20 < end;
       let length = message.content.length;
       // Separate PCM/JS clocks can differ by a fraction of one sample. Never
       // leave a completed reply pending forever over a sub-frame difference.
-      if (!muted && this.played + 20 < end) {
+      if (playing) {
         let previousText = 0, previousTime = start;
         length = 0;
         const cues = Array.isArray(meta.live_audio_cues) ? meta.live_audio_cues as { text_end: number; audio_end_ms: number }[] : [];
@@ -38,12 +40,13 @@ export class LiveCaptions {
           previousText = cue.text_end; previousTime = cue.audio_end_ms;
         }
         // Reveal complete words; existing streamReveal supplies their fade.
-        const prefix = message.content.slice(0, length);
+        const prefix = spokenText.slice(0, length);
         const boundary = prefix.search(/\S+$/u);
-        if (boundary >= 0 && length < spoken && /\S/u.test(message.content[length] || "")) length = boundary;
+        if (boundary >= 0 && length < spoken && /\S/u.test(spokenText[length] || "")) length = boundary;
       } else if (!muted && meta.live_partial && end <= start) length = 0;
-      const partial = Boolean(meta.live_partial || length < message.content.length);
-      const next = { ...message, content: message.content.slice(0, length), metadata: { ...meta, live_partial: partial, live_presenting: partial } };
+      const content = playing ? spokenText.slice(0, length) : message.content.slice(0, length);
+      const partial = Boolean(meta.live_partial || playing);
+      const next = { ...message, content, metadata: { ...meta, live_partial: partial, live_presenting: partial } };
       if (row.visible.content !== next.content || row.visible.metadata?.live_partial !== partial) changed = true;
       row.visible = next;
     }

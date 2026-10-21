@@ -18,6 +18,8 @@ export interface LiveInputRequest {
   audio?: string;
   text?: string;
   mic_muted?: boolean;
+  playback_ms?: number;
+  output_muted?: boolean;
   attachment_handles?: Array<string>;
 }
 export interface LiveControlRequest {

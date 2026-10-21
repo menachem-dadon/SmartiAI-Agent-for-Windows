@@ -289,7 +289,9 @@ export const RichMessage = memo(function RichMessage({
 }) {
   const messageId = `${message.role}:${message.metadata?.live_answer_id || message.metadata?.live_message_id || message.metadata?.run_id || message.message_id || `${message.created_at || ""}:${contentIdentity(message.content)}`}`;
   const preferencesKey = `smarti.chat.disclosures:${messageId}`;
-  const processActive = active && !["completed", "failed", "cancelled", "interrupted"].includes(String(runStatus || message.metadata?.live_run_status || ""));
+  const processStatus = message.metadata?.live_segment_id ? String(message.metadata.live_run_status || runStatus || "") : String(runStatus || message.metadata?.live_run_status || "");
+  const segmentQueued = message.metadata?.live_schema === 2 && Boolean(message.metadata.live_segment_id) && message.metadata.live_segment_after == null && !["completed", "failed", "cancelled", "interrupted"].includes(processStatus);
+  const processActive = active && !segmentQueued && !["completed", "failed", "cancelled", "interrupted"].includes(processStatus);
   const storedPreferences = () => { try { return JSON.parse(sessionStorage.getItem(preferencesKey) || "{}"); } catch { return {}; } };
   const [preferences, setPreferences] = useState<Record<string, boolean>>(storedPreferences);
   const processManual = useRef(typeof preferences.process === "boolean");
@@ -339,7 +341,9 @@ export const RichMessage = memo(function RichMessage({
     if (message.role !== "assistant") return [];
     // Initial run loading and replay polling can deliver the same event.
     // Count each tool call once so a duplicate start cannot keep it running.
-    const live = [...new Map(events.map((event) => [event.event_id, event])).values()]
+    const scoped = message.metadata?.live_segment_id ? events.filter(event => message.metadata?.live_segment_after != null &&
+      event.sequence > Number(message.metadata.live_segment_after) && (message.metadata.live_segment_before == null || event.sequence < Number(message.metadata.live_segment_before))) : events;
+    const live = [...new Map(scoped.map((event) => [event.event_id, event])).values()]
       .sort((left, right) => left.event_id - right.event_id)
       .map(eventFromRun)
       .filter((item): item is AgentEvent => Boolean(item));
@@ -348,14 +352,14 @@ export const RichMessage = memo(function RichMessage({
     const identity = ({ liveEventId: _live, ...event }: AgentEvent) => event.id || JSON.stringify(event);
     const saved = new Set(storedProcess.events.map(identity));
     return [...storedProcess.events, ...live.filter(event => !saved.has(identity(event)))];
-  }, [events, message.role, storedProcess, processActive]);
+  }, [events, message.role, message.metadata?.live_segment_id, message.metadata?.live_segment_after, message.metadata?.live_segment_before, storedProcess, processActive]);
   const processText = (he: string, en: string) => processCaption(INTERFACE_LANGUAGE, he, en);
   const rows = useMemo(() => {
     // A user's message shares the run ID but never owns its activity. Saved
     // execution is authoritative; stream preparation includes unexecuted calls
     // from rejected attempts or batches that Core deliberately did not admit.
     if (message.role !== "assistant") return [];
-    const result = processRows(mergeProcessEvents(agentEvents, stream, processActive));
+    const result = processRows(mergeProcessEvents(agentEvents, message.metadata?.live_segment_id && message.metadata.live_segment_after == null ? undefined : stream, processActive));
     if (runStatus === "waiting_for_approval" && !agentEvents.some(event => event.type === "tool_waiting")) for (const row of result) if (row.kind === "tools") { for (const tool of row.tools) if (tool.status === "running") tool.status = "waiting"; const waiting = row.tools.find(tool => tool.status === "waiting"); if (waiting) row.label = processText(`ממתין לאישור הפעלת כלי ${waiting.name}`, `Waiting for tool approval ${waiting.name}`); }
     if (!processActive) for (const row of result) if (row.kind === "tools" && row.tools.some(tool => ["preparing", "running", "waiting"].includes(tool.status))) {
       for (const tool of row.tools) if (["preparing", "running", "waiting"].includes(tool.status)) tool.status = "error";
@@ -424,7 +428,7 @@ export const RichMessage = memo(function RichMessage({
         )
       : [];
   const actionsAvailable =
-    !hideActions && !active && Boolean(message.content.trim()) &&
+    !hideActions && !message.metadata?.live_result_pending && !active && Boolean(message.content.trim()) &&
     (message.role !== "assistant" || (!isError && (!(runStatus || message.metadata?.run_status) || (runStatus || message.metadata?.run_status) === "completed")));
   const openLink = useCallback(async (href: string) => {
     setLinkError("");
@@ -557,7 +561,7 @@ export const RichMessage = memo(function RichMessage({
       {Array.isArray(message.metadata?.live_prefix) && message.metadata.live_prefix.length > 0 && <div className="live-answer-prefix">
         {(message.metadata.live_prefix as ChatMessage[]).map(prefix => <RichMessage key={String(prefix.metadata?.live_message_id || prefix.message_id)} message={prefix} hideActions active={Boolean(prefix.metadata?.live_partial)} theme={theme} onOpenCanvas={onOpenCanvas} />)}
       </div>}
-      {!!rows.length && (
+      {(!!rows.length || message.metadata?.live_schema === 2 && Boolean(message.metadata.live_process || message.metadata.live_answer_process)) && (
         <details
           className="agent-process"
           dir="rtl"
@@ -566,7 +570,7 @@ export const RichMessage = memo(function RichMessage({
           <summary onClick={event => { event.preventDefault(); processManual.current = true; preserveDisclosure(event.currentTarget, () => { setProcessOpen(!processOpen); remember("process", !processOpen); }); }}>
             <Icon name="chevron" size={16} className="process-chevron" />
             <AgentStatusText active={processActive && !processOpen}>
-              {processActive ? paused ? processText("המשימה מושהית", "Task paused") : pauseRequested ? processText("ממתין לנקודת השהיה", "Waiting for a pause boundary") : processText("סמארטי עובד", "Smarti is working") : processText("סמארטי עבד", "Smarti worked")}{" "}
+              {segmentQueued ? processText("ממתין לעדכון המשימה", "Waiting for the task update") : processActive ? paused ? processText("המשימה מושהית", "Task paused") : pauseRequested ? processText("ממתין לנקודת השהיה", "Waiting for a pause boundary") : processText("סמארטי עובד", "Smarti is working") : processText("סמארטי עבד", "Smarti worked")}{" "}
               {formatAgentDuration(elapsed)}
             </AgentStatusText>
             <Icon name="activity" size={20} />

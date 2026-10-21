@@ -77,6 +77,13 @@
         "mic_muted": {
           "type": "boolean"
         },
+        "playback_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_muted": {
+          "type": "boolean"
+        },
         "attachment_handles": {
           "type": "array",
           "maxItems": 80,

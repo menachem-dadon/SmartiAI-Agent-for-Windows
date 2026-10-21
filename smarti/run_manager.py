@@ -515,8 +515,17 @@ class ConversationRunManager:
                         if message.get("role") == "assistant" and message.get("metadata", {}).get("run_id") == work["handle"].run_id), {})
         meta = {key: value for key, value in backend.get("metadata", {}).items() if key in {"canvases", "memory_updated", "memory_change_count", "memory_change_actions", "is_error"}}
         display = getattr(self.core, "_display_assistant_text_for_history", str)
-        self.core.chat_store.upsert_live_message(work["session_id"], f"final-{task_id}", "assistant", display(response),
-            {**meta, "live_task_id": task_id, "live_final": True, "live_session_id": work["metadata"].get("live_session_id", "")})
+        modern = work["metadata"].get("live_schema") == 2
+        if modern:
+            from .live_content import display_content
+            response = display_content(response)
+        identity = "final-" + (work["run_id"] if modern else task_id)
+        run_meta = (self.core.chat_store.run(work["run_id"]) or {}).get("metadata", {})
+        segments = run_meta.get("live_segments") or [{}]
+        self.core.chat_store.upsert_live_message(work["session_id"], identity, "assistant", display(response),
+            {**meta, "live_task_id": task_id, "live_final": True, "live_session_id": work["metadata"].get("live_session_id", ""),
+             **({"live_schema": 2, "run_id": work["run_id"], "live_segment_id": segments[-1].get("id"),
+                 "live_delivery": "fallback", "live_result_text": display(response), "live_result_pending": False} if modern else {})})
 
     def control_run(self, run_id, action, text="", attachments=None):
         handle = self.handle(run_id)

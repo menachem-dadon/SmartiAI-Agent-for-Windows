@@ -39,6 +39,7 @@ REQUEST_SCHEMAS = {
         "sequence": {"type": "integer", "minimum": 0},
         "audio": {"type": "string", "maxLength": 64000},
         "text": {"type": "string", "maxLength": 1000000}, "mic_muted": {"type": "boolean"},
+        "playback_ms": {"type": "number", "minimum": 0}, "output_muted": {"type": "boolean"},
         "attachment_handles": {"type": "array", "maxItems": 80, "items": IDENTIFIER},
     }, ("sequence",)),
     "liveControl": _object({
