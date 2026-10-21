@@ -14,7 +14,7 @@ export type LiveTask = { id: string; run_id: string; status: string; pause_reque
 type Session = { id: string; conversation_id: string; phase: string; error: string; tasks: LiveTask[] };
 type Event = { sequence: number; type: string; phase?: string; message?: ChatMessage | string; audio?: string; rate?: number; task?: LiveTask; admission_id?: string; error?: string };
 type Receipt = { accepted: boolean; admission_id?: string };
-type Input = { audio?: string; text?: string; attachment_handles?: string[]; mic_muted?: boolean };
+type Input = { audio?: string; text?: string; attachment_handles?: string[]; mic_muted?: boolean; playback_ms?: number; output_muted?: boolean };
 export type LiveController = ReturnType<typeof useLiveConversation>;
 
 export function useLiveConversation(options: {
@@ -39,6 +39,7 @@ export function useLiveConversation(options: {
   const startupOwner = useRef(""), taskBusy = useRef(false);
   const admissions = useRef(new Map<string, { resolve: () => void; reject: (error: Error) => void }>());
   const admitted = useRef(new Map<string, string>());
+  const playbackMuted = useRef(false);
   useEffect(() => { setLiveSpeechSuspended(phase !== "closed"); return () => setLiveSpeechSuspended(false); }, [phase]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; void stop(); }; }, []);
   useEffect(() => {
@@ -87,6 +88,17 @@ export function useLiveConversation(options: {
     }
   }
   const fail = (error: unknown) => { if (mounted.current) current.current.onError(String(error)); void stop(); };
+  useEffect(() => {
+    if (phase === "closed" || phase === "starting") return;
+    const revision = generation.current;
+    // Playback acknowledgement is distinct from generated text and vendor ACKs.
+    // Also keep it flowing when the microphone is muted.
+    const timer = window.setInterval(() => {
+      if (generation.current === revision && !queued.current)
+        void sendInput({ playback_ms: audio.current?.playedMs || 0, output_muted: playbackMuted.current }).catch(() => undefined);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [phase]);
   const handles = async (attachments: PendingAttachment[], owner: string) => {
     const registered: string[] = [];
     for (const item of attachments) {
@@ -101,10 +113,11 @@ export function useLiveConversation(options: {
     starting.current = true; const revision = ++generation.current;
     const requested = { ...current.current, attachments: [...current.current.attachments] };
     startupOwner.current = requested.conversation;
-    setPhase("starting"); setMicMuted(false); setOutputMuted(false); taskBusy.current = false;
+    setPhase("starting"); setMicMuted(false); setOutputMuted(false); playbackMuted.current = false; taskBusy.current = false;
     captions.current = new LiveCaptions();
     const activity = new LiveActivity(), seenUsers = new Set<string>();
-    const engine = new LiveAudio(value => { void sendInput({ audio: value }).catch(error => { if (generation.current === revision) fail(error); }); }, (user, smarty) => {
+    const engine = new LiveAudio(value => { void sendInput({ audio: value, playback_ms: audio.current?.playedMs || 0,
+      output_muted: playbackMuted.current }).catch(error => { if (generation.current === revision) fail(error); }); }, (user, smarty) => {
       if (generation.current !== revision) return;
       const sample = activity.sample(user, smarty, performance.now(), taskBusy.current);
       level.current = sample.level;
@@ -162,7 +175,7 @@ export function useLiveConversation(options: {
     audio.current?.muteMic(next); setMicMuted(next);
     try { await sendInput({ mic_muted: next }); } catch (error) { if (generation.current === revision) fail(error); }
   };
-  const toggleOutput = () => { const next = !outputMuted; setOutputMuted(next); audio.current?.muteOutput(next); captions.current.tick(audio.current?.playedMs || 0, next); redrawCaptions(value => value + 1); };
+  const toggleOutput = () => { const next = !outputMuted; playbackMuted.current = next; setOutputMuted(next); audio.current?.muteOutput(next); captions.current.tick(audio.current?.playedMs || 0, next); redrawCaptions(value => value + 1); };
   const send = async (text: string, attachments: PendingAttachment[]) => {
     const owned = session.current;
     if (!owned || phase !== "ready") throw new Error("יש להמתין להכנת מנוע הלייב");

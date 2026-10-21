@@ -9,6 +9,16 @@ import { RichMessage } from "./RichMessage";
 const event = (id: number, values: Record<string, unknown>[]): RunEvent => ({ event_id: id, sequence: id, run_id: "r", session_id: "s", event_type: "run_stream", created_at: "", payload: { value: { events: values.map(value => ({ request_id: "request", ...value })) } } });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 describe("live chat contracts", () => {
+  test("a queued revision has its own quiet block, and a completed empty segment stays collapsed", () => {
+    const message = { role: "assistant" as const, content: "", metadata: { live_schema: 2, live_process: true, live_segment_id: "revision", live_segment_after: null, live_run_status: "queued" } };
+    const view = render(<RichMessage message={message} active runStatus="running"/>);
+    expect(view.container.querySelector('.agent-process')).not.toBeNull();
+    expect(view.container.textContent).toContain("ממתין לעדכון המשימה");
+    expect(view.container.querySelector('.is-shimmering')).toBeNull();
+    view.rerender(<RichMessage message={{...message,metadata:{...message.metadata,live_segment_after:9,live_run_status:"completed"}}} active runStatus="running"/>);
+    expect(view.container.querySelector('details')?.open).toBe(false);
+    expect(view.container.querySelector('.is-shimmering')).toBeNull();
+  });
   test("streamed activity belongs only to the assistant, including a restored user run ID", () => {
     const stream: StreamState = { stage: "tool", blocks: {
       report: { kind: "text", role: "report", text: "בודק מקורות" },

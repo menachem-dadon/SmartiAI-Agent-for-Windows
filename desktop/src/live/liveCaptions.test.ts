@@ -27,3 +27,16 @@ test("sub-sample clock differences cannot keep final content and actions pending
   expect(captions.present(final).content).toBe(message.content);
   expect(captions.present(final).metadata?.live_partial).toBe(false);
 });
+
+test("rich content between prose does not leak into spoken captions and fallback replaces a frozen row",()=>{
+  const captions=new LiveCaptions();
+  const rich={...message,content:"שלום\n```py\nprint(42)\n```\nלך עולם",metadata:{...message.metadata,live_spoken_text:"שלום לך עולם"}};
+  captions.update(rich);captions.tick(1000);
+  expect(captions.present(rich).content).toBe("שלום ");
+  expect(captions.present(rich).content).not.toContain("```py");
+  captions.interrupt(1000);
+  const fallback={...rich,content:"Complete executor answer",metadata:{...rich.metadata,live_delivery:"fallback",live_audio_end_ms:0,live_partial:false}};
+  captions.update(fallback);
+  expect(captions.present(fallback).content).toBe("Complete executor answer");
+  expect(captions.present(fallback).metadata?.live_partial).toBe(false);
+});

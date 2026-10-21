@@ -623,6 +623,10 @@ class MessagingMixin:
                     task_state["control_revision"] = update["revision"]
                 if updates:
                     checkpoint("instruction_updated")
+                    run = self.chat_store.run(run_id) if run_id else None
+                    if run and run.get("metadata", {}).get("live_schema") == 2:
+                        self.run_manager._emit("run_revision_applied", run_id, target_session_id,
+                                               {"revision": updates[-1]["revision"]})
                 return bool(updates)
 
             def emit_process_report(report, source="model", force=False):

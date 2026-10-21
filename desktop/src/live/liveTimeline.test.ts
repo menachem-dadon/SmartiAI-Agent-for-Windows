@@ -49,3 +49,23 @@ test("transcription updates replace a stable message instead of duplicating bubb
   const after = message("I would like", { live_message_id: "utterance", live_partial: false });
   expect(mergeMessages([before], [after])).toEqual([after]);
 });
+
+test("modern execution segments keep final identity and stay before informational followups", () => {
+  const process = message("", { live_schema: 2, live_session_id: "voice", live_message_id: "process-s1", live_process: true, live_task_id: "one", run_id: "r1", live_segment_id: "s1", live_run_status: "completed" });
+  const final = message("Final", { live_schema: 2, live_session_id: "voice", live_message_id: "final-r1", live_final: true, live_task_id: "one", run_id: "r1", live_segment_id: "s1", live_delivery: "generated" });
+  const later: ChatMessage = { role: "user", content: "Explain that answer", metadata: { live_message_id: "followup" } };
+  const rows = liveTimeline([process, final, later], []);
+  expect(rows.map(row => row.content)).toEqual(["Final", "Explain that answer"]);
+  expect(rows[0].metadata?.live_message_id).toBe("final-r1");
+  expect(rows[0].metadata?.live_delivery).toBe("generated");
+  expect(rows[0].metadata?.live_answer_process).toBe(true);
+});
+
+test("a changed instruction and later continuation own separate process blocks", () => {
+  const segment = (id: string, runId = "r1", until?: string) => message("", { live_schema: 2, live_session_id: "voice", live_process: true, live_task_id: "one", run_id: runId, live_segment_id: id, live_segment_until_message: until });
+  const correction: ChatMessage = { role: "user", content: "Change destination", metadata: { live_message_id: "correction" } };
+  const final = message("Final", { live_schema: 2, live_final: true, live_task_id: "one", run_id: "r1", live_segment_id: "s2" });
+  const rows = liveTimeline([segment("s1", "r1", "correction"), correction, segment("s2"), final, segment("s3", "r2")], []);
+  expect(rows.map(row => row.content)).toEqual(["", "Change destination", "Final", ""]);
+  expect(rows.filter(row => row.metadata?.live_answer_id).map(row => row.metadata?.live_segment_id)).toEqual(["s1", "s2", "s3"]);
+});

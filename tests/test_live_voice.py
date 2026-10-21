@@ -633,6 +633,7 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         response = self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]
         self.assertEqual(response["scheduling"], "WHEN_IDLE")
         self.assertFalse(response["willContinue"])
+        self.session.control("deliver", task_id=task["id"], run_id=task["run_id"])
         await self.session.receive({"serverContent": {"outputTranscription": {"text": "הסתיים"}, "turnComplete": True}})
         final = self.store.messages(self.conversation)[-1]
         self.assertEqual(final["metadata"]["live_task_id"], task["id"])
@@ -673,3 +674,207 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError): SpeechMixin.start_speaking(core, "text")
         SpeechMixin.speak_text(core, "text")
         core._tts_session.start.assert_not_called()
+
+    def test_terminal_result_is_durable_before_voice_callback_and_regular_chat_is_unchanged(self):
+        task = self.make_task()
+        self.store.transition_run(task["run_id"], "completed", response_text="Full answer\n```py\nprint(1)\n```")
+        row = self.session.coordinator.result(task)
+        self.assertTrue(row["metadata"]["live_result_pending"])
+        self.assertIn("print(1)", row["metadata"]["live_result_text"])
+        self.store.mark_live_backend(task["run_id"], task["id"])
+        self.assertFalse(self.session.coordinator.result(task)["metadata"].get("live_backend"))
+        normal = self.store.create_run(self.conversation, user_text="ordinary")
+        before = len(self.store.messages(self.conversation))
+        self.store.transition_run(normal, "completed", response_text="ordinary answer")
+        self.assertEqual(len(self.store.messages(self.conversation)), before)
+
+    async def test_stalled_voice_replaces_same_reserved_answer_without_waiting_for_idle(self):
+        task = self.make_task()
+        self.session.voice_idle.clear()  # Missing provider turnComplete used to stall forever.
+        self.session.delivery_timeout = .05
+        self.session.finalizer = asyncio.create_task(self.session.deliver_finals())
+        self.session.queue_run_event({"event_type": "run_finished", "run_id": task["run_id"],
+            "payload": {"status": "completed", "response": "Confirmed complete answer"}})
+        identity = self.session.coordinator.result(task)["message_id"]
+        for _ in range(100):
+            row = self.session.coordinator.result(task)
+            if row["metadata"]["live_delivery"] == "fallback": break
+            await asyncio.sleep(.01)
+        self.assertEqual(row["content"], "Confirmed complete answer")
+        self.assertEqual(row["message_id"], identity)
+        self.assertTrue(self.session.ws.sent)
+        self.session.transcript("assistant", "late duplicate")
+        self.assertEqual(len([r for r in self.store.messages(self.conversation) if r["metadata"].get("live_final")]), 1)
+        self.assertFalse(self.session.closed)
+        self.session.transcript("user", "new question")
+        self.assertFalse(self.session.output_suppressed)
+
+    async def test_old_speech_is_not_bound_to_the_next_final_and_playback_has_its_own_ack(self):
+        task = self.make_task()
+        self.session.transcript("assistant", "Still working")
+        self.session.voice_idle.clear()
+        self.session.finalizer = asyncio.create_task(self.session.deliver_finals())
+        self.session.queue_run_event({"event_type": "run_finished", "run_id": task["run_id"],
+            "payload": {"status": "completed", "response": "Complete"}})
+        for _ in range(100):
+            if self.session.ws.sent: break
+            await asyncio.sleep(.01)
+        await self.session.receive({"serverContent": {"outputTranscription": {"text": " now"}, "turnComplete": True}})
+        self.assertEqual(self.session.coordinator.result(task)["content"], "")
+        self.session.control("deliver", task_id=task["id"], run_id=task["run_id"])
+        self.session.output_audio(base64.b64encode(b"\0\0" * 24000).decode())
+        await self.session.receive({"serverContent": {"outputTranscription": {"text": "Complete"}, "turnComplete": True}})
+        row = self.session.coordinator.result(task)
+        self.assertEqual(row["content"], "Complete")
+        self.assertEqual(row["metadata"]["live_delivery"], "generated")
+        await self.session.input({"sequence": 0, "playback_ms": 1000})
+        self.assertEqual(self.session.coordinator.result(task)["metadata"]["live_delivery"], "spoken")
+
+    async def test_partial_delivery_stall_replaces_one_answer_and_new_session_does_not_replay_it(self):
+        task = self.make_task()
+        self.session.delivery_timeout = .05
+        self.session.finalizer = asyncio.create_task(self.session.deliver_finals())
+        self.session.queue_run_event({"event_type": "run_finished", "run_id": task["run_id"],
+            "payload": {"status": "completed", "response": "Whole result"}})
+        for _ in range(100):
+            if self.session.ws.sent: break
+            await asyncio.sleep(.01)
+        self.session.control("deliver", task_id=task["id"], run_id=task["run_id"])
+        self.session.transcript("assistant", "Whole")
+        for _ in range(100):
+            if self.session.coordinator.result(task)["metadata"]["live_delivery"] == "fallback": break
+            await asyncio.sleep(.01)
+        self.assertEqual(self.session.coordinator.result(task)["content"], "Whole result")
+        await self.session.close()
+        reopened = LiveSession(self.manager, self.conversation, "gemini", self.session.executor, [])
+        try:
+            self.assertIn(task["run_id"], reopened.queued_results)
+            self.assertTrue(reopened.final_queue.empty())
+        finally: await reopened.close()
+
+    def test_ai_read_only_followup_keeps_segment_and_continuation_creates_another_run(self):
+        task = self.make_task()
+        original = self.session.tasks[task["id"]]["segments"][0]["id"]
+        self.session.control("answer", task_id=task["id"])
+        self.runs.submit.assert_called_once()
+        self.assertEqual(self.session.tasks[task["id"]]["segments"][0]["id"], original)
+        self.session.tasks[task["id"]]["status"] = "completed"
+        self.store.transition_run(task["run_id"], "completed", response_text="Done")
+        again = self.session.control("continue", "Do further work", task_id=task["id"])
+        self.assertEqual(again["id"], task["id"])
+        self.assertNotEqual(again["run_id"], task["run_id"])
+        self.assertNotEqual(self.session.tasks[task["id"]]["segments"][0]["id"], original)
+        self.assertEqual(len([r for r in self.store.messages(self.conversation) if r["metadata"].get("live_process")]), 2)
+
+    def test_ai_revision_splits_at_the_applied_boundary_and_replayed_command_never_reexecutes(self):
+        task = self.make_task()
+        self.runs.control_run.return_value = {"revision": 1}
+        self.session.transcript("user", "Use another destination")
+        self.session.control("update", "Use B", task_id=task["id"], call_id="one")
+        self.session.control("update", "Use B", task_id=task["id"], call_id="two")
+        self.runs.control_run.assert_called_once()
+        self.session.queue_run_event({"event_type": "run_revision_applied", "run_id": task["run_id"], "sequence": 9,
+            "payload": {"revision": 1}})
+        segments = self.session.tasks[task["id"]]["segments"]
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[0]["before"], 9)
+        self.assertEqual(segments[0]["status"], "completed")
+        self.assertEqual(segments[1]["after"], 9)
+
+    def test_explicit_rich_blocks_keep_their_anchors_without_a_formatting_inference(self):
+        from smarti.live_content import compose_transcript, display_content
+        source = "Here is code.<!--smarti-display-->```py\nprint(1)\n```<!--/smarti-display-->Then a table.<!--smarti-display-->|A|B|\n|---|---|\n|1|2|<!--/smarti-display-->Done."
+        spoken = "Here is code.Then a table.Done."
+        displayed = compose_transcript(spoken, source)
+        self.assertLess(displayed.index("print(1)"), displayed.index("Then a table."))
+        self.assertLess(displayed.index("|1|2|"), displayed.index("Done."))
+        self.assertNotIn("smarti-display", display_content(source))
+        paraphrased = compose_transcript("Finished.", source)
+        self.assertLess(paraphrased.index("print(1)"), paraphrased.index("|1|2|"))
+
+    async def test_lease_recovers_a_missed_terminal_callback_and_reopening_recovers_pending_text_quietly(self):
+        task = self.make_task()
+        self.store.transition_run(task["run_id"], "completed", response_text="Durable result")
+        self.session.lease = asyncio.create_task(self.session.watch_lease())
+        await asyncio.sleep(1.1)
+        self.assertEqual(self.session.final_queue.qsize(), 1)
+        await self.session.close()
+        self.assertEqual(self.session.coordinator.result(task)["content"], "Durable result")
+        # Simulate a completed run whose voice owner disappeared before delivery.
+        self.session.coordinator.set_delivery(task, "ready", content="", live_result_pending=True)
+        reopened = LiveSession(self.manager, self.conversation, "gemini", self.session.executor, [])
+        try:
+            self.assertEqual(reopened.coordinator.result(task)["content"], "Durable result")
+            self.assertTrue(reopened.final_queue.empty())
+        finally: await reopened.close()
+
+    async def test_gpt_delayed_adjacent_final_fragments_keep_rich_content_and_one_result(self):
+        self.session.provider = "openai"
+        task = self.make_task()
+        self.session.finalizer = asyncio.create_task(self.session.deliver_finals())
+        self.session.queue_run_event({"event_type": "run_finished", "run_id": task["run_id"],
+            "payload": {"status": "completed", "response": "Done\n```py\nprint(42)\n```"}})
+        for _ in range(100):
+            if any(frame.get("type") == "session.commentary.append" for frame in self.session.ws.sent): break
+            await asyncio.sleep(.01)
+        self.session.control("deliver", task_id=task["id"], run_id=task["run_id"])
+        self.session.transcript("assistant", "First", start=0, end=200)
+        self.session.finish_transcript("assistant", True)
+        await asyncio.sleep(.01)
+        self.session.transcript("assistant", " second", start=300, end=500)
+        self.session.finish_transcript("assistant", True)
+        row = self.session.coordinator.result(task)
+        self.assertIn("First second", row["content"])
+        self.assertIn("print(42)", row["content"])
+        self.assertEqual(len([row for row in self.store.messages(self.conversation) if row["metadata"].get("live_final")]), 1)
+        self.assertEqual(sum(frame.get("type") == "session.commentary.append" for frame in self.session.ws.sent), 1)
+
+    async def test_progress_transport_failure_does_not_close_voice_or_lose_the_terminal_result(self):
+        task = self.make_task()
+        self.session.tasks[task["id"]]["call_id"] = "native-call"
+        original = self.session.ws.send_json
+        self.session.ws.send_json = AsyncMock(side_effect=ConnectionError("temporary progress failure"))
+        self.session.forwarder = asyncio.create_task(self.session.forward_events())
+        self.session.queue_run_event({"event_type": "run_step", "run_id": task["run_id"], "payload": {"value": "progress"}})
+        await asyncio.sleep(1.1)
+        self.assertFalse(self.session.closed)
+        self.session.ws.send_json = original
+        self.session.queue_run_event({"event_type": "run_finished", "run_id": task["run_id"], "payload": {"status": "completed", "response": "Ready"}})
+        self.assertEqual(self.session.final_queue.qsize(), 1)
+        self.assertEqual(self.session.coordinator.result(task)["metadata"]["live_result_text"], "Ready")
+
+    async def test_late_progress_speech_cannot_complete_result_before_explicit_delivery_claim(self):
+        task = self.make_task()
+        self.session.finalizer = asyncio.create_task(self.session.deliver_finals())
+        self.session.queue_run_event({"event_type": "run_finished", "run_id": task["run_id"], "payload": {"status": "completed", "response": "Verified final"}})
+        for _ in range(100):
+            if self.session.ws.sent: break
+            await asyncio.sleep(.01)
+        await self.session.receive({"serverContent": {"outputTranscription": {"text": "Still working"}, "turnComplete": True}})
+        self.assertEqual(self.session.coordinator.result(task)["content"], "")
+        self.assertFalse(self.session.final_delivered.is_set())
+        with self.assertRaises(ValueError): self.session.control("deliver", run_id="another-run")
+        self.session.control("deliver", task_id=task["id"], run_id=task["run_id"])
+        await self.session.receive({"serverContent": {"outputTranscription": {"text": "Verified final"}, "turnComplete": True}})
+        self.assertEqual(self.session.coordinator.result(task)["content"], "Verified final")
+
+    async def test_provider_tool_cancellation_never_cancels_execution_and_barge_in_keeps_one_truncated_result(self):
+        task = self.make_task()
+        self.session.tasks[task["id"]]["call_id"] = "old-call"
+        await self.session.receive({"toolCallCancellation": {"ids": ["old-call"]}})
+        self.assertEqual(self.session.tasks[task["id"]]["call_id"], "")
+        self.runs.cancel.assert_not_called()
+        self.session.finalizer = asyncio.create_task(self.session.deliver_finals())
+        self.session.queue_run_event({"event_type": "run_finished", "run_id": task["run_id"], "payload": {"status": "completed", "response": "Complete original result"}})
+        for _ in range(100):
+            if self.session.ws.sent: break
+            await asyncio.sleep(.01)
+        self.session.control("deliver", task_id=task["id"], run_id=task["run_id"])
+        self.session.transcript("assistant", "Complete")
+        await self.session.receive({"serverContent": {"interrupted": True}})
+        row = self.session.coordinator.result(task)
+        self.assertEqual(row["content"], "Complete")
+        self.assertEqual(row["metadata"]["live_delivery"], "truncated")
+        await self.session.close()
+        self.assertEqual(self.session.coordinator.result(task)["message_id"], row["message_id"])
+        self.assertEqual(self.session.coordinator.result(task)["content"], "Complete")

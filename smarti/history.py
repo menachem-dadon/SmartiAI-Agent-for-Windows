@@ -694,8 +694,40 @@ class ChatSessionStore:
         with self._lock, self._connect() as db:
             for row in db.execute("SELECT id,metadata_json FROM messages WHERE json_extract(metadata_json,'$.run_id')=?", (str(run_id),)).fetchall():
                 meta = _json_loads(row["metadata_json"], {})
+                if meta.get("live_process") or meta.get("live_final"):
+                    continue
                 meta.update(live_backend=True, live_task_id=str(task_id))
                 db.execute("UPDATE messages SET metadata_json=? WHERE id=?", (_json_dumps(meta), row["id"]))
+
+    def _record_live_result_locked(self, db, run, status, response):
+        """Reserve one durable answer before publishing a terminal Live run.
+
+        Its position belongs to execution, never to the eventual audio callback.
+        This path is opt-in; ordinary chat persistence is unchanged.
+        """
+        meta = _json_loads(run["metadata_json"], {})
+        if meta.get("live_schema") != 2:
+            return
+        identity = "final-" + run["id"]
+        existing = db.execute("SELECT * FROM messages WHERE session_id=? AND json_extract(metadata_json,'$.live_message_id')=?",
+                              (run["session_id"], identity)).fetchone()
+        if existing:
+            return  # A delivery/fallback already owns this answer; never erase it.
+        backend = db.execute("SELECT * FROM messages WHERE session_id=? AND role='assistant' AND content<>'' AND json_extract(metadata_json,'$.run_id')=? ORDER BY ordinal DESC LIMIT 1",
+                             (run["session_id"], run["id"])).fetchone()
+        from .memory_protocol import strip_memory_envelopes
+        from .live_content import display_content
+        text = display_content(backend["content"] if backend else strip_memory_envelopes(str(response or "המשימה הסתיימה")))
+        visual = _json_loads(backend["metadata_json"], {}) if backend else {}
+        segments = meta.get("live_segments") or [{"id": meta.get("live_segment_id", meta["live_task_id"])}]
+        result_meta = {key: visual[key] for key in ("canvases", "memory_updated", "memory_change_count", "memory_change_actions", "is_error") if key in visual}
+        result_meta.update(live_message_id=identity, live_schema=2, live_final=True,
+            live_task_id=meta["live_task_id"], live_segment_id=segments[-1]["id"], run_id=run["id"],
+            live_session_id=meta.get("live_session_id", ""), live_run_status=status,
+            live_result_text=text, live_result_pending=True, live_delivery="ready", live_partial=False)
+        ordinal = db.execute("SELECT COALESCE(MAX(ordinal),-1)+1 FROM messages WHERE session_id=?", (run["session_id"],)).fetchone()[0]
+        db.execute("INSERT INTO messages(session_id,ordinal,role,content,created_at,metadata_json) VALUES(?,?,'assistant','',?,?)",
+                   (run["session_id"], ordinal, _now_iso(), _json_dumps(result_meta)))
 
     def append_message(self, role, content, metadata=None, session_id=None, created_at=None):
         """Append one durable message without requiring a complete user/assistant turn."""
@@ -1607,6 +1639,8 @@ class ChatSessionStore:
                 values.append(_json_dumps(metadata))
             values.append(str(run_id or ""))
             db.execute(f"UPDATE runs SET {', '.join(updates)} WHERE id=?", tuple(values))
+            if status in {"completed", "failed", "cancelled", "interrupted"} and response_text is not None:
+                self._record_live_result_locked(db, row, status, response_text)
             self._append_run_event_locked(
                 db,
                 run_id,
