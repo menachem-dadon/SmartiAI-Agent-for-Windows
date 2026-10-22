@@ -6,19 +6,24 @@ import type { ChatMessage, PendingAttachment } from "../chatTypes";
 import { LiveAudio } from "./liveAudio";
 import { LiveActivity } from "./liveActivity";
 import { LiveCaptions } from "./liveCaptions";
+import { LiveTransport } from "./liveTransport";
 import type { OrbState } from "./SmartyLiveOrb";
 
 export type LiveProvider = { id: string; label: string; model: string; voices: string[]; voice: string; configured: boolean; inherited: boolean; masked: string };
-export type LiveConfig = { provider: string; enabled: boolean; language: string; available: boolean; items: LiveProvider[] };
+export type LiveConfig = { provider: string; enabled: boolean; language: string; available: boolean; items: LiveProvider[];
+  max_session_seconds?: number; daily_seconds_limit?: number };
 export type LiveTask = { id: string; run_id: string; status: string; pause_requested?: boolean };
-type Session = { id: string; conversation_id: string; phase: string; error: string; tasks: LiveTask[] };
-type Event = { sequence: number; type: string; phase?: string; message?: ChatMessage | string; audio?: string; rate?: number; task?: LiveTask; admission_id?: string; error?: string };
+type Session = { id: string; conversation_id: string; phase: string; error: string; tasks: LiveTask[];
+  next_input_sequence?: number; cursor?: number; audio_ms?: number; mic_muted?: boolean; output_muted?: boolean };
+type Event = { sequence: number; type: string; phase?: string; message?: ChatMessage | string; audio?: string; rate?: number; start_ms?: number; end_ms?: number; task?: LiveTask; admission_id?: string; error?: string };
 type Receipt = { accepted: boolean; admission_id?: string };
-type Input = { audio?: string; text?: string; attachment_handles?: string[]; mic_muted?: boolean; playback_ms?: number; output_muted?: boolean };
+type Input = { audio?: string; text?: string; attachment_handles?: string[]; mic_muted?: boolean; playback_ms?: number; output_muted?: boolean;
+  dropped_audio?: number[][]; provider_mode?: string; model_name?: string };
 export type LiveController = ReturnType<typeof useLiveConversation>;
 
 export function useLiveConversation(options: {
   coreReady: boolean; coreGeneration: number;
+  beforeModelUse?: () => Promise<void>;
   conversation: string; provider: string; model: string; attachments: PendingAttachment[];
   onConversation: (id: string) => void; onMessage: (message: ChatMessage) => void;
   onNewUserMessage: (id: string) => void;
@@ -34,7 +39,8 @@ export function useLiveConversation(options: {
   const captions = useRef(new LiveCaptions());
   const [, redrawCaptions] = useState(0);
   const session = useRef<Session | null>(null), generation = useRef(0), audio = useRef<LiveAudio | null>(null);
-  const sequence = useRef(0), writes = useRef(Promise.resolve()), queued = useRef(0), starting = useRef(false);
+  const sequence = useRef(0), queued = useRef(0), starting = useRef(false);
+  const transport = useRef<LiveTransport | null>(null);
   const mounted = useRef(true);
   const startupOwner = useRef(""), taskBusy = useRef(false);
   const admissions = useRef(new Map<string, { resolve: () => void; reject: (error: Error) => void }>());
@@ -63,19 +69,18 @@ export function useLiveConversation(options: {
         (starting.current && !session.current && options.conversation !== startupOwner.current)) void stop();
   }, [options.conversation]);
   const sendInput = (input: Input) => {
-    const owned = session.current, revision = generation.current, order = sequence.current++;
-    if (!owned) return Promise.reject(new Error("הלייב אינו פעיל"));
-    if (++queued.current > 180) { queued.current--; return Promise.reject(new Error("שליחת השמע מתעכבת; יש לחדש את הלייב")); }
-    const write = writes.current.then(async () => {
-      if (revision !== generation.current) return;
-      return await coreApi<Receipt>("POST", `/v2/live/sessions/${owned.id}/input`, { ...input, sequence: order });
-    });
-    writes.current = write.then(() => undefined, () => undefined);
-    return write.finally(() => { queued.current--; });
+    const channel = transport.current;
+    if (!session.current || !channel) return Promise.reject(new Error("הלייב אינו פעיל"));
+    // Never queue seconds of stale microphone data behind HTTP/control receipts.
+    if (input.audio && queued.current >= 12) return Promise.resolve<Receipt>({ accepted: true });
+    queued.current++;
+    return channel.send({ ...input, dropped_audio: audio.current?.droppedRanges, sequence: sequence.current++ })
+      .finally(() => { queued.current--; });
   };
   async function stop() {
     generation.current++; starting.current = false;
     const owned = session.current; session.current = null;
+    transport.current?.close(); transport.current = null;
     for (const pending of admissions.current.values()) pending.reject(new Error("הלייב נסגר לפני שההודעה עם הקבצים אושרה"));
     admissions.current.clear(); admitted.current.clear();
     audio.current?.dispose(); audio.current = null; level.current = 0;
@@ -117,29 +122,39 @@ export function useLiveConversation(options: {
     captions.current = new LiveCaptions();
     const activity = new LiveActivity(), seenUsers = new Set<string>();
     const engine = new LiveAudio(value => { void sendInput({ audio: value, playback_ms: audio.current?.playedMs || 0,
-      output_muted: playbackMuted.current }).catch(error => { if (generation.current === revision) fail(error); }); }, (user, smarty) => {
+      output_muted: playbackMuted.current }).catch(error => { if (generation.current === revision) current.current.onError(String(error)); }); }, (user, smarty) => {
       if (generation.current !== revision) return;
       const sample = activity.sample(user, smarty, performance.now(), taskBusy.current);
       level.current = sample.level;
       setOrbState(previous => previous === sample.state ? previous : sample.state);
-    }, playedMs => { if (generation.current === revision && captions.current.tick(playedMs)) redrawCaptions(value => value + 1); });
+    }, playedMs => { if (generation.current === revision && captions.current.tick(playedMs, playbackMuted.current)) redrawCaptions(value => value + 1); },
+    message => { if (generation.current === revision) current.current.onError(message); });
     audio.current = engine;
     try {
       await engine.prepare();
+      await current.current.beforeModelUse?.();
       if (revision !== generation.current) return;
       let owner = requested.conversation;
       if (!owner) owner = (await coreApi<{ conversation: { id: string } }>("POST", "/v2/conversations", {}, true)).conversation.id;
       const attachment_handles = await handles(requested.attachments, owner);
       if (revision !== generation.current) return;
-      const opened = await coreApi<Session>("POST", "/v2/live/sessions", { conversation_id: owner, provider_mode: requested.provider, model_name: requested.model, attachment_handles });
+      const opened = await coreApi<Session>("POST", "/v2/live/sessions", { conversation_id: owner, provider_mode: current.current.provider, model_name: current.current.model, attachment_handles });
       if (revision !== generation.current) { await coreApi("POST", `/v2/live/sessions/${opened.id}/stop`, {}); return; }
-      session.current = opened; sequence.current = 0; writes.current = Promise.resolve();
+      session.current = opened; sequence.current = opened.next_input_sequence ?? 0;
+      engine.rebase(opened.audio_ms || 0);
+      engine.muteMic(Boolean(opened.mic_muted)); setMicMuted(Boolean(opened.mic_muted));
+      engine.muteOutput(Boolean(opened.output_muted)); playbackMuted.current = Boolean(opened.output_muted); setOutputMuted(Boolean(opened.output_muted));
       current.current.onConversation(opened.conversation_id);
-      let cursor = 0, began = false;
+      if (opened.next_input_sequence) current.current.onRefresh();
+      const channel = new LiveTransport(opened.id, opened.cursor || 0, () => {
+        if (generation.current === revision) setPhase("reconnecting");
+      });
+      transport.current = channel; await channel.open();
+      let cursor = opened.cursor || 0, began = false;
       while (revision === generation.current) {
-        const page = await coreApi<Session & { events: Event[]; cursor: number; gap: boolean }>("GET", `/v2/live/sessions/${opened.id}/events?after=${cursor}`);
+        const page = await channel.next<Session & { events: Event[]; cursor: number; gap: boolean }>(cursor);
         if (revision !== generation.current) break;
-        if (page.gap) { engine.interrupt(); current.current.onRefresh(); }
+        if (page.gap) { captions.current.interrupt(engine.playedMs); engine.rebase(page.audio_ms || 0); current.current.onRefresh(); }
         cursor = page.cursor;
         setTasks(previous => JSON.stringify(previous.map(task => [task.id, task.status, task.pause_requested])) === JSON.stringify(page.tasks.map(task => [task.id, task.status, task.pause_requested])) ? previous : page.tasks);
         setPhase(page.phase);
@@ -148,14 +163,14 @@ export function useLiveConversation(options: {
           if (event.type === "message" && event.message && typeof event.message !== "string") {
             const message: ChatMessage = { ...event.message, metadata: { ...event.message.metadata, live_reveal: true } };
             const id = String(message.metadata?.live_message_id || message.message_id || "");
-            captions.current.update(message); captions.current.tick(engine.playedMs);
+            captions.current.update(message); captions.current.tick(engine.playedMs, playbackMuted.current);
             current.current.onMessage(message);
             if (message.role === "user" && id && !seenUsers.has(id)) {
               seenUsers.add(id); current.current.onNewUserMessage(id);
             }
           }
           if (event.type === "notice" && typeof event.message === "string") current.current.onError(event.message);
-          if (event.type === "audio" && event.audio && !engine.play(event.audio, event.rate)) current.current.onError("נוקה תור שמע שהתארך באופן חריג. השיחה והמשימה ממשיכות; התמלול המלא זמין בצ׳אט.");
+          if (event.type === "audio" && event.audio && !engine.play(event.audio, event.rate, event.start_ms)) current.current.onError("נוקה תור שמע שהתארך באופן חריג. השיחה והמשימה ממשיכות; התמלול המלא זמין בצ׳אט.");
           if (event.type === "interrupt") { captions.current.interrupt(engine.playedMs); engine.interrupt(); redrawCaptions(value => value + 1); }
           if (event.type === "input_accepted" && event.admission_id) {
             const pending = admissions.current.get(event.admission_id);
@@ -169,6 +184,15 @@ export function useLiveConversation(options: {
     } catch (error) { if (revision === generation.current) fail(error); }
     finally { if (revision === generation.current) starting.current = false; }
   }
+  useEffect(() => {
+    if (!session.current || phase !== "ready") return;
+    let alive = true;
+    void (async () => {
+      await current.current.beforeModelUse?.();
+      if (alive) await sendInput({ provider_mode: options.provider, model_name: options.model });
+    })().catch(error => { if (alive) current.current.onError(String(error)); });
+    return () => { alive = false; };
+  }, [options.provider, options.model, phase]);
   const toggleMic = async () => {
     const revision = generation.current;
     const next = !micMuted;
@@ -179,6 +203,8 @@ export function useLiveConversation(options: {
   const send = async (text: string, attachments: PendingAttachment[]) => {
     const owned = session.current;
     if (!owned || phase !== "ready") throw new Error("יש להמתין להכנת מנוע הלייב");
+    await current.current.beforeModelUse?.();
+    await sendInput({ provider_mode: current.current.provider, model_name: current.current.model });
     const receipt = await sendInput({ text, attachment_handles: await handles(attachments, owned.conversation_id) });
     if (receipt?.admission_id) {
       const id = receipt.admission_id;

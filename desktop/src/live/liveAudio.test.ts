@@ -77,6 +77,15 @@ test("bursty replies longer than eight seconds drain in order through a short sc
   // A pathological backlog is recovered locally and never throws or closes audio.
   const huge=btoa("\0\0".repeat(24000*121));
   expect(audio.play(huge)).toBe(false);
+  expect(audio.playedMs).toBeCloseTo(20000); // Dropped audio was never heard.
+  expect(audio.droppedRanges[0]).toEqual([20000, 141000]);
+  audio.rebase(160000);
+  expect(audio.playedMs).toBeCloseTo(20000);
+  expect(audio.droppedRanges[0]).toEqual([20000, 160000]);
+  audio.muteOutput(true);
+  expect(audio.play(btoa("\0\0".repeat(2400)), 24000, 160000)).toBe(true);
+  expect(audio.playedMs).toBeCloseTo(20000);
+  audio.muteOutput(false);
   expect(audio.play(btoa("\0\0".repeat(2400)))).toBe(true);
   audio.dispose();
 });

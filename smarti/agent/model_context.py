@@ -163,7 +163,10 @@ class ModelContextMixin(RequestBudgetMixin):
         return history
 
     def _chat_context_snapshot(self):
+        run_values = getattr(getattr(self, "_execution_context", None), "run_values", None) or {}
         return {
+            **({"live_history_revision": run_values["_live_dialogue_revision"], "live_message_cursor": run_values.get("_live_message_cursor", -1)}
+               if run_values.get("_live_dialogue_revision") else {}),
             "mode": getattr(self, "mode", ""),
             "system_prompt": getattr(self, "system_prompt", ""),
             "gemini_history": copy.deepcopy(getattr(self, "gemini_history", [])),
@@ -1177,6 +1180,9 @@ class ModelContextMixin(RequestBudgetMixin):
                     "cache_write_prompt", "reasoning",
                 ):
                     bucket[key] = int(bucket.get(key, 0) or 0) + int(usage_dict.get(key, 0) or 0)
+                if "voice_seconds" in usage_dict:
+                    bucket["voice_seconds"] = float(bucket.get("voice_seconds", 0) or 0) + float(usage_dict["voice_seconds"])
+                    bucket["voice_duration_estimated"] = bool(usage_dict.get("voice_duration_estimated"))
                 if request_id:
                     receipts.append(request_id)
                 if usage_dict.get("estimated_cost_usd") is not None and previous_cost is not None:

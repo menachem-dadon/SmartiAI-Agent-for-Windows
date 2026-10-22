@@ -47,6 +47,16 @@ class UsageStatsTests(unittest.TestCase):
         self.assertEqual(data["models"][0]["cost_status"], "unavailable")
         self.assertIsNone(data["models"][0]["cost_usd"])
 
+    def test_live_duration_is_accounted_without_inventing_zero_audio_cost(self):
+        receipt = {"voice_seconds": 15, "voice_duration_estimated": False, "request_id": "live:one"}
+        self.assertTrue(ModelContextMixin._log_usage(self.core, "gpt-live-1", receipt))
+        self.assertTrue(ModelContextMixin._log_usage(self.core, "gpt-live-1", receipt))
+        data = usage_snapshot(self.core, "today")
+        self.assertEqual(data["voice_seconds"], 15)
+        self.assertEqual(data["total_tokens"], 0)
+        self.assertIsNone(data["cost_usd"])
+        self.assertEqual(data["unpriced_models"], 1)
+
     def test_reads_real_runtime_log_and_prices_cache_without_double_counting(self):
         ModelContextMixin._log_usage(self.core, "gemini-test", {
             "prompt": 1000, "completion": 500, "total": 1500,

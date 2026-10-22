@@ -176,7 +176,7 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_language_is_snapshotted_and_uses_provider_native_contract(self):
         setup = self.session.connection_setup()["setup"]
-        self.assertEqual(setup["inputAudioTranscription"], {"languageCodes": ["he-IL"], "wordTimestamp": True})
+        self.assertEqual(setup["inputAudioTranscription"], {"languageCodes": ["he-IL"]})
         self.assertNotIn("languageCode", setup["generationConfig"]["speechConfig"])
         vad = setup["realtimeInputConfig"]["automaticActivityDetection"]
         self.assertEqual(vad["endOfSpeechSensitivity"], "END_SENSITIVITY_LOW")
@@ -185,7 +185,7 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(vad["prefixPaddingMs"], 300)
         self.assertIn("Hebrew", setup["systemInstruction"]["parts"][0]["text"])
         self.settings["live_language"] = "en"
-        self.assertEqual(self.session.connection_setup()["setup"]["inputAudioTranscription"], {"languageCodes": ["he-IL"], "wordTimestamp": True})
+        self.assertEqual(self.session.connection_setup()["setup"]["inputAudioTranscription"], {"languageCodes": ["he-IL"]})
         other = LiveSession(self.manager, self.conversation, "openai", {}, [])
         try:
             config = other.connection_setup()["session"]
@@ -196,7 +196,7 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.settings["live_language"] = "auto"
         other = LiveSession(self.manager, self.conversation, "gemini", {}, [])
         try:
-            self.assertEqual(other.connection_setup()["setup"]["inputAudioTranscription"], {"wordTimestamp": True})
+            self.assertEqual(other.connection_setup()["setup"]["inputAudioTranscription"], {})
             self.assertNotIn("default language of the user's microphone", other.instructions)
         finally:
             await other.close()
@@ -300,10 +300,11 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.session.http = SimpleNamespace(ws_connect=AsyncMock(return_value=replacement), close=AsyncMock())
         self.session.gemini_setup = self.session.connection_setup()
         self.session.resume_handle = "preface-handle"
-        def snapshot():
-            status_seen.set()
-            return "full context after resumption"
-        self.session.context = snapshot
+        original_control = self.session.control
+        def control(action, *args, **kwargs):
+            if action == "status": status_seen.set()
+            return original_control(action, *args, **kwargs)
+        self.session.control = control
         send = replacement.send_json
         async def reply(data):
             await send(data)
@@ -338,22 +339,157 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.session.transport_ready.is_set())
         self.session.http.ws_connect.assert_awaited_once()
 
-    async def test_status_context_does_not_block_audio_input_on_the_gateway_loop(self):
+    async def test_status_needs_no_context_and_keeps_audio_available(self):
         task = self.make_task()
-        started, release = threading.Event(), threading.Event()
-        def snapshot():
-            started.set(); release.wait(1)
-            return "complete canonical snapshot"
-        self.session.context = snapshot
-        command = asyncio.create_task(self.session.receive({"toolCall":{"functionCalls":[{"id":"status-check","name":"smarty_task","args":{"action":"status","task_id":task["id"]}}]}}))
-        while not started.is_set(): await asyncio.sleep(.005)
-        try:
-            await asyncio.wait_for(self.session.input({"sequence":0,"audio":base64.b64encode(b'\0\0'*256).decode()}),.2)
-        finally:
-            release.set()
-            await command
-        response=self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]["response"]
-        self.assertEqual(response["full_canonical_context"], "complete canonical snapshot")
+        self.session.context = Mock(side_effect=AssertionError("status must not export history"))
+        await self.session.receive({"toolCall":{"functionCalls":[{"id":"status-check","name":"smarty_task","args":{"action":"status","task_id":task["id"]}}]}})
+        response = self.session.ws.sent[-1]["toolResponse"]["functionResponses"][0]["response"]
+        self.assertNotIn("full_canonical_context", response)
+        await asyncio.wait_for(self.session.input({"sequence":0,"audio":base64.b64encode(b"\0\0"*256).decode()}), .2)
+        self.session.context.assert_not_called()
+
+    async def test_reattach_restores_input_cursor_and_accepts_next_frame(self):
+        encoded = base64.b64encode(b"\0\0" * 256).decode()
+        await self.session.input({"sequence": 500, "audio": encoded})
+        opened = await self.manager.start({"conversation_id": self.conversation})
+        self.assertEqual(opened["next_input_sequence"], 501)
+        await self.session.input({"sequence": opened["next_input_sequence"], "audio": encoded})
+        self.assertEqual(len(self.session.ws.sent), 2)
+
+    async def test_reconnecting_audio_is_dropped_promptly_instead_of_buffered_for_later(self):
+        self.session.phase = "reconnecting"
+        self.session.transport_ready.clear()
+        encoded = base64.b64encode(b"\0\0" * 256).decode()
+        receipt = await asyncio.wait_for(self.session.input({"sequence": 0, "audio": encoded}), .1)
+        self.assertTrue(receipt["dropped"])
+        self.assertEqual(self.session.ws.sent, [])
+        self.session.phase = "ready"; self.session.transport_ready.set()
+        await self.session.input({"sequence": 1, "audio": encoded})
+        self.assertEqual(len(self.session.ws.sent), 1)
+
+    async def test_resumable_false_discards_old_handle_and_fresh_connection_keeps_task(self):
+        task = self.make_task()
+        self.session.resume_handle = "stale"
+        await self.session.receive({"sessionResumptionUpdate": {"resumable": False}})
+        self.assertEqual(self.session.resume_handle, "")
+        replacement = type(self.session.ws)()
+        replacement.receive = AsyncMock(return_value=WSMessage(WSMsgType.TEXT, '{"setupComplete":{}}', None))
+        self.session.http = SimpleNamespace(ws_connect=AsyncMock(return_value=replacement), close=AsyncMock())
+        await self.session.resume_gemini()
+        self.assertNotIn("handle", replacement.sent[0]["setup"]["sessionResumption"])
+        self.assertIn(task["run_id"], json.dumps(replacement.sent))
+        self.assertEqual(self.session.tasks[task["id"]]["run_id"], task["run_id"])
+        self.runs.submit.assert_called_once()
+
+    async def test_controls_do_not_read_context_or_historical_files(self):
+        task = self.make_task()
+        self.session.context = Mock(side_effect=AssertionError("context unavailable"))
+        self.session.gather_files = Mock(side_effect=AssertionError("old file deleted"))
+        for action in ("pause", "resume", "cancel"):
+            self.session.control(action, task_id=task["id"])
+        self.runs.cancel.assert_called_once_with(task["run_id"])
+        self.assertEqual(self.runs.control_run.call_count, 2)
+
+    async def test_text_retry_during_inflight_and_after_audio_keeps_one_turn(self):
+        original = self.session.apply_text
+        async def slow(text, attachments):
+            await asyncio.sleep(.02)
+            await original(text, attachments)
+        self.session.apply_text = slow
+        payload = {"sequence": 2, "text": "One explicit request"}
+        await asyncio.gather(self.session.input(payload), self.session.input(payload))
+        encoded = base64.b64encode(b"\0\0" * 256).decode()
+        for sequence in range(3, 75):
+            await self.session.input({"sequence": sequence, "audio": encoded})
+        await self.session.input(payload)
+        self.assertEqual([r["content"] for r in self.store.messages(self.conversation) if r["role"] == "user"], [payload["text"]])
+
+    async def test_memory_uses_shared_manager_and_only_actual_changes_emit(self):
+        memory = SimpleNamespace(build_prompt_context=Mock(return_value="Saved preference: brief Hebrew replies"),
+            extract_model_memory_decision=Mock(return_value=("", [{"action": "add", "content": "brief replies"}])),
+            apply_model_memory_operations=Mock(side_effect=[{"changed": True, "count": 1}, {"changed": False, "count": 0}]))
+        self.core.memory_manager = memory
+        self.assertIn("Saved preference", self.session.context())
+        for _ in range(2):
+            result = await asyncio.to_thread(self.session.control, "memory", '{"operations":[{"action":"add","content":"brief replies"}]}')
+        await asyncio.sleep(0)
+        memory.apply_model_memory_operations.assert_called_with([{"action": "add", "content": "brief replies"}], session_id=self.conversation)
+        self.assertEqual(sum(e["type"] == "memory" for e in self.session.events), 1)
+        self.assertFalse(result["changed"])
+
+    async def test_gpt_close_reader_keeps_final_ack_and_cumulative_usage(self):
+        self.session.provider = "openai"
+        self.core._log_usage = Mock(return_value=True)
+        async def read():
+            while not any(item.get("type") == "session.close" for item in self.session.ws.sent): await asyncio.sleep(.001)
+            self.assertFalse(self.session.closed)
+            await self.session.receive({"type": "session.closed", "usage": {"seconds": 15}, "reason": "close_requested"})
+        self.session.worker = asyncio.create_task(read())
+        await asyncio.wait_for(self.session.close(), .5)
+        self.assertTrue(self.session.closed_ack.is_set())
+        self.assertEqual(sum(call.args[1]["voice_seconds"] for call in self.core._log_usage.call_args_list), 15)
+
+    async def test_gemini_usage_sums_turns_without_double_counting_one_turn(self):
+        self.core._log_usage = Mock(return_value=True)
+        await self.session.receive({"usageMetadata": {"promptTokenCount": 10, "responseTokenCount": 2, "totalTokenCount": 12}})
+        await self.session.receive({"serverContent": {"turnComplete": True}, "usageMetadata": {"promptTokenCount": 20, "responseTokenCount": 3, "totalTokenCount": 23}})
+        await self.session.receive({"serverContent": {"turnComplete": True}, "usageMetadata": {"promptTokenCount": 10, "responseTokenCount": 2, "totalTokenCount": 12}})
+        await self.session.record_usage({}, final=True)
+        calls = self.core._log_usage.call_args_list
+        self.assertEqual(sum(call.args[1].get("prompt", 0) for call in calls), 30)
+        self.assertEqual(sum(call.args[1].get("completion", 0) for call in calls), 5)
+        self.assertEqual(sum(call.args[1].get("total", 0) for call in calls), 35)
+
+    async def test_gpt_correlated_append_rejection_is_nonfatal(self):
+        self.session.provider = "openai"
+        await self.session.inject("New background")
+        event = self.session.ws.sent[-1]["event_id"]
+        await self.session.receive({"type": "error", "error": {"client_event_id": event, "message": "Rejected update"}})
+        self.assertFalse(self.session.closed)
+        self.assertNotIn(event, self.session.pending_appends)
+        self.assertEqual(self.session.events[-1]["type"], "notice")
+
+    async def test_playback_drop_cannot_become_spoken_receipt(self):
+        task = self.make_task()
+        self.session.output_audio_ms = 1000
+        self.session.delivery_receipts[task["run_id"]] = {"task": task, "start_ms": 0, "end_ms": 1000}
+        self.session.coordinator.set_delivery = Mock()
+        await self.session.input({"sequence": 0, "playback_ms": 1000, "dropped_audio": [[200, 1000]]})
+        self.session.coordinator.set_delivery.assert_called_once_with(task, "truncated")
+
+    async def test_context_delta_is_empty_until_core_changes(self):
+        self.session.context_changes()
+        self.assertEqual(self.session.context_changes(), {})
+        self.store.append_message("user", "A later text turn", session_id=self.conversation)
+        delta = self.session.context_changes()
+        self.assertEqual(delta["recent_messages"][-1]["content"], "A later text turn")
+        self.assertEqual(self.session.context_changes(), {})
+
+    async def test_expired_resume_handle_falls_back_to_fresh_context_once(self):
+        self.session.resume_handle = "expired"
+        rejected, replacement = type(self.session.ws)(), type(self.session.ws)()
+        rejected.receive = AsyncMock(return_value=WSMessage(WSMsgType.TEXT, '{"error":{"code":400,"message":"Invalid session handle"}}', None))
+        replacement.receive = AsyncMock(return_value=WSMessage(WSMsgType.TEXT, '{"setupComplete":{}}', None))
+        self.session.http = SimpleNamespace(ws_connect=AsyncMock(side_effect=[rejected, replacement]), close=AsyncMock())
+        await self.session.resume_gemini()
+        self.assertEqual(self.session.http.ws_connect.await_count, 2)
+        self.assertTrue(rejected.closed)
+        self.assertNotIn("handle", replacement.sent[0]["setup"]["sessionResumption"])
+
+    async def test_gpt_delivery_fast_path_requires_correlated_ack_and_timeline_boundary(self):
+        task = self.make_task()
+        self.store.transition_run(task["run_id"], "completed", response_text="Verified 7319")
+        task["status"] = "completed"
+        self.session.provider = "openai"
+        self.session.delivery_task = task
+        self.session.route_client_intent = Mock(return_value={"action": "status"})
+        await self.session.send_task_result(task, "Verified 7319")
+        for identity in list(self.session.delivery_claim["events"]):
+            await self.session.receive({"type": "session.commentary.appended", "client_event_id": identity, "end_ms": 500})
+        await self.session.receive({"type": "session.delegation.created", "delegation": {"id": "presentation", "offset_ms": 501}})
+        await asyncio.gather(*self.session.commands)
+        self.session.route_client_intent.assert_not_called()
+        self.assertEqual(self.session.calls["presentation"]["delivery"], "accepted")
 
     async def test_gpt_native_append_contract_keeps_delegation_identity(self):
         self.session.provider = "openai"
@@ -466,6 +602,7 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.session.provider = "openai"
         for role, text, start in (("input", "I would", 100), ("output", "Sure", 120), ("input", " like", 200)):
             await self.session.receive({"type": f"session.{role}_transcript.delta", "delta": text, "start_ms": start, "end_ms": start + 50})
+        await asyncio.sleep(.04)
         rows = self.store.messages(self.conversation)
         self.assertEqual([row["content"] for row in rows], ["I would like", "Sure"])
         identity = rows[0]["message_id"]
@@ -478,6 +615,7 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_interim_input_updates_one_bubble_and_final_does_not_repeat_it(self):
         for text in ("אני רו", "אני רוצה"):
             await self.session.receive({"serverContent": {"interimInputTranscription": {"text": text, "startOffset": ".2s", "endOffset": "1s"}}})
+        await asyncio.sleep(.04)
         before = self.store.messages(self.conversation)
         self.assertEqual(len(before), 1)
         self.assertEqual(before[0]["content"], "אני רוצה")
@@ -549,17 +687,29 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.session.cleanup_complete.is_set())
         self.assertTrue(self.session.error)
 
-    async def test_full_history_file_content_and_explicit_context_overflow(self):
+    async def test_large_history_uses_bounded_view_and_missing_historical_file_does_not_block(self):
         marker = "full file ending marker"
         path = Path(self.directory.name) / "example.txt"
         path.write_text("a" * 12000 + marker, encoding="utf-8")
         self.session.attachments = [{"path": str(path), "name": path.name, "kind": "file", "mime_type": "text/plain"}]
-        self.store.append_message("user", "early detail", session_id=self.conversation)
+        self.store.append_message("user", "early detail", {"attachments": self.session.attachments}, session_id=self.conversation)
         text = self.session.context()
-        self.assertIn("early detail", text); self.assertIn(marker, text)
-        self.store.append_message("user", "b" * 120000, session_id=self.conversation)
-        with self.assertRaisesRegex(ValueError, "ההקשר המלא"):
-            self.session.context()
+        self.assertIn("early detail", text); self.assertIn("example.txt", text)
+        self.assertNotIn(marker, text)  # Files remain in Core, behind its tools/policy.
+        path.unlink()
+        self.session.attachments = []
+        self.store.append_message("user", "topic " * 50000 + marker, session_id=self.conversation)
+        source = self.store.messages(self.conversation)[-1]
+        from smarti.live_context import token_count
+        self.session.provider = "openai"
+        self.session.context_view.invalidate()
+        self.assertLessEqual(token_count(self.session.context()), 7600)
+        tail = self.session.control("context", query="message:" + source["message_id"], offset=len("topic ") * 50000)
+        self.assertIn(marker, tail["content"])
+        self.session.provider = "gemini"
+        self.session.context_view.invalidate()
+        self.assertGreater(token_count(self.session.context(), "gemini"), 8192)
+        self.assertEqual(self.session.gather_files(), [])
 
     async def test_cursor_gap_does_not_replay_old_audio(self):
         for _ in range(1500): self.session.emit("audio", audio="AAA=")
@@ -653,7 +803,8 @@ class LiveVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["scheduling"], "SILENT")
         facts = json.loads(result["response"]["progress"])
         self.assertEqual(len(facts["context"]["progress_events"]),25)
-        self.assertTrue(facts["context"]["full_canonical_context"])
+        self.assertIn("context_changes", facts["context"])
+        self.assertNotIn("full_canonical_context", facts["context"])
 
     async def test_native_update_requires_new_user_input_but_accepts_a_spoken_correction(self):
         task = self.make_task()

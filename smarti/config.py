@@ -1947,6 +1947,8 @@ DEFAULT_SETTINGS = {
     "live_provider": "",
     "live_enabled": False,
     "live_language": "he",
+    "live_max_session_seconds": 0,
+    "live_daily_seconds_limit": 0,
     "live_openai_voice": "marin",
     "live_gemini_voice": "Kore",
     "live_openai_api_key": "",

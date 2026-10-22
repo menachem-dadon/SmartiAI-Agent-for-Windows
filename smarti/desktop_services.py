@@ -338,6 +338,7 @@ def usage_snapshot(core, timeframe="all"):
     }.get(normalized)
     token_keys = ("input_tokens", "output_tokens", "cached_input_tokens", "cache_write_tokens", "tokens")
     totals = {key: 0 for key in token_keys}
+    voice_seconds, voice_estimated = 0.0, False
     known_cost = 0.0
     cached, catalog = pricing_cache(), bundled_pricing()
     models = {}
@@ -360,12 +361,22 @@ def usage_snapshot(core, timeframe="all"):
             target = models.setdefault(model, {
                 "model": model, **{key: 0 for key in token_keys},
                 "cost_usd": 0.0, "cost_status": "recorded", "unpriced_tokens": 0,
+                "voice_seconds": 0.0, "voice_duration_estimated": False,
             })
+            seconds = max(0, float(item.get("voice_seconds", 0) or 0))
+            voice_seconds += seconds
+            target["voice_seconds"] += seconds
+            target["voice_duration_estimated"] |= bool(item.get("voice_duration_estimated"))
+            voice_estimated |= bool(item.get("voice_duration_estimated"))
             for key, value in tokens.items():
                 totals[key] += value
                 target[key] += value
             amount, status = usage_cost(model, item, tokens, cached, catalog)
-            if amount is None and tokens["tokens"]:
+            if seconds and item.get("estimated_cost_usd") is None:
+                # Audio modalities/duration need a separate price contract.
+                # Applying a text-token rate would report a fictitious cost.
+                amount, status = None, "unavailable"
+            if amount is None and (tokens["tokens"] or seconds):
                 target["cost_status"] = "unavailable"
                 target["unpriced_tokens"] += tokens["tokens"]
             elif amount is not None:
@@ -380,6 +391,7 @@ def usage_snapshot(core, timeframe="all"):
     return {
         "schema_version": 2,
         "timeframe": normalized, "total_tokens": totals.pop("tokens"), **totals,
+        "voice_seconds": voice_seconds, "voice_duration_estimated": voice_estimated,
         "cost_usd": known_cost if not unpriced_models else None,
         "known_cost_usd": known_cost, "unpriced_models": unpriced_models,
         "pricing": pricing_status,

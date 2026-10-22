@@ -22,7 +22,7 @@ export function LiveSettings() {
     onSaved: async () => { setStatus("מפתח הלייב נשמר. זמינות המודל תיבדק בפתיחת הלייב"); await load(); },
     onError: error => setStatus(`המפתח לא נשמר: ${String(error)}`),
   });
-  const save = async (path: string, value: string | boolean) => {
+  const save = async (path: string, value: string | boolean | number) => {
     const confirmed = config;
     if (path === "live_enabled") setConfig(current => current ? { ...current, enabled: Boolean(value) } : current);
     setSaving(true);
@@ -37,6 +37,16 @@ export function LiveSettings() {
       </SettingRow>
       <div className="source-settings-field"><SettingRow title="מודל לייב">
         <div className="source-settings-control"><ChoiceField label="מודל לייב" hiddenLabel disabled={disabled} value={provider} options={[{ value: "", label: "בחר ספק לייב" }, ...(config?.items || []).map(item => ({ value: item.id, label: item.label }))]} onValueChange={value => void save("live_provider", value)} /></div>
+      </SettingRow></div>
+      <div className="source-settings-field"><SettingRow title="מגבלת זמן לשיחת לייב" description="בדקות. 0 מאפשר שיחה ללא מגבלת זמן מקומית.">
+        <div className="source-settings-control"><Field label="מגבלת דקות לשיחה" hiddenLabel type="number" min={0} max={10080} step={1} disabled={disabled}
+          key={`session-${config?.max_session_seconds}`} defaultValue={(config?.max_session_seconds || 0) / 60}
+          onBlur={event => { const minutes = Number(event.target.value); if (Number.isInteger(minutes) && minutes >= 0 && minutes <= 10080) void save("live_max_session_seconds", minutes * 60); }} /></div>
+      </SettingRow></div>
+      <div className="source-settings-field"><SettingRow title="מכסת זמן לייב יומית" description="בדקות, לכל ספקי הלייב יחד. 0 מאפשר שימוש ללא מכסה מקומית. הספירה עשויה לכלול אומדן זמן חיבור.">
+        <div className="source-settings-control"><Field label="מכסת דקות יומית" hiddenLabel type="number" min={0} max={10080} step={1} disabled={disabled}
+          key={`daily-${config?.daily_seconds_limit}`} defaultValue={(config?.daily_seconds_limit || 0) / 60}
+          onBlur={event => { const minutes = Number(event.target.value); if (Number.isInteger(minutes) && minutes >= 0 && minutes <= 10080) void save("live_daily_seconds_limit", minutes * 60); }} /></div>
       </SettingRow></div>
       <div className="source-settings-field"><SettingRow title="שפת הלייב" description="העדפת השפה לדיבור ולזיהוי. תחול בפתיחת הלייב הבאה; זיהוי השפה עדיין תלוי בספק.">
         <div className="source-settings-control"><ChoiceField label="שפת הלייב" hiddenLabel disabled={disabled} value={config?.language || "he"} options={[{ value: "he", label: "עברית" }, { value: "en", label: "אנגלית" }, { value: "auto", label: "זיהוי אוטומטי" }]} onValueChange={value => void save("live_language", value)} /></div>

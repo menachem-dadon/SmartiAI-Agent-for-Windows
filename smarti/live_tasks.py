@@ -9,9 +9,10 @@ import uuid
 import hashlib
 from datetime import datetime
 from .live_content import PRESENTATION_INSTRUCTIONS
+from .live_context import fit_text
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
-ACTIONS = {"start", "continue", "update", "pause", "resume", "cancel", "status", "answer", "deliver"}
+ACTIONS = {"start", "continue", "update", "pause", "resume", "cancel", "status", "answer", "deliver", "context", "memory"}
 
 
 class LiveTaskCoordinator:
@@ -41,7 +42,8 @@ class LiveTaskCoordinator:
     def answer(self, task):
         run = self.store.run(task["run_id"]) or {}
         if run: task["status"] = run["status"]
-        return {**self.view(task), "result": run.get("response_text") or run.get("error_text") or "",
+        return {**self.view(task), "result": fit_text(run.get("response_text") or run.get("error_text") or "", 3000),
+                "result_ref": {"run_id": task["run_id"], "lookup_action": "context"},
                 "reason": "This is existing execution evidence, not a new execution request."}
 
     def command(self, action, instruction, task_id, call_id, *, context, attachments, executor,
@@ -59,13 +61,12 @@ class LiveTaskCoordinator:
         if action == "start" and call_id and recovered_revision >= user_revision and task:
             return {**self.view(task), "resumed_existing": True, "acknowledge_start": False}
         if action in {"status", "answer"}:
-            if not task: return {"status": "idle", "full_canonical_context": context}
-            return {**self.answer(task), "full_canonical_context": context}
+            if not task: return {"status": "idle"}
+            return self.answer(task)
         if action == "continue" and task and task["status"] not in TERMINAL:
             # A continuation is a new execution only after the previous one
             # ended. Native model mistakes must not queue a copy of live work.
             return {**self.answer(task), "already_running": True, "execution_started": False,
-                    "full_canonical_context": context,
                     "reason": "This execution is still active. No new run or instruction change was applied. "
                               "Answer the user from the current progress. Use update only if the user actually changed execution instructions; "
                               "never continue/restart merely to report progress or carry out the remaining steps of the original request."}
@@ -77,7 +78,7 @@ class LiveTaskCoordinator:
         if action == "start":
             if not str(instruction).strip(): raise ValueError("חסרה בקשת המשתמש להפעלת הסוכן")
             segment = {"id": uuid.uuid4().hex, "status": "running", "after": 0}
-            prompt = "Live user request:\n" + instruction + "\n\n" + PRESENTATION_INSTRUCTIONS + "\n\nFull canonical conversation and task context:\n" + context
+            prompt = "Live user request:\n" + instruction + "\n\n" + PRESENTATION_INSTRUCTIONS
             metadata = {**executor, "channel": "live", "live_schema": 2, "live_task_id": task_id,
                         "live_segment_id": segment["id"], "live_segments": [segment], "live_session_id": self.session_id,
                         "live_command_key": command_key}
@@ -96,7 +97,7 @@ class LiveTaskCoordinator:
             if action == "cancel": self.core.run_manager.cancel(task["run_id"])
             else:
                 result = self.core.run_manager.control_run(task["run_id"], action,
-                    instruction + "\nUpdated full voice context:\n" + context if action == "update" else instruction,
+                    instruction,
                     attachments=attachments if action == "update" else None)
                 if action == "update":
                     segments = task.setdefault("segments", [])

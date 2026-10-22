@@ -7,6 +7,8 @@ import { ConfirmDialog, PageHero } from "./SettingsManagement";
 
 type Timeframe = "all" | "today" | "week" | "month";
 type UsageModel = {
+  voice_seconds?: number;
+  voice_duration_estimated?: boolean;
   model: string;
   tokens: number;
   input_tokens: number;
@@ -17,6 +19,8 @@ type UsageModel = {
   cost_status: "recorded" | "estimated" | "local" | "unavailable";
 };
 export type UsageSnapshot = {
+  voice_seconds?: number;
+  voice_duration_estimated?: boolean;
   schema_version: 2;
   timeframe: Timeframe;
   total_tokens: number;
@@ -149,13 +153,14 @@ export function UsageView() {
         <section className="usage-stat usage-stat--cost"><span>{partial ? "עלות זמינה · סיכום חלקי" : "עלות מוערכת"}</span><strong dir="ltr">{snapshot ? formatUsageCost(partial ? snapshot.known_cost_usd : snapshot.cost_usd) : "—"}</strong><small>דולר ארה״ב (USD)</small></section>
       </div>
       {snapshot && <>
+        {Boolean(snapshot.voice_seconds) && <p className="usage-pricing-note">זמן לייב: {count(Math.ceil((snapshot.voice_seconds || 0) / 60))} דקות{snapshot.voice_duration_estimated ? " · כולל אומדן זמן חיבור" : " · לפי דיווח הספק"}. עלות קולית מוצגת רק כשיש נתון חיוב מתאים.</p>}
         <p className="usage-pricing-note" aria-live="polite">{snapshot.pricing?.refreshing && "מעדכן את תעריפי המודלים… העלויות יתעדכנו עם סיום הטעינה. "}{snapshot.pricing?.refresh_failed && "עדכון התעריפים אינו זמין כרגע. החישוב משתמש בתעריפים המקומיים הזמינים. "}העלות מבוססת על העלות שנרשמה או על התעריפים הזמינים, ועשויה להיות שונה מהחיוב בפועל.{partial && ` חסר תעריף עבור ${count(snapshot.unpriced_models)} מהמודלים; הם אינם כלולים בסיכום העלות.`}</p>
         {snapshot.models.length ? <section className="usage-details" aria-label="פירוט שימוש לפי מודל">
           <header><h3>פירוט לפי מודל</h3><span>{count(snapshot.models.length)} מודלים</span></header>
           <div className="usage-table-scroll"><table className="usage-table">
             <thead><tr><th scope="col">מודל</th><th scope="col">קלט</th><th scope="col">פלט</th><th scope="col">סה״כ טוקנים</th><th scope="col">עלות (USD)</th></tr></thead>
             <tbody>{snapshot.models.map(item => <tr key={item.model}>
-              <th scope="row"><bdi title={item.model}>{item.model}</bdi>{Boolean(item.cached_input_tokens || item.cache_write_tokens) && <small>מתוך הקלט: {count(item.cached_input_tokens)} מהמטמון{item.cache_write_tokens ? ` · ${count(item.cache_write_tokens)} נכתבו למטמון` : ""}</small>}</th>
+              <th scope="row"><bdi title={item.model}>{item.model}</bdi>{Boolean(item.voice_seconds) && <small>{count(Math.ceil((item.voice_seconds || 0) / 60))} דקות לייב{item.voice_duration_estimated ? " · אומדן" : ""}</small>}{Boolean(item.cached_input_tokens || item.cache_write_tokens) && <small>מתוך הקלט: {count(item.cached_input_tokens)} מהמטמון{item.cache_write_tokens ? ` · ${count(item.cache_write_tokens)} נכתבו למטמון` : ""}</small>}</th>
               <td><bdi>{count(item.input_tokens)}</bdi></td><td><bdi>{count(item.output_tokens)}</bdi></td><td className="usage-tokens-total"><bdi>{count(item.tokens)}</bdi></td>
               <td><bdi className={item.cost_usd === null ? "usage-unpriced" : "usage-model-cost"}>{formatUsageCost(item.cost_usd)}</bdi><small>{item.cost_status === "recorded" ? "עלות מתועדת" : item.cost_status === "local" ? "מודל מקומי" : item.cost_status === "unavailable" ? "חסר תעריף" : "מוערכת"}</small></td>
             </tr>)}</tbody>

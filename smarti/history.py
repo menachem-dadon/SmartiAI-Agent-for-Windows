@@ -669,6 +669,49 @@ class ChatSessionStore:
             session = self._session(db, target)
             return session.get("messages", []) if session else []
 
+    def live_context_messages(self, session_id, *, query="", limit=124, offset=0):
+        """Bounded read-only projection; do not export provider prompts/checkpoints."""
+        clauses = ["session_id=?", "role IN ('user','assistant')", "content<>''",
+                   "COALESCE(json_extract(metadata_json,'$.live_backend'),0)=0",
+                   "COALESCE(json_extract(metadata_json,'$.live_process'),0)=0",
+                   "COALESCE(json_extract(metadata_json,'$.ui_only'),0)=0"]
+        args = [str(session_id)]
+        if str(query).strip():
+            clauses.append("content LIKE ? ESCAPE '\\'")
+            args.append("%" + str(query).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+        with self._lock, self._connect() as db:
+            rows = db.execute("SELECT id,session_id,ordinal,role,substr(content,1,600000) AS content,created_at,"
+                              "json_object('attachments',json_extract(metadata_json,'$.attachments')) AS metadata_json,'{}' AS extra_json FROM messages WHERE "
+                              + " AND ".join(clauses) + " ORDER BY ordinal DESC LIMIT ? OFFSET ?",
+                              (*args, min(512, max(1, int(limit))), max(0, int(offset)))).fetchall()
+            return [self._row_message(row) for row in reversed(rows)]
+
+    def live_context_metadata(self, session_id, *, include_summary=False):
+        """Do not materialize the execution provider's potentially large history."""
+        with self._lock, self._connect() as db:
+            summary = "json_extract(context_json,'$.conversation_summary')" if include_summary else "''"
+            row = db.execute("SELECT updated_at,extra_json," + summary + " AS summary,"
+                             "(SELECT COUNT(*) FROM messages WHERE session_id=sessions.id) AS message_count "
+                             "FROM sessions WHERE id=?", (str(session_id),)).fetchone()
+            if row is None: return {}
+            return {**_json_loads(row["extra_json"], {}), "updated_at": row["updated_at"], "message_count": row["message_count"],
+                    "context": {"conversation_summary": row["summary"] or ""}}
+
+    def live_context_source(self, session_id, message_id, *, offset=0, length=96000):
+        """Read a page of one source without loading an entire large message."""
+        prefix, separator, ordinal = str(message_id).rpartition(":")
+        if not separator or prefix != str(session_id) or not ordinal.isdigit():
+            raise ValueError("Invalid conversation message reference")
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT role,substr(content,?,?),length(content) AS total_chars FROM messages "
+                             "WHERE session_id=? AND ordinal=? AND role IN ('user','assistant') "
+                             "AND COALESCE(json_extract(metadata_json,'$.live_backend'),0)=0 "
+                             "AND COALESCE(json_extract(metadata_json,'$.live_process'),0)=0",
+                             (max(0, int(offset))+1, min(96000, max(1, int(length))), str(session_id), int(ordinal))).fetchone()
+            if row is None:
+                raise ValueError("Message source is unavailable")
+            return {"role": row[0], "content": row[1], "total_chars": row[2]}
+
     def upsert_live_message(self, session_id, identity, role, content, metadata=None):
         """Persist transcript revisions under one identity, without duplicating turns."""
         with self._lock, self._connect() as db:
@@ -676,6 +719,7 @@ class ChatSessionStore:
             row = db.execute("SELECT * FROM messages WHERE session_id=? AND json_extract(metadata_json, '$.live_message_id')=?",
                              (target, str(identity))).fetchone()
             meta = _json_loads(row["metadata_json"], {}) if row else {}
+            history_changed = not row or str(row["content"]) != str(content) or bool(meta.get("live_partial"))
             meta.update(metadata or {})
             meta["live_message_id"] = str(identity)
             now = _now_iso()
@@ -688,6 +732,14 @@ class ChatSessionStore:
                 db.execute("INSERT INTO messages(session_id,ordinal,role,content,created_at,metadata_json) VALUES(?,?,?,?,?,?)",
                            (target, ordinal, role, str(content), now, _json_dumps(meta)))
             db.execute("UPDATE sessions SET updated_at=? WHERE id=?", (now, target))
+            if history_changed and not meta.get("live_partial") and not meta.get("live_process"):
+                # This marker is separate from provider context, so finishing an
+                # older worker cannot overwrite newly recorded voice dialogue.
+                extra = _json_loads(db.execute("SELECT extra_json FROM sessions WHERE id=?", (target,)).fetchone()[0], {})
+                extra["live_dialogue_revision"] = int(extra.get("live_dialogue_revision", 0)) + 1
+                db.execute("UPDATE sessions SET extra_json=? WHERE id=?", (_json_dumps(extra), target))
+                meta["live_dialogue_revision"] = extra["live_dialogue_revision"]
+                db.execute("UPDATE messages SET metadata_json=? WHERE session_id=? AND ordinal=?", (_json_dumps(meta), target, ordinal))
             return self._row_message(db.execute("SELECT * FROM messages WHERE session_id=? AND ordinal=?", (target, ordinal)).fetchone())
 
     def mark_live_backend(self, run_id, task_id):

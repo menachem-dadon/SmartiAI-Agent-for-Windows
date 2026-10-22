@@ -16,6 +16,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent};
 mod browser;
 mod core_process_job;
 mod draft_attachments;
+mod live_stream;
 mod taskbar_badge;
 mod windows_integration;
 
@@ -1448,11 +1449,15 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(windows_integration::DesktopState::default())
         .manage(managed)
+        .manage(live_stream::LiveStreams::default())
         .invoke_handler(tauri::generate_handler![
             core_status,
             core_health,
             core_restart,
             core_api,
+            live_stream::core_live_open,
+            live_stream::core_live_send,
+            live_stream::core_live_close,
             desktop_open_with,
             stage_attachment,
             retain_draft_attachment,

@@ -292,21 +292,42 @@ class LifecycleMixin:
         }
         saved_mode = normalize_provider_name(context.get("mode", ""))
         messages = self.chat_store.messages(session_id)
+        live_revision = int(session.get("live_dialogue_revision", 0) or 0)
+        live_dirty = live_revision > int(context.get("live_history_revision", 0) or 0)
+        if live_revision:
+            values["_live_dialogue_revision"] = live_revision
+        if live_revision:
+            messages = [message for message in messages if not (message.get("metadata") or {}).get("live_backend")
+                        and not (message.get("metadata") or {}).get("live_process")]
         values["_current_user_language"] = conversation_language(messages)
         if exclude_run_id:
             messages = [
                 message for message in messages
                 if str((message.get("metadata") or {}).get("run_id") or "") != str(exclude_run_id)
             ]
+        live_messages = [message for message in messages if (message.get("metadata") or {}).get("live_session_id")
+                         and not (message.get("metadata") or {}).get("live_partial")]
+        if live_revision:
+            values["_live_message_cursor"] = max((int(message["message_id"].rsplit(":", 1)[-1]) for message in live_messages), default=-1)
+        pending_live = [message for message in live_messages
+                        if (int((message.get("metadata") or {}).get("live_dialogue_revision", 0)) > int(context.get("live_history_revision", 0))
+                            or (not (message.get("metadata") or {}).get("live_dialogue_revision")
+                                and int(message["message_id"].rsplit(":", 1)[-1]) > int(context.get("live_message_cursor", -1))))]
         if run_mode == "gemini":
             history = context.get("gemini_history") if saved_mode == "gemini" else None
             if not isinstance(history, list):
                 history = self._messages_to_provider_history(messages, provider_mode=run_mode)
+            elif live_dirty:
+                history = history + self._messages_to_provider_history(pending_live, provider_mode=run_mode)
             values["gemini_history"] = copy.deepcopy(history)
         else:
             history = context.get("universal_history") if saved_mode != "gemini" else None
             if not isinstance(history, list) or not history:
                 history = self._messages_to_provider_history(messages, provider_mode=run_mode)
+            elif live_dirty:
+                # Keep native tool call/result IDs and provider reasoning from
+                # the saved agent history; append only uncaptured voice turns.
+                history = history + self._messages_to_provider_history(pending_live, provider_mode=run_mode)
             history = [copy.deepcopy(item) for item in history if isinstance(item, dict) and item.get("role") != "system"]
             history.insert(0, {"role": "system", "content": values["system_prompt"]})
             values["universal_history"] = history

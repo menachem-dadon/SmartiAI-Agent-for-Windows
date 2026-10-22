@@ -933,6 +933,10 @@ export default function App() {
   const activeAssistantRecorded = Boolean(displayRun && messages.some(message =>
     message.role === "assistant" && message.metadata?.run_id === displayRun.id));
   const live = useLiveConversation({ coreReady: healthOkay && bootstrapReady, coreGeneration: core.generation, conversation: activeId, provider, model, attachments,
+    beforeModelUse: async () => {
+      if (!await renderedSelectionSave) throw new Error("בחירת המודל לא נשמרה. יש לבחור מודל לפני הפעלת הלייב.");
+      await reasoningOperations.current;
+    },
     onConversation: id => setActiveId(id),
     onMessage: message => setMessages(current => mergeMessages(current, [message])),
     onNewUserMessage: setNewUserRun,

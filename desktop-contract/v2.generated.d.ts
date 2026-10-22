@@ -20,6 +20,9 @@ export interface LiveInputRequest {
   mic_muted?: boolean;
   playback_ms?: number;
   output_muted?: boolean;
+  dropped_audio?: Array<Array<number>>;
+  provider_mode?: string;
+  model_name?: string;
   attachment_handles?: Array<string>;
 }
 export interface LiveControlRequest {

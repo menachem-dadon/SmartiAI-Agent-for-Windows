@@ -40,6 +40,8 @@ REQUEST_SCHEMAS = {
         "audio": {"type": "string", "maxLength": 64000},
         "text": {"type": "string", "maxLength": 1000000}, "mic_muted": {"type": "boolean"},
         "playback_ms": {"type": "number", "minimum": 0}, "output_muted": {"type": "boolean"},
+        "dropped_audio": {"type": "array", "maxItems": 128, "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number", "minimum": 0}}},
+        "provider_mode": STRING, "model_name": STRING,
         "attachment_handles": {"type": "array", "maxItems": 80, "items": IDENTIFIER},
     }, ("sequence",)),
     "liveControl": _object({
@@ -191,6 +193,7 @@ OPERATIONS = [
     ("GET", "/v2/live/config", "liveConfig", "ספקי לייב ומצב מפתחות ממוסך", None),
     ("POST", "/v2/live/sessions", "startLive", "פתיחת שיחת לייב", "startLive"),
     ("GET", "/v2/live/sessions/{live_id}/events", "liveEvents", "אירועי שמע ותמלול זמניים", None),
+    ("GET", "/v2/live/sessions/{live_id}/stream", "liveStream", "ערוץ לייב רציף מאומת בבעלות Rust", None),
     ("POST", "/v2/live/sessions/{live_id}/input", "liveInput", "שמע והודעה למודל לייב", "liveInput"),
     ("POST", "/v2/live/sessions/{live_id}/control", "liveControl", "שליטה במשימת לייב ללא מתן אישורים", "liveControl"),
     ("POST", "/v2/live/sessions/{live_id}/stop", "stopLive", "סגירת קול תוך המשך משימות", None),

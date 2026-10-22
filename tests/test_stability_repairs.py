@@ -245,6 +245,55 @@ class StabilityRepairTests(unittest.TestCase):
         self.assertIsNone(self.core.chat_store.load_run_checkpoint(run_id=first))
         self.assertIsNone(self.core.chat_store.load_run_checkpoint(run_id=resumed))
 
+    def test_live_history_merge_preserves_native_tool_pairs_and_captures_revision(self):
+        session, _, _ = self._managed_resume_fixture()
+        object.__setattr__(self.core, "system_prompt", "Core policy")
+        native = [{"role": "user", "content": "earlier request"},
+                  {"role": "assistant", "content": "", "tool_calls": [{"id": "original-call", "type": "function", "function": {"name": "read", "arguments": "{}"}}]},
+                  {"role": "tool", "tool_call_id": "original-call", "content": "verified source"}]
+        self.core.chat_store.update_context({"mode": "local", "universal_history": native}, session_id=session)
+        self.core.chat_store.upsert_live_message(session, "voice-user", "user", "A newer voice correction",
+                                               {"live_session_id": "voice", "live_partial": False})
+        with self.core.bind_run_context("next-run", session, runtime_snapshot={"mode": "local"}):
+            history = self.core.universal_history
+            self.assertEqual(history[1:4], native)
+            self.assertEqual(history[-1]["content"], "A newer voice correction")
+            captured = self.core._chat_context_snapshot()
+            self.core.chat_store.upsert_live_message(session, "late-voice", "user", "Later than capture", {"live_session_id": "voice", "live_partial": False})
+        self.core.chat_store.update_context(captured, session_id=session)
+        with self.core.bind_run_context("following-run", session, runtime_snapshot={"mode": "local"}):
+            serialized = json.dumps(self.core.universal_history)
+            self.assertEqual(serialized.count("A newer voice correction"), 1)
+            self.assertEqual(serialized.count("Later than capture"), 1)
+            self.assertIn("original-call", serialized)
+
+    def test_ordinary_history_without_live_marker_keeps_saved_provider_contract(self):
+        session, _, _ = self._managed_resume_fixture()
+        object.__setattr__(self.core, "system_prompt", "Core policy")
+        native = [{"role": "assistant", "content": "Native saved context", "reasoning_content": "provider metadata"}]
+        context = {"mode": "local", "universal_history": native}
+        self.core.chat_store.update_context(context, session_id=session)
+        with self.core.bind_run_context("ordinary-run", session, runtime_snapshot={"mode": "local"}):
+            self.assertEqual(self.core.universal_history[1:], native)
+            self.assertNotIn("live_history_revision", self.core._chat_context_snapshot())
+        self.assertEqual(self.core.chat_store.session_metadata(session)["context"], context)
+
+    def test_late_finalized_voice_turn_before_cursor_is_not_lost(self):
+        session, _, _ = self._managed_resume_fixture()
+        object.__setattr__(self.core, "system_prompt", "Core policy")
+        store = self.core.chat_store
+        store.update_context({"mode": "local", "universal_history": [{"role": "user", "content": "earlier"}]}, session_id=session)
+        store.upsert_live_message(session, "overlap", "assistant", "Incomplete", {"live_session_id": "voice", "live_partial": True})
+        store.upsert_live_message(session, "later-user", "user", "New instruction", {"live_session_id": "voice", "live_partial": False})
+        with self.core.bind_run_context("run-a", session, runtime_snapshot={"mode": "local"}):
+            captured = self.core._chat_context_snapshot()
+            self.assertNotIn("Incomplete", json.dumps(self.core.universal_history))
+        store.update_context(captured, session_id=session)
+        store.upsert_live_message(session, "overlap", "assistant", "Complete late voice answer", {"live_session_id": "voice", "live_partial": False})
+        with self.core.bind_run_context("run-b", session, runtime_snapshot={"mode": "local"}):
+            self.assertIn("Complete late voice answer", json.dumps(self.core.universal_history))
+            self.assertEqual(json.dumps(self.core.universal_history).count("New instruction"), 1)
+
     def test_resume_refreshes_only_live_system_slot_and_preserves_saved_tool_content(self):
         session, first, resumed = self._managed_resume_fixture()
         checkpoint = self.core.chat_store.load_run_checkpoint(run_id=first)

@@ -700,6 +700,62 @@ class SmartiLocalGateway:
         except (ValueError, RuntimeError) as error:
             return self._error(request, 409, "live_error", str(error))
 
+    async def _live_stream(self, request):
+        session = self._live_voice.sessions.get(request.match_info["live_id"])
+        if session is None or session.closed:
+            return self._error(request, 404, "live_not_found")
+        cursor = self._query_int(request, "after", 0, 0, 2147483647)
+        ws = web.WebSocketResponse(heartbeat=10, max_msg_size=self.MAX_BODY_BYTES)
+        await ws.prepare(request)
+        writing = asyncio.Lock()
+        pending = set()
+        async def send(value):
+            async with writing:
+                await asyncio.wait_for(ws.send_json(value), 5)
+        async def read_input(payload):
+            sequence = payload.get("sequence", -1) if isinstance(payload, dict) else -1
+            try:
+                if not isinstance(payload, dict) or validate_request("liveInput", payload):
+                    raise ValueError("מקטע קלט לייב אינו תקין")
+                result = await session.input(payload)
+                await send({"type": "receipt", "sequence": sequence, "data": result})
+            except (ValueError, RuntimeError) as error:
+                await send({"type": "receipt", "sequence": sequence, "error": str(error)})
+        async def output():
+            nonlocal cursor
+            first = True
+            while not ws.closed:
+                page = await session.poll(cursor, wait=not first)
+                first = False
+                cursor = page["cursor"]
+                await send({"type": "page", "data": page})
+                if page["phase"] == "closed": return
+        writer = asyncio.create_task(output())
+        try:
+            async for packet in ws:
+                session.last_poll = time.monotonic()
+                if packet.type != WSMsgType.TEXT:
+                    if packet.type in {WSMsgType.CLOSE, WSMsgType.ERROR}: break
+                    continue
+                try: payload = json.loads(packet.data)
+                except ValueError:
+                    await ws.close(code=1007, message=b"invalid_json")
+                    break
+                if len(pending) >= 32:
+                    sequence = payload.get("sequence", -1) if isinstance(payload, dict) else -1
+                    receipt = ({"data": {"accepted": True, "dropped": True}} if isinstance(payload, dict) and payload.get("audio")
+                               else {"error": "תור פקודות הלייב מלא; נסה שוב. דבר לא אושר"})
+                    await send({"type": "receipt", "sequence": sequence, **receipt})
+                    continue
+                command = asyncio.create_task(read_input(payload))
+                pending.add(command)
+                command.add_done_callback(pending.discard)
+        finally:
+            writer.cancel()
+            for command in pending: command.cancel()
+            await asyncio.gather(writer, *pending, return_exceptions=True)
+        return ws
+
     async def _approvals(self, request):
         return self._ok(request, {"items": self.core.chat_store.pending_approvals(request.query.get("session_id") or None)})
 
@@ -1218,6 +1274,8 @@ class SmartiLocalGateway:
                 raise RequestValidationError("unknown_or_secret_setting", bad)
             for key, value in values.items():
                 default = DEFAULT_SETTINGS[key]
+                if key in {"live_max_session_seconds", "live_daily_seconds_limit"} and (type(value) is not int or not 0 <= value <= 604800):
+                    raise RequestValidationError("invalid_live_duration_limit", [key])
                 if key == "claude_code_auth_strategy" and (not isinstance(value, str) or value not in {"claude_login", "setup_token_env"}):
                     raise RequestValidationError("unsupported_auth_strategy", [key])
                 # JSON encodes 1.0 as 1. Decimal controls must accept both,
@@ -1516,6 +1574,7 @@ class SmartiLocalGateway:
             await self._live_voice.stop()
         app.on_cleanup.append(close_live)
         app.router.add_get("/v2/live/config", self._live_config)
+        app.router.add_get("/v2/live/sessions/{live_id}/stream", self._live_stream)
         app.router.add_post("/v2/live/sessions", self._live_start)
         app.router.add_get("/v2/live/sessions/{live_id}/{action:events}", self._live_session)
         app.router.add_post("/v2/live/sessions/{live_id}/{action:input|stop|control}", self._live_session)

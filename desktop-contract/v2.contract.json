@@ -84,6 +84,25 @@
         "output_muted": {
           "type": "boolean"
         },
+        "dropped_audio": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "provider_mode": {
+          "type": "string"
+        },
+        "model_name": {
+          "type": "string"
+        },
         "attachment_handles": {
           "type": "array",
           "maxItems": 80,
@@ -911,6 +930,13 @@
       "path": "/v2/live/sessions/{live_id}/events",
       "operation_id": "liveEvents",
       "summary_he": "אירועי שמע ותמלול זמניים",
+      "request_schema": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/live/sessions/{live_id}/stream",
+      "operation_id": "liveStream",
+      "summary_he": "ערוץ לייב רציף מאומת בבעלות Rust",
       "request_schema": null
     },
     {

@@ -466,6 +466,51 @@ class DesktopToolSnapshotTests(unittest.TestCase):
 
 
 class LocalGatewayTests(unittest.TestCase):
+    def test_live_stream_authentication_receipts_and_reattachment(self):
+        from smarti.live_voice import LiveSession
+        import aiohttp
+        with tempfile.TemporaryDirectory() as directory:
+            core = _FakeCore(Path(directory) / "history.json")
+            core.run_manager = ConversationRunManager(core)
+            conversation = core.chat_store.create_session(set_active=False)["id"]
+            gateway = SmartiLocalGateway(core, "test-token", port=0)
+            self.assertTrue(gateway.start())
+            async def prepare():
+                manager = gateway._live_voice
+                voice = LiveSession(manager, conversation, "gemini", {"provider_mode": "local", "model_name": "a"}, [])
+                voice.phase = "ready"
+                voice.ws = SimpleNamespace(closed=False, send_json=mock.AsyncMock(), close=mock.AsyncMock())
+                manager.sessions[voice.id], manager.owner = voice, voice
+                return voice
+            voice = asyncio.run_coroutine_threadsafe(prepare(), gateway._loop).result(3)
+            async def exercise():
+                url = f"http://127.0.0.1:{gateway.port}/v2/live/sessions/{voice.id}/stream"
+                async with aiohttp.ClientSession() as client:
+                    for headers in ({}, {"Authorization": "Bearer wrong"}):
+                        with self.assertRaises(aiohttp.WSServerHandshakeError):
+                            await client.ws_connect(url, headers=headers)
+                    headers = {"Authorization": "Bearer test-token", "Origin": "tauri://localhost"}
+                    async with client.ws_connect(url, headers=headers) as socket:
+                        first = await socket.receive_json(timeout=3)
+                        self.assertEqual(first["type"], "page")
+                        await socket.send_json({"sequence": 100, "mic_muted": True})
+                        while True:
+                            item = await socket.receive_json(timeout=3)
+                            if item["type"] == "receipt": break
+                        self.assertEqual(item["sequence"], 100)
+                        self.assertTrue(item["data"]["accepted"])
+                    self.assertFalse(voice.closed)
+                    async with client.ws_connect(url, headers=headers) as socket:
+                        page = await socket.receive_json(timeout=3)
+                        self.assertEqual(page["data"]["next_input_sequence"], 101)
+                        self.assertTrue(page["data"]["mic_muted"])
+            try:
+                asyncio.run(exercise())
+            finally:
+                asyncio.run_coroutine_threadsafe(voice.close(), gateway._loop).result(5)
+                gateway.stop()
+                core.run_manager.shutdown(wait=True)
+
     def test_desktop_attention_is_global_and_read_receipts_are_snapshot_scoped(self):
         with tempfile.TemporaryDirectory() as directory:
             core = _FakeCore(Path(directory) / "history.json")
