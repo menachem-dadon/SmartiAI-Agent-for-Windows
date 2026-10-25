@@ -12,7 +12,7 @@ except ImportError:  # pragma: no cover - PyQt always provides sip in production
 # ==========================================
 
 THEME_OPTIONS = ("system", "dark", "light")
-DEFAULT_THEME_MODE = "dark"
+DEFAULT_THEME_MODE = "system"
 APP_FONT_FAMILY = "Segoe UI"
 APP_FONT_SOURCE_PATH = ""
 _APP_FONT_CACHE_PATH = None

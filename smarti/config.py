@@ -2095,7 +2095,7 @@ DEFAULT_SETTINGS = {
         "developer_trace": True,
         "sanitize_html": True,
         "lazy_settings_pages": True,
-        "theme_mode": "dark",
+        "theme_mode": "system",
         "settings_show_advanced": False,
         "workspace_start_maximized": True,
         "workspace_sidebar_collapsed": False,
