@@ -54,12 +54,12 @@ beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
   focused = true; hidden = false; readGate = null; messageGate = null;
-  attention = ["b", "c"].map((session) => ({ id: `unread-${session}`, session_id: session, title: `chat-${session}`, kind: "response" }));
+  attention = ["b", "c"].map((session) => ({ id: `unread-${session}`, session_id: session, title: `chat-${session}`, kind: "response", run_id: `run-${session}`, run_status: "completed" }));
   conversations = ["a", "b", "c"].map((id) => ({ id, title: `chat-${id}`, message_count: 3 }));
   messages = Object.fromEntries(["a", "b", "c"].map((id) => [id, [
     { role: "assistant", content: `old-${id}` },
     { role: "user", content: `question-${id}` },
-    { role: "assistant", content: `answer-${id}` },
+    { role: "assistant", content: `answer-${id}`, metadata: { run_id: `run-${id}` } },
   ]]));
   approvals = []; runs = []; olderMessages = {}; readCalls.length = 0;
   localStorage.clear(); sessionStorage.clear(); native.handlers.clear();
@@ -125,12 +125,19 @@ afterEach(() => {
 const row = (session: string) => screen.getByText(`chat-${session}`, { selector: ".conversation-select span" }).closest(".conversation-row")!;
 const open = (session: string) => fireEvent.click(row(session).querySelector("button")!);
 const badge = () => vi.mocked(invoke).mock.calls.filter(([name]) => name === "desktop_set_unread").slice(-1)[0]?.[1];
+async function revealResult() {
+  const viewport = document.querySelector<HTMLElement>(".chat-stage")!;
+  await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
+  viewport.scrollTop = 1450;
+  fireEvent.scroll(viewport);
+  await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
+}
 async function start() {
   // Read/notification scenarios begin with an explicitly selected conversation.
   rememberActiveConversation("a");
   render(<App />);
   await screen.findByText("answer-a");
-  await waitFor(() => expect(badge()).toEqual({ count: attention.length }));
+  await waitFor(() => expect(badge()).toEqual({ count: attention.filter(item => item.run_status === "completed").length, actionRequired: attention.some(item => item.action_required) }));
 }
 
 test("new conversation remains an unsent draft until the first message", async () => {
@@ -150,13 +157,46 @@ test("new conversation remains an unsent draft until the first message", async (
   expect(vi.mocked(coreApi).mock.calls.some(([method, path]) => method === "POST" && path === "/v2/conversations")).toBe(false);
 });
 
+test("an unseen result remains unread while reading older content", async () => {
+  await start();
+  open("b");
+  await screen.findByText("answer-b");
+  await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)); });
+  expect(readCalls.some(call => call.session === "b")).toBe(false);
+  expect(row("b").querySelector(".conversation-activity.unread")).not.toBeNull();
+  await revealResult();
+  await waitFor(() => expect(readCalls).toContainEqual({ session: "b", ids: ["unread-b"] }));
+});
+
+test("a new result in another foreground chat offers the compact icon navigation", async () => {
+  await start();
+  attention.push({ id: "new-c", session_id: "c", run_id: "run-c", kind: "response", run_status: "completed", title: "chat-c" });
+  await screen.findByRole("button", { name: "פתיחת השיחה" }, { timeout: 4000 });
+  expect(document.querySelector(".conversation-toast")).not.toBeNull();
+  expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "desktop_notify")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "פתיחת השיחה" }));
+  await screen.findByText("answer-c");
+  expect(document.querySelector(".conversation-toast")).toBeNull();
+});
+
+test("viewing a pending request preserves its action marker until it is resolved", async () => {
+  const { result } = renderHook(() => useConversationAttention(vi.fn()));
+  const pending = { id: "pending", session_id: "b", run_id: "run-b", title: "request", kind: "approval", action_required: true };
+  act(() => result.current.replace([pending]));
+  await act(async () => result.current.acknowledge("b", [pending.id]));
+  expect(result.current.items).toEqual([pending]);
+  act(() => result.current.replace([]));
+  expect(result.current.items).toEqual([]);
+});
+
 describe("conversation read state and reply navigation", () => {
   test("clears the dot and decrements only its taskbar count before the receipt finishes", async () => {
     await start();
     readGate = deferred<void>();
     open("b");
     await screen.findByText("answer-b");
-    await waitFor(() => expect(badge()).toEqual({ count: 1 }));
+    await revealResult();
+    await waitFor(() => expect(badge()).toEqual({ count: 1, actionRequired: false }));
     expect(row("b").querySelector(".conversation-activity.unread")).toBeNull();
     expect(row("c").querySelector(".conversation-activity.unread")).not.toBeNull();
     expect(readCalls).toEqual([{ session: "b", ids: ["unread-b"] }]);
@@ -169,19 +209,20 @@ describe("conversation read state and reply navigation", () => {
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "chat-a" } });
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(1));
     expect(screen.getByRole("option").textContent).toContain("chat-a");
-    expect(badge()).toEqual({ count: 2 });
+    expect(badge()).toEqual({ count: 2, actionRequired: false });
   });
 
   test("does not read a background window and acknowledges it on return to the foreground", async () => {
     focused = false;
-    attention.push({ id: "unread-a", session_id: "a", kind: "response", title: "chat-a" });
+    attention.push({ id: "unread-a", session_id: "a", kind: "response", title: "chat-a", run_id: "run-a", run_status: "completed" });
     await start();
     expect(readCalls).toEqual([]);
     expect(row("a").querySelector(".conversation-activity.unread")).not.toBeNull();
     focused = true;
     fireEvent.focus(window);
+    await revealResult();
     await waitFor(() => expect(readCalls).toContainEqual({ session: "a", ids: ["unread-a"] }));
-    expect(badge()).toEqual({ count: 2 });
+    expect(badge()).toEqual({ count: 2, actionRequired: false });
   });
 
   test("ordinary selection preserves reading while notifications explicitly align the reply", async () => {
@@ -206,13 +247,15 @@ describe("conversation read state and reply navigation", () => {
 
   test("quiet polls discover a completion in the already-open conversation and synchronize its receipt", async () => {
     await start();
-    attention.push({ id: "late-a", session_id: "a", kind: "response", title: "chat-a" });
+    attention.push({ id: "late-a", session_id: "a", kind: "response", title: "chat-a", run_id: "run-a", run_status: "completed" });
     messages.a.push({ role: "assistant", content: "new-answer-a" });
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1250)); });
     expect(screen.getByText("new-answer-a")).toBeDefined();
+    await revealResult();
+    await waitFor(() => expect(readCalls).toContainEqual({ session: "a", ids: ["late-a"] }));
     expect(readCalls).toContainEqual({ session: "a", ids: ["late-a"] });
     expect(row("a").querySelector(".conversation-activity.unread")).toBeNull();
-    expect(badge()).toEqual({ count: 2 });
+    expect(badge()).toEqual({ count: 2, actionRequired: false });
   });
 
   test("an older notification loads and positions its own reply beyond the latest page", async () => {
@@ -245,14 +288,14 @@ describe("conversation read state and reply navigation", () => {
     runs = [{ id: "run-b", session_id: "b", status: "waiting_for_approval", user_text: "question" }];
     approvals = [{ id: "approval-b", run_id: "run-b", session_id: "b", title: "Approve file", prompt: "Allow this action", risk_level: "low", created_at: "" }];
     conversations[1].needs_input = true;
-    attention[0].kind = "approval";
+    attention[0].kind = "approval"; attention[0].action_required = true; attention[0].run_status = "waiting_for_approval";
     await start();
     await act(async () => native.handlers.get("desktop://activation")!({ payload: { command: "notification", sessionId: "b" } }));
     const panel = await screen.findByRole("region", { name: "בקשות הרשאה" });
     expect(within(panel).getByText("Approve file")).toBeDefined();
     expect(document.querySelector(".chat-input-panel")!.contains(panel)).toBe(true);
     expect(panel.querySelector('[aria-modal="true"]')).toBeNull();
-    await waitFor(() => expect(document.querySelector<HTMLElement>(".chat-stage")!.scrollTop).toBe(1384));
+    await waitFor(() => expect(document.querySelector<HTMLElement>(".chat-stage")!.scrollTop).toBe(1184));
     expect(readCalls).toContainEqual({ session: "b", ids: ["unread-b"] });
     // Reading the request never resolves the underlying permission.
     expect(row("b").querySelector(".conversation-activity.waiting_for_approval")).not.toBeNull();

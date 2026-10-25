@@ -21,6 +21,7 @@ pub struct DesktopState {
     hidden_to_tray: AtomicBool,
     pending_activation: Mutex<Option<DesktopActivation>>,
     unread_count: AtomicU32,
+    action_required: AtomicBool,
 }
 
 impl Default for DesktopState {
@@ -34,6 +35,7 @@ impl Default for DesktopState {
             hidden_to_tray: AtomicBool::new(false),
             pending_activation: Mutex::new(None),
             unread_count: AtomicU32::new(u32::MAX),
+            action_required: AtomicBool::new(false),
         }
     }
 }
@@ -708,13 +710,18 @@ pub fn desktop_notify(
 }
 
 #[tauri::command]
-pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
+pub fn desktop_set_unread(app: AppHandle, count: u32, action_required: Option<bool>) -> Result<(), String> {
     let state = app.state::<DesktopState>();
-    if state.unread_count.load(Ordering::Acquire) == count {
+    let action_required = action_required.unwrap_or(false);
+    let previous_count = state.unread_count.load(Ordering::Acquire);
+    let previous_action = state.action_required.load(Ordering::Acquire);
+    if previous_count == count && previous_action == action_required {
         return Ok(());
     }
     let window = app.get_window("main").ok_or("main window missing")?;
-    let taskbar_title = if count == 0 {
+    let taskbar_title = if action_required {
+        "SmartiAI (!)".to_string()
+    } else if count == 0 {
         "SmartiAI".to_string()
     } else {
         format!("SmartiAI ({count})")
@@ -722,8 +729,8 @@ pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
     window
         .set_title(&taskbar_title)
         .map_err(|error| error.to_string())?;
-    let badge = if count > 0 {
-        Some(crate::taskbar_badge::unread_badge(count)?)
+    let badge = if count > 0 || action_required {
+        Some(crate::taskbar_badge::unread_badge(count, action_required)?)
     } else {
         None
     };
@@ -731,18 +738,19 @@ pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
         .set_overlay_icon(badge)
         .map_err(|error| error.to_string())?;
     #[cfg(windows)]
-    if count == 0 || !window.is_focused().unwrap_or(false) {
+    if (count == 0 && !action_required) || (!window.is_focused().unwrap_or(false)
+        && (action_required && !previous_action || count > previous_count)) {
         use windows::Win32::UI::WindowsAndMessaging::{
-            FlashWindowEx, FLASHWINFO, FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG,
+            FlashWindowEx, FLASHWINFO, FLASHW_ALL, FLASHW_STOP,
         };
         if let Ok(hwnd) = window.hwnd() {
             let info = FLASHWINFO {
                 cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
                 hwnd,
-                dwFlags: if count == 0 {
+                dwFlags: if count == 0 && !action_required {
                     FLASHW_STOP
                 } else {
-                    FLASHW_ALL | FLASHW_TIMERNOFG
+                    FLASHW_ALL
                 },
                 uCount: 3,
                 dwTimeout: 0,
@@ -751,6 +759,7 @@ pub fn desktop_set_unread(app: AppHandle, count: u32) -> Result<(), String> {
         }
     }
     state.unread_count.store(count, Ordering::Release);
+    state.action_required.store(action_required, Ordering::Release);
     let _ = app.emit("desktop://unread", count);
     Ok(())
 }

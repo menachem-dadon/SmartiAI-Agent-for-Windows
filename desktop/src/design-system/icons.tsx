@@ -10,14 +10,14 @@ import {
   IconPencil, IconPin, IconPlayerPause, IconPlayerPlay, IconPlayerStopFilled, IconPlug,
   IconPlus, IconRefresh, IconSearch, IconSettings, IconShield, IconSparkles,
   IconStar, IconStarFilled, IconSun, IconTerminal2, IconTextWrap, IconTools,
-  IconTrash, IconUser, IconVolume, IconWorld, IconX,
+  IconTrash, IconUser, IconVolume, IconWorld, IconX, IconClock, IconHelpCircle, IconExclamationCircle,
 } from "@tabler/icons-react";
 import { foundations, type DesignTheme } from "./tokens";
 
 export const IconTheme = createContext<DesignTheme>("light");
 export type IconFamily = "tabler" | "original";
 export const IconFamilyContext = createContext<IconFamily>("tabler");
-export const iconNames = ["plus", "send", "mic", "stop", "chevron", "search", "settings", "file", "expand", "shrink", "archive", "close", "check", "sun", "moon", "panel", "arrow", "copy", "download", "shield", "spark", "more", "newChat", "pin", "rename", "trash", "export", "speaker", "memory", "folder", "browser", "terminal", "canvas", "tools", "tasks", "usage", "activity", "refresh", "back", "forward", "external", "lock", "info", "star", "starFilled", "save", "wrap", "play", "pause", "user", "home", "history", "mail", "screen", "code", "globe", "bell", "layers", "plug", "paste", "book", "alert", "loader", "key"] as const;
+export const iconNames = ["plus", "send", "mic", "stop", "chevron", "search", "settings", "file", "expand", "shrink", "archive", "close", "check", "sun", "moon", "panel", "arrow", "copy", "download", "shield", "spark", "more", "newChat", "pin", "rename", "trash", "export", "speaker", "memory", "folder", "browser", "terminal", "canvas", "tools", "tasks", "usage", "activity", "refresh", "back", "forward", "external", "lock", "info", "star", "starFilled", "save", "wrap", "play", "pause", "user", "home", "history", "mail", "screen", "code", "globe", "bell", "layers", "plug", "paste", "book", "alert", "loader", "key", "clock", "questionCircle", "exclamationCircle"] as const;
 export type IconName = typeof iconNames[number];
 // Static imports keep the published SVG geometry and allow Vite to remove unused icons.
 // Physical arrow directions match the accepted v7 actions; caller-owned transforms stay intact.
@@ -39,9 +39,13 @@ export const tablerIcons = {
   mail: IconMail, screen: IconDeviceDesktop, code: IconCode, globe: IconWorld,
   bell: IconBell, layers: IconLayersIntersect, plug: IconPlug, paste: IconClipboard,
   book: IconBook, alert: IconAlertTriangle, loader: IconLoader2, key: IconKey,
+  clock: IconClock, questionCircle: IconHelpCircle, exclamationCircle: IconExclamationCircle,
 };
 const assets = import.meta.glob<string>("./icons/*.png", { eager: true, query: "?url", import: "default" });
-export function rasterIcon(theme: DesignTheme, name: IconName): string { return assets[`./icons/${name === "key" ? "lock" : name}-${theme}.png`]; }
+export function rasterIcon(theme: DesignTheme, name: IconName): string {
+  const fallback = { key: "lock", clock: "history", questionCircle: "info", exclamationCircle: "info" } as Record<string, string>;
+  return assets[`./icons/${fallback[name] || name}-${theme}.png`];
+}
 export const actionIcons = { create: "plus", edit: "rename", remove: "trash", refresh: "refresh", copy: "copy", speak: "speaker", send: "send", cancel: "stop", appearanceLight: "sun", appearanceDark: "moon", appearanceSystem: "screen", expand: "expand", collapse: "shrink" } satisfies Record<string, IconName>;
 export const toolIcons: Record<string, IconName> = {
   agent_planner: "tasks", background_task_manager: "history", browser_automation_manager: "browser", canvas_manager: "canvas", computer_automation_manager: "screen", context_compaction: "layers", create_python_tool: "code", document_manager: "file", email_manager: "mail", extension_manager: "plug", file_manager: "folder", final_verifier: "check", get_tool_info: "info", mcp: "plug", memory_manager: "memory", notification_manager: "bell", row_status: "check", screen_manager: "screen", search_tools: "search", skill: "book", software_manager: "layers", system_manager: "terminal", web_manager: "globe",
@@ -49,7 +53,7 @@ export const toolIcons: Record<string, IconName> = {
 export function Icon({ name, size = Number.parseInt(foundations.size.icon), className = "" }: { name: IconName; size?: number; className?: string }) {
   const theme = useContext(IconTheme);
   const family = useContext(IconFamilyContext);
-  if (family === "original") return <img className={`sds-icon ${className}`} data-icon={name} data-icon-family={family} src={rasterIcon(theme, name)} width={size} height={size} alt="" aria-hidden="true" draggable={false} />;
+  if (family === "original" && !["clock", "questionCircle", "exclamationCircle"].includes(name)) return <img className={`sds-icon ${className}`} data-icon={name} data-icon-family={family} src={rasterIcon(theme, name)} width={size} height={size} alt="" aria-hidden="true" draggable={false} />;
   const Svg = tablerIcons[name];
   return <Svg className={`sds-icon ${className}`} data-icon={name} data-icon-family={family} size={size} stroke={2} aria-hidden="true" focusable="false" />;
 }

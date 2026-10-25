@@ -28,7 +28,7 @@ function setup(open = false) {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 1040, width: 240 } as DOMRect);
   let clipPath = "none";
   vi.spyOn(window, "getComputedStyle").mockImplementation(() => ({ getPropertyValue: () => "72px", get clipPath() { return clipPath; } }) as unknown as CSSStyleDeclaration);
-  const props = { logo: "/logo.png", conversations: [], activeId: "", loading: false, error: "", unread: () => 0,
+  const props = { logo: "/logo.png", conversations: [], activeId: "", loading: false, error: "", attentionItems: [],
     onToggle: vi.fn(), onCreate: vi.fn(), onSearch: vi.fn(), onSelect: vi.fn(), actions: () => [], onManagement: vi.fn() };
   const view = render(<ChatSidebar {...props} open={open} />);
   const drawer = () => view.container.querySelector("aside")!;

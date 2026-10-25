@@ -5,7 +5,7 @@ export interface Conversation {
 }
 export interface AttachmentMeta { handle?: string; name: string; kind?: string; mime_type?: string; size?: number; path?: string; }
 export interface ChatMessage { role: "user" | "assistant" | "system"; content: string; message_id?: string; created_at?: string; attachments?: AttachmentMeta[]; metadata?: Record<string, unknown>; }
-export interface AttentionItem { id: string; session_id: string; run_id?: string; kind: string; title: string; }
+export interface AttentionItem { id: string; session_id: string; run_id?: string; kind: string; title: string; run_status?: string | null; action_required?: boolean; created_at?: string; read_at?: string | null; }
 export interface ConversationList { items: Conversation[]; attention_items: AttentionItem[]; total?: number; }
 export interface MessagePage { session_id: string; messages: ChatMessage[]; total_count: number; has_older: boolean; older_count: number; next_before_ordinal: number | null; unread_attention_ids?: string[]; }
 export interface RunRecord { id: string; session_id: string; status: string; user_text: string; response_text?: string; error_text?: string; updated_at?: string; metadata?: { provider_mode?: string; user_language?: "he" | "en"; live_task_id?: string; live_schema?: number; live_session_id?: string; live_permission?: boolean; pause_requested?: boolean; paused?: boolean; stream?: import("./chatStreaming").StreamState }; }

@@ -1,7 +1,7 @@
 import { useId, useLayoutEffect, useRef, useState } from "react";
-import type { Conversation } from "./chatTypes";
+import type { AttentionItem, Conversation } from "./chatTypes";
 import type { ManagementSection } from "./managementCatalog";
-import { activityState } from "./legacyUiParity";
+import { attentionSummary, conversationIndicator, ConversationIndicator, isUnseenCompletion } from "./conversationIndicators";
 import { recentConversations } from "./chatState";
 import { HoverLabel, Icon, IconButton, Menu, type MenuItem } from "./design-system";
 import { useConversationDrawerMotion } from "./workspaceMotion";
@@ -18,10 +18,10 @@ export function conversationActions(item: Conversation, handlers: {
   ];
 }
 
-export function ChatSidebar({ open, resizing = false, logo, conversations, activeId, loading, error, unread,
+export function ChatSidebar({ open, resizing = false, logo, conversations, activeId, loading, error, attentionItems,
   onToggle, onCreate, onSearch, onSelect, actions, onManagement }: {
   open: boolean; resizing?: boolean; logo: string; conversations: Conversation[]; activeId: string;
-  loading: boolean; error: string; unread: (id: string) => number;
+  loading: boolean; error: string; attentionItems: AttentionItem[];
   onToggle: () => void; onCreate: () => void; onSearch: () => void;
   onSelect: (id: string) => void; actions: (item: Conversation) => MenuItem[];
   onManagement: (section: ManagementSection, trigger?: HTMLElement) => void;
@@ -31,28 +31,29 @@ export function ChatSidebar({ open, resizing = false, logo, conversations, activ
   const list = useRef<HTMLDivElement>(null);
   const listId = useId();
   const recent = recentConversations(conversations);
+  const summary = attentionSummary(attentionItems);
   const { ref, visibleOpen } = useConversationDrawerMotion(open, resizing);
   useLayoutEffect(() => { setScrolled((list.current?.scrollTop || 0) > 0); }, [open, expanded, recent.length]);
   return <aside ref={ref} className={`conversation-drawer ${visibleOpen ? "is-open" : "is-rail"}${visibleOpen && !open ? " is-closing" : ""}`} data-state={open ? "open" : "closed"} aria-label="שיחות">
     <div className="drawer-brand-row"><button className="drawer-brand" type="button" aria-expanded={open} aria-label={open ? "כיווץ תפריט הצד" : "פתיחת תפריט הצד"} onClick={onToggle}>
       <span className="drawer-brand-mark"><img src={logo} alt="" /><Icon name="panel" size={24} /></span>
+      {!open && <span className="drawer-attention"><ConversationIndicator state={summary.state} /></span>}
     </button>{visibleOpen && <><strong>SmartiAI</strong><IconButton className="drawer-search" icon="search" label="חיפוש בשיחות ובקבצים" variant="ghost" disabled={!open} onClick={onSearch} /></>}</div>
     {!visibleOpen && <div className="drawer-rail-search"><IconButton icon="search" label="חיפוש בשיחות ובקבצים" variant="ghost" onClick={onSearch} /></div>}
     <button className="new-chat-button" type="button" aria-label="שיחה חדשה" onClick={onCreate}><Icon name="newChat" />{visibleOpen && <span>שיחה חדשה</span>}</button>
     {visibleOpen && <div className={`drawer-expanded-content ${scrolled ? "is-scrolled" : ""}`} inert={!open || undefined}>
       <div className="conversation-list" ref={list} onScroll={event => setScrolled(event.currentTarget.scrollTop > 0)}>
         <button className="recent-conversations-toggle" type="button" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(value => !value)}>
-          <span>שיחות אחרונות</span><Icon name="chevron" size={16} />
+          <span>שיחות אחרונות</span>{!expanded && <ConversationIndicator state={summary.state} />}<Icon name="chevron" size={16} />
         </button>
         <div id={listId} hidden={!expanded}>
         {loading && <p role="status">טוען שיחות…</p>}{error && <p role="alert">{error}</p>}
         {recent.map(item => {
-          const state = activityState({ ...item, unread_count: unread(item.id) });
-          const title = state === "running" ? "סמארטי עובד בשיחה הזאת" : state === "waiting_for_approval" ? item.runtime_status === "waiting_for_input" ? "סמארטי ממתין למפתח API" : "סמארטי ממתין לאישור" : "התקבלה תשובה חדשה";
+          const state = conversationIndicator(item, attentionItems);
           return <div className={`conversation-row ${item.id === activeId ? "is-active" : ""}`} key={item.id}>
             <button className="conversation-select" type="button" aria-current={item.id === activeId ? "true" : undefined} onClick={() => onSelect(item.id)}><HoverLabel text={item.title} /></button>
             {item.pinned && <Icon name="pin" />}
-            {state !== "idle" && <span role="img" aria-label={title} title={title} className={`conversation-activity ${state}`} />}
+            <span className="conversation-indicator-slot"><ConversationIndicator state={state} />{state !== "unread" && attentionItems.some(entry => entry.session_id === item.id && isUnseenCompletion(entry)) && <ConversationIndicator state="unread" />}</span>
             {open && <span className="history-actions"><Menu fitContent icon="more" label={`פעולות עבור ${item.title}`} items={actions(item)} /></span>}
           </div>;
         })}

@@ -69,8 +69,11 @@ and reason. A source/build pass alone does not establish visual or native qualit
   preference/storage-key/contrast API and re-exports these values. It has no second palette.
 - `system.css`: component rules consume those properties. Importing the shared
   components loads this stylesheet; it is scoped to `.sds-root` and `sds-*` classes.
-- `icons.tsx`: all 64 semantic roles map to the official Tabler React SVG
-  components (`@tabler/icons-react` pinned to 3.48.0). Inline SVG inherits
+- `icons.tsx`: all 67 semantic roles map to the official Tabler React SVG
+  components (`@tabler/icons-react` pinned to 3.48.0). D116 adds clock,
+  questionCircle and exclamationCircle for conversation state. These three roles
+  retain their semantic SVGs when the original artwork family is selected;
+  all original files remain available. Inline SVG inherits
   currentColor, uses a 24×24 viewBox and stroke 2; filled favorites stay filled.
   Static imports keep unused library icons out of production bundles.
 - `icons/`: all 126 original v7 PNGs are preserved unchanged as the reversible

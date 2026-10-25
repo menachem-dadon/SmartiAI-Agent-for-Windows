@@ -14,12 +14,12 @@ fn badge_label(count: u32) -> String {
 
 /// Render the system typeface at 4x resolution, then downsample both the glyph
 /// and circular silhouette. The shell can scale this cleanly at different DPIs.
-pub fn unread_badge(count: u32) -> Result<Image<'static>, String> {
-    let glyph = text_mask(&badge_label(count))?;
+pub fn unread_badge(count: u32, action_required: bool) -> Result<Image<'static>, String> {
+    let glyph = text_mask(&if action_required { "!".into() } else { badge_label(count) })?;
     let mut rgba = vec![0u8; SIZE * SIZE * 4];
     let center = RASTER as f64 / 2.0;
     let radius = center - SCALE as f64;
-    let color = [38u32, 111, 166];
+    let color = if action_required { [134u32, 91, 23] } else { [0u32, 0, 0] };
     for y in 0..SIZE {
         for x in 0..SIZE {
             let mut coverage = 0u32;
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn badge_has_symmetric_antialiased_edges_and_transparent_corners() {
         for count in [1, 8, 12, 99, 100, u32::MAX] {
-            let badge = unread_badge(count).unwrap();
+            let badge = unread_badge(count, false).unwrap();
             let pixels = badge.rgba();
             // Optional native-render evidence without opening the app or a toast.
             if let Ok(directory) = std::env::var("SMARTI_BADGE_PREVIEW_DIR") {
@@ -189,5 +189,14 @@ mod tests {
                 .any(|p| p[0] > 230 && p[1] > 230 && p[3] == 255));
         }
         assert_eq!(badge_label(100), "99+");
+    }
+
+    #[test]
+    fn action_badge_uses_amber_and_completion_badge_is_black() {
+        for action in [false, true] {
+            let badge = unread_badge(3, action).unwrap();
+            let background = if action { [134, 91, 23] } else { [0, 0, 0] };
+            assert!(badge.rgba().chunks_exact(4).any(|p| p[..3] == background && p[3] == 255));
+        }
     }
 }

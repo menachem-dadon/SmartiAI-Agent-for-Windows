@@ -505,6 +505,7 @@ export const RichMessage = memo(function RichMessage({
       data-run-id={String(message.metadata?.run_id || "") || undefined}
       data-message-id={messageId}
       data-message-ordinal={message.message_id?.split(":").slice(-1)[0]}
+      data-result-ready={message.role === "assistant" && !active && !hideActions && !message.metadata?.live_result_pending && !message.metadata?.live_partial ? "true" : undefined}
       dir="auto"
     >
       <MessageFrame outputs={!!canvases.length && (

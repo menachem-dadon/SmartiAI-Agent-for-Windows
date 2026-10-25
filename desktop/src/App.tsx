@@ -21,6 +21,7 @@ import {
 } from "./chatState";
 import type {
   Approval,
+  AttentionItem,
   Bootstrap,
   ChatMessage,
   Conversation,
@@ -47,6 +48,9 @@ import { liveTimeline } from "./live/liveTimeline";
 import { LiveOrb } from "./live/LiveOrb";
 import { Alert, Button, DesignSystemProvider, Dialog, Field, Icon, IconButton, Menu } from "./design-system";
 import { ChatSidebar, conversationActions } from "./ChatSidebar";
+import { attentionSummary, attentionTitle, isUnseenCompletion, needsAttention } from "./conversationIndicators";
+import { useVisibleConversationAttention } from "./visibleConversationAttention";
+import { ConversationToast } from "./ConversationToast";
 import { SearchDialog } from "./SearchDialog";
 import { rememberConversationVisit } from "./searchState";
 import { useChatDrafts, readActiveConversation, rememberActiveConversation, restoreActiveConversation, beginChatLaunch } from "./chatDrafts";
@@ -278,6 +282,9 @@ export default function App() {
   const { attachments } = drafts.draft;
   const setAttachments = drafts.setAttachments;
   const attention = useConversationAttention(setError);
+  const [attentionToast, setAttentionToast] = useState<AttentionItem | null>(null);
+  const dismissAttentionToast = useCallback(() => setAttentionToast(null), []);
+  const attentionNotificationsReady = useRef(false);
   const [foreground, setForeground] = useState(() => !document.hidden && document.hasFocus());
   const [availableUpdateVersion, setAvailableUpdateVersion] = useState("");
   const [reconnecting, setReconnecting] = useState(false);
@@ -759,13 +766,6 @@ export default function App() {
     if (foreground && activeIdRef.current && core.state === "ready")
       void loadMessages(activeIdRef.current).catch((reason) => setError(String(reason)));
   }, [foreground, core.state, loadMessages]);
-  useEffect(() => {
-    if (!foreground || document.hidden || managementSection || !workspaceWindowReady ||
-        core.state !== "ready" || !activeId || page?.session_id !== activeId) return;
-    if (navigation?.sessionId === activeId && readyNavigationRevision !== navigation.revision) return;
-    void attention.acknowledge(activeId, page.unread_attention_ids || []);
-  }, [foreground, managementSection, workspaceWindowReady, core.state, activeId, page,
-    navigation, readyNavigationRevision, attention.acknowledge]);
   const chatViewportRef = useReplyNavigation(
     navigation, page?.session_id || "",
     workspaceWindowReady && !managementSection && loadedNavigationRevision === navigation?.revision &&
@@ -774,6 +774,13 @@ export default function App() {
   const scroll = useChatScroll(chatViewportRef, activeId,
     workspaceWindowReady && !managementSection && page?.session_id === activeId,
     messages.length, messages, newUserRun, activeRunId, foreground);
+  const attentionChatVisible = foreground && !managementSection && workspaceWindowReady &&
+    core.state === "ready" && Boolean(activeId) && page?.session_id === activeId &&
+    !(workspace.workbenchOpen && (workbenchExpanded || narrowWorkspace)) &&
+    !(narrowWorkspace && workspace.conversationDrawerOpen) && !searchOpen && !conversationDialog &&
+    !(navigation?.sessionId === activeId && readyNavigationRevision !== navigation.revision);
+  useVisibleConversationAttention(chatViewportRef, activeId, attentionChatVisible,
+    attention.items, page?.unread_attention_ids || [], attention.acknowledge);
   useEffect(() => {
     if (!newUserRun || !messages.some(message => message.role === "user" && (message.metadata?.live_message_id || message.metadata?.run_id) === newUserRun)) return;
     const timer = window.setTimeout(() => setNewUserRun(""), 240);
@@ -1396,26 +1403,36 @@ export default function App() {
   useEffect(() => {
     void invoke("desktop_set_close_to_tray", { enabled: keepRunningInTray });
   }, [keepRunningInTray]);
+  const taskbarAttention = attentionSummary(attention.items);
   useEffect(() => {
-    const count = attention.items.length;
+    if (!attention.loaded) return;
+    const { count, actionRequired } = taskbarAttention;
     // Native commands can finish out of order; keep overlay updates ordered.
     unreadUpdate.current = unreadUpdate.current
-      .then(async () => { await invoke("desktop_set_unread", { count }); })
+      .then(async () => { await invoke("desktop_set_unread", { count, actionRequired }); })
       .catch((reason) => setError(`לא ניתן לעדכן את מונה המשימות: ${String(reason)}`));
-  }, [attention.items.length]);
+  }, [taskbarAttention.count, taskbarAttention.actionRequired, attention.loaded]);
   useEffect(() => {
+    if (!attention.loaded) return;
+    if (!attentionNotificationsReady.current) {
+      for (const item of attention.items) notifiedAttention.current.add(item.id);
+      attentionNotificationsReady.current = true;
+      return;
+    }
     for (const item of attention.items) {
       if (notifiedAttention.current.has(item.id)) continue;
       notifiedAttention.current.add(item.id);
-      if (!foreground)
+      if (item.read_at || (!isUnseenCompletion(item) && !needsAttention(item))) continue;
+      if (!foreground) {
         void invoke("desktop_notify", {
-          title: ["approval", "api_key"].includes(item.kind) ? "Smarti ממתין להתייחסותך" : "תגובה חדשה מ־Smarti",
+          title: attentionTitle(item),
           body: item.title,
           sessionId: item.session_id,
           runId: item.run_id,
-        });
+        }).catch(reason => setError(`לא ניתן להציג התראה: ${String(reason)}`));
+      } else if (item.session_id !== activeId || !attentionChatVisible) setAttentionToast(item);
     }
-  }, [attention.items, foreground]);
+  }, [attention.items, attention.loaded, foreground, activeId, attentionChatVisible]);
   useEffect(() => {
     let alive = true;
     const subscription = listen<{ command: string; sessionId?: string; runId?: string }>(
@@ -1543,7 +1560,7 @@ export default function App() {
         <ChatSidebar open={workspace.conversationDrawerOpen} resizing={workspaceResizing} logo={icons.logo}
           conversations={conversations} activeId={activeId}
           loading={historyLoading} error={historyError}
-          unread={id => attention.items.filter(item => item.session_id === id).length}
+          attentionItems={attention.items}
           onToggle={() => void toggleConversationDrawer()} onCreate={() => void createConversation()}
           onSearch={() => setSearchOpen(true)} onSelect={id => void selectConversation(id)}
           onManagement={openManagement} actions={item => conversationActions(item, {
@@ -1578,6 +1595,8 @@ export default function App() {
             <h1>{activeConversation?.title || "שיחה חדשה"}</h1>
 
           </div>
+          <ConversationToast item={attentionToast} suppressed={Boolean(error) || !foreground || Boolean(managementSection)} onDismiss={dismissAttentionToast}
+            onOpen={item => { dismissAttentionToast(); void selectConversation(item.session_id, item.run_id, true); }} />
           {error && (
             <div className="chat-error">
               <Alert tone="danger" title="הפעולה לא הושלמה" onDismiss={() => setError("")}>

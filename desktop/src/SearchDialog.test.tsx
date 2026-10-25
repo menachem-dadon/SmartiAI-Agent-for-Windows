@@ -100,7 +100,7 @@ test("a late chat-search failure cannot replace file results after switching mod
 });
 
 test("recent heading collapses the list and divider tracks scroll without filtering history", () => {
-  render(<DesignSystemProvider theme="light"><ChatSidebar open logo="/logo.png" conversations={conversations} activeId="" loading={false} error="" unread={() => 0}
+  render(<DesignSystemProvider theme="light"><ChatSidebar open logo="/logo.png" conversations={conversations} activeId="" loading={false} error="" attentionItems={[]}
     onToggle={vi.fn()} onCreate={vi.fn()} onSearch={vi.fn()} onSelect={vi.fn()} actions={() => []} onManagement={vi.fn()} /></DesignSystemProvider>);
   expect(screen.queryByRole("searchbox")).toBeNull();
   const heading = screen.getByRole("button", { name: "שיחות אחרונות" });

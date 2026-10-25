@@ -1885,22 +1885,52 @@ class ChatSessionStore:
                 )
             except sqlite3.IntegrityError:
                 row = db.execute(
-                    "SELECT id FROM attention_items WHERE run_id=? AND kind=?",
+                    "SELECT id, metadata_json FROM attention_items WHERE run_id=? AND kind=?",
                     (str(run_id or ""), str(kind or "response")),
                 ).fetchone()
+                if row and kind in {"approval", "api_key"}:
+                    previous = _json_loads(row["metadata_json"], {})
+                    incoming = _json_object(metadata)
+                    # Each new interruption needs a fresh receipt identity. A late
+                    # receipt for the previous request must not read this one.
+                    if kind == "api_key" or previous.get("approval_id") != incoming.get("approval_id"):
+                        db.execute(
+                            "UPDATE attention_items SET id=?, created_at=?, read_at=NULL, metadata_json=? WHERE id=?",
+                            (identifier, now, _json_dumps(incoming), row["id"]),
+                        )
+                        return identifier
                 return str(row["id"]) if row else ""
         return identifier
 
-    def unread_attention_items(self):
-        """Global attention snapshot, independent of sidebar search and paging."""
+    def unread_attention_items(self, include_pending=False):
+        """Global outcomes and, for desktop, unresolved requests even after viewing."""
         with self._lock, self._connect() as db:
-            return [dict(row) for row in db.execute(
+            rows = db.execute(
                 """
-                SELECT a.id, a.session_id, a.run_id, a.kind, s.title
+                SELECT a.id, a.session_id, a.run_id, a.kind, s.title,
+                       a.created_at, a.read_at, r.status AS run_status,
+                       EXISTS(SELECT 1 FROM approvals p WHERE p.run_id=a.run_id AND p.status='pending') AS pending_approval
                 FROM attention_items a JOIN sessions s ON s.id=a.session_id
-                WHERE a.read_at IS NULL ORDER BY a.rowid
-                """
-            )]
+                LEFT JOIN runs r ON r.id=a.run_id
+                WHERE a.read_at IS NULL OR (? AND (
+                    (a.kind='approval' AND EXISTS(SELECT 1 FROM approvals p WHERE p.run_id=a.run_id AND p.status='pending'))
+                    OR (a.kind='api_key' AND r.status='waiting_for_input')
+                )) ORDER BY a.rowid
+                """, (bool(include_pending),),
+            ).fetchall()
+            items = []
+            for row in rows:
+                item = dict(row)
+                pending = bool(item.pop("pending_approval"))
+                item["action_required"] = (
+                    item["kind"] == "approval" and pending
+                    or item["kind"] == "api_key" and item["run_status"] == "waiting_for_input"
+                )
+                # Resolved request notifications are not new results.
+                if include_pending and item["kind"] in {"approval", "api_key"} and not item["action_required"]:
+                    continue
+                items.append(item)
+            return items
 
     def mark_session_read(self, session_id, actor_id="desktop", attention_ids=None):
         now = _now_iso()

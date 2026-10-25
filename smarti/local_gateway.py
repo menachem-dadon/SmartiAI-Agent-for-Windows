@@ -480,7 +480,7 @@ class SmartiLocalGateway:
             offset = self._query_int(request, "offset", 0, 0, 1000000)
             return self._ok(request, {
                 "items": items[offset:offset + limit], "total": len(items), "offset": offset, "limit": limit,
-                "attention_items": store.unread_attention_items(),
+                "attention_items": store.unread_attention_items(include_pending=True),
             })
         def create(payload):
             session = store.create_session(False, payload.get("workspace_id") or None)

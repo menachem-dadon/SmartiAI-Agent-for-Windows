@@ -93,6 +93,54 @@ class _FakeCore:
 
 
 class ConversationRunStoreTests(unittest.TestCase):
+    def test_desktop_attention_retains_viewed_requests_and_exposes_actual_outcomes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "history.json"))
+            session = store.create_session(set_active=False)["id"]
+            run = store.create_run(session, "work")
+            store.transition_run(run, "running")
+            approval = store.create_approval(run, session)
+            request = store.create_attention(session, run, "approval", {"approval_id": approval})
+            store.mark_session_read(session, attention_ids=[request])
+            item = store.unread_attention_items(include_pending=True)[0]
+            self.assertTrue(item["action_required"])
+            self.assertIsNotNone(item["read_at"])
+            store.resolve_approval(approval, "approved")
+            self.assertEqual(store.unread_attention_items(include_pending=True), [])
+            store.transition_run(run, "failed")
+            store.create_attention(session, run, "response")
+            self.assertEqual(store.unread_attention_items(include_pending=True)[0]["run_status"], "failed")
+
+    def test_new_approval_gets_new_receipt_identity_without_duplicate_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "history.json"))
+            session = store.create_session(set_active=False)["id"]
+            run = store.create_run(session, "work")
+            first = store.create_attention(session, run, "approval", {"approval_id": "first"})
+            second = store.create_attention(session, run, "approval", {"approval_id": "second"})
+            self.assertNotEqual(first, second)
+            self.assertEqual(store.mark_session_read(session, attention_ids=[first]), 0)
+            self.assertEqual(store.create_attention(session, run, "approval", {"approval_id": "second"}), second)
+            completion = store.create_attention(session, run)
+            self.assertEqual(store.create_attention(session, run), completion)
+            self.assertEqual(store.unread_count(), 2)
+
+    def test_viewed_api_key_request_remains_actionable_until_run_resumes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = ChatSessionStore(str(Path(directory) / "history.json"))
+            session = store.create_session(set_active=False)["id"]
+            run = store.create_run(session, "work")
+            store.transition_run(run, "running")
+            store.transition_run(run, "waiting_for_input")
+            first = store.create_attention(session, run, "api_key")
+            store.mark_session_read(session, attention_ids=[first])
+            self.assertTrue(store.unread_attention_items(include_pending=True)[0]["action_required"])
+            store.transition_run(run, "running")
+            self.assertEqual(store.unread_attention_items(include_pending=True), [])
+            store.transition_run(run, "waiting_for_input")
+            second = store.create_attention(session, run, "api_key")
+            self.assertNotEqual(first, second)
+
     def test_page_receipt_does_not_read_later_attention_or_another_conversation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = str(Path(directory) / "history.json")
@@ -520,7 +568,9 @@ class LocalGatewayTests(unittest.TestCase):
             other = store.create_session(set_active=False)["id"]
             store.append_message("assistant", "ready", session_id=session)
             seen = store.create_attention(session)
-            foreign = store.create_attention(other, kind="approval")
+            approval_run = store.create_run(other, "approve")
+            store.create_approval(approval_run, other)
+            foreign = store.create_attention(other, approval_run, kind="approval")
             gateway = SmartiLocalGateway(core, "test-token", port=0)
             self.assertTrue(gateway.start())
             try:
