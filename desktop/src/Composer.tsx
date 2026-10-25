@@ -12,7 +12,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import type { PendingAttachment, ReasoningOption } from "./chatTypes";
 import type { ResolvedTheme } from "./designSystem";
-import { DesignSystemProvider, Icon, Menu, Switch } from "./design-system";
+import { DesignSystemProvider, Icon, Menu, Switch, Tooltip } from "./design-system";
 import "./chat.css";
 import { ComposerModelPicker } from "./ComposerModelPicker";
 import { useProviderQuota } from "./ProviderQuota";
@@ -331,9 +331,21 @@ export function Composer({
     return () => window.removeEventListener("smarti:voice-hotkey", activate);
   }, []);
   const canSend = Boolean(text.trim() || attachments.length);
-  const separateLiveAction = Boolean(live?.available || live?.active);
+  const separateLiveAction = Boolean(live);
   const liveAction = running && !live?.active ? "stop" : live?.active && !live.ready ? "loading"
     : canSend ? "send" : live?.active ? "close" : "start";
+  const liveStartUnavailable = liveAction === "start" && !live?.available;
+  const liveButton = live && <button className="composer-primary live-toggle" type="button"
+    aria-label={liveAction === "send" ? "שליחה" : liveAction === "stop" ? "עצירה" : live.active ? "סגירת לייב" : "פתיחת לייב"}
+    aria-busy={liveAction === "loading" || liveAction === "send" && submitting || undefined}
+    disabled={liveStartUnavailable || Boolean(["send", "start"].includes(liveAction) && (disabled || listening || voiceStarting || submitting || sendPending || staging > 0))}
+    onClick={() => {
+      if (liveAction === "stop") { onCancel(); requestFocus(); }
+      else if (liveAction === "send") void send();
+      else if (live.active) void live.stop(); else void live.start();
+    }}>
+    {liveAction !== "start" ? <Icon name={liveAction === "loading" || submitting ? "loader" : liveAction === "send" ? "send" : liveAction === "stop" ? "stop" : "close"} size={22} /> : <svg className="sds-icon" data-icon="voice" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 10v4m4-7v10m4-14v18m4-14v10m4-7v4" /></svg>}
+  </button>;
   return (
     <DesignSystemProvider theme={theme} className="composer-design"><div
       className={`composer ${running ? "is-running" : ""}`}
@@ -402,17 +414,7 @@ export function Composer({
       />
       <div className="composer-actions" dir="ltr">
         <span className="action-button-host">
-          {(live?.available || live?.active) && <button className="composer-primary live-toggle" type="button"
-            aria-label={liveAction === "send" ? "שליחה" : liveAction === "stop" ? "עצירה" : live.active ? "סגירת לייב" : "פתיחת לייב"}
-            aria-busy={liveAction === "loading" || liveAction === "send" && submitting || undefined}
-            disabled={Boolean(["send", "start"].includes(liveAction) && (disabled || listening || voiceStarting || submitting || sendPending || staging > 0))}
-            onClick={() => {
-              if (liveAction === "stop") { onCancel(); requestFocus(); }
-              else if (liveAction === "send") void send();
-              else if (live.active) void live.stop(); else void live.start();
-            }}>
-            {liveAction !== "start" ? <Icon name={liveAction === "loading" || submitting ? "loader" : liveAction === "send" ? "send" : liveAction === "stop" ? "stop" : "close"} size={22} /> : <svg className="sds-icon" data-icon="voice" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M4 10v4m4-7v10m4-14v18m4-14v10m4-7v4" /></svg>}
-          </button>}
+          {liveButton && (liveStartUnavailable ? <Tooltip label="מצב לייב לא הוגדר. יש לבחור מודל ולהזין מפתח API בהגדרות ספקים ומודלים.">{liveButton}</Tooltip> : liveButton)}
           <button
             className={`composer-primary ${separateLiveAction ? "is-plain-mic" : ""} ${canSend && !separateLiveAction ? "can-send" : ""} ${listening ? "is-listening" : ""}`}
             hidden={live?.active}

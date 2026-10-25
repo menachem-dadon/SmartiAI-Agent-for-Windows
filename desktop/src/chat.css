@@ -80,10 +80,10 @@
 .composer-actions { display:grid; grid-template-columns:40px minmax(0,1fr) 40px; align-items:center; gap:8px; margin-top:8px; }
 .composer-primary,.composer-tool { width:40px; height:40px; display:grid; place-items:center; border:0; padding:8px; border-radius:50%; cursor:pointer; }
 .composer-primary { background:var(--sds-color-action); color:var(--sds-color-on-action); }
-.composer-primary:hover { background:var(--sds-color-action-hover); }
+.composer-primary:hover:not(:disabled) { background:var(--sds-color-action-hover); }
 .composer-actions:has(.live-toggle) { grid-template-columns:auto minmax(0,1fr) 40px; }
 .composer-actions:has(.live-toggle) .action-button-host { display:flex; align-items:center; gap:4px; }
-.composer-actions:has(.live-toggle) .action-button-host>button { flex:none; }
+.composer-actions:has(.live-toggle) .action-button-host>:is(button,.sds-tooltip-anchor) { flex:none; }
 .live-toggle { display:flex; align-items:center; justify-content:center; padding:0; line-height:0; }
 .live-toggle>.sds-icon { display:block; margin:0; transform-origin:center; }
 .composer-primary[hidden] { display:none; }
