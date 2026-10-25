@@ -1,4 +1,5 @@
 import { LiveCaptureFilter } from "./liveCapture";
+import { renderLiveCues, type LiveCue, type LiveCueBuffers } from "./liveCues";
 import captureWorkletUrl from "./liveCaptureWorklet.js?url&no-inline";
 /** PCM transport, bounded queues, echo cancellation and deterministic disposal. */
 export class LiveAudio {
@@ -19,6 +20,9 @@ export class LiveAudio {
   private nextTime = 0;
   private muted = false;
   private disposed = false;
+  private began = false;
+  private cue: AudioBufferSourceNode | null = null;
+  private cueBuffers: LiveCueBuffers | null = null;
   private outputMuted = false;
   private captureFilter = new LiveCaptureFilter();
   private acceptedInputLevel: number | null = null;
@@ -39,6 +43,7 @@ export class LiveAudio {
   async prepare() {
     // Called synchronously from the user's click, before the first network await.
     this.context = new AudioContext({ sampleRate: 24000 });
+    const cues = renderLiveCues(this.context.sampleRate).catch(() => null);
     this.output = this.context.createGain();
     this.outputMeter = this.context.createAnalyser(); this.outputMeter.fftSize = 1024;
     this.output.connect(this.outputMeter); this.outputMeter.connect(this.context.destination);
@@ -59,9 +64,11 @@ export class LiveAudio {
       try { await track.applyConstraints({ echoCancellation: { exact: "all" } as unknown as ConstrainBoolean }); }
       catch { /* Keep the already enabled, supported boolean AEC. */ }
     }
+    const preparedCues = await cues;
+    if (!this.disposed) this.cueBuffers = preparedCues;
   }
   begin() {
-    if (this.disposed || !this.context || !this.stream) return;
+    if (this.disposed || this.began || !this.context || !this.stream) return;
     this.source = this.context.createMediaStreamSource(this.stream);
     this.userMeter = this.context.createAnalyser(); this.userMeter.fftSize = 1024;
     this.source.connect(this.userMeter);
@@ -104,6 +111,32 @@ export class LiveAudio {
       this.meterFrame = requestAnimationFrame(measure);
     };
     this.meterFrame = requestAnimationFrame(measure);
+    this.began = true;
+    this.playCue("ready", this.output!);
+  }
+  private stopCue() {
+    const cue = this.cue; this.cue = null;
+    if (!cue) return;
+    cue.onended = null; cue.disconnect();
+    try { cue.stop(); } catch { /* already ended */ }
+  }
+  private playCue(kind: LiveCue, destination: AudioNode): AudioBufferSourceNode | null {
+    const context = this.context;
+    const buffer = this.cueBuffers?.[kind];
+    if (!context || context.state !== "running" || this.outputMuted || !buffer) return null;
+    try {
+      const cue = context.createBufferSource(); this.cue = cue;
+      cue.buffer = buffer; cue.connect(destination);
+      cue.onended = () => { cue.disconnect(); if (this.cue === cue) this.cue = null; };
+      const start = context.currentTime + .005;
+      // Keep cue echo out of microphone input without blocking the user's speech.
+      if (kind === "ready") this.captureFilter.record(buffer.getChannelData(0), buffer.sampleRate, start);
+      cue.start(start);
+      return cue;
+    } catch {
+      this.stopCue();
+      return null; // A cosmetic sound must never fail Live startup or teardown.
+    }
   }
   play(encoded: string, rate = 24000, startMs?: number) {
     const context = this.context;
@@ -149,7 +182,7 @@ export class LiveAudio {
   muteMic(muted: boolean) {
     this.muted = muted; this.stream?.getAudioTracks().forEach(track => { track.enabled = !muted; });
   }
-  muteOutput(muted: boolean) { this.outputMuted = muted; if (this.output) this.output.gain.value = muted ? 0 : 1; if (muted) this.interrupt(); }
+  muteOutput(muted: boolean) { this.outputMuted = muted; if (this.output) this.output.gain.value = muted ? 0 : 1; if (muted) { this.stopCue(); this.interrupt(); } }
   private drop(start: number, end: number) {
     if (end <= start) return;
     const previous = this.dropped[this.dropped.length - 1];
@@ -174,7 +207,7 @@ export class LiveAudio {
   };
   dispose() {
     if (this.disposed) return;
-    this.disposed = true; this.interrupt();
+    this.disposed = true; this.stopCue(); this.interrupt();
     cancelAnimationFrame(this.meterFrame);
     this.context?.removeEventListener("statechange", this.contextChanged);
     if (this.capture) this.capture.onaudioprocess = null;
@@ -183,6 +216,23 @@ export class LiveAudio {
     this.capture?.disconnect(); this.source?.disconnect(); this.silent?.disconnect(); this.output?.disconnect(); this.userMeter?.disconnect(); this.outputMeter?.disconnect();
     navigator.mediaDevices.removeEventListener?.("devicechange", this.deviceChanged);
     this.stream?.getTracks().forEach(track => { track.removeEventListener?.("ended", this.deviceEnded); track.stop(); }); this.stream = null;
-    if (this.context) void this.context.close().catch(() => undefined);
+    const context = this.context;
+    if (context) {
+      // Capture and provider speech are already stopped. Let the short end cue
+      // finish on the activated context, independently of the server stop receipt.
+      const cue = this.began ? this.playCue("end", context.destination) : null;
+      let timer: ReturnType<typeof setTimeout> | undefined, closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true; clearTimeout(timer); this.stopCue();
+        void context.close().catch(() => undefined);
+      };
+      if (cue) {
+        cue.onended = close;
+        // A device suspension can prevent onended; never retain the context.
+        timer = setTimeout(close, Math.ceil(cue.buffer!.duration * 1000) + 155);
+      } else close();
+    }
+    this.cueBuffers = null;
   }
 }
