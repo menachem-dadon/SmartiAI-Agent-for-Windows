@@ -333,19 +333,54 @@ fn apply_windows_identity(window: &Window) {
 #[cfg(not(windows))]
 fn apply_windows_identity(_window: &Window) {}
 
+#[cfg(any(windows, test))]
+fn usable_main_webview_size(minimized: bool, size: PhysicalSize<u32>) -> Option<PhysicalSize<u32>> {
+    (!minimized && size.width > 0 && size.height > 0).then_some(size)
+}
+
+#[cfg(windows)]
+fn resize_main_webview(app: &AppHandle, window: &Window, size: PhysicalSize<u32>) -> Result<(), String> {
+    let minimized = window.is_minimized().map_err(|error| error.to_string())?;
+    let Some(size) = usable_main_webview_size(minimized, size) else {
+        return Ok(());
+    };
+    let webview = app.get_webview("main").ok_or("main webview missing")?;
+    // Restoring to the same client size needs no new WebView2 backing surface.
+    if webview.size().map_err(|error| error.to_string())? != size {
+        webview.set_size(size).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 pub fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let window = app.get_window("main").ok_or("main window missing")?;
     apply_windows_identity(&window);
+    #[cfg(windows)]
+    {
+        // Tauri's multi-WebView autoresizer also forwards minimized/iconic
+        // bounds. Preserve the trusted UI's last surface instead of making the
+        // renderer discard it and repaint the whole shell on taskbar restore.
+        app.get_webview("main")
+            .ok_or("main webview missing")?
+            .set_auto_resize(false)?;
+    }
     prepare_main_window(app)?;
+    #[cfg(windows)]
+    resize_main_webview(app, &window, window.inner_size()?)?;
     let app_for_window = app.clone();
     window.on_window_event(move |event| match event {
-        WindowEvent::Resized(_) => {
-            if app_for_window
-                .state::<DesktopState>()
-                .workspace_ready
-                .load(Ordering::Acquire)
-            {
-                if let Some(window) = app_for_window.get_window("main") {
+        WindowEvent::Resized(_size)
+        | WindowEvent::ScaleFactorChanged { new_inner_size: _size, .. } => {
+            if let Some(window) = app_for_window.get_window("main") {
+                #[cfg(windows)]
+                if let Err(error) = resize_main_webview(&app_for_window, &window, *_size) {
+                    eprintln!("Failed to resize main webview: {error}");
+                }
+                if app_for_window
+                    .state::<DesktopState>()
+                    .workspace_ready
+                    .load(Ordering::Acquire)
+                {
                     save_launch_state(&app_for_window, &window);
                 }
             }
@@ -795,6 +830,30 @@ pub fn lifecycle_failure(app: &AppHandle, error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn main_webview_preserves_its_surface_for_minimized_or_empty_bounds() {
+        for size in [
+            PhysicalSize::new(0, 0),
+            PhysicalSize::new(1280, 0),
+            PhysicalSize::new(0, 800),
+        ] {
+            assert_eq!(usable_main_webview_size(false, size), None);
+            assert_eq!(usable_main_webview_size(true, size), None);
+        }
+        assert_eq!(usable_main_webview_size(true, PhysicalSize::new(160, 28)), None);
+    }
+
+    #[test]
+    fn main_webview_follows_valid_normal_narrow_and_maximized_bounds() {
+        for size in [
+            PhysicalSize::new(1280, 800),
+            PhysicalSize::new(390, 640),
+            PhysicalSize::new(1920, 1040),
+        ] {
+            assert_eq!(usable_main_webview_size(false, size), Some(size));
+        }
+    }
 
     #[test]
     fn second_launch_arguments_route_one_scoped_command() {
