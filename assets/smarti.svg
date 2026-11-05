@@ -1,0 +1,500 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="100%" height="100%">
+  <title>Smarty Icon - Siri Cloudy Smoke Edition</title>
+  <desc>Pure vector SVG icon for Smarty featuring an outer glowing glass orb and inner Siri-inspired volumetric smoke clouds and ethereal aurora waves, organized into semantic vector layers for animation.</desc>
+
+  <defs>
+    <!-- ==================== CLIP PATHS ==================== -->
+    <clipPath id="icon-squircle-clip">
+      <rect x="0" y="0" width="1024" height="1024" rx="225" ry="225" />
+    </clipPath>
+    <clipPath id="orb-interior-clip">
+      <circle cx="512" cy="512" r="384" />
+    </clipPath>
+
+    <!-- ==================== GLOBAL USER-SPACE FILTERS (Zero Clipping) ==================== -->
+    <filter id="glow-tiny" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="2.0" />
+    </filter>
+
+    <filter id="blur-crisp-smoke" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="4.5" />
+    </filter>
+
+    <filter id="blur-silky-smoke" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="12" />
+    </filter>
+
+    <filter id="blur-soft-cloud" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="22" />
+    </filter>
+
+    <filter id="blur-deep-nebula" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="38" />
+    </filter>
+
+    <filter id="blur-ambient" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="62" />
+    </filter>
+
+    <!-- Volumetric Cloud-Smoke Filter A: Deep billowing cloud structure with internal smoky density pockets -->
+    <filter id="volumetric-cloud-A" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.0055" numOctaves="5" seed="18" result="noiseA" />
+      <feColorMatrix in="noiseA" type="matrix"
+        values="0 0 0 0 1
+                0 0 0 0 1
+                0 0 0 0 1
+                1.8 0.6 0 -0.35 0" result="cloudAlphaA" />
+      <feDisplacementMap in="SourceGraphic" in2="noiseA" scale="64" xChannelSelector="R" yChannelSelector="G" result="displacedA" />
+      <feGaussianBlur in="displacedA" stdDeviation="24" result="baseGlowA" />
+      <feComposite in="displacedA" in2="cloudAlphaA" operator="in" result="carvedCloudsA" />
+      <feGaussianBlur in="carvedCloudsA" stdDeviation="7" result="softCarvedA" />
+      <feMerge>
+        <feMergeNode in="baseGlowA" />
+        <feMergeNode in="softCarvedA" />
+      </feMerge>
+    </filter>
+
+    <!-- Volumetric Cloud-Smoke Filter B: Silky swirling smoke wisps and fine vapor curls -->
+    <filter id="volumetric-cloud-B" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.0082" numOctaves="5" seed="42" result="noiseB" />
+      <feColorMatrix in="noiseB" type="matrix"
+        values="0 0 0 0 1
+                0 0 0 0 1
+                0 0 0 0 1
+                2.2 0.8 0 -0.52 0" result="cloudAlphaB" />
+      <feDisplacementMap in="SourceGraphic" in2="noiseB" scale="48" xChannelSelector="R" yChannelSelector="G" result="displacedB" />
+      <feGaussianBlur in="displacedB" stdDeviation="16" result="baseGlowB" />
+      <feComposite in="displacedB" in2="cloudAlphaB" operator="in" result="carvedCloudsB" />
+      <feGaussianBlur in="carvedCloudsB" stdDeviation="4.5" result="softCarvedB" />
+      <feMerge>
+        <feMergeNode in="baseGlowB" />
+        <feMergeNode in="softCarvedB" />
+      </feMerge>
+    </filter>
+
+    <!-- Silky Siri Fluid Ribbon Filter: Gentle organic wave undulation -->
+    <filter id="siri-fluid-wave" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.0045" numOctaves="3" seed="7" result="waveNoise" />
+      <feDisplacementMap in="SourceGraphic" in2="waveNoise" scale="36" xChannelSelector="R" yChannelSelector="G" result="waved" />
+      <feGaussianBlur in="waved" stdDeviation="10" />
+    </filter>
+
+    <filter id="rim-neon-bloom" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="16" result="wide" />
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="mid" />
+      <feMerge>
+        <feMergeNode in="wide" />
+        <feMergeNode in="mid" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- ==================== BACKGROUND & ORB BASE GRADIENTS ==================== -->
+    <radialGradient id="bg-cosmic-grad" cx="50%" cy="50%" r="72%">
+      <stop offset="0%" stop-color="#110d33" />
+      <stop offset="55%" stop-color="#060417" />
+      <stop offset="100%" stop-color="#020109" />
+    </radialGradient>
+
+    <radialGradient id="corner-glow-tl" cx="8%" cy="8%" r="58%">
+      <stop offset="0%" stop-color="#6a1b9a" stop-opacity="0.46" />
+      <stop offset="45%" stop-color="#2c0747" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#020109" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="corner-glow-br" cx="92%" cy="92%" r="58%">
+      <stop offset="0%" stop-color="#880e4f" stop-opacity="0.48" />
+      <stop offset="45%" stop-color="#360628" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#020109" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="orb-base-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#140c3c" />
+      <stop offset="58%" stop-color="#080622" />
+      <stop offset="84%" stop-color="#06143d" />
+      <stop offset="95%" stop-color="#08296c" />
+      <stop offset="100%" stop-color="#0d47a1" />
+    </radialGradient>
+
+    <!-- Inner 3D Glass Orb Edge Illumination -->
+    <radialGradient id="orb-inner-glass-shade" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0" />
+      <stop offset="78%" stop-color="#003399" stop-opacity="0" />
+      <stop offset="91%" stop-color="#0077ff" stop-opacity="0.24" />
+      <stop offset="97%" stop-color="#00e5ff" stop-opacity="0.52" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.75" />
+    </radialGradient>
+
+    <!-- Soft Inner Atmospheric Halo -->
+    <radialGradient id="inner-atmosphere-shell" cx="50%" cy="48%" r="34%">
+      <stop offset="0%" stop-color="#7c4dff" stop-opacity="0" />
+      <stop offset="72%" stop-color="#651fff" stop-opacity="0.06" />
+      <stop offset="89%" stop-color="#b388ff" stop-opacity="0.28" />
+      <stop offset="96%" stop-color="#80d8ff" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- ==================== VOLUMETRIC NEBULA CLOUD GRADIENTS ==================== -->
+    <radialGradient id="cloud-grad-magenta-left" gradientUnits="userSpaceOnUse" cx="355" cy="520" r="245">
+      <stop offset="0%" stop-color="#ff80d5" stop-opacity="0.95" />
+      <stop offset="28%" stop-color="#ff0a78" stop-opacity="0.88" />
+      <stop offset="62%" stop-color="#b0006a" stop-opacity="0.48" />
+      <stop offset="88%" stop-color="#4a148c" stop-opacity="0.16" />
+      <stop offset="100%" stop-color="#1a0033" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="cloud-grad-cyan-right" gradientUnits="userSpaceOnUse" cx="665" cy="490" r="245">
+      <stop offset="0%" stop-color="#b8fff4" stop-opacity="0.95" />
+      <stop offset="28%" stop-color="#00f0d0" stop-opacity="0.88" />
+      <stop offset="62%" stop-color="#0095ff" stop-opacity="0.50" />
+      <stop offset="88%" stop-color="#003c8f" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#001233" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="cloud-grad-violet-top" gradientUnits="userSpaceOnUse" cx="495" cy="340" r="235">
+      <stop offset="0%" stop-color="#f8bbd0" stop-opacity="0.92" />
+      <stop offset="30%" stop-color="#d500f9" stop-opacity="0.84" />
+      <stop offset="64%" stop-color="#651fff" stop-opacity="0.48" />
+      <stop offset="88%" stop-color="#1a237e" stop-opacity="0.16" />
+      <stop offset="100%" stop-color="#0d1b4c" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="cloud-grad-rose-bottom" gradientUnits="userSpaceOnUse" cx="490" cy="675" r="235">
+      <stop offset="0%" stop-color="#ff94c2" stop-opacity="0.92" />
+      <stop offset="30%" stop-color="#ff1493" stop-opacity="0.82" />
+      <stop offset="64%" stop-color="#8e24aa" stop-opacity="0.48" />
+      <stop offset="88%" stop-color="#283593" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#0d1b4c" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="cloud-grad-azure-se" gradientUnits="userSpaceOnUse" cx="615" cy="625" r="225">
+      <stop offset="0%" stop-color="#80e8ff" stop-opacity="0.90" />
+      <stop offset="32%" stop-color="#0077ff" stop-opacity="0.78" />
+      <stop offset="68%" stop-color="#304ffe" stop-opacity="0.42" />
+      <stop offset="100%" stop-color="#0a0026" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="cloud-grad-lavender-nw" gradientUnits="userSpaceOnUse" cx="395" cy="395" r="215">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.88" />
+      <stop offset="32%" stop-color="#ea80fc" stop-opacity="0.78" />
+      <stop offset="68%" stop-color="#ff4081" stop-opacity="0.42" />
+      <stop offset="100%" stop-color="#311b92" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- ==================== SILKY SIRI SMOKE WAVE GRADIENTS ==================== -->
+    <linearGradient id="siri-wave-horiz" gradientUnits="userSpaceOnUse" x1="175" y1="540" x2="845" y2="470">
+      <stop offset="0%" stop-color="#ff007f" stop-opacity="0" />
+      <stop offset="18%" stop-color="#ff1493" stop-opacity="0.75" />
+      <stop offset="38%" stop-color="#ff80d5" stop-opacity="0.90" />
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.92" />
+      <stop offset="62%" stop-color="#80ffea" stop-opacity="0.90" />
+      <stop offset="82%" stop-color="#00d8ff" stop-opacity="0.75" />
+      <stop offset="100%" stop-color="#0055ff" stop-opacity="0" />
+    </linearGradient>
+
+    <linearGradient id="siri-wave-diag1" gradientUnits="userSpaceOnUse" x1="255" y1="285" x2="770" y2="735">
+      <stop offset="0%" stop-color="#7c4dff" stop-opacity="0" />
+      <stop offset="20%" stop-color="#d500f9" stop-opacity="0.72" />
+      <stop offset="40%" stop-color="#f8bbd0" stop-opacity="0.88" />
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.90" />
+      <stop offset="62%" stop-color="#80d8ff" stop-opacity="0.88" />
+      <stop offset="80%" stop-color="#0088ff" stop-opacity="0.72" />
+      <stop offset="100%" stop-color="#1a237e" stop-opacity="0" />
+    </linearGradient>
+
+    <linearGradient id="siri-wave-diag2" gradientUnits="userSpaceOnUse" x1="275" y1="735" x2="750" y2="285">
+      <stop offset="0%" stop-color="#c51162" stop-opacity="0" />
+      <stop offset="20%" stop-color="#ff1788" stop-opacity="0.75" />
+      <stop offset="40%" stop-color="#ff94e0" stop-opacity="0.88" />
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.90" />
+      <stop offset="62%" stop-color="#9effeb" stop-opacity="0.88" />
+      <stop offset="80%" stop-color="#00e5ff" stop-opacity="0.75" />
+      <stop offset="100%" stop-color="#0066ff" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- ==================== CENTRAL CORE GRADIENTS ==================== -->
+    <radialGradient id="core-aura-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.94" />
+      <stop offset="26%" stop-color="#ffd9f7" stop-opacity="0.70" />
+      <stop offset="54%" stop-color="#ff6ec7" stop-opacity="0.34" />
+      <stop offset="80%" stop-color="#64e8ff" stop-opacity="0.14" />
+      <stop offset="100%" stop-color="#651fff" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="core-heart-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1" />
+      <stop offset="35%" stop-color="#ffffff" stop-opacity="0.92" />
+      <stop offset="68%" stop-color="#ffe0f7" stop-opacity="0.48" />
+      <stop offset="100%" stop-color="#d6faff" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- ==================== OUTER ORB RING & FLARE GRADIENTS ==================== -->
+    <linearGradient id="orb-ring-main-grad" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="7%" stop-color="#00f0ff" />
+      <stop offset="26%" stop-color="#0066ff" />
+      <stop offset="50%" stop-color="#00d8ff" />
+      <stop offset="74%" stop-color="#651fff" />
+      <stop offset="92%" stop-color="#ff1493" />
+      <stop offset="100%" stop-color="#ffe0f7" />
+    </linearGradient>
+
+    <linearGradient id="orb-ring-horiz-grad" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#e0ffff" />
+      <stop offset="14%" stop-color="#00b8ff" />
+      <stop offset="50%" stop-color="#651fff" stop-opacity="0.2" />
+      <stop offset="86%" stop-color="#00c8ff" />
+      <stop offset="100%" stop-color="#e0ffff" />
+    </linearGradient>
+
+    <radialGradient id="flare-hotspot-cyan" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1" />
+      <stop offset="22%" stop-color="#e0ffff" stop-opacity="0.92" />
+      <stop offset="55%" stop-color="#00d8ff" stop-opacity="0.42" />
+      <stop offset="100%" stop-color="#0055ff" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient id="flare-hotspot-magenta" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="1" />
+      <stop offset="22%" stop-color="#ffe0f7" stop-opacity="0.92" />
+      <stop offset="55%" stop-color="#ff1493" stop-opacity="0.45" />
+      <stop offset="100%" stop-color="#7c00ff" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- ==================== MAIN ICON CONTAINER ==================== -->
+  <g id="smarty-icon" clip-path="url(#icon-squircle-clip)">
+
+    <!-- 1. COSMIC BACKGROUND LAYER -->
+    <g id="background-layer">
+      <rect width="1024" height="1024" fill="url(#bg-cosmic-grad)" />
+      <rect width="1024" height="1024" fill="url(#corner-glow-tl)" />
+      <rect width="1024" height="1024" fill="url(#corner-glow-br)" />
+      <!-- Soft outer atmospheric glow behind the orb -->
+      <circle cx="512" cy="495" r="415" fill="#0077ff" opacity="0.24" filter="url(#blur-ambient)" />
+      <circle cx="512" cy="545" r="405" fill="#e0009c" opacity="0.18" filter="url(#blur-ambient)" />
+    </g>
+
+    <!-- 2. ORB INTERIOR CONTAINER -->
+    <g id="orb-interior" clip-path="url(#orb-interior-clip)">
+      <!-- Deep cosmic blue-indigo base inside the sphere -->
+      <circle cx="512" cy="512" r="384" fill="url(#orb-base-grad)" />
+
+      <!-- Soft 3D inner atmospheric bubble shell -->
+      <circle id="inner-atmosphere-bubble" cx="512" cy="512" r="295" fill="url(#inner-atmosphere-shell)" filter="url(#blur-silky-smoke)" />
+
+      <!-- 3. COSMIC STARDUST PARTICLES -->
+      <g id="stardust-particles">
+      <circle cx="734.4" cy="750.3" r="2.9" fill="#ff9ee8" opacity="0.49" filter="url(#glow-tiny)" />
+      <circle cx="251.6" cy="762.3" r="1.6" fill="#9efcff" opacity="0.39" />
+      <circle cx="460.7" cy="305.8" r="1.0" fill="#70ffdf" opacity="0.37" />
+      <circle cx="653.7" cy="430.8" r="1.6" fill="#c8a2ff" opacity="0.67" />
+      <circle cx="590.2" cy="843.4" r="2.4" fill="#ffffff" opacity="0.66" filter="url(#glow-tiny)" />
+      <circle cx="504.7" cy="243.5" r="2.0" fill="#8ab4ff" opacity="0.27" filter="url(#glow-tiny)" />
+      <circle cx="370.3" cy="763.0" r="1.3" fill="#c8a2ff" opacity="0.38" />
+      <circle cx="544.7" cy="653.6" r="1.0" fill="#70ffdf" opacity="0.55" />
+      <circle cx="689.8" cy="662.0" r="1.6" fill="#c8a2ff" opacity="0.4" />
+      <circle cx="497.1" cy="370.4" r="1.3" fill="#ff9ee8" opacity="0.39" />
+      <circle cx="373.5" cy="465.3" r="2.4" fill="#c8a2ff" opacity="0.75" filter="url(#glow-tiny)" />
+      <circle cx="606.9" cy="755.3" r="1.3" fill="#70ffdf" opacity="0.29" />
+      <circle cx="625.0" cy="756.3" r="1.6" fill="#ffffff" opacity="0.41" />
+      <circle cx="592.8" cy="206.4" r="1.6" fill="#8ab4ff" opacity="0.34" />
+      <circle cx="801.7" cy="596.9" r="1.6" fill="#8ab4ff" opacity="0.74" />
+      <circle cx="361.2" cy="472.6" r="2.4" fill="#c8a2ff" opacity="0.49" filter="url(#glow-tiny)" />
+      <circle cx="333.5" cy="547.6" r="1.3" fill="#8ab4ff" opacity="0.6" />
+      <circle cx="310.9" cy="396.1" r="1.0" fill="#ff9ee8" opacity="0.76" />
+      <circle cx="813.7" cy="666.2" r="2.0" fill="#ffffff" opacity="0.32" filter="url(#glow-tiny)" />
+      <circle cx="346.9" cy="454.3" r="2.9" fill="#ffffff" opacity="0.57" filter="url(#glow-tiny)" />
+      <circle cx="214.4" cy="393.7" r="1.0" fill="#ff9ee8" opacity="0.77" />
+      <circle cx="527.6" cy="267.0" r="2.0" fill="#c8a2ff" opacity="0.87" filter="url(#glow-tiny)" />
+      <circle cx="297.7" cy="245.1" r="2.4" fill="#70ffdf" opacity="0.69" filter="url(#glow-tiny)" />
+      <circle cx="408.9" cy="410.3" r="2.4" fill="#9efcff" opacity="0.84" filter="url(#glow-tiny)" />
+      <circle cx="362.2" cy="278.0" r="1.0" fill="#8ab4ff" opacity="0.6" />
+      <circle cx="756.4" cy="671.3" r="2.0" fill="#9efcff" opacity="0.7" filter="url(#glow-tiny)" />
+      <circle cx="340.7" cy="353.3" r="2.4" fill="#8ab4ff" opacity="0.65" filter="url(#glow-tiny)" />
+      <circle cx="289.3" cy="446.1" r="2.0" fill="#9efcff" opacity="0.6" filter="url(#glow-tiny)" />
+      <circle cx="610.5" cy="289.8" r="2.9" fill="#9efcff" opacity="0.87" filter="url(#glow-tiny)" />
+      <circle cx="781.7" cy="645.8" r="1.0" fill="#8ab4ff" opacity="0.6" />
+      <circle cx="383.5" cy="633.1" r="2.9" fill="#ffffff" opacity="0.3" filter="url(#glow-tiny)" />
+      <circle cx="707.8" cy="271.4" r="1.0" fill="#c8a2ff" opacity="0.62" />
+      <circle cx="691.8" cy="576.4" r="1.0" fill="#8ab4ff" opacity="0.62" />
+      <circle cx="424.2" cy="180.0" r="1.3" fill="#ffffff" opacity="0.41" />
+      <circle cx="838.7" cy="496.5" r="1.3" fill="#8ab4ff" opacity="0.5" />
+      <circle cx="356.7" cy="361.5" r="2.4" fill="#9efcff" opacity="0.28" filter="url(#glow-tiny)" />
+      <circle cx="370.8" cy="413.2" r="1.3" fill="#ffffff" opacity="0.71" />
+      <circle cx="297.1" cy="418.7" r="2.0" fill="#70ffdf" opacity="0.53" filter="url(#glow-tiny)" />
+      <circle cx="286.4" cy="531.5" r="1.6" fill="#ffffff" opacity="0.45" />
+      <circle cx="754.5" cy="767.4" r="1.3" fill="#70ffdf" opacity="0.33" />
+      <circle cx="306.3" cy="764.4" r="2.4" fill="#ff9ee8" opacity="0.71" filter="url(#glow-tiny)" />
+      <circle cx="747.0" cy="288.2" r="2.0" fill="#9efcff" opacity="0.71" filter="url(#glow-tiny)" />
+      <circle cx="646.0" cy="345.4" r="2.0" fill="#ff9ee8" opacity="0.64" filter="url(#glow-tiny)" />
+      <circle cx="686.9" cy="569.4" r="2.9" fill="#c8a2ff" opacity="0.34" filter="url(#glow-tiny)" />
+      <circle cx="433.3" cy="264.1" r="2.0" fill="#ffffff" opacity="0.84" filter="url(#glow-tiny)" />
+      <circle cx="539.8" cy="309.7" r="1.6" fill="#c8a2ff" opacity="0.26" />
+      <circle cx="377.1" cy="347.4" r="2.4" fill="#ffffff" opacity="0.56" filter="url(#glow-tiny)" />
+      <circle cx="555.3" cy="172.2" r="2.4" fill="#70ffdf" opacity="0.25" filter="url(#glow-tiny)" />
+      <circle cx="528.7" cy="233.6" r="2.4" fill="#8ab4ff" opacity="0.72" filter="url(#glow-tiny)" />
+      <circle cx="650.2" cy="179.5" r="2.0" fill="#ffffff" opacity="0.4" filter="url(#glow-tiny)" />
+      <circle cx="726.8" cy="754.1" r="2.0" fill="#8ab4ff" opacity="0.45" filter="url(#glow-tiny)" />
+      <circle cx="644.5" cy="585.3" r="2.4" fill="#ff9ee8" opacity="0.61" filter="url(#glow-tiny)" />
+      <circle cx="440.5" cy="233.2" r="1.6" fill="#9efcff" opacity="0.54" />
+      <circle cx="851.6" cy="574.5" r="2.0" fill="#c8a2ff" opacity="0.86" filter="url(#glow-tiny)" />
+      <circle cx="592.3" cy="346.7" r="1.0" fill="#ff9ee8" opacity="0.79" />
+      <circle cx="674.4" cy="608.5" r="1.6" fill="#ffffff" opacity="0.42" />
+      <circle cx="356.7" cy="319.5" r="1.3" fill="#70ffdf" opacity="0.35" />
+      <circle cx="194.3" cy="677.3" r="2.0" fill="#8ab4ff" opacity="0.57" filter="url(#glow-tiny)" />
+      <circle cx="419.2" cy="710.9" r="2.4" fill="#c8a2ff" opacity="0.32" filter="url(#glow-tiny)" />
+      <circle cx="325.8" cy="405.4" r="2.4" fill="#9efcff" opacity="0.71" filter="url(#glow-tiny)" />
+      <circle cx="425.7" cy="710.5" r="2.0" fill="#9efcff" opacity="0.84" filter="url(#glow-tiny)" />
+      <circle cx="756.2" cy="480.8" r="2.9" fill="#c8a2ff" opacity="0.76" filter="url(#glow-tiny)" />
+      <circle cx="687.5" cy="294.0" r="1.3" fill="#c8a2ff" opacity="0.49" />
+      <circle cx="537.3" cy="834.4" r="2.4" fill="#9efcff" opacity="0.71" filter="url(#glow-tiny)" />
+      <circle cx="316.5" cy="613.2" r="1.3" fill="#70ffdf" opacity="0.45" />
+      <circle cx="642.1" cy="267.5" r="2.4" fill="#ffffff" opacity="0.68" filter="url(#glow-tiny)" />
+      <circle cx="458.7" cy="274.0" r="1.0" fill="#ff9ee8" opacity="0.39" />
+      <circle cx="617.8" cy="358.9" r="1.0" fill="#ffffff" opacity="0.48" />
+      <circle cx="729.3" cy="485.8" r="2.0" fill="#8ab4ff" opacity="0.43" filter="url(#glow-tiny)" />
+      <circle cx="273.1" cy="649.2" r="2.4" fill="#ff9ee8" opacity="0.63" filter="url(#glow-tiny)" />
+      <circle cx="715.3" cy="419.3" r="1.6" fill="#c8a2ff" opacity="0.39" />
+      <circle cx="692.4" cy="586.9" r="2.9" fill="#ffffff" opacity="0.74" filter="url(#glow-tiny)" />
+      <circle cx="670.9" cy="728.1" r="2.9" fill="#9efcff" opacity="0.76" filter="url(#glow-tiny)" />
+      <circle cx="427.4" cy="274.3" r="2.4" fill="#ffffff" opacity="0.66" filter="url(#glow-tiny)" />
+      <circle cx="725.6" cy="511.5" r="1.3" fill="#ff9ee8" opacity="0.34" />
+      </g>
+
+      <!-- 4. VOLUMETRIC NEBULA SMOKE CLOUDS - LAYER A (Deep billowing cloud formations) -->
+      <g id="siri-nebula-clouds" filter="url(#volumetric-cloud-A)" style="mix-blend-mode: screen;">
+        <!-- West Hot-Pink / Magenta Cloud Bank -->
+        <path id="cloud-bank-magenta"
+              d="M 145,510 C 135,365 255,255 405,290 C 525,320 595,435 565,565 C 535,695 395,770 255,705 C 165,665 152,605 145,510 Z"
+              fill="url(#cloud-grad-magenta-left)" />
+
+        <!-- East Electric Cyan / Turquoise Cloud Bank -->
+        <path id="cloud-bank-cyan"
+              d="M 875,485 C 885,630 765,740 615,705 C 495,675 425,560 455,430 C 485,300 625,225 765,290 C 855,330 868,390 875,485 Z"
+              fill="url(#cloud-grad-cyan-right)" />
+
+        <!-- North Orchid / Electric Violet Cloud Bank -->
+        <path id="cloud-bank-violet"
+              d="M 325,235 C 415,135 585,125 685,225 C 765,305 725,455 615,525 C 505,595 365,555 305,445 C 265,370 270,295 325,235 Z"
+              fill="url(#cloud-grad-violet-top)" />
+
+        <!-- South Rose / Purple Cloud Bank -->
+        <path id="cloud-bank-rose"
+              d="M 335,785 C 425,885 595,885 695,775 C 775,685 725,535 615,475 C 505,415 365,455 305,565 C 265,640 280,725 335,785 Z"
+              fill="url(#cloud-grad-rose-bottom)" />
+
+        <!-- Southeast Deep Royal Blue Cloud Bank -->
+        <path id="cloud-bank-azure"
+              d="M 455,615 C 485,495 605,445 715,495 C 805,535 825,655 755,735 C 685,815 555,815 485,735 C 445,690 440,665 455,615 Z"
+              fill="url(#cloud-grad-azure-se)" />
+      </g>
+
+      <!-- 5. VOLUMETRIC SMOKE WISPS - LAYER B (Fine swirling smoke curls and vapor puffs) -->
+      <g id="siri-smoke-wisps" filter="url(#volumetric-cloud-B)" style="mix-blend-mode: screen;">
+        <!-- Northwest Lavender-Pink Smoke Plume -->
+        <path id="smoke-wisp-nw"
+              d="M 215,435 C 205,315 305,225 425,255 C 525,280 585,385 555,485 C 525,585 415,635 305,585 C 235,550 222,505 215,435 Z"
+              fill="url(#cloud-grad-lavender-nw)" />
+
+        <!-- Southwest Hot-Pink Smoke Plume -->
+        <path id="smoke-wisp-sw"
+              d="M 195,575 C 185,465 275,385 385,405 C 485,425 545,515 515,615 C 485,715 375,765 275,715 C 215,685 202,640 195,575 Z"
+              fill="url(#cloud-grad-magenta-left)" />
+
+        <!-- Northeast Mint-Cyan Smoke Plume -->
+        <path id="smoke-wisp-ne"
+              d="M 825,425 C 835,535 745,615 635,595 C 535,575 475,485 505,385 C 535,285 645,235 745,285 C 805,315 818,360 825,425 Z"
+              fill="url(#cloud-grad-cyan-right)" />
+
+        <!-- Southeast Aqua-Blue Smoke Plume -->
+        <path id="smoke-wisp-se"
+              d="M 795,585 C 805,695 715,775 605,755 C 505,735 445,645 475,545 C 505,445 615,395 715,445 C 775,475 788,520 795,585 Z"
+              fill="url(#cloud-grad-azure-se)" />
+      </g>
+
+      <!-- 6. SILKY SIRI FLUID AURORA WAVES (Smooth undulating glowing vapor curtains) -->
+      <g id="siri-fluid-waves" filter="url(#siri-fluid-wave)" style="mix-blend-mode: screen;">
+        <!-- Wave 1: Flowing Horizontal S-Curtain (Pink -> White -> Cyan) -->
+        <path id="siri-curtain-1"
+              d="M 175,535 C 225,385 365,345 505,445 C 645,545 755,525 845,415 C 815,575 665,655 520,565 C 375,475 245,505 175,535 Z"
+              fill="url(#siri-wave-horiz)" opacity="0.88" />
+
+        <!-- Wave 2: Counter-Flowing S-Curtain (Magenta -> White -> Mint) -->
+        <path id="siri-curtain-2"
+              d="M 185,455 C 285,545 415,545 535,455 C 655,365 775,385 845,515 C 755,355 605,325 485,420 C 365,515 245,515 185,455 Z"
+              fill="url(#siri-wave-horiz)" opacity="0.84" />
+
+        <!-- Wave 3: Diagonal Aurora Curtain (NW Violet -> White -> SE Azure) -->
+        <path id="siri-curtain-3"
+              d="M 255,305 C 385,235 520,305 570,455 C 620,605 725,665 805,625 C 705,745 545,705 485,550 C 425,395 315,340 255,305 Z"
+              fill="url(#siri-wave-diag1)" opacity="0.84" />
+
+        <!-- Wave 4: Diagonal Aurora Curtain (SW Rose -> White -> NE Aqua) -->
+        <path id="siri-curtain-4"
+              d="M 275,725 C 235,595 310,460 455,420 C 600,380 685,280 675,195 C 765,305 715,465 565,515 C 415,565 335,665 275,725 Z"
+              fill="url(#siri-wave-diag2)" opacity="0.84" />
+      </g>
+
+      <!-- 7. CENTRAL LUMINOUS ENERGY CORE (Radiant cloudy heart) -->
+      <g id="central-core" style="mix-blend-mode: screen;">
+        <!-- Soft rose-lavender-cyan atmospheric bloom -->
+        <circle cx="512" cy="512" r="215" fill="url(#core-aura-grad)" filter="url(#blur-deep-nebula)" />
+        <!-- Cloudy textured glowing heart -->
+        <path id="core-cloud-heart"
+              d="M 395,488 C 405,412 475,378 545,402 C 615,426 645,498 612,565 C 579,632 498,648 438,602 C 388,564 388,530 395,488 Z"
+              fill="url(#core-heart-grad)" filter="url(#volumetric-cloud-B)" />
+        <!-- Intense white-hot luminous center -->
+        <circle cx="512" cy="512" r="85" fill="url(#core-heart-grad)" filter="url(#blur-silky-smoke)" />
+      </g>
+
+      <!-- 8. INNER 3D SPHERE GLASS SHADING -->
+      <circle cx="512" cy="512" r="384" fill="url(#orb-inner-glass-shade)" style="mix-blend-mode: screen;" />
+    </g>
+
+    <!-- 9. OUTER GLASS ORB RING & NEON HALO -->
+    <g id="outer-orb-ring">
+      <!-- Wide soft neon outer aura -->
+      <circle cx="512" cy="512" r="384" fill="none" stroke="url(#orb-ring-main-grad)" stroke-width="20" opacity="0.58" filter="url(#blur-soft-cloud)" />
+      <!-- Primary luminous glass rim -->
+      <circle cx="512" cy="512" r="384" fill="none" stroke="url(#orb-ring-main-grad)" stroke-width="7.5" filter="url(#rim-neon-bloom)" />
+      <!-- Horizontal cyan-blue rim brilliance -->
+      <circle cx="512" cy="512" r="384" fill="none" stroke="url(#orb-ring-horiz-grad)" stroke-width="5" opacity="0.85" />
+      <!-- Crisp continuous specular rim highlight -->
+      <circle cx="512" cy="512" r="384" fill="none" stroke="#ffffff" stroke-width="2.2" opacity="0.72" />
+    </g>
+
+    <!-- 10. CARDINAL SPECULAR RIM FLARES (Seamless curved light hotspots) -->
+    <g id="rim-flares" style="mix-blend-mode: screen;">
+      <!-- Top Cyan-White Specular Hotspot -->
+      <g id="flare-top">
+        <ellipse cx="512" cy="128" rx="95" ry="26" fill="url(#flare-hotspot-cyan)" filter="url(#blur-silky-smoke)" />
+        <ellipse cx="512" cy="128" rx="45" ry="9" fill="url(#flare-hotspot-cyan)" filter="url(#blur-crisp-smoke)" />
+        <ellipse cx="512" cy="128" rx="22" ry="4" fill="#ffffff" filter="url(#glow-tiny)" />
+      </g>
+
+      <!-- Bottom Magenta-Pink Specular Hotspot -->
+      <g id="flare-bottom">
+        <ellipse cx="512" cy="896" rx="95" ry="26" fill="url(#flare-hotspot-magenta)" filter="url(#blur-silky-smoke)" />
+        <ellipse cx="512" cy="896" rx="45" ry="9" fill="url(#flare-hotspot-magenta)" filter="url(#blur-crisp-smoke)" />
+        <ellipse cx="512" cy="896" rx="22" ry="4" fill="#ffffff" filter="url(#glow-tiny)" />
+      </g>
+
+      <!-- Left Cyan Specular Hotspot -->
+      <g id="flare-left">
+        <ellipse cx="128" cy="512" rx="22" ry="82" fill="url(#flare-hotspot-cyan)" filter="url(#blur-silky-smoke)" />
+        <ellipse cx="128" cy="512" rx="8" ry="38" fill="url(#flare-hotspot-cyan)" filter="url(#blur-crisp-smoke)" />
+        <ellipse cx="128" cy="512" rx="3.5" ry="18" fill="#ffffff" filter="url(#glow-tiny)" />
+      </g>
+
+      <!-- Right Cyan Specular Hotspot -->
+      <g id="flare-right">
+        <ellipse cx="896" cy="512" rx="22" ry="82" fill="url(#flare-hotspot-cyan)" filter="url(#blur-silky-smoke)" />
+        <ellipse cx="896" cy="512" rx="8" ry="38" fill="url(#flare-hotspot-cyan)" filter="url(#blur-crisp-smoke)" />
+        <ellipse cx="896" cy="512" rx="3.5" ry="18" fill="#ffffff" filter="url(#glow-tiny)" />
+      </g>
+    </g>
+
+  </g>
+</svg>
